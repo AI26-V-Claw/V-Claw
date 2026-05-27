@@ -1,6 +1,7 @@
 ## I. Context Diagram
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "mainBkg": "#ffffff", "darkMode": false, "lineColor": "#374151"}}}%%
 flowchart LR
     user(["Người dùng"])
     vclaw(["V-Claw Assistant\n(GoClaw Gateway + Agent Loop)"])
@@ -32,20 +33,25 @@ flowchart LR
 
 ## III. System architecture
 ```mermaid
----
-config:
-  theme: base
-  themeVariables:
-    fontSize: 22px
-    fontFamily: Arial
-    primaryTextColor: '#111827'
-    lineColor: '#111827'
-  flowchart:
-    nodeSpacing: 110
-    rankSpacing: 110
-    curve: linear
----
-
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "background": "#ffffff",
+    "mainBkg": "#ffffff",
+    "darkMode": false,
+    "fontSize": "22px",
+    "fontFamily": "Arial",
+    "primaryTextColor": "#111827",
+    "lineColor": "#374151",
+    "edgeLabelBackground": "#ffffff"
+  },
+  "flowchart": {
+    "nodeSpacing": 110,
+    "rankSpacing": 110,
+    "curve": "linear",
+    "htmlLabels": true
+  }
+}}%%
 flowchart TB
     %% ===== Message Channels =====
     subgraph Channels["Message Channels"]
@@ -169,5 +175,6 @@ flowchart TB
     style Store fill:#FFF3F7,stroke:#F48FB1,stroke-width:2px
 
     %% ===== Thicker Arrows =====
-    linkStyle default stroke:#111827,stroke-width:4px
+    linkStyle default stroke:#374151,stroke-width:2.5px,fill:none
+    linkStyle 16 stroke:#C62828,stroke-width:2.5px,stroke-dasharray:6 4,fill:none
 ```
