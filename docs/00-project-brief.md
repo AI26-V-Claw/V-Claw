@@ -78,5 +78,3 @@ Khi gặp hành động nguy hiểm, AI sẽ:
 | **Phương thức kết nối** | 2 người | Kết nối với Telegram/Slack để giao tiếp với Agent. |
 
 ---
-
-*Tài liệu này được duy trì bởi nhóm phát triển V-Claw.*

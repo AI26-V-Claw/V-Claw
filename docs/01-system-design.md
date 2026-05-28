@@ -179,5 +179,3 @@ flowchart TB
 ## III. Usecase Diagram
 
 [Xem Usecase Diagram](02-usecase-diagram.md)
-
-*Tài liệu này được duy trì bởi nhóm phát triển V-Claw.*
