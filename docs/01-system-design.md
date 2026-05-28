@@ -28,10 +28,7 @@ flowchart LR
 - V‑Claw tích hợp Google Workspace và Sandbox để xử lý tác vụ.
 - Các mũi tên thể hiện luồng yêu cầu/kết quả giữa các thành phần.
 
-## II. Usecase Diagram
-
-
-## III. System architecture
+## II. System architecture
 ```mermaid
 %%{init: {
   "theme": "base",
@@ -178,3 +175,5 @@ flowchart TB
     linkStyle default stroke:#374151,stroke-width:2.5px,fill:none
     linkStyle 16 stroke:#C62828,stroke-width:2.5px,stroke-dasharray:6 4,fill:none
 ```
+
+*Tài liệu này được duy trì bởi nhóm phát triển V-Claw.*
