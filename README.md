@@ -20,7 +20,6 @@ See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for the intended module layout.
 
 Start with the docs in this order:
 
-1. [Product Vision](docs/02-product-vision.md)
-2. [Architecture Overview](docs/03-architecture-overview.md)
-3. [Tools and Permissions](docs/05-tools-permissions.md)
-4. [Security, Approval, and Audit](docs/10-security-approval-audit.md)
+1. [Project Brief](docs/00-project-brief.md)
+2. [System Design](docs/01-system-design.md)
+3. [Usecase Diagram](docs/02-usecase-diagram.md)
