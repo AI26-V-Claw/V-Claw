@@ -72,8 +72,8 @@ Khi gặp hành động nguy hiểm, AI sẽ:
 | Nhóm | Số thành viên | Trách nhiệm |
 |---|---|---|
 | **Kiến trúc hệ thống** | Toàn bộ | Ngồi lại thảo luận về kiến trúc hệ thống, cơ sở dữ liệu, lên diagram cho các luồng chính của dự án. |
-| **Tích hợp API** | 3 người | Tập trung làm việc với API của Mail, Calendar, Chat và đồng bộ dữ liệu về database. |
-| **Hệ thống & Sandbox** | 2 người | Chịu trách nhiệm về môi trường cô lập, xử lý để AI chạy lệnh Shell/Python an toàn khi tương tác với máy tính. |
+| **Tích hợp API** | 2 người | Tập trung làm việc với API của Mail, Calendar, Chat và đồng bộ dữ liệu về database. |
+| **Hệ thống & Sandbox** | 3 người | Chịu trách nhiệm về môi trường cô lập, xử lý để AI chạy lệnh Shell/Python an toàn khi tương tác với máy tính. |
 | **Agent & Bộ nhớ** | 2 người | Viết prompt, xử lý phân loại lệnh nguy hiểm (kích hoạt HITL) và xây dựng bộ nhớ dài hạn (Knowledge Graph đơn giản). |
 | **Phương thức kết nối** | 2 người | Kết nối với Telegram/Slack để giao tiếp với Agent. |
 
