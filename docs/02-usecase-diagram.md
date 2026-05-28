@@ -320,5 +320,3 @@ flowchart LR
 ```
 
 ---
-
-*Tài liệu này được duy trì bởi nhóm phát triển V-Claw.*
