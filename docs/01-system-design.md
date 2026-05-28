@@ -176,4 +176,8 @@ flowchart TB
     linkStyle 16 stroke:#C62828,stroke-width:2.5px,stroke-dasharray:6 4,fill:none
 ```
 
+## III. Usecase Diagram
+
+[Xem Usecase Diagram](02-usecase-diagram.md)
+
 *Tài liệu này được duy trì bởi nhóm phát triển V-Claw.*
