@@ -175,8 +175,8 @@ flowchart LR
         subgraph CHAT_READ ["🔵 Đọc — an toàn"]
             CH_FETCH["Lấy nội dung hội thoại"]
             CH_SUM["Tóm tắt hội thoại"]
-            CH_REPLY["Trả lời tin nhắn"]
-            CH_REPLY -.->|"«include»"| CH_FETCH
+            CH_DRAFT_REPLY["Đề xuất nội dung trả lời"]
+            CH_DRAFT_REPLY -.->|"«include»"| CH_FETCH
             CH_SUM -.->|"«include»"| CH_FETCH
         end
 
@@ -185,7 +185,7 @@ flowchart LR
             CH_FILE["Gửi tệp đính kèm"]
             CH_APPROVE["Yêu cầu xác nhận\nngười dùng"]
             CH_FILE -.->|"«extend»"| CH_SEND
-            CH_APPROVE -.->|"«extend»"| CH_SEND
+            CH_SEND -.->|"«include»"| CH_APPROVE
         end
     end
 

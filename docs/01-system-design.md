@@ -89,7 +89,7 @@ flowchart TB
     %% ===== Tools =====
     subgraph Tools["Tool Layer"]
         ROUTER["Tool Router & Executor"]
-        GTOOLS["Google Workspace Tools<br>Gmail / Calendar / Chat / Drive"]
+        GTOOLS["Google Workspace Tools<br>Gmail / Calendar / Chat"]
         SANDBOX["Sandbox Tools<br>Python / Shell / File Processing"]
     end
 
