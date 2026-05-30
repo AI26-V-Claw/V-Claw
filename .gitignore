@@ -5,3 +5,4 @@ configs/google/token.json
 .gocache/
 .gopath/
 bin/
+.antigravity/
