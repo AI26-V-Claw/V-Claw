@@ -8,15 +8,35 @@ G1 uses OAuth user authentication. V-Claw runs locally, opens a browser consent 
 2. Configure the Google Chat API with an app name, avatar URL, and description. Turn interactive features off for G1.
 3. Configure the OAuth consent screen for your Workspace.
 4. Create an OAuth client with application type `Desktop app`.
-5. Download the client JSON.
+5. Download the client JSON and store it in a restricted Google Drive shared drive.
 
-For this private/internal repo, the admin-owned OAuth Desktop app config is committed at `configs/google/oauth-client.internal.json` so Workspace members can run from source without downloading credentials.
+The OAuth Desktop app config is not committed to git. Developers download it locally into `configs/google/credentials.json`.
 
-Do not commit `credentials.json` or generated token files. `credentials.json` is only a local admin/developer override.
+Do not commit `credentials.json`, `oauth-client.internal.json`, or generated token files.
 
-## Pull-and-run flow
+## Google Drive flow
 
-Workspace members can pull the private repo and sign in immediately:
+Admin creates a restricted shared drive:
+
+```text
+V-Claw Secrets
+```
+
+Upload:
+
+```text
+credentials.json
+```
+
+Share the drive only with trusted Workspace members or a Workspace group.
+
+Workspace members download `credentials.json` from Google Drive and save it to:
+
+```text
+configs/google/credentials.json
+```
+
+Then sign in and smoke test:
 
 ```powershell
 go run ./cmd/vclaw google auth
