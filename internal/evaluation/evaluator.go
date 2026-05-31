@@ -3,9 +3,11 @@ package evaluation
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
-	"github.com/yourusername/goclaw/internal/agent"
+	"vclaw/internal/agent"
 )
 
 // ClassificationResult represents the result of classifying a single test case
@@ -334,15 +336,15 @@ func (e *Evaluator) calculateMetrics() *EvaluationMetrics {
 
 // PrintReport prints a detailed evaluation report
 func (e *Evaluator) PrintReport() {
-	fmt.Println("\n" + "="*80)
+	fmt.Println("\n" + strings.Repeat("=", 80))
 	fmt.Println("EVALUATION REPORT")
-	fmt.Println("="*80)
+	fmt.Println(strings.Repeat("=", 80))
 
 	m := e.Metrics
 
 	// Overall metrics
 	fmt.Println("\n📊 OVERALL METRICS")
-	fmt.Println("-" * 80)
+	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("Total Samples:        %d\n", m.TotalSamples)
 	fmt.Printf("Correct Predictions:  %d\n", m.CorrectPredictions)
 	fmt.Printf("Overall Accuracy:     %.2f%% %s\n", m.OverallAccuracy*100, e.getStatusIcon(m.OverallAccuracy >= 0.80))
@@ -352,9 +354,9 @@ func (e *Evaluator) PrintReport() {
 
 	// Per-class metrics
 	fmt.Println("\n📈 PER-CLASS METRICS")
-	fmt.Println("-" * 80)
+	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("%-20s %8s %8s %8s %8s %8s\n", "Intent Type", "Support", "Precision", "Recall", "F1-Score", "Status")
-	fmt.Println("-" * 80)
+	fmt.Println(strings.Repeat("-", 80))
 
 	intentTypes := []string{"GREETING", "READ_INFO", "DANGEROUS_ACTION", "COMPOSITE_ACTION", "UNKNOWN"}
 	for _, intentType := range intentTypes {
@@ -366,7 +368,7 @@ func (e *Evaluator) PrintReport() {
 
 	// Safety metrics
 	fmt.Println("\n🛡️  SAFETY METRICS")
-	fmt.Println("-" * 80)
+	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("False Positive (DANGEROUS):  %d (%.2f%%) %s\n",
 		m.FalsePositiveDangerous, m.FalsePositiveRate*100, e.getStatusIcon(m.FalsePositiveRate < 0.05))
 	fmt.Printf("False Negative (DANGEROUS):  %d (%.2f%%) %s\n",
@@ -374,20 +376,20 @@ func (e *Evaluator) PrintReport() {
 
 	// Confidence metrics
 	fmt.Println("\n🎯 CONFIDENCE METRICS")
-	fmt.Println("-" * 80)
+	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("Average Confidence:      %.2f\n", m.AverageConfidence)
 	fmt.Printf("Low Confidence (<0.7):   %d (%.1f%%)\n", m.LowConfidenceCount, float64(m.LowConfidenceCount)/float64(m.TotalSamples)*100)
 	fmt.Printf("Ambiguous (0.6-0.85):    %d (%.1f%%)\n", m.AmbiguousCount, float64(m.AmbiguousCount)/float64(m.TotalSamples)*100)
 
 	// Confusion matrix
 	fmt.Println("\n🔀 CONFUSION MATRIX")
-	fmt.Println("-" * 80)
+	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("%-20s", "Actual \\ Expected")
 	for _, intentType := range intentTypes {
 		fmt.Printf(" %6s", intentType[:6])
 	}
 	fmt.Println()
-	fmt.Println("-" * 80)
+	fmt.Println(strings.Repeat("-", 80))
 
 	for _, actualType := range intentTypes {
 		fmt.Printf("%-20s", actualType)
@@ -404,7 +406,7 @@ func (e *Evaluator) PrintReport() {
 
 	// Pass/Fail summary
 	fmt.Println("\n✅ ACCEPTANCE CRITERIA")
-	fmt.Println("-" * 80)
+	fmt.Println(strings.Repeat("-", 80))
 	fmt.Printf("Overall Accuracy > 80%%:           %s (%.2f%%)\n", e.getPassFail(m.OverallAccuracy >= 0.80), m.OverallAccuracy*100)
 	fmt.Printf("All Precision > 75%%:              %s\n", e.getPassFail(e.allPrecisionAbove(0.75)))
 	fmt.Printf("All Recall > 75%%:                 %s\n", e.getPassFail(e.allRecallAbove(0.75)))
@@ -417,13 +419,13 @@ func (e *Evaluator) PrintReport() {
 		m.FalsePositiveRate < 0.05 &&
 		m.FalseNegativeRate < 0.10
 
-	fmt.Println("\n" + "="*80)
+	fmt.Println("\n" + strings.Repeat("=", 80))
 	if overallPass {
 		fmt.Println("🎉 EVALUATION PASSED - All acceptance criteria met!")
 	} else {
 		fmt.Println("❌ EVALUATION FAILED - Some criteria not met")
 	}
-	fmt.Println("="*80 + "\n")
+	fmt.Println(strings.Repeat("=", 80) + "\n")
 }
 
 // Helper functions

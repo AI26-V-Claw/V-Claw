@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 import (
@@ -5,8 +7,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/yourusername/goclaw/internal/agent"
-	"github.com/yourusername/goclaw/internal/agent/prompts"
+	"vclaw/internal/agent"
+	"vclaw/internal/agent/prompts"
 )
 
 // This example demonstrates how to use the Intent Classifier prompt system
@@ -79,6 +81,7 @@ func example2_WithToolRegistry() {
 	fullPrompt := builder.
 		WithToolRegistry(tools).
 		BuildWithUserInput("Chạy lệnh npm install")
+	_ = fullPrompt
 
 	fmt.Printf("Prompt includes %d tools\n", len(tools))
 	fmt.Println("This helps the LLM know which tools are available in this session")
@@ -102,6 +105,7 @@ func example3_WithSessionHistory() {
 	fullPrompt := builder.
 		WithSessionHistory(history, 5). // Keep last 5 turns
 		BuildWithUserInput("Xóa file đó")
+	_ = fullPrompt
 
 	fmt.Printf("Included %d history items\n", len(history))
 	fmt.Println("Note: The prompt includes a WARNING not to use history for dangerous actions")
@@ -133,6 +137,7 @@ func example4_FullContext() {
 		WithSessionHistory(history, 5).
 		WithContext("User is working on a cleanup task").
 		BuildWithUserInput("Xóa các file log cũ hơn 30 ngày")
+	_ = fullPrompt
 
 	fmt.Printf("Full prompt length: %d characters\n", len(fullPrompt))
 	fmt.Println("Includes: base prompt + tools + user context + history + custom context + user input")
@@ -224,6 +229,7 @@ func exampleLLMIntegration() {
 	builder := prompts.NewIntentClassifierPrompt()
 	userInput := "Xóa file /tmp/test.txt"
 	fullPrompt := builder.BuildWithUserInput(userInput)
+	_ = fullPrompt
 
 	// 2. Call LLM (pseudo-code)
 	fmt.Println("// Call LLM API")

@@ -15,7 +15,7 @@ const (
 
 // Intent represents the result of intent classification
 type Intent struct {
-	Type           IntentType             `json:"type"`
+	Type           IntentType             `json:"intent_type"`
 	Confidence     float64                `json:"confidence"`      // 0.0 - 1.0
 	RequiredParams []string               `json:"required_params"` // Required parameters
 	ProvidedParams map[string]interface{} `json:"provided_params"` // Parameters provided by user

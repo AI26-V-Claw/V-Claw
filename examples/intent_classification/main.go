@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 import (
@@ -65,7 +67,7 @@ func main() {
 		fmt.Println("🔧 Tool Calls:")
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		
-		validator := stages.NewParamValidator()
+		validator := stages.NewParameterValidator(stages.ParameterValidatorConfig{})
 		
 		for i, toolCall := range intent.ToolCalls {
 			fmt.Printf("\n%d. %s (%s)\n", i+1, toolCall.Name, toolCall.Category)
