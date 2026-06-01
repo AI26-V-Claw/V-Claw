@@ -1,7 +1,8 @@
-FROM golang:1.23 AS build
+FROM golang:1.26 AS build
 
 WORKDIR /src
 COPY go.mod ./
+COPY go.sum ./
 COPY cmd ./cmd
 COPY internal ./internal
 RUN go build -o /out/vclaw ./cmd/vclaw
