@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 type sampleTool struct{}
@@ -127,5 +128,40 @@ func TestToolRegistryRejectsDuplicateTool(t *testing.T) {
 	}
 	if err := registry.Register(sampleTool{}); err == nil {
 		t.Fatal("expected duplicate registration error")
+	}
+}
+
+func TestToolRegistryExposesMetadataAndEnabledState(t *testing.T) {
+	registry := NewToolRegistry()
+	if err := registry.RegisterWithEntry(sampleTool{}, ToolRegistryEntry{
+		Owner:   "integration",
+		Timeout: 5 * time.Second,
+	}); err != nil {
+		t.Fatalf("register sample tool with metadata: %v", err)
+	}
+
+	definition, ok := registry.GetDefinition("test.echo")
+	if !ok {
+		t.Fatalf("expected tool definition")
+	}
+	if definition.Owner != "integration" {
+		t.Fatalf("expected owner integration, got %q", definition.Owner)
+	}
+	if definition.Timeout != 5*time.Second {
+		t.Fatalf("expected timeout metadata, got %s", definition.Timeout)
+	}
+	if !definition.Enabled {
+		t.Fatalf("tool should be enabled by default when metadata is provided")
+	}
+
+	if err := registry.SetEnabled("test.echo", false); err != nil {
+		t.Fatalf("disable tool: %v", err)
+	}
+	definition, ok = registry.GetDefinition("test.echo")
+	if !ok {
+		t.Fatalf("expected tool definition after disable")
+	}
+	if definition.Enabled {
+		t.Fatalf("expected disabled tool metadata")
 	}
 }
