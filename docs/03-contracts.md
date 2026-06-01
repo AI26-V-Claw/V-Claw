@@ -15,6 +15,7 @@ Channel -> Agent Core -> Safety/HITL -> Tool Layer -> Tool Execution -> Agent Co
 - Tool trả kết quả qua `ToolResult`.
 - Action có side effect phải có `RiskDecision`.
 - Nếu `requiresApproval = true`, tool không được execute trước khi có `ApprovalDecision = approved`.
+- MVP là single-owner deployment; không dùng `userId` trong runtime contract.
 
 ---
 
@@ -67,7 +68,6 @@ Channel / Integration -> Agent Core
 {
   "requestId": "req_001",
   "sessionId": "sess_001",
-  "userId": "user_001",
   "channel": "telegram",
   "text": "Kiểm tra mail xem có ai hẹn họp không, nếu có thì xếp lịch giúp tôi.",
   "locale": "vi-VN",
@@ -79,7 +79,7 @@ Channel / Integration -> Agent Core
 Required:
 
 ```text
-requestId, sessionId, userId, channel, text, timestamp
+requestId, sessionId, channel, text, timestamp
 ```
 
 ---
@@ -124,7 +124,6 @@ Agent Core -> Tool Layer
   "toolCallId": "toolcall_001",
   "requestId": "req_001",
   "sessionId": "sess_001",
-  "userId": "user_001",
   "toolName": "calendar.createEvent",
   "input": {
     "title": "Họp với anh Minh",
@@ -139,7 +138,7 @@ Agent Core -> Tool Layer
 Required:
 
 ```text
-toolCallId, requestId, sessionId, userId, toolName, input
+toolCallId, requestId, sessionId, toolName, input
 ```
 
 ---
@@ -276,7 +275,7 @@ Channel / User -> Approval Service / Agent Core
   "approvalId": "appr_001",
   "requestId": "req_001",
   "decision": "approved",
-  "decidedBy": "user_001",
+  "decidedBy": "owner",
   "decidedAt": "2026-05-29T09:02:00+07:00",
   "comment": "Đồng ý tạo lịch."
 }
