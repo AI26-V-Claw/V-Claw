@@ -21,12 +21,17 @@ import (
 // timeout, or cancellation. Timeout is enforced via context.WithTimeout; when
 // the deadline fires the container is hard-killed before the call returns.
 //
+// Every request is validated by the embedded WorkspaceGuard before Docker is
+// involved; this blocks path traversal and credential access at the host layer.
+//
 // Usage:
 //
-//	runner := runtime.NewDockerRunner(runtime.DockerRunnerConfig{})
+//	guard, _ := runtime.NewWorkspaceGuard("/var/vclaw/workspaces")
+//	runner := runtime.NewDockerRunner(runtime.DockerRunnerConfig{Guard: guard})
 //	result, err := runner.RunPython(ctx, req)
 type DockerRunner struct {
-	cfg DockerRunnerConfig
+	cfg   DockerRunnerConfig
+	guard *WorkspaceGuard
 }
 
 // DockerRunnerConfig holds tunable parameters for the DockerRunner.
@@ -42,6 +47,11 @@ type DockerRunnerConfig struct {
 	// StopTimeoutSec is the number of seconds given to `docker stop` before
 	// the runner escalates to `docker kill`. Defaults to 3.
 	StopTimeoutSec int
+
+	// Guard enforces workspace directory restrictions. When non-nil, every
+	// RunPython and RunShell call validates the workspace path through the
+	// guard before dispatching to Docker. Strongly recommended in production.
+	Guard *WorkspaceGuard
 }
 
 // NewDockerRunner creates a DockerRunner with the given config.
@@ -56,7 +66,7 @@ func NewDockerRunner(cfg DockerRunnerConfig) *DockerRunner {
 	if cfg.StopTimeoutSec <= 0 {
 		cfg.StopTimeoutSec = 3
 	}
-	return &DockerRunner{cfg: cfg}
+	return &DockerRunner{cfg: cfg, guard: cfg.Guard}
 }
 
 // ─── Runner interface ─────────────────────────────────────────────────────────
@@ -66,6 +76,18 @@ func NewDockerRunner(cfg DockerRunnerConfig) *DockerRunner {
 func (r *DockerRunner) RunPython(ctx context.Context, req *RunPythonRequest) (*JobResult, error) {
 	if err := ValidateRunPythonRequest(req); err != nil {
 		return nil, err
+	}
+
+	// ── Workspace guard ──────────────────────────────────────────────────
+	if r.guard != nil {
+		if err := r.guard.ValidateWorkspaceDir(req.WorkspaceDir); err != nil {
+			return nil, fmt.Errorf("run_python: %w", err)
+		}
+	}
+	if strings.TrimSpace(req.ScriptPath) != "" {
+		if err := ValidateScriptPath(req.ScriptPath); err != nil {
+			return nil, fmt.Errorf("run_python: %w", err)
+		}
 	}
 
 	timeout := EffectivePythonTimeout(req)
@@ -94,6 +116,16 @@ func (r *DockerRunner) RunPython(ctx context.Context, req *RunPythonRequest) (*J
 func (r *DockerRunner) RunShell(ctx context.Context, req *RunShellRequest) (*JobResult, error) {
 	if err := ValidateRunShellRequest(req); err != nil {
 		return nil, err
+	}
+
+	// ── Workspace guard ──────────────────────────────────────────────────
+	if r.guard != nil {
+		if err := r.guard.ValidateWorkspaceDir(req.WorkspaceDir); err != nil {
+			return nil, fmt.Errorf("run_shell: %w", err)
+		}
+	}
+	if err := ValidateShellCommand(req.Command); err != nil {
+		return nil, fmt.Errorf("run_shell: %w", err)
 	}
 
 	timeout := EffectiveShellTimeout(req)
