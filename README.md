@@ -1,25 +1,57 @@
 # V-Claw
 
-V-Claw is planned as a local-first personal AI agent assistant built on top of GoClaw's architecture patterns: agent loop, provider routing, tool registry, workspace isolation, scheduling, skills, audit logs, and safe execution.
+V-Claw is a local-first personal AI assistant for safe office automation and controlled computer tasks. The project is inspired by GoClaw architecture patterns, but narrows the scope to a personal assistant that can connect to Google Workspace, route work through an agent loop, call tools, and require human approval before risky actions.
 
-The first product target is a safe automation assistant for office work and local computer control:
+The current focus is an early development/MVP foundation, not a production-ready assistant.
 
-- Manage email, calendar, files, and chat through Google Workspace connectors.
-- Execute local file/data tasks through Python, shell, and desktop automation.
-- Route requests across multiple LLM providers such as Anthropic, OpenAI, OpenAI-compatible endpoints, Gemini, OpenRouter, and local models.
-- Require explicit policy, approval, sandboxing, and audit trails for risky actions.
-- Keep the user in control through a local CLI/chat loop, approvals, and run history.
+## Goals
 
-This folder currently contains only the project skeleton and architecture notes. No runtime implementation has been added yet.
+V-Claw is intended to help a user:
 
-The intended setup path is local: a user should be able to clone the repo, configure providers/accounts, and run V-Claw on their own machine. Docker assets are kept for local reproducibility and sandboxing, not for a hosted deployment.
+- Read and summarize work information from Google Workspace services such as Gmail, Calendar, and Chat.
+- Coordinate multi-step office workflows, for example reading email, checking calendar availability, and preparing a response or calendar action.
+- Run local file/data tasks through controlled Python, shell, or sandboxed system tools.
+- Route requests to different LLM providers through a common provider boundary.
+- Keep risky actions under user control through policy checks, human-in-the-loop approval, and audit-friendly execution records.
 
-## Structure
+## Current project state
 
-See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for the intended module layout.
+The repository contains both architecture documentation and an initial Go codebase. Some runtime pieces already exist, including a CLI entrypoint, Google connector experiments, an early agent loop, tool registry code, and Gmail read tooling.
 
-Start with the docs in this order:
+Not all documented workflows are implemented yet. In particular, write actions, approval flows, sandbox execution, persistence, and channel adapters should be treated as planned or in-progress unless their implementation is present in code and tests.
 
-1. [Project Brief](docs/00-project-brief.md)
-2. [System Design](docs/01-system-design.md)
-3. [Usecase Diagram](docs/02-usecase-diagram.md)
+## Documentation map
+
+Start with these documents:
+
+1. [Project Brief](docs/00-project-brief.md) — product problem, safety model, roadmap, and team split.
+2. [System Design](docs/01-system-design.md) — high-level system diagrams and component relationships.
+3. [Usecase Diagram](docs/02-usecase-diagram.md) — expected user-facing capabilities and risk categories.
+4. [Contracts](docs/03-contracts.md) — intended runtime contracts between channel, agent, safety, and tools.
+5. [Canonical Sequence Scenarios](docs/04-sequences.md) — reference flows for implementation review and E2E tests.
+6. [Active Modules & Ownership](ACTIVE_MODULES.md) — current implementation scope and frozen areas.
+7. [Project Structure](PROJECT_STRUCTURE.md) — repository layout and module responsibilities.
+
+When documents and code differ, treat `docs/03-contracts.md` and `ACTIVE_MODULES.md` as the intended design baseline for new work, then update code or docs explicitly as part of the task.
+
+## Repository layout
+
+See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for the repository layout and module boundaries.
+
+At a high level:
+
+- `cmd/` contains CLI entrypoints.
+- `configs/` contains local configuration examples and provider setup notes.
+- `docs/` contains product, architecture, contract, and scenario documentation.
+- `internal/` contains private Go application packages.
+- `migrations/`, `scripts/`, `skills/`, and `tests/` contain supporting project assets.
+
+## Safety principle
+
+Any action with side effects should pass through one safety/approval boundary before execution. This includes sending email or chat messages, creating or changing calendar events, modifying local files, or running Python/shell commands.
+
+Read-only operations may be allowed directly when policy permits them. Destructive, external-write, local-write, or code-execution actions must be reviewed through the approved HITL flow once that flow is implemented.
+
+## Development note
+
+Keep implementation small and vertical-slice oriented. Do not add GoClaw-inspired platform layers unless they are required by the current roadmap or explicitly approved in `ACTIVE_MODULES.md`.
