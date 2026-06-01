@@ -368,6 +368,9 @@ name, owner, description, defaultRiskLevel, requiresApproval
 | `gmail.getEmail` | Integration | `safe_read` | No |
 | `gmail.sendEmail` | Integration | `external_write` | Yes |
 
+> `gmail.getEmail` trả dữ liệu raw từ connector (headers/body/attachments).  
+> Render text để hiển thị (ví dụ fallback từ HTML sang text) thuộc tool layer, không thuộc connector raw API boundary.
+
 ### Calendar
 
 | Tool | Owner | Risk | Approval |
