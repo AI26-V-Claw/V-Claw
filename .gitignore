@@ -9,3 +9,4 @@ configs/google/token.json
 .gopath/
 bin/
 .antigravity/
+.appdata/
