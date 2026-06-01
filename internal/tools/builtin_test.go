@@ -128,8 +128,8 @@ func TestCalculatorToolRejectsInvalidArguments(t *testing.T) {
 	if result.Error.Code != ErrorInvalidArgument {
 		t.Fatalf("expected %s, got %s", ErrorInvalidArgument, result.Error.Code)
 	}
-	if result.Error.Code != "invalid_arguments" {
-		t.Fatalf("expected standardized invalid_arguments code, got %s", result.Error.Code)
+	if result.Error.Code != "TOOL_INPUT_INVALID" {
+		t.Fatalf("expected standardized TOOL_INPUT_INVALID code, got %s", result.Error.Code)
 	}
 	if result.ToolCallID != "call_invalid" {
 		t.Fatalf("expected call_invalid, got %q", result.ToolCallID)

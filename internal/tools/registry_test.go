@@ -109,8 +109,8 @@ func TestToolRegistryExecuteMissingTool(t *testing.T) {
 	if result.Error.Code != ErrorToolNotFound {
 		t.Fatalf("expected %s, got %s", ErrorToolNotFound, result.Error.Code)
 	}
-	if result.Error.Code != "tool_not_found" {
-		t.Fatalf("expected standardized tool_not_found code, got %s", result.Error.Code)
+	if result.Error.Code != "TOOL_NOT_FOUND" {
+		t.Fatalf("expected standardized TOOL_NOT_FOUND code, got %s", result.Error.Code)
 	}
 	if result.ToolCallID != "call_missing" {
 		t.Fatalf("expected tool call id call_missing, got %q", result.ToolCallID)
