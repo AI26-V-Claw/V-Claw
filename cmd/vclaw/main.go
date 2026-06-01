@@ -12,6 +12,8 @@ import (
 	"vclaw/internal/connectors/google/chat"
 	"vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
+	"vclaw/internal/policies"
+	"vclaw/internal/safety"
 )
 
 const (
@@ -35,6 +37,8 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "google":
 		return runGoogle(ctx, args[1:])
+	case "sandbox":
+		return runSandbox(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -161,10 +165,154 @@ func envOrDefault(name string, fallback string) string {
 	return value
 }
 
+// ─── sandbox subcommand ───────────────────────────────────────────────────────
+
+// runSandbox dispatches vclaw sandbox <subcommand>.
+func runSandbox(args []string) error {
+	if len(args) == 0 {
+		printSandboxUsage()
+		return nil
+	}
+	switch args[0] {
+	case "check":
+		return runSandboxCheck(args[1:])
+	case "help", "-h", "--help":
+		printSandboxUsage()
+		return nil
+	default:
+		return fmt.Errorf("unknown sandbox command %q", args[0])
+	}
+}
+
+// runSandboxCheck runs a policy + safety check on a command/code string and
+// prints the result in human-readable Vietnamese.
+//
+// Usage:
+//
+//	vclaw sandbox check -tool run_shell -cmd "ls /workspace"
+//	vclaw sandbox check -tool run_python -code "import os; os.remove('a.txt')"
+//	vclaw sandbox check -tool file_ops   -op delete -path "/workspace/old.csv"
+func runSandboxCheck(args []string) error {
+	fs := flag.NewFlagSet("vclaw sandbox check", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	tool := fs.String("tool", "run_shell", "tool name: run_shell | run_python | file_ops")
+	cmd := fs.String("cmd", "", "shell command (for run_shell)")
+	code := fs.String("code", "", "python code or script path (for run_python)")
+	fileOp := fs.String("op", "", "file operation: list|read|write|copy|move|delete (for file_ops)")
+	filePath := fs.String("path", "", "file path (for file_ops)")
+	conservative := fs.Bool("conservative", false, "require confirmation for safe_write too")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// ── Build policy request ───────────────────────────────────────────────
+	req := policies.Request{
+		RequestID: "cli_check",
+		SessionID: "cli_session",
+		UserID:    "developer",
+		Tool:      policies.ToolName(*tool),
+		Input: policies.RequestInput{
+			Command:    *cmd,
+			Code:       *code,
+			FileOp:     *fileOp,
+			FilePath:   *filePath,
+		},
+		Meta: policies.RequestMeta{
+			Source: "user_direct",
+		},
+	}
+
+	checker := policies.NewRuleBasedChecker(policies.RuleBasedConfig{
+		SafeWriteRequiresConfirm: *conservative,
+	})
+	result := checker.Check(req)
+
+	// ── Safety scan ────────────────────────────────────────────────────────
+	var reports []safety.DangerReport
+	scanner := safety.DefaultScanner
+	switch req.Tool {
+	case policies.ToolRunShell:
+		reports = scanner.ScanShell(*cmd)
+	case policies.ToolRunPython:
+		text := *code
+		if strings.TrimSpace(text) == "" {
+			text = req.Input.ScriptPath
+		}
+		reports = scanner.ScanPython(text)
+	case policies.ToolFileOps:
+		reports = scanner.ScanShell(*fileOp + " " + *filePath)
+	}
+
+	// ── Print result ───────────────────────────────────────────────────────
+	decisionEmoji := map[policies.Decision]string{
+		policies.DecisionAllow:          "✅",
+		policies.DecisionNeedsApproval:  "⚠️ ",
+		policies.DecisionBlock:          "🚫",
+	}
+	emoji := decisionEmoji[result.Decision]
+	if emoji == "" {
+		emoji = "?"
+	}
+
+	fmt.Println()
+	fmt.Printf("══════════════════════════════════════════════════\n")
+	fmt.Printf(" %s POLICY DECISION: %-20s\n", emoji, strings.ToUpper(string(result.Decision)))
+	fmt.Printf("══════════════════════════════════════════════════\n")
+	fmt.Printf("  Tool      : %s\n", req.Tool)
+	fmt.Printf("  Risk Level: %s\n", result.RiskLevel)
+	fmt.Println()
+
+	fmt.Println("  Lý do:")
+	for _, r := range result.Reasons {
+		fmt.Printf("    • %s\n", r)
+	}
+
+	if len(reports) > 0 {
+		fmt.Println()
+		fmt.Printf("  ⚡ Safety Threats Detected (%d):\n", len(reports))
+		for _, rpt := range reports {
+			fmt.Printf("    [%s/%s] %s\n", rpt.Category, rpt.Severity, rpt.ExplanationVI)
+			fmt.Printf("           matched: %q\n", rpt.MatchedPattern)
+		}
+		fmt.Println()
+		fmt.Printf("  Tóm tắt: %s\n", safety.SummariseVI(reports))
+	} else {
+		fmt.Println()
+		fmt.Println("  ✓ Không phát hiện mối đe dọa cụ thể.")
+	}
+	fmt.Printf("══════════════════════════════════════════════════\n\n")
+
+	return nil
+}
+
+func printSandboxUsage() {
+	fmt.Println(`Usage:
+  vclaw sandbox check [options]
+
+Options:
+  -tool run_shell|run_python|file_ops   Tool to simulate (default: run_shell)
+  -cmd  "<command>"                     Shell command (run_shell)
+  -code "<python code>"                 Python code (run_python)
+  -op   list|read|write|copy|move|delete  File operation (file_ops)
+  -path "<file path>"                   Target path (file_ops)
+  -conservative                         Require approval for safe_write too
+
+Examples:
+  vclaw sandbox check -tool run_shell -cmd "ls /workspace"
+  vclaw sandbox check -tool run_shell -cmd "rm -rf /workspace/temp"
+  vclaw sandbox check -tool run_shell -cmd "shutdown -h now"
+  vclaw sandbox check -tool run_python -code "import os; os.remove('a.txt')"
+  vclaw sandbox check -tool file_ops -op delete -path "/workspace/old.csv"
+  vclaw sandbox check -tool run_shell -cmd "cat .env"`)
+}
+
 func printUsage() {
 	fmt.Println(`Usage:
   vclaw google auth
-  vclaw google smoke [-chat-space spaces/AAAA...]`)
+  vclaw google smoke [-chat-space spaces/AAAA...]
+  vclaw sandbox check -tool <tool> [-cmd|-code|-op|-path] "<input>"`)
 }
 
 func printGoogleUsage() {
