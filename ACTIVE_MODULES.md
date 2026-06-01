@@ -87,9 +87,9 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 |---|---|---|
 | `internal/tools/` | Shared | Agent-facing tool interface, registry tối giản và wrappers. |
 | `internal/tools/registry/` | Shared | Danh sách tool, input/output shape, default risk level. Cần Lead review khi đổi. |
-| `internal/tools/gmail/` | Integration | Agent-callable Gmail tools, ví dụ `listEmails`, `getEmail`, `sendEmail`. |
-| `internal/tools/calendar/` | Integration | Agent-callable Calendar tools, ví dụ `listEvents`, `createEvent`, `deleteEvent`. |
-| `internal/tools/chat/` | Integration | Agent-callable Google Chat tools theo roadmap Google Workspace. |
+| `internal/tools/office/gmail/` | Integration | Agent-callable Gmail tools, ví dụ `listEmails`, `getEmail`, `sendEmail`. |
+| `internal/tools/office/calendar/` | Integration | Agent-callable Calendar tools, ví dụ `listEvents`, `createEvent`, `deleteEvent`. |
+| `internal/tools/office/chat/` | Integration | Agent-callable Google Chat tools theo roadmap Google Workspace. |
 | `internal/tools/system/` | Agent Core | Agent-callable local/system tools đi qua sandbox/safety. |
 | `internal/connectors/` | Integration | Raw API clients/adapters cho external services. Không chứa agent reasoning. |
 | `internal/connectors/google/` | Integration | Gmail/Calendar/Chat raw clients, OAuth/API response handling. |
@@ -256,6 +256,10 @@ Mỗi PR nên trả lời các câu hỏi sau:
 ## Tests
 - [ ] Đã thêm/cập nhật test phù hợp.
 - [ ] Đã chạy test liên quan trước khi request review.
+
+## Security hygiene
+- [ ] Không in/paste access token, refresh token, client secret trong log, test output, PR comment.
+- [ ] File secrets local (`configs/google/credentials.json`, `configs/google/token.json`) không được commit.
 ```
 
 ---
