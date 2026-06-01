@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "timestamp": "2026-06-01T15:11:42+07:00",
+    "timestamp": "2026-06-01T16:07:49+07:00",
     "total_samples": 62
   },
   "metrics": {
@@ -82,7 +82,7 @@
     "FalseNegativeDangerous": 0,
     "FalsePositiveRate": 0,
     "FalseNegativeRate": 0,
-    "AverageLatency": 8558,
+    "AverageLatency": 0,
     "MedianLatency": 0,
     "P95Latency": 0,
     "P99Latency": 0,
@@ -603,7 +603,7 @@
       "ToolCallsMatch": true,
       "ParamsMatch": true,
       "ConfirmMatch": true,
-      "Latency": 513400,
+      "Latency": 0,
       "Error": null,
       "Notes": ""
     },
@@ -619,7 +619,7 @@
       "ToolCallsMatch": true,
       "ParamsMatch": true,
       "ConfirmMatch": true,
-      "Latency": 7900,
+      "Latency": 0,
       "Error": null,
       "Notes": ""
     },
@@ -635,7 +635,7 @@
       "ToolCallsMatch": true,
       "ParamsMatch": true,
       "ConfirmMatch": true,
-      "Latency": 9300,
+      "Latency": 0,
       "Error": null,
       "Notes": ""
     },

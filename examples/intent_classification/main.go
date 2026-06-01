@@ -16,7 +16,8 @@ import (
 
 func main() {
 	fmt.Println("V-Claw Intent Classification Example")
-	fmt.Println("=====================================\n")
+	fmt.Println("=====================================")
+	fmt.Println()
 
 	// Example 1: Heuristic Classifier (Fast, No API Key)
 	fmt.Println("Example 1: Heuristic Classifier")
@@ -146,7 +147,7 @@ func runSafetyExample() {
 		{"delete_file", intent.TypeDangerousAction},
 		{"send_email", intent.TypeDangerousAction},
 		{"exec", intent.TypeDangerousAction},
-		"format_disk", intent.TypeDangerousAction},
+		{"format_disk", intent.TypeDangerousAction},
 	}
 
 	for _, tc := range testCases {
