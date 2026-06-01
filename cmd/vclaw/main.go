@@ -40,6 +40,8 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "agent":
+		return runAgent(ctx, args[1:])
 	case "google":
 		return runGoogle(ctx, args[1:])
 	case "help", "-h", "--help":
@@ -370,6 +372,7 @@ func splitCSV(value string) []string {
 
 func printUsage() {
 	fmt.Println(`Usage:
+  vclaw agent -prompt "..."
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
   vclaw google gmail <list|get>

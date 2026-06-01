@@ -4,25 +4,52 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 )
 
 type ToolDefinition struct {
-	Name        string
-	Description string
-	Parameters  ToolSchema
-	Capability  Capability
-	RiskLevel   RiskLevel
+	Name             string
+	Owner            string
+	Description      string
+	Parameters       ToolSchema
+	Capability       Capability
+	RiskLevel        RiskLevel
+	RequiresApproval bool
+	Timeout          time.Duration
+	Enabled          bool
+}
+
+type ToolRegistryEntry struct {
+	Name             string
+	Owner            string
+	Description      string
+	Parameters       ToolSchema
+	Capability       Capability
+	RiskLevel        RiskLevel
+	RequiresApproval bool
+	Timeout          time.Duration
+	Enabled          bool
+	Disabled         bool
 }
 
 type ToolRegistry struct {
-	tools map[string]Tool
+	tools map[string]registeredTool
+}
+
+type registeredTool struct {
+	tool  Tool
+	entry ToolRegistryEntry
 }
 
 func NewToolRegistry() *ToolRegistry {
-	return &ToolRegistry{tools: make(map[string]Tool)}
+	return &ToolRegistry{tools: make(map[string]registeredTool)}
 }
 
 func (r *ToolRegistry) Register(tool Tool) error {
+	return r.RegisterWithEntry(tool, ToolRegistryEntry{})
+}
+
+func (r *ToolRegistry) RegisterWithEntry(tool Tool, entry ToolRegistryEntry) error {
 	if tool == nil {
 		return fmt.Errorf("tool is nil")
 	}
@@ -32,26 +59,35 @@ func (r *ToolRegistry) Register(tool Tool) error {
 	if _, exists := r.tools[tool.Name()]; exists {
 		return fmt.Errorf("tool already registered: %s", tool.Name())
 	}
+	if entry.Name != "" && entry.Name != tool.Name() {
+		return fmt.Errorf("tool entry name %q does not match tool name %q", entry.Name, tool.Name())
+	}
 
-	r.tools[tool.Name()] = tool
+	entry = normalizeEntry(tool, entry)
+	r.tools[tool.Name()] = registeredTool{tool: tool, entry: entry}
 	return nil
 }
 
 func (r *ToolRegistry) GetTool(name string) (Tool, bool) {
-	tool, ok := r.tools[name]
-	return tool, ok
+	registered, ok := r.tools[name]
+	if !ok {
+		return nil, false
+	}
+	return registered.tool, true
+}
+
+func (r *ToolRegistry) GetDefinition(name string) (ToolDefinition, bool) {
+	registered, ok := r.tools[name]
+	if !ok {
+		return ToolDefinition{}, false
+	}
+	return definitionFromEntry(registered.entry), true
 }
 
 func (r *ToolRegistry) ListTools() []ToolDefinition {
 	defs := make([]ToolDefinition, 0, len(r.tools))
-	for _, tool := range r.tools {
-		defs = append(defs, ToolDefinition{
-			Name:        tool.Name(),
-			Description: tool.Description(),
-			Parameters:  tool.Parameters(),
-			Capability:  tool.Capability(),
-			RiskLevel:   tool.RiskLevel(),
-		})
+	for _, registered := range r.tools {
+		defs = append(defs, definitionFromEntry(registered.entry))
 	}
 
 	sort.Slice(defs, func(i, j int) bool {
@@ -61,6 +97,17 @@ func (r *ToolRegistry) ListTools() []ToolDefinition {
 	return defs
 }
 
+func (r *ToolRegistry) SetEnabled(name string, enabled bool) error {
+	registered, ok := r.tools[name]
+	if !ok {
+		return fmt.Errorf("tool not found: %s", name)
+	}
+	registered.entry.Enabled = enabled
+	registered.entry.Disabled = !enabled
+	r.tools[name] = registered
+	return nil
+}
+
 func (r *ToolRegistry) Execute(ctx context.Context, call ToolCall) ToolResult {
 	tool, ok := r.GetTool(call.Name)
 	if !ok {
@@ -68,4 +115,60 @@ func (r *ToolRegistry) Execute(ctx context.Context, call ToolCall) ToolResult {
 	}
 
 	return tool.Execute(ctx, call)
+}
+
+func normalizeEntry(tool Tool, entry ToolRegistryEntry) ToolRegistryEntry {
+	if entry.Name == "" {
+		entry.Name = tool.Name()
+	}
+	if entry.Owner == "" {
+		entry.Owner = "agent_core"
+	}
+	if entry.Description == "" {
+		entry.Description = tool.Description()
+	}
+	if entry.Parameters == nil {
+		entry.Parameters = tool.Parameters()
+	}
+	if entry.Capability == "" {
+		entry.Capability = tool.Capability()
+	}
+	if entry.RiskLevel == "" {
+		entry.RiskLevel = tool.RiskLevel()
+	}
+	if !entry.RequiresApproval {
+		entry.RequiresApproval = requiresApproval(entry.Capability, entry.RiskLevel)
+	}
+	if entry.Disabled {
+		entry.Enabled = false
+	} else if !entry.Enabled {
+		entry.Enabled = true
+	}
+	return entry
+}
+
+func definitionFromEntry(entry ToolRegistryEntry) ToolDefinition {
+	return ToolDefinition{
+		Name:             entry.Name,
+		Owner:            entry.Owner,
+		Description:      entry.Description,
+		Parameters:       entry.Parameters,
+		Capability:       entry.Capability,
+		RiskLevel:        entry.RiskLevel,
+		RequiresApproval: entry.RequiresApproval,
+		Timeout:          entry.Timeout,
+		Enabled:          entry.Enabled,
+	}
+}
+
+func requiresApproval(capability Capability, riskLevel RiskLevel) bool {
+	if capability != CapabilityReadOnly {
+		return true
+	}
+	switch riskLevel {
+	case RiskLevelSafeRead, RiskLevelSafeCompute:
+		return false
+	default:
+		return true
+	}
 }
