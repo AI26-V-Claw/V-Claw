@@ -1,7 +1,11 @@
 .claude/
+.env
+.env.local
 configs/google/credentials.json
+configs/google/oauth-client.internal.json
 configs/google/token.json
 .vclaw/secrets/
 .gocache/
 .gopath/
 bin/
+.appdata/
