@@ -33,9 +33,12 @@ func (l *InMemoryLog) Record(event Event) {
 
 type Entry struct {
 	Timestamp    string  `json:"timestamp"`
+	RequestID    string  `json:"request_id,omitempty"`
 	UpdateID     int64   `json:"update_id"`
+	Channel      string  `json:"channel,omitempty"`
 	ChatID       int64   `json:"chat_id"`
 	UserID       int64   `json:"user_id"`
+	SessionID    string  `json:"session_id,omitempty"`
 	Input        string  `json:"input"`
 	Intent       string  `json:"intent"`
 	SystemOpType string  `json:"system_op_type"`

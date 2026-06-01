@@ -12,6 +12,10 @@ type Config struct {
 	AllowedTelegramUserID    int64
 	DataDir                  string
 	LogDir                   string
+	LLMProvider              string
+	LLMAPIKey                string
+	LLMBaseURL               string
+	LLMModel                 string
 	AnthropicAPIKey          string
 	AnthropicClassifierModel string
 	AnthropicResponseModel   string
@@ -39,6 +43,10 @@ func Load() (Config, error) {
 		AllowedTelegramUserID:    allowedUserID,
 		DataDir:                  envOrDefault("DATA_DIR", "./data"),
 		LogDir:                   envOrDefault("LOG_DIR", "./logs"),
+		LLMProvider:              strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER"))),
+		LLMAPIKey:                strings.TrimSpace(os.Getenv("LLM_API_KEY")),
+		LLMBaseURL:               envOrDefault("LLM_BASE_URL", ""),
+		LLMModel:                 strings.TrimSpace(os.Getenv("LLM_MODEL")),
 		AnthropicAPIKey:          strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
 		AnthropicClassifierModel: strings.TrimSpace(os.Getenv("ANTHROPIC_CLASSIFIER_MODEL")),
 		AnthropicResponseModel:   strings.TrimSpace(os.Getenv("ANTHROPIC_RESPONSE_MODEL")),
