@@ -8,3 +8,4 @@ configs/google/token.json
 .gocache/
 .gopath/
 bin/
+.appdata/
