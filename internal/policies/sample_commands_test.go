@@ -351,28 +351,28 @@ func TestPolicy_XoaFile_Shell(t *testing.T) {
 			req:          shellReq("d-sh-01", "rm /workspace/output/old_report.csv"),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rm -rf temp dir",
 			req:          shellReq("d-sh-02", "rm -rf /workspace/temp"),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rm wildcard csv",
 			req:          shellReq("d-sh-03", "rm /workspace/output/*.csv"),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rmdir empty folder",
 			req:          shellReq("d-sh-04", "rmdir /workspace/old_input"),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "mv (rename = implicit delete old)",
@@ -395,7 +395,7 @@ print('Deleted')
 `),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name: "shutil.rmtree directory",
@@ -405,7 +405,7 @@ shutil.rmtree('/workspace/cache')
 `),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name: "pathlib unlink",
@@ -416,7 +416,7 @@ p.unlink()
 `),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name: "glob delete pattern",
@@ -427,7 +427,7 @@ for f in glob.glob('/workspace/output/*.tmp'):
 `),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 	}
 	runPolicyCases(t, cases)
@@ -460,14 +460,14 @@ func TestPolicy_HeThong_Shutdown(t *testing.T) {
 			req:          shellReq("sys-sh-01", "shutdown -h now"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatSystemShutdown},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatSystemShutdown},
 		},
 		{
 			name:         "reboot",
 			req:          shellReq("sys-sh-02", "reboot"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatSystemShutdown},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatSystemShutdown},
 		},
 		{
 			name: "python os.system shutdown",
@@ -477,7 +477,7 @@ os.system('shutdown /s /t 0')
 `),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatSystemShutdown},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatSystemShutdown},
 		},
 	}
 	runPolicyCases(t, cases)
@@ -490,28 +490,28 @@ func TestPolicy_HeThong_ServiceControl(t *testing.T) {
 			req:          shellReq("sys-sh-03", "systemctl stop nginx"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatServiceControl},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatServiceControl},
 		},
 		{
 			name:         "service restart",
 			req:          shellReq("sys-sh-04", "service postgresql restart"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatServiceControl},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatServiceControl},
 		},
 		{
 			name:         "windows sc stop",
 			req:          shellReq("sys-sh-05", "sc stop wuauserv"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatServiceControl},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatServiceControl},
 		},
 		{
 			name:         "net stop service",
 			req:          shellReq("sys-sh-06", "net stop \"Windows Update\""),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatServiceControl},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatServiceControl},
 		},
 	}
 	runPolicyCases(t, cases)
@@ -524,14 +524,14 @@ func TestPolicy_HeThong_Registry(t *testing.T) {
 			req:          shellReq("sys-sh-07", "reg add HKLM\\SOFTWARE\\MyApp /v Version /t REG_SZ /d 1.0"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatRegistryAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatRegistryAccess},
 		},
 		{
 			name:         "reg delete key",
 			req:          shellReq("sys-sh-08", "reg delete HKCU\\Software\\Temp /f"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatRegistryAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatRegistryAccess},
 		},
 		{
 			name: "python winreg access",
@@ -541,7 +541,7 @@ key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft')
 `),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatRegistryAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatRegistryAccess},
 		},
 	}
 	runPolicyCases(t, cases)
@@ -554,7 +554,7 @@ func TestPolicy_HeThong_PrivilegeEscalation(t *testing.T) {
 			req:          shellReq("sys-sh-09", "sudo rm -rf /"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskHighRisk,
-			wantThreats:  []safety.ThreatCategory{safety.CatPrivilegeEscalation},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatPrivilegeEscalation},
 		},
 		{
 			name:         "chmod 777 sensitive",
@@ -585,21 +585,21 @@ func TestPolicy_HeThong_CredentialAccess(t *testing.T) {
 			req:          shellReq("cred-sh-01", "cat /workspace/.env"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskCredentialAccess,
-			wantThreats:  []safety.ThreatCategory{safety.CatCredentialAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 		{
 			name:         "read id_rsa private key",
 			req:          shellReq("cred-sh-02", "cat /root/.ssh/id_rsa"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskCredentialAccess,
-			wantThreats:  []safety.ThreatCategory{safety.CatCredentialAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 		{
 			name:         "access credentials.json",
 			req:          shellReq("cred-sh-03", "cat /workspace/credentials.json"),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskCredentialAccess,
-			wantThreats:  []safety.ThreatCategory{safety.CatCredentialAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 		{
 			name: "python read .env",
@@ -610,7 +610,7 @@ print(secrets)
 `),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskCredentialAccess,
-			wantThreats:  []safety.ThreatCategory{safety.CatCredentialAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 		{
 			name: "python dotenv load",
@@ -622,7 +622,7 @@ print(os.getenv('API_KEY'))
 `),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskCredentialAccess,
-			wantThreats:  []safety.ThreatCategory{safety.CatCredentialAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 	}
 	runPolicyCases(t, cases)
@@ -635,14 +635,14 @@ func TestPolicy_HeThong_NetworkAccess(t *testing.T) {
 			req:          shellReq("net-sh-01", "curl https://api.example.com/data"),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskExternalNetwork,
-			wantThreats:  []safety.ThreatCategory{safety.CatNetworkAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 		{
 			name:         "wget download file",
 			req:          shellReq("net-sh-02", "wget https://files.example.com/dataset.zip -O /workspace/data.zip"),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskExternalNetwork,
-			wantThreats:  []safety.ThreatCategory{safety.CatNetworkAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 		{
 			name: "python requests.get",
@@ -653,7 +653,7 @@ data = resp.json()
 `),
 			wantDecision: DecisionBlock,
 			wantRisk:     RiskExternalNetwork,
-			wantThreats:  []safety.ThreatCategory{safety.CatNetworkAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 		{
 			name: "python subprocess curl",
@@ -720,7 +720,7 @@ for f in glob.glob('/workspace/output/*.tmp'):
 `),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskNeedsApproval,
-			wantThreats:  []safety.ThreatCategory{safety.CatFileDeletion},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		// Bước 5: Kiểm tra output
 		{
@@ -736,7 +736,7 @@ for f in glob.glob('/workspace/output/*.tmp'):
 			req:          shellReq("wf-06", "curl https://external-api.com/upload -d @/workspace/output/regional_summary.xlsx"),
 			wantDecision: DecisionNeedsApproval,
 			wantRisk:     RiskExternalNetwork,
-			wantThreats:  []safety.ThreatCategory{safety.CatNetworkAccess},
+			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 	}
 	runPolicyCases(t, cases)
