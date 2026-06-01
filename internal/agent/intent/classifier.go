@@ -130,6 +130,9 @@ func detectIntentType(input string) IntentType {
 		"kiểm tra rồi", "rồi xóa",
 		"rồi sửa", "rồi gửi",
 		"rồi trả lời", "rồi restore",
+		"and reply", "and delete", "and send",
+		"then reply", "then delete", "then send",
+		"if not", "nếu không", "if ", "nếu ",
 	}
 	for _, p := range compositePatterns {
 		if strings.Contains(lower, p) {
@@ -138,8 +141,8 @@ func detectIntentType(input string) IntentType {
 	}
 	// Detect composite by presence of both read AND dangerous keywords
 	hasRead := containsAny(lower, "tìm", "đọc", "kiểm tra", "lấy", "check", "find", "read", "search", "backup")
-	hasDangerous := containsAny(lower, "xóa", "delete", "gửi", "send", "sửa", "edit", "nén", "zip", "restore")
-	hasConjunction := containsAny(lower, "và", "and", "rồi", "then", "sau đó", "after")
+	hasDangerous := containsAny(lower, "xóa", "delete", "gửi", "send", "sửa", "edit", "nén", "zip", "restore", "reply", "trả lời", "restart", "khởi động")
+	hasConjunction := containsAny(lower, "và", "and", "rồi", "then", "sau đó", "after", "if", "nếu")
 	if hasRead && hasDangerous && hasConjunction {
 		return TypeComposite
 	}
@@ -169,7 +172,9 @@ func detectIntentType(input string) IntentType {
 		"chào", "hello", "hey", "xin chào",
 		"cảm ơn", "thank", "tạm biệt", "bye",
 		"buổi sáng", "buổi chiều", "buổi tối",
-		"tốt lành", "khỏe không",
+		"tốt lành", "khỏe không", "how are you",
+		"good morning", "good afternoon", "good evening",
+		"see you", "goodbye",
 	}
 	for _, p := range greetingPatterns {
 		if strings.Contains(lower, p) && len(lower) < 60 {
@@ -178,6 +183,14 @@ func detectIntentType(input string) IntentType {
 	}
 	// "hi" with word-boundary match. Also match "hi," (with punctuation).
 	if containsWordFuzzy(lower, "hi") && len(lower) < 50 {
+		return TypeGreeting
+	}
+	// Emoji greetings
+	if (strings.Contains(lower, "😊") || strings.Contains(lower, "👋")) && len(lower) < 30 {
+		return TypeGreeting
+	}
+	// LOL, haha patterns (short expressions)
+	if containsAny(lower, "lol", "haha", "hehe") && len(lower) < 30 && !containsAny(lower, "file", "email", "xóa", "delete", "gửi", "send") {
 		return TypeGreeting
 	}
 
@@ -221,7 +234,7 @@ func calculateConfidence(input string, t IntentType) float64 {
 }
 
 func scoreGreeting(input string) float64 {
-	keywords := []string{"chào", "hello", "hey", "xin chào", "cảm ơn", "thank", "tạm biệt", "bye", "buổi sáng", "tốt lành"}
+	keywords := []string{"chào", "hello", "hey", "xin chào", "cảm ơn", "thank", "tạm biệt", "bye", "buổi sáng", "tốt lành", "khỏe không", "how are you"}
 	for _, k := range keywords {
 		if strings.Contains(input, k) {
 			return 0.95
@@ -229,6 +242,14 @@ func scoreGreeting(input string) float64 {
 	}
 	if containsWord(input, "hi") {
 		return 0.95
+	}
+	// Emoji and short expressions
+	if strings.Contains(input, "😊") || strings.Contains(input, "👋") {
+		return 0.90
+	}
+	// LOL, haha patterns
+	if containsAny(input, "lol", "haha", "hehe") && len(input) < 30 {
+		return 0.90
 	}
 	if len(input) < 20 {
 		return 0.70
@@ -279,15 +300,19 @@ func scoreDangerous(input string) float64 {
 
 func scoreComposite(input string) float64 {
 	score := 0.75
-	for _, k := range []string{"và", "and", "rồi", "then", "sau đó"} {
+	for _, k := range []string{"và", "and", "rồi", "then", "sau đó", "if", "nếu"} {
 		if strings.Contains(input, k) {
 			score += 0.10
 		}
 	}
 	// Boost if contains both read and dangerous keywords
-	hasRead := containsAny(input, "tìm", "đọc", "kiểm tra", "lấy", "check", "find", "backup")
-	hasDanger := containsAny(input, "xóa", "delete", "gửi", "send", "sửa", "nén", "zip", "restore")
+	hasRead := containsAny(input, "tìm", "đọc", "kiểm tra", "lấy", "check", "find", "backup", "read")
+	hasDanger := containsAny(input, "xóa", "delete", "gửi", "send", "sửa", "nén", "zip", "restore", "reply", "trả lời", "restart", "khởi động")
 	if hasRead && hasDanger {
+		score += 0.15
+	}
+	// Strong boost for explicit conditional patterns
+	if containsAny(input, "if not", "nếu không", "if ", "nếu ") {
 		score += 0.10
 	}
 	return clamp(score)
