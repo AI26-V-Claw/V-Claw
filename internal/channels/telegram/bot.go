@@ -37,7 +37,7 @@ func New(token string, allowedUserID int64, dataDir string, orchestrator *agent.
 		dataDir:       dataDir,
 		offsetPath:    filepath.Join(dataDir, "telegram_offset.txt"),
 		client: &http.Client{
-			Timeout: 35 * time.Second,
+			Timeout: 65 * time.Second,
 		},
 		orchestrator: orchestrator,
 		logger:       logger,
