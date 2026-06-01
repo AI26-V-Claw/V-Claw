@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"vclaw/internal/connectors/google"
 	"vclaw/internal/connectors/google/calendar"
@@ -98,15 +99,26 @@ func runGoogle(ctx context.Context, args []string) error {
 
 		fmt.Println()
 		fmt.Println("Upcoming calendar events:")
-		events, err := calendar.ListUpcomingEvents(ctx, httpClient, "primary", 10)
+		calClient, err := calendar.NewClient(ctx, httpClient)
+		if err != nil {
+			return fmt.Errorf("failed to create calendar client: %w", err)
+		}
+		
+		timeMin := time.Now()
+		timeMax := timeMin.AddDate(0, 1, 0) // Next 1 month
+		
+		events, err := calClient.ListEvents(ctx, timeMin, timeMax, "")
 		if err != nil {
 			return fmt.Errorf("calendar smoke test failed: %w", err)
 		}
 		if len(events) == 0 {
 			fmt.Println("- no upcoming events found")
 		}
-		for _, event := range events {
-			fmt.Printf("- %s | %s\n", event.Start, event.Summary)
+		for i, event := range events {
+			if i >= 10 {
+				break
+			}
+			fmt.Printf("- %s | %s\n", event.StartTime.Format(time.RFC3339), event.Title)
 		}
 
 		fmt.Println()
