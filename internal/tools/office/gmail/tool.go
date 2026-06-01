@@ -30,7 +30,7 @@ const (
 type ToolRegistryEntry struct {
 	Name             string
 	Owner            string
-	DescriptionVi    string
+	Description      string
 	DefaultRiskLevel string
 	RequiresApproval bool
 }
@@ -39,14 +39,14 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameListEmails,
 		Owner:            "integration",
-		DescriptionVi:    "Liệt kê email theo điều kiện tìm kiếm.",
+		Description:      "List emails by search criteria.",
 		DefaultRiskLevel: "safe_read",
 		RequiresApproval: false,
 	},
 	{
 		Name:             ToolNameGetEmail,
 		Owner:            "integration",
-		DescriptionVi:    "Đọc chi tiết một email.",
+		Description:      "Read one email in detail.",
 		DefaultRiskLevel: "safe_read",
 		RequiresApproval: false,
 	},

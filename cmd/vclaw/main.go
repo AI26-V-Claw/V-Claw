@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -18,9 +19,14 @@ import (
 const (
 	defaultCredentialsPath = "configs/google/credentials.json"
 	defaultTokenPath       = "configs/google/token.json"
+	defaultEnvPath         = ".env"
 )
 
 func main() {
+	if err := loadDotEnv(defaultEnvPath); err != nil {
+		fmt.Fprintf(os.Stderr, "vclaw: load .env: %v\n", err)
+		os.Exit(1)
+	}
 	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "vclaw: %v\n", err)
 		os.Exit(1)
@@ -124,7 +130,7 @@ func runGoogle(ctx context.Context, args []string) error {
 		}
 
 		if strings.TrimSpace(*chatSpace) != "" {
-			message, err := chat.CreateTextMessage(ctx, httpClient, *chatSpace, *chatText)
+			message, err := chat.CreateTextMessage(ctx, httpClient, *chatSpace, *chatText, chat.MessageCreateOptions{})
 			if err != nil {
 				return fmt.Errorf("chat send smoke test failed: %w", err)
 			}
@@ -135,6 +141,8 @@ func runGoogle(ctx context.Context, args []string) error {
 		return nil
 	case "gmail":
 		return runGoogleGmail(ctx, args[1:])
+	case "chat":
+		return runGoogleChat(ctx, args[1:])
 
 	case "help", "-h", "--help":
 		printGoogleUsage()
@@ -296,6 +304,58 @@ func envOrDefault(name string, fallback string) string {
 	return value
 }
 
+func loadDotEnv(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return fmt.Errorf("%s:%d: expected KEY=value", path, lineNumber)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return fmt.Errorf("%s:%d: env key is empty", path, lineNumber)
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+
+		value = parseDotEnvValue(strings.TrimSpace(value))
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("%s:%d: set %s: %w", path, lineNumber, key, err)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parseDotEnvValue(value string) string {
+	if len(value) < 2 {
+		return value
+	}
+	if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
 func splitCSV(value string) []string {
 	items := strings.Split(value, ",")
 	out := make([]string, 0, len(items))
@@ -312,7 +372,8 @@ func printUsage() {
 	fmt.Println(`Usage:
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
-  vclaw google gmail <list|get>`)
+  vclaw google gmail <list|get>
+  vclaw google chat <list-spaces|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>`)
 }
 
 func printGoogleUsage() {
@@ -328,6 +389,8 @@ func printGoogleUsage() {
 
 	fmt.Println()
 	printGoogleGmailUsage()
+	fmt.Println()
+	printGoogleChatUsage()
 }
 
 func printGoogleGmailUsage() {
