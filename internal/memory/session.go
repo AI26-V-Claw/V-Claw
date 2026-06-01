@@ -21,40 +21,53 @@ type Message struct {
 
 type Store struct {
 	mu       sync.Mutex
-	messages []Message
+	sessions map[string][]Message
 	maxSize  int
 }
 
 func NewStore() *Store {
-	return &Store{maxSize: 20}
+	return &Store{
+		sessions: map[string][]Message{},
+		maxSize:  20,
+	}
 }
 
-func (s *Store) Append(role Role, text string) {
+func (s *Store) Append(sessionID string, role Role, text string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.messages = append(s.messages, Message{
+	key := normalizedSessionID(sessionID)
+	s.sessions[key] = append(s.sessions[key], Message{
 		Role:      role,
 		Text:      strings.TrimSpace(text),
 		Timestamp: time.Now().UTC(),
 	})
-	if len(s.messages) > s.maxSize {
-		s.messages = append([]Message(nil), s.messages[len(s.messages)-s.maxSize:]...)
+	if len(s.sessions[key]) > s.maxSize {
+		s.sessions[key] = append([]Message(nil), s.sessions[key][len(s.sessions[key])-s.maxSize:]...)
 	}
 }
 
-func (s *Store) GetHistory() []Message {
+func (s *Store) GetHistory(sessionID string) []Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	history := make([]Message, len(s.messages))
-	copy(history, s.messages)
+	key := normalizedSessionID(sessionID)
+	history := make([]Message, len(s.sessions[key]))
+	copy(history, s.sessions[key])
 	return history
 }
 
-func (s *Store) Clear() {
+func (s *Store) Clear(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.messages = nil
+	delete(s.sessions, normalizedSessionID(sessionID))
+}
+
+func normalizedSessionID(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "default"
+	}
+	return sessionID
 }
