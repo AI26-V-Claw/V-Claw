@@ -39,6 +39,10 @@ Copy `.env.example` to `.env` and set:
 - `TELEGRAM_BOT_TOKEN`
 - `ALLOWED_TELEGRAM_USER_ID`
 - optional `DATA_DIR` and `LOG_DIR`
+- optional LLM settings:
+  - `LLM_PROVIDER=anthropic` or `LLM_PROVIDER=openai-compatible`
+  - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`
+  - or the legacy `ANTHROPIC_API_KEY` and `ANTHROPIC_RESPONSE_MODEL`
 
 ## Intent evaluation
 

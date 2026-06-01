@@ -97,14 +97,21 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		return true, nil
 	}
 	inbound := agent.InboundMessage{
-		UpdateID: int64(update.UpdateID),
-		ChatID:   update.Message.Chat.ID,
-		UserID:   0,
-		Text:     update.Message.Text,
-		Source:   "telegram",
+		RequestID: fmt.Sprintf("telegram_update_%d", update.UpdateID),
+		SessionID: "",
+		Channel:   "telegram",
+		UpdateID:  int64(update.UpdateID),
+		ChatID:    update.Message.Chat.ID,
+		UserID:    0,
+		Text:      update.Message.Text,
+		Source:    "telegram",
+		Timestamp: time.Now().UTC(),
 	}
 	if update.Message.From != nil {
 		inbound.UserID = update.Message.From.ID
+		inbound.SessionID = fmt.Sprintf("telegram_user_%d", update.Message.From.ID)
+	} else if update.Message.Chat.ID != 0 {
+		inbound.SessionID = fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID)
 	}
 
 	if strings.TrimSpace(update.Message.Text) == "" {
