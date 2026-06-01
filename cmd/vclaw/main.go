@@ -7,6 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"encoding/json"
+
+	"vclaw/internal/audit"
 	"vclaw/internal/connectors/google"
 	"vclaw/internal/connectors/google/calendar"
 	"vclaw/internal/connectors/google/chat"
@@ -14,6 +17,9 @@ import (
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	"vclaw/internal/policies"
 	"vclaw/internal/safety"
+	"vclaw/internal/sandbox/gate"
+	"vclaw/internal/sandbox/runtime"
+	"vclaw/internal/toolrouter"
 )
 
 const (
@@ -38,7 +44,7 @@ func run(ctx context.Context, args []string) error {
 	case "google":
 		return runGoogle(ctx, args[1:])
 	case "sandbox":
-		return runSandbox(args[1:])
+		return runSandbox(ctx, args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -168,7 +174,7 @@ func envOrDefault(name string, fallback string) string {
 // ─── sandbox subcommand ───────────────────────────────────────────────────────
 
 // runSandbox dispatches vclaw sandbox <subcommand>.
-func runSandbox(args []string) error {
+func runSandbox(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		printSandboxUsage()
 		return nil
@@ -176,6 +182,8 @@ func runSandbox(args []string) error {
 	switch args[0] {
 	case "check":
 		return runSandboxCheck(args[1:])
+	case "run":
+		return runSandboxRun(ctx, args[1:])
 	case "help", "-h", "--help":
 		printSandboxUsage()
 		return nil
@@ -287,6 +295,155 @@ func runSandboxCheck(args []string) error {
 	return nil
 }
 
+// runSandboxRun performs a full end-to-end sandbox run using the ToolRouter
+// and a real DockerRunner. The full pipeline executes:
+//
+//	ToolRouter → GatedRunner → PolicyChecker → SafetyScanner → DockerRunner
+//
+// The result (including policy decisions) is printed as indented JSON.
+//
+// Usage:
+//
+//	vclaw sandbox run -tool run_shell -cmd "ls /workspace" -workspace /tmp/ws
+//	vclaw sandbox run -tool run_python -code "print('hello')" -workspace /tmp/ws
+func runSandboxRun(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("vclaw sandbox run", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	tool := fs.String("tool", "run_shell", "tool: run_shell | run_python")
+	cmd := fs.String("cmd", "", "shell command (run_shell)")
+	code := fs.String("code", "", "python code (run_python)")
+	workspace := fs.String("workspace", "", "absolute path to workspace dir (required)")
+	requestID := fs.String("request-id", "cli_run_001", "unique request ID")
+	sessionID := fs.String("session-id", "cli_session", "session ID")
+	userID := fs.String("user-id", "developer", "user ID")
+	intent := fs.String("intent", "", "user intent (used in audit log)")
+	jsonOut := fs.Bool("json", false, "output full JSON response instead of human-readable")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(*workspace) == "" {
+		return fmt.Errorf("sandbox run: -workspace is required")
+	}
+
+	// ── Build GatedRunner ─────────────────────────────────────────────────
+	guard, err := runtime.NewWorkspaceGuard(*workspace)
+	if err != nil {
+		return fmt.Errorf("sandbox run: workspace guard: %w", err)
+	}
+
+	auditLogger := audit.NewMemoryLogger()
+	gated := gate.NewGatedRunner(gate.Config{
+		Checker:  policies.DefaultChecker,
+		Detector: safety.DefaultScanner,
+		Logger:   auditLogger,
+		Runner:   runtime.NewDockerRunner(runtime.DockerRunnerConfig{Guard: guard}),
+	})
+
+	router := toolrouter.New(toolrouter.Config{Runner: gated})
+
+	// ── Build ToolRequest ─────────────────────────────────────────────────
+	req := toolrouter.ToolRequest{
+		RequestID: *requestID,
+		SessionID: *sessionID,
+		UserID:    *userID,
+		Tool:      *tool,
+		Input: toolrouter.ToolInput{
+			WorkspaceDir: *workspace,
+			Command:      *cmd,
+			Code:         *code,
+		},
+		Context: toolrouter.ToolContext{
+			UserIntent: *intent,
+			Source:     "user_direct",
+		},
+	}
+
+	// ── Dispatch ──────────────────────────────────────────────────────────
+	resp := router.Dispatch(ctx, req)
+
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+
+	// ── Human-readable output ─────────────────────────────────────────────
+	statusIcon := map[string]string{
+		"success":          "✅",
+		"failed":           "❌",
+		"timeout":          "⏱️ ",
+		"blocked":          "🚫",
+		"pending_approval": "⚠️ ",
+		"error":            "💥",
+	}
+	icon := statusIcon[resp.Status]
+	if icon == "" {
+		icon = "?"
+	}
+
+	fmt.Println()
+	fmt.Printf("══════════════════════════════════════════════════\n")
+	fmt.Printf(" %s  STATUS: %-30s\n", icon, strings.ToUpper(resp.Status))
+	fmt.Printf("══════════════════════════════════════════════════\n")
+	fmt.Printf("  Tool       : %s\n", *tool)
+	fmt.Printf("  Request ID : %s\n", resp.RequestID)
+	if resp.JobID != "" {
+		fmt.Printf("  Job ID     : %s\n", resp.JobID)
+	}
+	if resp.PolicyDecision != "" {
+		fmt.Printf("  Policy     : %s / %s\n", resp.PolicyDecision, resp.PolicyRiskLevel)
+	}
+	if len(resp.PolicyReasons) > 0 {
+		fmt.Println()
+		fmt.Println("  Lý do chính sách:")
+		for _, r := range resp.PolicyReasons {
+			fmt.Printf("    • %s\n", r)
+		}
+	}
+
+	if resp.Status == "pending_approval" {
+		fmt.Println()
+		fmt.Printf("  Approval ID  : %s\n", resp.ApprovalID)
+		fmt.Printf("  Tóm tắt HITL : %s\n", resp.ApprovalSummaryVI)
+	}
+
+	if resp.Stdout != "" || resp.Stderr != "" {
+		fmt.Println()
+		if resp.Stdout != "" {
+			fmt.Printf("  Stdout (%dms):\n", resp.DurationMs)
+			for _, line := range strings.Split(strings.TrimRight(resp.Stdout, "\n"), "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+		if resp.Stderr != "" {
+			fmt.Println("  Stderr:")
+			for _, line := range strings.Split(strings.TrimRight(resp.Stderr, "\n"), "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+	}
+
+	if resp.ErrorMessage != "" {
+		fmt.Printf("\n  Error: %s\n", resp.ErrorMessage)
+	}
+
+	// ── Audit events summary ──────────────────────────────────────────────
+	events, _ := auditLogger.Query(audit.Filter{RequestID: *requestID})
+	if len(events) > 0 {
+		fmt.Printf("\n  Audit log (%d events):\n", len(events))
+		for _, ev := range events {
+			fmt.Printf("    [%s] %s\n", ev.EventType, ev.Status)
+		}
+	}
+	fmt.Printf("══════════════════════════════════════════════════\n\n")
+
+	return nil
+}
+
 func printSandboxUsage() {
 	fmt.Println(`Usage:
   vclaw sandbox check [options]
@@ -305,14 +462,22 @@ Examples:
   vclaw sandbox check -tool run_shell -cmd "shutdown -h now"
   vclaw sandbox check -tool run_python -code "import os; os.remove('a.txt')"
   vclaw sandbox check -tool file_ops -op delete -path "/workspace/old.csv"
-  vclaw sandbox check -tool run_shell -cmd "cat .env"`)
+  vclaw sandbox check -tool run_shell -cmd "cat .env"
+
+sandbox run — full end-to-end execution (requires Docker + vclaw-sandbox image):
+  vclaw sandbox run -tool run_shell  -cmd "ls /workspace"  -workspace /tmp/ws
+  vclaw sandbox run -tool run_python -code "print('hello')" -workspace /tmp/ws
+  vclaw sandbox run -tool run_shell  -cmd "rm -rf /workspace/temp" -workspace /tmp/ws
+  vclaw sandbox run -tool run_shell  -cmd "shutdown -h now" -workspace /tmp/ws
+  vclaw sandbox run -tool run_python -code "print(42)" -workspace /tmp/ws -json`)
 }
 
 func printUsage() {
 	fmt.Println(`Usage:
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
-  vclaw sandbox check -tool <tool> [-cmd|-code|-op|-path] "<input>"`)
+  vclaw sandbox check -tool <tool> [-cmd|-code|-op|-path] "<input>"
+  vclaw sandbox run   -tool <tool> [-cmd|-code] "<input>" -workspace <dir>`)
 }
 
 func printGoogleUsage() {
