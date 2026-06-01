@@ -1,140 +1,190 @@
-//go:build ignore
-
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 
-	"vclaw/internal/agent"
-	"vclaw/internal/pipeline/stages"
+	"vclaw/internal/agent/intent"
+	"vclaw/internal/memory"
+	"vclaw/internal/providers"
+	"vclaw/internal/providers/gemini"
+	"vclaw/internal/safety/risk"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		return
+	fmt.Println("V-Claw Intent Classification Example")
+	fmt.Println("=====================================\n")
+
+	// Example 1: Heuristic Classifier (Fast, No API Key)
+	fmt.Println("Example 1: Heuristic Classifier")
+	fmt.Println("--------------------------------")
+	runHeuristicExample()
+
+	// Example 2: LLM Classifier (Production, Requires API Key)
+	if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
+		fmt.Println("\nExample 2: LLM-based Classifier")
+		fmt.Println("--------------------------------")
+		runLLMExample(apiKey)
+	} else {
+		fmt.Println("\nExample 2: Skipped (Set GEMINI_API_KEY to run)")
 	}
 
-	userInput := os.Args[1]
-	
-	// Create intent classifier
-	classifier := agent.NewIntentClassifier(agent.DefaultConfidenceConfig)
-	
-	// Classify user input
-	fmt.Printf("📝 User Input: %q\n\n", userInput)
-	
-	result, err := classifier.Classify(context.Background(), userInput)
-	if err != nil {
-		fmt.Printf("❌ Error: %v\n", err)
-		return
+	// Example 3: Memory Isolation
+	fmt.Println("\nExample 3: Memory Isolation for Dangerous Actions")
+	fmt.Println("--------------------------------------------------")
+	runMemoryIsolationExample()
+
+	// Example 4: Safety Risk Assessment
+	fmt.Println("\nExample 4: Safety Risk Assessment")
+	fmt.Println("----------------------------------")
+	runSafetyExample()
+}
+
+func runHeuristicExample() {
+	ctx := context.Background()
+	classifier := intent.NewClassifier(intent.DefaultConfig)
+
+	testCases := []string{
+		"Chào buổi sáng",
+		"Đọc file config.json",
+		"Xóa file /tmp/test.txt",
+		"Xóa file config", // Missing path
+		"Tìm các file log cũ và xóa chúng",
 	}
-	
-	if result.Error != nil {
-		fmt.Printf("❌ Classification Error: %v\n", result.Error)
-		return
-	}
-	
-	intent := result.Intent
-	
-	// Display classification result
-	fmt.Printf("🎯 Intent Type: %s\n", intent.Type)
-	fmt.Printf("📊 Confidence: %.2f%%\n", intent.Confidence*100)
-	fmt.Printf("💭 Reasoning: %s\n\n", intent.Reasoning)
-	
-	// Check if clarification is needed
-	if result.NeedsClarification {
-		fmt.Println("❓ Clarification Needed")
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		
-		if result.ClarificationOptions != nil {
-			fmt.Println(result.ClarificationOptions.Question)
-			fmt.Println()
-			
-			if len(result.ClarificationOptions.Options) > 0 {
-				for _, opt := range result.ClarificationOptions.Options {
-					fmt.Printf("%s) %s (confidence: %.2f%%)\n", 
-						opt.ID, opt.Label, opt.Confidence*100)
-				}
-			}
+
+	for _, input := range testCases {
+		fmt.Printf("\nInput: %q\n", input)
+
+		output, err := intent.Classify(ctx, classifier, input)
+		if err != nil {
+			log.Printf("Error: %v\n", err)
+			continue
 		}
-		return
-	}
-	
-	// Display tool calls
-	if len(intent.ToolCalls) > 0 {
-		fmt.Println("🔧 Tool Calls:")
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		
-		validator := stages.NewParameterValidator(stages.ParameterValidatorConfig{})
-		
-		for i, toolCall := range intent.ToolCalls {
-			fmt.Printf("\n%d. %s (%s)\n", i+1, toolCall.Name, toolCall.Category)
-			fmt.Printf("   Timeout: %ds\n", toolCall.Timeout)
-			
-			// Validate parameters
-			validation, err := validator.Validate(toolCall)
-			if err != nil {
-				fmt.Printf("   ❌ Validation Error: %v\n", err)
-				continue
-			}
-			
-			// Display parameters
-			if len(toolCall.Parameters) > 0 {
-				fmt.Println("   Parameters:")
-				for key, value := range toolCall.Parameters {
-					fmt.Printf("     - %s: %v\n", key, value)
-				}
-			}
-			
-			// Display validation result
-			if !validation.IsValid {
-				fmt.Printf("   ⚠️  Missing Parameters: %v\n", validation.Missing)
-				
-				clarification := validator.GenerateClarificationRequest(validation, toolCall.Name)
-				fmt.Printf("\n   💬 %s\n", clarification)
-			} else {
-				fmt.Println("   ✅ All parameters valid")
-			}
-		}
-	} else {
-		fmt.Println("ℹ️  No tool calls required (direct response)")
-	}
-	
-	// Display confirmation requirement
-	fmt.Println()
-	if intent.NeedsConfirm {
-		fmt.Println("⚠️  CONFIRMATION REQUIRED")
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		fmt.Println("This action is dangerous and requires explicit user confirmation.")
-		fmt.Println("User must approve before execution.")
-	} else {
-		fmt.Println("✅ Safe to execute without confirmation")
-	}
-	
-	// Display missing parameters summary
-	if len(intent.MissingParams) > 0 {
-		fmt.Println()
-		fmt.Println("📋 Missing Parameters Summary:")
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-		for _, param := range intent.MissingParams {
-			fmt.Printf("  - %s\n", param)
-		}
-		fmt.Println("\n⚠️  Cannot execute until all parameters are provided.")
+
+		printClassificationOutput(output)
 	}
 }
 
-func printUsage() {
-	fmt.Println("Intent Classification Demo")
-	fmt.Println()
-	fmt.Println("Usage:")
-	fmt.Println("  go run examples/intent_classification/main.go \"<user input>\"")
-	fmt.Println()
-	fmt.Println("Examples:")
-	fmt.Println("  go run examples/intent_classification/main.go \"Chào buổi sáng\"")
-	fmt.Println("  go run examples/intent_classification/main.go \"Đọc file config.json\"")
-	fmt.Println("  go run examples/intent_classification/main.go \"Xóa file config.json\"")
-	fmt.Println("  go run examples/intent_classification/main.go \"Tìm và xóa các file log cũ\"")
-	fmt.Println("  go run examples/intent_classification/main.go \"Xử lý file config\"")
+func runLLMExample(apiKey string) {
+	ctx := context.Background()
+
+	// Create Gemini provider
+	cfg := providers.DefaultConfig()
+	cfg.APIKey = apiKey
+
+	provider, err := gemini.NewClient(ctx, cfg)
+	if err != nil {
+		log.Printf("Failed to create Gemini client: %v\n", err)
+		return
+	}
+	defer provider.Close()
+
+	// Create LLM classifier
+	classifier, err := intent.NewLLMClassifier(provider, intent.DefaultConfig)
+	if err != nil {
+		log.Printf("Failed to create LLM classifier: %v\n", err)
+		return
+	}
+
+	testCases := []string{
+		"Gửi email cho john@example.com với tiêu đề 'Meeting' và nội dung 'See you at 3pm'",
+		"Gửi email cho sếp", // Missing all params
+	}
+
+	for _, input := range testCases {
+		fmt.Printf("\nInput: %q\n", input)
+
+		output, err := classifier.Classify(ctx, input)
+		if err != nil {
+			log.Printf("Error: %v\n", err)
+			continue
+		}
+
+		printClassificationOutput(output)
+	}
+}
+
+func runMemoryIsolationExample() {
+	// Simulate a conversation where user mentioned a file path yesterday
+	session := memory.NewSessionMemory(20)
+
+	// Day 1: User mentions a file
+	session.AddMessage(memory.RoleUser, "Tôi có file config ở /etc/app.conf")
+	session.AddMessage(memory.RoleAssistant, "Tôi đã ghi nhận file config của bạn ở /etc/app.conf")
+
+	// Day 2: User asks to delete "the config file" without specifying path
+	session.AddMessage(memory.RoleUser, "Xóa file config đi")
+
+	// Get isolated history for dangerous action
+	recentHistory, isolationWarning := session.GetFilteredHistoryForDangerousAction(3)
+
+	fmt.Println("Recent History (for context only):")
+	for _, msg := range recentHistory {
+		fmt.Printf("  %s\n", msg)
+	}
+
+	fmt.Println("\nIsolation Warning:")
+	fmt.Println(isolationWarning)
+
+	fmt.Println("\nExpected Behavior:")
+	fmt.Println("  - System MUST NOT use /etc/app.conf from Day 1")
+	fmt.Println("  - System MUST ask user to specify the path again")
+	fmt.Println("  - missing_params should include 'path'")
+}
+
+func runSafetyExample() {
+	classifier := risk.NewClassifier()
+
+	testCases := []struct {
+		toolName   string
+		intentType intent.IntentType
+	}{
+		{"read_file", intent.TypeReadInfo},
+		{"delete_file", intent.TypeDangerousAction},
+		{"send_email", intent.TypeDangerousAction},
+		{"exec", intent.TypeDangerousAction},
+		"format_disk", intent.TypeDangerousAction},
+	}
+
+	for _, tc := range testCases {
+		fmt.Printf("\nTool: %s (Intent: %s)\n", tc.toolName, tc.intentType)
+
+		assessment, err := classifier.Assess(tc.toolName, tc.intentType)
+		if err != nil {
+			log.Printf("Error: %v\n", err)
+			continue
+		}
+
+		fmt.Printf("  Risk Level: %s\n", assessment.RiskLevel)
+		fmt.Printf("  Decision: %s\n", assessment.Decision)
+		fmt.Printf("  Requires Approval: %v\n", assessment.RequiresApproval)
+		fmt.Printf("  Reason: %s\n", assessment.ReasonVi)
+	}
+}
+
+func printClassificationOutput(output *intent.ClassificationOutput) {
+	// Pretty print JSON
+	data, _ := json.MarshalIndent(output, "  ", "  ")
+	fmt.Printf("Output:\n  %s\n", string(data))
+
+	// Highlight key decisions
+	if output.NeedsClarification {
+		fmt.Println("  ⚠️  NEEDS CLARIFICATION")
+		if output.ClarificationMessage != "" {
+			fmt.Printf("  Message: %s\n", output.ClarificationMessage)
+		}
+	}
+
+	if output.Intent != nil {
+		if output.Intent.NeedsConfirm {
+			fmt.Println("  🔒 REQUIRES USER CONFIRMATION")
+		}
+
+		if len(output.Intent.MissingParams) > 0 {
+			fmt.Printf("  ❌ Missing params: %v\n", output.Intent.MissingParams)
+		}
+	}
 }
