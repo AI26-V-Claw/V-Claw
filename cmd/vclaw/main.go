@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultCredentialsPath = "configs/google/oauth-client.internal.json"
+	defaultCredentialsPath = "configs/google/credentials.json"
 	defaultTokenPath       = "configs/google/token.json"
 )
 
@@ -148,9 +148,17 @@ func newGoogleFlagSet(name string) *flag.FlagSet {
 }
 
 func addGoogleAuthFlags(fs *flag.FlagSet) (*string, *string) {
-	credentialsPath := fs.String("credentials", defaultCredentialsPath, "OAuth desktop client credentials JSON")
-	tokenPath := fs.String("token", defaultTokenPath, "OAuth token cache path")
+	credentialsPath := fs.String("credentials", envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", defaultCredentialsPath), "OAuth desktop client credentials JSON")
+	tokenPath := fs.String("token", envOrDefault("VCLAW_GOOGLE_TOKEN_PATH", defaultTokenPath), "OAuth token cache path")
 	return credentialsPath, tokenPath
+}
+
+func envOrDefault(name string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func printUsage() {
