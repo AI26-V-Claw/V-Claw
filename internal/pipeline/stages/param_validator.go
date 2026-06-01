@@ -325,26 +325,33 @@ func (pv *ParameterValidator) extractCommand(input string) string {
 	// Look for common command patterns
 	inputLower := strings.ToLower(input)
 
+	// Helper: find keyword in lower, extract suffix from original input
+	extractAfter := func(keyword string) string {
+		idx := strings.Index(inputLower, keyword)
+		if idx < 0 {
+			return ""
+		}
+		suffix := strings.TrimSpace(input[idx+len(keyword):])
+		return suffix
+	}
+
 	// Vietnamese patterns
 	if strings.Contains(inputLower, "chạy lệnh") {
-		parts := strings.SplitN(input, "chạy lệnh", 2)
-		if len(parts) > 1 {
-			return strings.TrimSpace(parts[1])
+		if cmd := extractAfter("chạy lệnh"); cmd != "" {
+			return cmd
 		}
 	}
 
 	// English patterns
 	if strings.Contains(inputLower, "run command") {
-		parts := strings.SplitN(input, "run command", 2)
-		if len(parts) > 1 {
-			return strings.TrimSpace(parts[1])
+		if cmd := extractAfter("run command"); cmd != "" {
+			return cmd
 		}
 	}
 
 	if strings.Contains(inputLower, "execute") {
-		parts := strings.SplitN(input, "execute", 2)
-		if len(parts) > 1 {
-			return strings.TrimSpace(parts[1])
+		if cmd := extractAfter("execute"); cmd != "" {
+			return cmd
 		}
 	}
 

@@ -66,14 +66,20 @@ func (cs *ConfidenceScorer) CalculateHeuristic(userInput string, intentType Inte
 // scoreGreeting scores greeting intents
 func (cs *ConfidenceScorer) scoreGreeting(input string) float64 {
 	greetingKeywords := []string{
-		"chào", "hello", "hi", "hey", "xin chào",
+		"chào", "hello", "hey", "xin chào",
 		"cảm ơn", "thank", "thanks", "tạm biệt", "bye", "goodbye",
 	}
 
+	// Check for whole-word matches to avoid substring false positives (e.g. "hi" in "this")
 	for _, keyword := range greetingKeywords {
-		if strings.Contains(input, keyword) {
+		if containsWholeWord(input, keyword) {
 			return 0.95
 		}
+	}
+
+	// "hi" requires whole-word match (short, easily matched as substring)
+	if containsWholeWord(input, "hi") {
+		return 0.95
 	}
 
 	// Short inputs are likely greetings
@@ -82,6 +88,25 @@ func (cs *ConfidenceScorer) scoreGreeting(input string) float64 {
 	}
 
 	return 0.3
+}
+
+// containsWholeWord checks if input contains keyword as a whole word (space-delimited)
+func containsWholeWord(input, keyword string) bool {
+	// Exact match
+	if input == keyword {
+		return true
+	}
+	// Check with surrounding spaces or at boundaries
+	if strings.HasPrefix(input, keyword+" ") {
+		return true
+	}
+	if strings.HasSuffix(input, " "+keyword) {
+		return true
+	}
+	if strings.Contains(input, " "+keyword+" ") {
+		return true
+	}
+	return false
 }
 
 // scoreReadInfo scores read info intents
@@ -165,6 +190,11 @@ func (cs *ConfidenceScorer) scoreComposite(input string) float64 {
 
 // ShouldAskForClarification determines if clarification is needed
 func (cs *ConfidenceScorer) ShouldAskForClarification(confidence float64, intentType IntentType) bool {
+	// Greetings never need clarification - they are always safe to proceed
+	if intentType == IntentGreeting {
+		return false
+	}
+
 	// Always ask for clarification if confidence is too low
 	if confidence < cs.config.AmbiguousRangeLow {
 		return true

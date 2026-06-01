@@ -110,6 +110,12 @@ func (ic *IntentClassifier) Classify(ctx context.Context, input string) (*agent.
 	// Set timestamp
 	intent.Timestamp = time.Now()
 
+	// Check if missing parameters for dangerous actions
+	// Must be set BEFORE any early return (low confidence / ambiguous range)
+	if intent.Type == agent.IntentDangerousAction && len(intent.MissingParams) > 0 {
+		intent.NeedsConfirm = true
+	}
+
 	// Validate confidence threshold
 	minConfidence := ic.config.GetMinConfidence(intent.Type)
 	if intent.Confidence < minConfidence {
@@ -131,11 +137,6 @@ func (ic *IntentClassifier) Classify(ctx context.Context, input string) (*agent.
 			ClarificationOptions: options,
 			Error:                nil,
 		}, nil
-	}
-
-	// Check if missing parameters for dangerous actions
-	if intent.Type == agent.IntentDangerousAction && len(intent.MissingParams) > 0 {
-		intent.NeedsConfirm = true
 	}
 
 	return &agent.ClassificationResult{
