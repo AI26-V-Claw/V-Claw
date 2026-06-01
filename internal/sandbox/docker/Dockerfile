@@ -58,7 +58,9 @@ WORKDIR /workspace
 
 # ─── Entrypoint ───────────────────────────────────────────────────────────────
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh \
+# Convert CRLF -> LF (Windows host có thể tạo file với line endings CRLF)
+RUN sed -i 's/\r//' /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh \
     && chown root:root /usr/local/bin/entrypoint.sh
 
 # Chạy với user sandbox từ đây trở đi

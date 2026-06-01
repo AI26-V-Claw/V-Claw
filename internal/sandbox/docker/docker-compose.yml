@@ -59,6 +59,10 @@ services:
     cap_drop:
       - ALL
 
+    # ─── Process limit (fork bomb protection) ───────────────────────────────
+    # Tối đa 64 process trong container (thay cho ulimit -u không hỗ trợ dash)
+    pids_limit: 64
+
     # ─── Timeout ────────────────────────────────────────────────────────────
     # Container tự stop sau 30s nếu command vẫn chạy
     # (Go runner dùng context timeout thay vì stop_grace_period)

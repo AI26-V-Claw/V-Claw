@@ -28,12 +28,12 @@ fi
 # ─── Giới hạn tài nguyên cấp process ────────────────────────────────────────
 # Giới hạn số file descriptor (tránh file handle leak)
 ulimit -n 256
-# Giới hạn số process con (tránh fork bomb)
-ulimit -u 64
 # Giới hạn core dump size = 0 (không ghi core dump)
 ulimit -c 0
 # Giới hạn file size tối đa có thể ghi = 50MB
 ulimit -f 51200
+# Lưu ý: giới hạn số process (fork bomb) được xử lý ở cấp Docker
+# bằng flag --pids-limit khi Go runner tạo container.
 
 # ─── Exec command ─────────────────────────────────────────────────────────────
 # Nếu không có argument thì chạy python --version để kiểm tra
