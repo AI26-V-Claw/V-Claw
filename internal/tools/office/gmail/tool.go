@@ -909,7 +909,7 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 	for _, name := range []string{ToolNameListEmails, ToolNameGetEmail, ToolNameListThreads, ToolNameGetThread, ToolNameCreateDraft, ToolNameUpdateDraft, ToolNameSendDraft, ToolNameReplyDraft, ToolNameForwardDraft, ToolNameDownloadAttachments, ToolNameModifyMessage} {
-		if err := registry.Register(NewTool(name, service)); err != nil {
+		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
 			return err
 		}
 	}
