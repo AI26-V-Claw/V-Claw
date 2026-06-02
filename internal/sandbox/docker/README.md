@@ -68,10 +68,7 @@ docker run --rm \
 docker compose run --rm sandbox python -c "import pandas; print(pandas.__version__)"
 ```
 
-## Cách Go Runner Khởi Tạo Container
-
-Go runner (`internal/sandbox/runtime`) tạo container qua Docker SDK với các tham số tương đương:
-
+Go runner (`internal/sandbox/runtime`) tạo container bằng cách gọi `docker run` qua `os/exec` với các tham số tương đương:
 ```go
 // Tham khảo - xem internal/sandbox/runtime để biết implementation
 containerConfig := &container.Config{
