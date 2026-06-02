@@ -12,6 +12,12 @@ type Config struct {
 	AllowedTelegramUserID    int64
 	DataDir                  string
 	LogDir                   string
+	OpenAIAPIKey             string
+	OpenAIModel              string
+	OpenAIBaseURL            string
+	GoogleToolsEnabled       bool
+	GoogleCredentialsPath    string
+	GoogleTokenPath          string
 	LLMProvider              string
 	LLMAPIKey                string
 	LLMBaseURL               string
@@ -43,6 +49,12 @@ func Load() (Config, error) {
 		AllowedTelegramUserID:    allowedUserID,
 		DataDir:                  envOrDefault("DATA_DIR", "./data"),
 		LogDir:                   envOrDefault("LOG_DIR", "./logs"),
+		OpenAIAPIKey:             firstEnv("OPENAI_API_KEY", "LLM_API_KEY"),
+		OpenAIModel:              firstEnv("OPENAI_MODEL", "LLM_MODEL"),
+		OpenAIBaseURL:            firstEnv("OPENAI_BASE_URL", "LLM_BASE_URL"),
+		GoogleToolsEnabled:       envOrDefault("VCLAW_GOOGLE_TOOLS_ENABLED", "false") == "true",
+		GoogleCredentialsPath:    envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", "configs/google/credentials.json"),
+		GoogleTokenPath:          envOrDefault("VCLAW_GOOGLE_TOKEN_PATH", "configs/google/token.json"),
 		LLMProvider:              strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER"))),
 		LLMAPIKey:                strings.TrimSpace(os.Getenv("LLM_API_KEY")),
 		LLMBaseURL:               envOrDefault("LLM_BASE_URL", ""),
@@ -52,6 +64,15 @@ func Load() (Config, error) {
 		AnthropicResponseModel:   strings.TrimSpace(os.Getenv("ANTHROPIC_RESPONSE_MODEL")),
 		UseLLMClassifier:         envOrDefault("USE_LLM_CLASSIFIER", "false") == "true",
 	}, nil
+}
+
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func envOrDefault(key, fallback string) string {

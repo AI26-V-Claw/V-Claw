@@ -60,3 +60,28 @@ func TestRiskDecisionSerializesCheckedAt(t *testing.T) {
 		t.Fatalf("unexpected checkedAt: %s", decoded.CheckedAt.Format(time.RFC3339))
 	}
 }
+
+func TestToolCallSerializesRequiredFields(t *testing.T) {
+	call := ToolCall{
+		ToolCallID: "toolcall_001",
+		RequestID:  "req_001",
+		SessionID:  "sess_001",
+		ToolName:   "calendar.listEvents",
+		Input:      map[string]any{},
+	}
+
+	data, err := json.Marshal(call)
+	if err != nil {
+		t.Fatalf("marshal tool call: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw tool call: %v", err)
+	}
+	for _, field := range []string{"toolCallId", "requestId", "sessionId", "toolName", "input"} {
+		if _, ok := raw[field]; !ok {
+			t.Fatalf("expected required field %q in serialized ToolCall: %s", field, string(data))
+		}
+	}
+}
