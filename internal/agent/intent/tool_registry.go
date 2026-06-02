@@ -34,123 +34,73 @@ type ParamDef struct {
 	Description string
 }
 
-// Registry maps tool names to their definitions.
-// This aligns with the Tool Registry in docs/03-contracts.md.
+// Registry maps tool names to contract-compliant definitions from docs/03-contracts.md.
 var Registry = map[string]ToolDefinition{
-	// ── Safe Read Tools ──────────────────────────────────────────
-	"system.readFile": {
-		Name: "system.readFile", Category: CategorySafeRead,
-		Description: "Read content from a file",
-		Dangerous: false, RequiresConfirm: false, Timeout: 30,
-		Parameters: []ParamDef{
-			{Name: "path", Type: "path", Required: true, Description: "File path to read"},
-		},
-	},
-	"system.listDirectory": {
-		Name: "system.listDirectory", Category: CategorySafeRead,
-		Description: "List files in a directory",
-		Dangerous: false, RequiresConfirm: false, Timeout: 30,
-		Parameters: []ParamDef{
-			{Name: "path", Type: "path", Required: true, Description: "Directory path to list"},
-		},
-	},
-	"web.search": {
-		Name: "web.search", Category: CategorySafeRead,
-		Description: "Search the web for information",
-		Dangerous: false, RequiresConfirm: false, Timeout: 45,
-		Parameters: []ParamDef{
-			{Name: "query", Type: "string", Required: true, Description: "Search query"},
-		},
-	},
-	// Maps to gmail.listEmails / calendar.listEvents in contracts
 	"gmail.listEmails": {
 		Name: "gmail.listEmails", Category: CategorySafeRead,
 		Description: "List emails from Gmail",
-		Dangerous: false, RequiresConfirm: false, Timeout: 30,
-		Parameters: []ParamDef{
-			{Name: "query", Type: "string", Required: false, Description: "Email search query"},
-		},
+		Dangerous:   false, RequiresConfirm: false, Timeout: 30,
+		Parameters: []ParamDef{{Name: "query", Type: "string", Required: false, Description: "Email search query"}},
+	},
+	"gmail.getEmail": {
+		Name: "gmail.getEmail", Category: CategorySafeRead,
+		Description: "Get an email from Gmail",
+		Dangerous:   false, RequiresConfirm: false, Timeout: 30,
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: false, Description: "Email ID"}},
 	},
 	"calendar.listEvents": {
 		Name: "calendar.listEvents", Category: CategorySafeRead,
 		Description: "List events from Google Calendar",
-		Dangerous: false, RequiresConfirm: false, Timeout: 30,
-		Parameters: []ParamDef{
-			{Name: "date", Type: "string", Required: false, Description: "Date to query (ISO-8601)"},
-		},
+		Dangerous:   false, RequiresConfirm: false, Timeout: 30,
+		Parameters: []ParamDef{{Name: "date", Type: "string", Required: false, Description: "Date to query (ISO-8601)"}},
 	},
-
-	// ── Dangerous Write Tools ────────────────────────────────────
-	"system.deleteFile": {
-		Name: "system.deleteFile", Category: CategoryDangerousWrite,
-		Description: "Delete a file from the filesystem",
-		Dangerous: true, RequiresConfirm: true, Timeout: 60,
-		Parameters: []ParamDef{
-			{Name: "path", Type: "path", Required: true, Description: "File path to delete"},
-			{Name: "confirm", Type: "bool", Required: true, Description: "Confirmation flag"},
-		},
+	"chat.listMessages": {
+		Name: "chat.listMessages", Category: CategorySafeRead,
+		Description: "List Google Chat messages",
+		Dangerous:   false, RequiresConfirm: false, Timeout: 30,
+		Parameters: []ParamDef{{Name: "space", Type: "string", Required: false, Description: "Chat space"}},
 	},
-	"system.writeFile": {
-		Name: "system.writeFile", Category: CategoryDangerousWrite,
-		Description: "Write content to a file",
-		Dangerous: true, RequiresConfirm: true, Timeout: 60,
-		Parameters: []ParamDef{
-			{Name: "path", Type: "path", Required: true, Description: "File path to write"},
-			{Name: "content", Type: "string", Required: true, Description: "Content to write"},
-		},
-	},
-	// Maps to calendar.createEvent in contracts
 	"calendar.createEvent": {
 		Name: "calendar.createEvent", Category: CategoryDangerousWrite,
 		Description: "Create a new calendar event",
-		Dangerous: true, RequiresConfirm: true, Timeout: 60,
-		Parameters: []ParamDef{
-			{Name: "title", Type: "string", Required: true, Description: "Event title"},
-			{Name: "start", Type: "string", Required: true, Description: "Start time (ISO-8601)"},
-		},
+		Dangerous:   true, RequiresConfirm: true, Timeout: 60,
+		Parameters: []ParamDef{{Name: "title", Type: "string", Required: true, Description: "Event title"}, {Name: "start", Type: "string", Required: true, Description: "Start time (ISO-8601)"}},
 	},
-
-	// ── Execution Tools ──────────────────────────────────────────
-	// Maps to sandbox.runPython / sandbox.runShell in contracts
+	"calendar.updateEvent": {
+		Name: "calendar.updateEvent", Category: CategoryDangerousWrite,
+		Description: "Update a calendar event",
+		Dangerous:   true, RequiresConfirm: true, Timeout: 60,
+		Parameters: []ParamDef{{Name: "eventId", Type: "string", Required: true, Description: "Event ID"}},
+	},
+	"calendar.deleteEvent": {
+		Name: "calendar.deleteEvent", Category: CategoryDangerousWrite,
+		Description: "Delete a calendar event",
+		Dangerous:   true, RequiresConfirm: true, Timeout: 60,
+		Parameters: []ParamDef{{Name: "eventId", Type: "string", Required: true, Description: "Event ID"}},
+	},
 	"sandbox.runPython": {
 		Name: "sandbox.runPython", Category: CategoryExecution,
 		Description: "Run Python code in sandbox",
-		Dangerous: true, RequiresConfirm: true, Timeout: 120,
-		Parameters: []ParamDef{
-			{Name: "code", Type: "string", Required: true, Description: "Python code to run"},
-		},
+		Dangerous:   true, RequiresConfirm: true, Timeout: 120,
+		Parameters: []ParamDef{{Name: "code", Type: "string", Required: true, Description: "Python code to run"}},
 	},
 	"sandbox.runShell": {
 		Name: "sandbox.runShell", Category: CategoryExecution,
 		Description: "Run shell command in sandbox",
-		Dangerous: true, RequiresConfirm: true, Timeout: 120,
-		Parameters: []ParamDef{
-			{Name: "command", Type: "string", Required: true, Description: "Shell command to run"},
-			{Name: "cwd", Type: "path", Required: false, Description: "Working directory"},
-		},
+		Dangerous:   true, RequiresConfirm: true, Timeout: 120,
+		Parameters: []ParamDef{{Name: "command", Type: "string", Required: true, Description: "Shell command to run"}, {Name: "cwd", Type: "path", Required: false, Description: "Working directory"}},
 	},
-
-	// ── Communication Tools ──────────────────────────────────────
-	// Maps to gmail.sendEmail in contracts
 	"gmail.sendEmail": {
 		Name: "gmail.sendEmail", Category: CategoryCommunication,
 		Description: "Send an email via Gmail",
-		Dangerous: true, RequiresConfirm: true, Timeout: 60,
-		Parameters: []ParamDef{
-			{Name: "to", Type: "email", Required: true, Description: "Recipient email address"},
-			{Name: "subject", Type: "string", Required: true, Description: "Email subject"},
-			{Name: "body", Type: "string", Required: true, Description: "Email body"},
-		},
+		Dangerous:   true, RequiresConfirm: true, Timeout: 60,
+		Parameters: []ParamDef{{Name: "to", Type: "email", Required: true, Description: "Recipient email address"}, {Name: "subject", Type: "string", Required: true, Description: "Email subject"}, {Name: "body", Type: "string", Required: true, Description: "Email body"}},
 	},
-	// Maps to chat.sendMessage in contracts
 	"chat.sendMessage": {
 		Name: "chat.sendMessage", Category: CategoryCommunication,
 		Description: "Send a chat message",
-		Dangerous: true, RequiresConfirm: true, Timeout: 30,
-		Parameters: []ParamDef{
-			{Name: "recipient", Type: "string", Required: true, Description: "Recipient user or space"},
-			{Name: "message", Type: "string", Required: true, Description: "Message content"},
-		},
+		Dangerous:   true, RequiresConfirm: true, Timeout: 30,
+		Parameters: []ParamDef{{Name: "recipient", Type: "string", Required: true, Description: "Recipient user or space"}, {Name: "message", Type: "string", Required: true, Description: "Message content"}},
 	},
 }
 

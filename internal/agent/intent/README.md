@@ -174,14 +174,14 @@ classifier := intent.NewClassifier(cfg)
 Tool Registry định nghĩa các tool có sẵn và tham số bắt buộc:
 
 ```go
-// Example: delete_file tool
+// Example: sandbox.runShell tool
 {
-    Name: "delete_file",
-    Category: CategoryDangerousWrite,
+    Name: "sandbox.runShell",
+    Category: CategoryExecution,
     Dangerous: true,
     RequiresConfirm: true,
     Parameters: []ParamDef{
-        {Name: "path", Type: "path", Required: true},
+        {Name: "command", Type: "string", Required: true},
         {Name: "confirm", Type: "bool", Required: true},
     },
 }
@@ -210,15 +210,15 @@ Module này tuân thủ theo contracts định nghĩa trong `docs/03-contracts.m
     "intent_type": "DANGEROUS_ACTION",
     "confidence": 0.95,
     "tool_calls": [{
-      "name": "delete_file",
-      "category": "DANGEROUS_WRITE",
-      "parameters": {"path": "/tmp/test.txt"}
+      "name": "sandbox.runShell",
+      "category": "EXECUTION",
+      "parameters": {"command": "rm /tmp/test.txt"}
     }],
     "needs_confirm": true,
     "missing_params": ["confirm"]
   },
   "needs_clarification": true,
-  "clarification_message": "Để thực hiện thao tác \"delete_file\", tôi cần bạn xác nhận."
+  "clarification_message": "Để thực hiện thao tác \"sandbox.runShell\", tôi cần bạn xác nhận."
 }
 ```
 

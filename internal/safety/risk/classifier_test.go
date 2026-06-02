@@ -18,28 +18,20 @@ func TestClassifier_Assess(t *testing.T) {
 		expectedApproval bool
 	}{
 		{
-			name:             "Safe read - read_file",
-			toolName:         "read_file",
+			name:             "Safe read - gmail.listEmails",
+			toolName:         "gmail.listEmails",
 			intentType:       intent.TypeReadInfo,
 			expectedRisk:     SafeRead,
 			expectedDecision: Allow,
 			expectedApproval: false,
 		},
 		{
-			name:             "Safe read - list_directory",
-			toolName:         "list_directory",
+			name:             "Safe read - calendar.listEvents",
+			toolName:         "calendar.listEvents",
 			intentType:       intent.TypeReadInfo,
 			expectedRisk:     SafeRead,
 			expectedDecision: Allow,
 			expectedApproval: false,
-		},
-		{
-			name:             "External write - send_email",
-			toolName:         "send_email",
-			intentType:       intent.TypeDangerousAction,
-			expectedRisk:     ExternalWrite,
-			expectedDecision: RequiresApproval,
-			expectedApproval: true,
 		},
 		{
 			name:             "External write - gmail.sendEmail",
@@ -50,26 +42,10 @@ func TestClassifier_Assess(t *testing.T) {
 			expectedApproval: true,
 		},
 		{
-			name:             "Local write - write_file",
-			toolName:         "write_file",
-			intentType:       intent.TypeDangerousAction,
-			expectedRisk:     LocalWrite,
-			expectedDecision: RequiresApproval,
-			expectedApproval: true,
-		},
-		{
-			name:             "Destructive - delete_file",
-			toolName:         "delete_file",
+			name:             "Destructive - calendar.deleteEvent",
+			toolName:         "calendar.deleteEvent",
 			intentType:       intent.TypeDangerousAction,
 			expectedRisk:     Destructive,
-			expectedDecision: RequiresApproval,
-			expectedApproval: true,
-		},
-		{
-			name:             "Code execution - exec",
-			toolName:         "exec",
-			intentType:       intent.TypeDangerousAction,
-			expectedRisk:     CodeExecution,
 			expectedDecision: RequiresApproval,
 			expectedApproval: true,
 		},
@@ -82,10 +58,10 @@ func TestClassifier_Assess(t *testing.T) {
 			expectedApproval: true,
 		},
 		{
-			name:             "Blocked - format_disk",
+			name:             "Decision block - format_disk",
 			toolName:         "format_disk",
 			intentType:       intent.TypeDangerousAction,
-			expectedRisk:     Blocked,
+			expectedRisk:     Destructive,
 			expectedDecision: Block,
 			expectedApproval: false,
 		},
@@ -93,7 +69,7 @@ func TestClassifier_Assess(t *testing.T) {
 			name:             "Unknown tool - should block",
 			toolName:         "unknown_tool",
 			intentType:       intent.TypeDangerousAction,
-			expectedRisk:     Blocked,
+			expectedRisk:     Destructive,
 			expectedDecision: Block,
 			expectedApproval: false,
 		},
@@ -128,10 +104,13 @@ func TestClassifier_Assess(t *testing.T) {
 func TestClassifier_UpdatePolicy(t *testing.T) {
 	classifier := NewClassifier()
 
-	// Initially, custom_tool is unknown (blocked)
+	// Initially, custom_tool is unknown and blocked with a valid contract risk level.
 	assessment, _ := classifier.Assess("custom_tool", intent.TypeDangerousAction)
-	if assessment.RiskLevel != Blocked {
-		t.Errorf("Expected Blocked for unknown tool, got %v", assessment.RiskLevel)
+	if assessment.RiskLevel != Destructive {
+		t.Errorf("Expected Destructive for unknown tool, got %v", assessment.RiskLevel)
+	}
+	if assessment.Decision != Block {
+		t.Errorf("Expected Block decision for unknown tool, got %v", assessment.Decision)
 	}
 
 	// Update policy
@@ -151,12 +130,12 @@ func TestClassifier_GetPolicy(t *testing.T) {
 	classifier := NewClassifier()
 
 	// Test known tool
-	level, ok := classifier.GetPolicy("read_file")
+	level, ok := classifier.GetPolicy("gmail.listEmails")
 	if !ok {
-		t.Error("Expected read_file to be in policy")
+		t.Error("Expected gmail.listEmails to be in policy")
 	}
 	if level != SafeRead {
-		t.Errorf("Expected SafeRead for read_file, got %v", level)
+		t.Errorf("Expected SafeRead for gmail.listEmails, got %v", level)
 	}
 
 	// Test unknown tool
@@ -177,7 +156,6 @@ func TestRiskLevelCoverage(t *testing.T) {
 		LocalWrite:    false,
 		CodeExecution: false,
 		Destructive:   false,
-		Blocked:       false,
 	}
 
 	for _, level := range classifier.policy {
@@ -185,7 +163,7 @@ func TestRiskLevelCoverage(t *testing.T) {
 	}
 
 	// Check that we have at least one tool for each major risk level
-	// (SafeCompute and Blocked may not have tools in the default policy)
+	// (SafeCompute may not have tools in the default policy)
 	requiredLevels := []Level{SafeRead, ExternalWrite, LocalWrite, CodeExecution, Destructive}
 	for _, level := range requiredLevels {
 		if !riskLevels[level] {

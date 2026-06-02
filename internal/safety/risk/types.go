@@ -12,7 +12,6 @@ const (
 	LocalWrite    Level = "local_write"
 	CodeExecution Level = "code_execution"
 	Destructive   Level = "destructive"
-	Blocked       Level = "blocked"
 )
 
 // Decision represents the outcome of a risk assessment.

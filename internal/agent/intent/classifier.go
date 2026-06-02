@@ -19,8 +19,13 @@ type Classifier struct {
 }
 
 // NewClassifier creates a new intent classifier with the given config.
-func NewClassifier(cfg ConfidenceConfig) *Classifier {
-	return &Classifier{config: cfg}
+// If no config is provided, DefaultConfig is used for legacy wiring.
+func NewClassifier(cfg ...ConfidenceConfig) *Classifier {
+	config := DefaultConfig
+	if len(cfg) > 0 {
+		config = cfg[0]
+	}
+	return &Classifier{config: config}
 }
 
 // Classify analyses userInput and returns a ClassificationOutput.
@@ -37,14 +42,14 @@ func Classify(ctx context.Context, classifier *Classifier, userInput string) (*C
 	if isPromptInjection(userInput) {
 		return &ClassificationOutput{
 			Intent: &Result{
-				Type:       TypeUnknown,
-				Confidence: 0.05, // Very low confidence
-				ToolCalls:  []ToolCallInfo{},
+				Type:         TypeUnknown,
+				Confidence:   0.05, // Very low confidence
+				ToolCalls:    []ToolCallInfo{},
 				NeedsConfirm: true,
-				Reasoning:  "Phát hiện prompt injection - từ chối xử lý",
-				Timestamp:  time.Now(),
+				Reasoning:    "Phát hiện prompt injection - từ chối xử lý",
+				Timestamp:    time.Now(),
 			},
-			NeedsClarification: true,
+			NeedsClarification:   true,
 			ClarificationMessage: "Tôi không thể xử lý yêu cầu này. Vui lòng thử lại với câu hỏi khác.",
 		}, nil
 	}
@@ -108,8 +113,8 @@ func Classify(ctx context.Context, classifier *Classifier, userInput string) (*C
 			toolName = toolCalls[0].Name
 		}
 		return &ClassificationOutput{
-			Intent:             result,
-			NeedsClarification: true,
+			Intent:               result,
+			NeedsClarification:   true,
 			ClarificationMessage: generateMissingParamMessage(toolName, missingParams),
 		}, nil
 	}
@@ -361,12 +366,6 @@ func extractToolCalls(input string, t IntentType) []ToolCallInfo {
 }
 
 func extractReadToolCalls(lower, original string) []ToolCallInfo {
-	if containsAny(lower, "file", "đọc file", "mở file", "read file", "xem nội dung", "readme") {
-		return []ToolCallInfo{{
-			Name: "system.readFile", Category: "SAFE_READ",
-			Parameters: extractPathParam(original), Timeout: 30,
-		}}
-	}
 	if containsAny(lower, "mail", "email", "hộp thư") {
 		return []ToolCallInfo{{
 			Name: "gmail.listEmails", Category: "SAFE_READ",
@@ -379,44 +378,14 @@ func extractReadToolCalls(lower, original string) []ToolCallInfo {
 			Parameters: map[string]interface{}{}, Timeout: 30,
 		}}
 	}
-	if containsAny(lower, "list", "danh sách", "liệt kê", "thư mục") {
-		return []ToolCallInfo{{
-			Name: "system.listDirectory", Category: "SAFE_READ",
-			Parameters: extractPathParam(original), Timeout: 30,
-		}}
-	}
-	if containsAny(lower, "tìm", "find", "search", "tra cứu", "thời tiết") {
-		return []ToolCallInfo{{
-			Name: "web.search", Category: "SAFE_READ",
-			Parameters: map[string]interface{}{"query": original}, Timeout: 45,
-		}}
-	}
 	return nil
 }
 
 func extractDangerousToolCalls(lower, original string) []ToolCallInfo {
-	if containsAny(lower, "xóa", "delete", "remove") {
-		return []ToolCallInfo{{
-			Name: "system.deleteFile", Category: "DANGEROUS_WRITE",
-			Parameters: extractPathParam(original), Timeout: 60,
-		}}
-	}
 	if containsAny(lower, "gửi email", "gửi mail", "send email", "gửi cho", "gửi tài liệu") {
 		return []ToolCallInfo{{
 			Name: "gmail.sendEmail", Category: "COMMUNICATION",
 			Parameters: extractEmailParams(original), Timeout: 60,
-		}}
-	}
-	if containsAny(lower, "chạy", "run", "exec") {
-		return []ToolCallInfo{{
-			Name: "sandbox.runShell", Category: "EXECUTION",
-			Parameters: map[string]interface{}{"command": original}, Timeout: 120,
-		}}
-	}
-	if containsAny(lower, "sửa", "edit", "modify") {
-		return []ToolCallInfo{{
-			Name: "system.writeFile", Category: "DANGEROUS_WRITE",
-			Parameters: extractPathParam(original), Timeout: 60,
 		}}
 	}
 	if containsAny(lower, "tạo sự kiện", "lên lịch", "đặt lịch") {
@@ -425,10 +394,20 @@ func extractDangerousToolCalls(lower, original string) []ToolCallInfo {
 			Parameters: map[string]interface{}{}, Timeout: 60,
 		}}
 	}
-	if containsAny(lower, "tạo file", "create file", "write file", "write ") {
+	if containsAny(lower, "xóa", "delete", "remove") {
+		params := map[string]interface{}{}
+		if hasSpecificTarget(original) {
+			params["command"] = original
+		}
 		return []ToolCallInfo{{
-			Name: "system.writeFile", Category: "DANGEROUS_WRITE",
-			Parameters: extractPathParam(original), Timeout: 60,
+			Name: "sandbox.runShell", Category: "EXECUTION",
+			Parameters: params, Timeout: 120,
+		}}
+	}
+	if containsAny(lower, "chạy", "run", "exec", "sửa", "edit", "modify", "tạo file", "create file", "write file", "write ") {
+		return []ToolCallInfo{{
+			Name: "sandbox.runShell", Category: "EXECUTION",
+			Parameters: map[string]interface{}{"command": original}, Timeout: 120,
 		}}
 	}
 	return nil
@@ -519,7 +498,7 @@ func generateMissingParamMessage(toolName string, missing []string) string {
 // isPromptInjection detects prompt injection attempts
 func isPromptInjection(input string) bool {
 	lower := strings.ToLower(input)
-	
+
 	// English patterns
 	injectionPatterns := []string{
 		"ignore previous instructions",
@@ -533,7 +512,7 @@ func isPromptInjection(input string) bool {
 		"system prompt",
 		"override instructions",
 	}
-	
+
 	// Vietnamese patterns
 	vietnamesePatterns := []string{
 		"bỏ qua hướng dẫn trước",
@@ -543,19 +522,19 @@ func isPromptInjection(input string) bool {
 		"bây giờ bạn là",
 		"hướng dẫn mới",
 	}
-	
+
 	for _, pattern := range injectionPatterns {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}
-	
+
 	for _, pattern := range vietnamesePatterns {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -579,6 +558,21 @@ func extractEmailParams(input string) map[string]interface{} {
 		}
 	}
 	return params
+}
+
+func hasSpecificTarget(input string) bool {
+	lower := strings.ToLower(input)
+	for _, vague := range []string{"xóa file", "xoá file", "delete the file", "delete file"} {
+		if strings.TrimSpace(lower) == vague || strings.TrimSpace(lower) == vague+" giúp tôi" || strings.TrimSpace(lower) == vague+" cấu hình đi" {
+			return false
+		}
+	}
+	for _, w := range strings.Fields(input) {
+		if strings.Contains(w, "/") || (strings.Contains(w, ".") && len(w) > 2) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsAny(s string, substrs ...string) bool {

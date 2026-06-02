@@ -18,12 +18,8 @@ evaluation_results.json
 data/telegram_offset.txt
 logs/audit.jsonl
 .antigravity/
-<<<<<<< HEAD
-=======
-.appdata/
 .gotmp/
 .localappdata/
->>>>>>> 85102a60efbf13f9065ed89a2f42f8521b227380
 AGENTS.md
 CLAUDE.md
 v_claw_architect_claude.pdf

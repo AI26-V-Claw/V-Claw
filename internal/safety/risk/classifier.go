@@ -9,37 +9,35 @@ import (
 // Classifier determines the risk level and approval requirements for tool calls.
 // This implements the safety layer described in docs/03-contracts.md.
 type Classifier struct {
-	// Policy maps tool names to their default risk levels
+	// Policy maps tool names to their default risk levels.
 	policy map[string]Level
+	// denied marks tools that must be blocked. Block is a decision, not a risk level.
+	denied map[string]bool
 }
 
 // NewClassifier creates a new risk classifier with default policies.
 func NewClassifier() *Classifier {
 	return &Classifier{
 		policy: buildDefaultPolicy(),
+		denied: buildDeniedTools(),
 	}
 }
 
 // Assess evaluates the risk of a tool call and returns an Assessment.
 // This is the main entry point for the safety layer.
 func (c *Classifier) Assess(toolName string, intentType intent.IntentType) (*Assessment, error) {
-	// Look up the tool's risk level
 	riskLevel, ok := c.policy[toolName]
 	if !ok {
-		// Unknown tool → block by default
 		return &Assessment{
 			ToolName:         toolName,
-			RiskLevel:        Blocked,
+			RiskLevel:        Destructive,
 			Decision:         Block,
 			RequiresApproval: false,
 			ReasonVi:         fmt.Sprintf("Tool %q không được đăng ký trong hệ thống. Hành động bị chặn vì lý do an toàn.", toolName),
 		}, nil
 	}
 
-	// Determine decision based on risk level
-	decision, requiresApproval := c.decideAction(riskLevel, intentType)
-
-	// Generate Vietnamese explanation
+	decision, requiresApproval := c.decideAction(toolName, riskLevel, intentType)
 	reasonVi := c.generateReason(toolName, riskLevel, decision)
 
 	return &Assessment{
@@ -52,34 +50,17 @@ func (c *Classifier) Assess(toolName string, intentType intent.IntentType) (*Ass
 }
 
 // decideAction determines whether to allow, require approval, or block an action.
-func (c *Classifier) decideAction(riskLevel Level, intentType intent.IntentType) (Decision, bool) {
+func (c *Classifier) decideAction(toolName string, riskLevel Level, intentType intent.IntentType) (Decision, bool) {
+	if c.denied[toolName] {
+		return Block, false
+	}
+
 	switch riskLevel {
 	case SafeRead, SafeCompute:
-		// Safe operations → allow immediately
 		return Allow, false
-
-	case SensitiveRead:
-		// Sensitive reads (e.g., credentials, private data) → require approval
+	case SensitiveRead, ExternalWrite, LocalWrite, CodeExecution, Destructive:
 		return RequiresApproval, true
-
-	case ExternalWrite, LocalWrite:
-		// Write operations → require approval
-		return RequiresApproval, true
-
-	case CodeExecution:
-		// Code execution → always require approval
-		return RequiresApproval, true
-
-	case Destructive:
-		// Destructive operations (delete, drop) → require approval
-		return RequiresApproval, true
-
-	case Blocked:
-		// Explicitly blocked → deny
-		return Block, false
-
 	default:
-		// Unknown risk level → block by default
 		return Block, false
 	}
 }
@@ -89,7 +70,6 @@ func (c *Classifier) generateReason(toolName string, riskLevel Level, decision D
 	switch decision {
 	case Allow:
 		return fmt.Sprintf("Tool %q được phép thực thi ngay lập tức vì thuộc nhóm an toàn (%s).", toolName, riskLevel)
-
 	case RequiresApproval:
 		switch riskLevel {
 		case ExternalWrite:
@@ -105,10 +85,8 @@ func (c *Classifier) generateReason(toolName string, riskLevel Level, decision D
 		default:
 			return fmt.Sprintf("Tool %q cần xác nhận trước khi thực thi.", toolName)
 		}
-
 	case Block:
 		return fmt.Sprintf("Tool %q bị chặn vì vi phạm chính sách an toàn.", toolName)
-
 	default:
 		return fmt.Sprintf("Không thể xác định quyết định cho tool %q.", toolName)
 	}
@@ -118,45 +96,35 @@ func (c *Classifier) generateReason(toolName string, riskLevel Level, decision D
 // This aligns with the Tool Registry in docs/03-contracts.md.
 func buildDefaultPolicy() map[string]Level {
 	return map[string]Level{
-		// ── Safe Read Tools ──────────────────────────────────────────
-		"read_file":            SafeRead,
-		"list_directory":       SafeRead,
-		"web_search":           SafeRead,
-		"gmail.listEmails":     SafeRead,
-		"gmail.getEmail":       SafeRead,
-		"calendar.listEvents":  SafeRead,
-		"chat.listMessages":    SafeRead,
+		"gmail.listEmails":          SafeRead,
+		"gmail.getEmail":            SafeRead,
+		"gmail.listThreads":         SafeRead,
+		"gmail.getThread":           SafeRead,
+		"calendar.listEvents":       SafeRead,
+		"chat.listMessages":         SafeRead,
+		"gmail.createDraft":         ExternalWrite,
+		"gmail.updateDraft":         ExternalWrite,
+		"gmail.sendDraft":           ExternalWrite,
+		"gmail.replyDraft":          ExternalWrite,
+		"gmail.forwardDraft":        ExternalWrite,
+		"gmail.downloadAttachments": LocalWrite,
+		"gmail.modifyMessage":       ExternalWrite,
+		"gmail.sendEmail":           ExternalWrite,
+		"calendar.createEvent":      ExternalWrite,
+		"calendar.updateEvent":      ExternalWrite,
+		"calendar.deleteEvent":      Destructive,
+		"chat.sendMessage":          ExternalWrite,
+		"sandbox.runPython":         CodeExecution,
+		"sandbox.runShell":          CodeExecution,
+		"format_disk":               Destructive,
+		"shutdown_system":           Destructive,
+	}
+}
 
-		// ── Sensitive Read Tools ─────────────────────────────────────
-		// (Currently none, but could include reading credentials, etc.)
-
-		// ── External Write Tools ─────────────────────────────────────
-		"gmail.sendEmail":      ExternalWrite,
-		"calendar.createEvent": ExternalWrite,
-		"calendar.updateEvent": ExternalWrite,
-		"chat.sendMessage":     ExternalWrite,
-		"send_email":           ExternalWrite,
-
-		// ── Local Write Tools ────────────────────────────────────────
-		"write_file":           LocalWrite,
-		"create_file":          LocalWrite,
-		"modify_file":          LocalWrite,
-
-		// ── Destructive Tools ────────────────────────────────────────
-		"delete_file":          Destructive,
-		"calendar.deleteEvent": Destructive,
-		"drop_database":        Destructive,
-
-		// ── Code Execution Tools ─────────────────────────────────────
-		"exec":                 CodeExecution,
-		"sandbox.runPython":    CodeExecution,
-		"sandbox.runShell":     CodeExecution,
-		"run_command":          CodeExecution,
-
-		// ── Blocked Tools ────────────────────────────────────────────
-		// (Tools that should never be executed)
-		"format_disk":          Blocked,
-		"shutdown_system":      Blocked,
+func buildDeniedTools() map[string]bool {
+	return map[string]bool{
+		"format_disk":     true,
+		"shutdown_system": true,
 	}
 }
 

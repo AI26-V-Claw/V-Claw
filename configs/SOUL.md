@@ -127,12 +127,12 @@ Response:
   "missing_params": [],
   "tool_calls": [
     {
-      "name": "read_file",
-      "category": "SAFE_READ",
+      "name": "sandbox.runShell",
+      "category": "EXECUTION",
       "parameters": {
-        "path": "config.json"
+        "command": "cat config.json"
       },
-      "timeout": 30
+      "timeout": 120
     }
   ],
   "needs_confirm": false,
@@ -152,10 +152,10 @@ Response:
   "missing_params": ["path", "confirm"],
   "tool_calls": [
     {
-      "name": "delete_file",
-      "category": "DANGEROUS_WRITE",
+      "name": "sandbox.runShell",
+      "category": "EXECUTION",
       "parameters": {},
-      "timeout": 60
+      "timeout": 120
     }
   ],
   "needs_confirm": true,
@@ -177,12 +177,12 @@ Response:
   "missing_params": ["confirm"],
   "tool_calls": [
     {
-      "name": "delete_file",
-      "category": "DANGEROUS_WRITE",
+      "name": "sandbox.runShell",
+      "category": "EXECUTION",
       "parameters": {
-        "path": "/tmp/test.txt"
+        "command": "rm /tmp/test.txt"
       },
-      "timeout": 60
+      "timeout": 120
     }
   ],
   "needs_confirm": true,
@@ -205,21 +205,20 @@ Response:
   "missing_params": ["confirm"],
   "tool_calls": [
     {
-      "name": "find_files",
-      "category": "SAFE_READ",
+      "name": "sandbox.runShell",
+      "category": "EXECUTION",
       "parameters": {
-        "pattern": "*.log",
-        "older_than_days": 30
+        "command": "find . -name '*.log' -mtime +30 -print"
       },
-      "timeout": 30
+      "timeout": 120
     },
     {
-      "name": "delete_files",
-      "category": "DANGEROUS_WRITE",
+      "name": "sandbox.runShell",
+      "category": "EXECUTION",
       "parameters": {
-        "paths": "${step1.result.files}"
+        "command": "rm ${step1.result.files}"
       },
-      "timeout": 60
+      "timeout": 120
     }
   ],
   "needs_confirm": true,
@@ -251,7 +250,7 @@ Response:
   "missing_params": ["to", "subject", "body", "confirm"],
   "tool_calls": [
     {
-      "name": "send_email",
+      "name": "gmail.sendEmail",
       "category": "COMMUNICATION",
       "parameters": {},
       "timeout": 60

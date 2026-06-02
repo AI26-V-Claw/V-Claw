@@ -91,7 +91,7 @@ The system MUST correctly identify multi-step workflows:
 ```
 Input: "Tìm các file log cũ và xóa chúng"
 Expected: intent_type = "COMPOSITE_ACTION"
-Expected: tool_calls = ["find_files", "delete_files"]
+Expected: tool_calls = ["sandbox.runShell"]
 Expected: needs_confirm = true
 ```
 
@@ -116,9 +116,9 @@ To add new test cases, edit `internal/evaluation/test_cases.json`:
   "input": "Your test input",
   "expected_intent": "DANGEROUS_ACTION",
   "expected_confidence_min": 0.90,
-  "expected_tool_calls": ["delete_file"],
+  "expected_tool_calls": ["sandbox.runShell"],
   "expected_params": {
-    "path": "/tmp/test.txt"
+    "command": "rm /tmp/test.txt"
   },
   "expected_missing_params": ["confirm"],
   "expected_needs_confirm": true,

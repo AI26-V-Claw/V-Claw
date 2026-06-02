@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"vclaw/internal/agent/intent"
 	"vclaw/internal/audit"
-	"vclaw/internal/intent"
 	"vclaw/internal/memory"
 	"vclaw/internal/providers"
 )
@@ -137,7 +137,7 @@ func TestHandleMessageReturnsEmptyHistoryMessage(t *testing.T) {
 
 type stubResponder struct {
 	reply string
-	calls  int
+	calls int
 }
 
 func (s *stubResponder) Complete(_ context.Context, _ string, _ []providers.ChatMessage) (string, error) {

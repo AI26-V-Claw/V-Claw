@@ -50,8 +50,8 @@ func main() {
 ```go
 // Add tool registry
 tools := map[string]interface{}{
-    "read_file": toolDefinitions["read_file"],
-    "delete_file": toolDefinitions["delete_file"],
+    "gmail.listEmails": toolDefinitions["gmail.listEmails"],
+    "sandbox.runShell": toolDefinitions["sandbox.runShell"],
 }
 
 // Add user context
@@ -207,8 +207,7 @@ AI Response:
 {
   "intent_type": "COMPOSITE_ACTION",
   "tool_calls": [
-    {"name": "find_files", "category": "SAFE_READ", ...},
-    {"name": "delete_files", "category": "DANGEROUS_WRITE", ...}
+    {"name": "sandbox.runShell", "category": "EXECUTION", ...}
   ],
   "needs_confirm": true
 }

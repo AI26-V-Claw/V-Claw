@@ -10,10 +10,10 @@ import (
 	"syscall"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/agent/intent"
 	"vclaw/internal/audit"
 	"vclaw/internal/channels/telegram"
 	"vclaw/internal/config"
-	"vclaw/internal/intent"
 	"vclaw/internal/memory"
 	"vclaw/internal/providers"
 )

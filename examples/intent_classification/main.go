@@ -143,10 +143,10 @@ func runSafetyExample() {
 		toolName   string
 		intentType intent.IntentType
 	}{
-		{"read_file", intent.TypeReadInfo},
-		{"delete_file", intent.TypeDangerousAction},
-		{"send_email", intent.TypeDangerousAction},
-		{"exec", intent.TypeDangerousAction},
+		{"gmail.listEmails", intent.TypeReadInfo},
+		{"sandbox.runShell", intent.TypeDangerousAction},
+		{"gmail.sendEmail", intent.TypeDangerousAction},
+		{"sandbox.runShell", intent.TypeDangerousAction},
 		{"format_disk", intent.TypeDangerousAction},
 	}
 

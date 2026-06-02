@@ -59,17 +59,17 @@ func example2_WithToolRegistry() {
 
 	// Define available tools
 	tools := map[string]interface{}{
-		"read_file": map[string]interface{}{
-			"description": "Read file content",
+		"gmail.listEmails": map[string]interface{}{
+			"description": "List Gmail messages",
 			"category":    "SAFE_READ",
-			"params":      []string{"path"},
+			"params":      []string{"query"},
 		},
-		"delete_file": map[string]interface{}{
-			"description": "Delete a file",
-			"category":    "DANGEROUS_WRITE",
-			"params":      []string{"path", "confirm"},
+		"gmail.sendEmail": map[string]interface{}{
+			"description": "Send an email",
+			"category":    "COMMUNICATION",
+			"params":      []string{"to", "subject", "body", "confirm"},
 		},
-		"exec": map[string]interface{}{
+		"sandbox.runShell": map[string]interface{}{
 			"description": "Execute shell command",
 			"category":    "EXECUTION",
 			"params":      []string{"command"},
@@ -119,8 +119,8 @@ func example4_FullContext() {
 
 	// Tools
 	tools := map[string]interface{}{
-		"read_file":   "Read file content",
-		"delete_file": "Delete a file",
+		"gmail.listEmails": "List Gmail messages",
+		"sandbox.runShell": "Run shell commands in sandbox",
 	}
 
 	// History
@@ -157,54 +157,54 @@ func example5_ValidatingResponses() {
 		{
 			name: "Valid JSON response",
 			response: `{
-				"intent_type": "READ_INFO",
-				"confidence": 0.95,
-				"required_params": ["path"],
-				"provided_params": {"path": "/etc/config.json"},
-				"missing_params": [],
-				"tool_calls": [
-					{
-						"name": "read_file",
-						"category": "SAFE_READ",
-						"parameters": {"path": "/etc/config.json"},
-						"timeout": 30
-					}
-				],
-				"needs_confirm": false,
-				"reasoning": "User wants to read a specific file"
-			}`,
+					"intent_type": "READ_INFO",
+					"confidence": 0.95,
+					"required_params": ["query"],
+					"provided_params": {"query": "from:team"},
+					"missing_params": [],
+					"tool_calls": [
+						{
+							"name": "gmail.listEmails",
+							"category": "SAFE_READ",
+							"parameters": {"query": "from:team"},
+							"timeout": 30
+						}
+					],
+					"needs_confirm": false,
+					"reasoning": "User wants to read matching email metadata"
+				}`,
 			valid: true,
 		},
 		{
-			name: "Invalid - wrapped in markdown",
+			name:     "Invalid - wrapped in markdown",
 			response: "```json\n{\n  \"intent_type\": \"READ_INFO\"\n}\n```",
-			valid: false,
+			valid:    false,
 		},
 		{
-			name: "Invalid - has explanation before JSON",
+			name:     "Invalid - has explanation before JSON",
 			response: "Here's my analysis:\n{\n  \"intent_type\": \"READ_INFO\"\n}",
-			valid: false,
+			valid:    false,
 		},
 		{
-			name: "Valid - with whitespace",
+			name:     "Valid - with whitespace",
 			response: "\n\n  {\n    \"intent_type\": \"GREETING\",\n    \"confidence\": 1.0\n  }\n\n",
-			valid: true,
+			valid:    true,
 		},
 	}
 
 	for _, tc := range testCases {
 		fmt.Printf("\nTest: %s\n", tc.name)
-		
+
 		// Validate JSON format
 		err := prompts.ValidateJSONResponse(tc.response)
-		
+
 		if tc.valid && err != nil {
 			fmt.Printf("  ❌ Expected valid, got error: %v\n", err)
 		} else if !tc.valid && err == nil {
 			fmt.Printf("  ❌ Expected invalid, but passed validation\n")
 		} else if tc.valid && err == nil {
 			fmt.Printf("  ✅ Valid JSON format\n")
-			
+
 			// Try to parse into Intent struct
 			var intent agent.Intent
 			if err := json.Unmarshal([]byte(tc.response), &intent); err != nil {
@@ -217,7 +217,7 @@ func example5_ValidatingResponses() {
 			fmt.Printf("  ✅ Correctly rejected invalid format\n")
 		}
 	}
-	
+
 	fmt.Println()
 }
 
@@ -287,21 +287,21 @@ func exampleConfidenceHandling() {
 
 	for _, scenario := range scenarios {
 		fmt.Printf("\nScenario: %s with confidence %.2f\n", scenario.intentType, scenario.confidence)
-		
+
 		minRequired := config.GetMinConfidence(scenario.intentType)
 		fmt.Printf("  Minimum required: %.2f\n", minRequired)
-		
+
 		if scenario.confidence >= minRequired {
 			fmt.Printf("  ✅ Meets threshold\n")
 		} else {
 			fmt.Printf("  ❌ Below threshold\n")
 		}
-		
+
 		if config.IsAmbiguous(scenario.confidence) {
-			fmt.Printf("  ⚠️  In ambiguous range (%.2f - %.2f)\n", 
+			fmt.Printf("  ⚠️  In ambiguous range (%.2f - %.2f)\n",
 				config.AmbiguousRangeLow, config.AmbiguousRangeHigh)
 		}
-		
+
 		fmt.Printf("  Action: %s\n", scenario.action)
 	}
 

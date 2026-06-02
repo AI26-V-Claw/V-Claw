@@ -43,7 +43,7 @@ func TestClassify_ReadInfo(t *testing.T) {
 	c := NewClassifier(DefaultConfig)
 
 	cases := []struct {
-		name string
+		name  string
 		input string
 	}{
 		{"Read file", "Đọc file config.json trong thư mục /etc"},
@@ -192,7 +192,7 @@ func TestValidate_BlocksDangerousWithMissingParams(t *testing.T) {
 		Confidence:    0.95,
 		MissingParams: []string{"path"},
 		ToolCalls: []ToolCallInfo{
-			{Name: "system.deleteFile", Category: "DANGEROUS_WRITE"},
+			{Name: "sandbox.runShell", Category: "EXECUTION"},
 		},
 	}
 
@@ -210,7 +210,7 @@ func TestValidate_AllowsSafeRead(t *testing.T) {
 		Type:       TypeReadInfo,
 		Confidence: 0.85,
 		ToolCalls: []ToolCallInfo{
-			{Name: "read_file", Category: "SAFE_READ"},
+			{Name: "gmail.listEmails", Category: "SAFE_READ"},
 		},
 	}
 

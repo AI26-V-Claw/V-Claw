@@ -86,9 +86,9 @@ Thresholds:
 
 ### Scenario 1: Safe Read (Execute Immediately)
 ```
-Input: "Đọc file /etc/config.json"
+Input: "Check mail xem có ai gửi báo cáo không"
 Output: intent_type="READ_INFO", confidence=0.95, needs_confirm=false
-Action: Execute read_file tool
+Action: Execute gmail.listEmails tool
 ```
 
 ### Scenario 2: Dangerous with Missing Params (Ask for Clarification)
@@ -101,12 +101,11 @@ Action: Ask "Bạn muốn xóa file config nào? Vui lòng cung cấp đường 
 ### Scenario 3: Composite Action (Multi-step Workflow)
 ```
 Input: "Tìm và xóa file log cũ"
-Output: intent_type="COMPOSITE_ACTION", tool_calls=[find_files, delete_files]
+Output: intent_type="COMPOSITE_ACTION", tool_calls=[sandbox.runShell]
 Action: 
-  1. Execute find_files
-  2. Show results: "Tìm thấy 15 file"
-  3. Ask confirmation: "Xóa 15 file này?"
-  4. If confirmed → Execute delete_files
+  1. Ask confirmation for sandbox command
+  2. If confirmed → Execute sandbox.runShell
+  3. Show controlled sandbox result
 ```
 
 ### Scenario 4: Ambiguous (Multiple Choice)
@@ -121,8 +120,8 @@ Action: Ask "Bạn muốn: A) Đọc file, B) Sửa file, C) Xóa file?"
 ### With Context
 ```go
 tools := map[string]interface{}{
-    "read_file": toolDef,
-    "delete_file": toolDef,
+    "gmail.listEmails": toolDef,
+    "sandbox.runShell": toolDef,
 }
 
 history := []string{

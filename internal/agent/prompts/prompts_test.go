@@ -69,13 +69,13 @@ func TestPromptBuilder_WithToolRegistry(t *testing.T) {
 	builder := NewIntentClassifierPrompt()
 	
 	tools := map[string]interface{}{
-		"read_file": map[string]string{
-			"description": "Read file content",
+		"gmail.listEmails": map[string]string{
+			"description": "List Gmail messages",
 			"category":    "SAFE_READ",
 		},
-		"delete_file": map[string]string{
-			"description": "Delete a file",
-			"category":    "DANGEROUS_WRITE",
+		"sandbox.runShell": map[string]string{
+			"description": "Run shell command in sandbox",
+			"category":    "EXECUTION",
 		},
 	}
 	
@@ -85,12 +85,12 @@ func TestPromptBuilder_WithToolRegistry(t *testing.T) {
 		t.Error("Built prompt missing tools section")
 	}
 	
-	if !strings.Contains(prompt, "read_file") {
-		t.Error("Built prompt missing read_file tool")
+	if !strings.Contains(prompt, "gmail.listEmails") {
+		t.Error("Built prompt missing gmail.listEmails tool")
 	}
-	
-	if !strings.Contains(prompt, "delete_file") {
-		t.Error("Built prompt missing delete_file tool")
+
+	if !strings.Contains(prompt, "sandbox.runShell") {
+		t.Error("Built prompt missing sandbox.runShell tool")
 	}
 }
 
@@ -201,7 +201,7 @@ func TestPromptBuilder_ChainedCalls(t *testing.T) {
 	builder := NewIntentClassifierPrompt()
 	
 	tools := map[string]interface{}{
-		"read_file": "Read file",
+		"gmail.listEmails": "List Gmail messages",
 	}
 	
 	history := []string{
@@ -338,9 +338,9 @@ func BenchmarkPromptBuilder_Build(b *testing.B) {
 
 func BenchmarkPromptBuilder_BuildWithContext(b *testing.B) {
 	tools := map[string]interface{}{
-		"read_file":   "Read file",
-		"delete_file": "Delete file",
-		"exec":        "Execute command",
+		"gmail.listEmails": "List Gmail messages",
+		"gmail.sendEmail":  "Send email",
+		"sandbox.runShell": "Execute command",
 	}
 	
 	history := []string{

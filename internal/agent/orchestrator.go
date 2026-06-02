@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
+	"vclaw/internal/agent/intent"
 	"vclaw/internal/audit"
-	"vclaw/internal/intent"
 	"vclaw/internal/memory"
 	"vclaw/internal/providers"
 )

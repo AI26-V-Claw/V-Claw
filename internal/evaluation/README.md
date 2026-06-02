@@ -113,7 +113,7 @@ package main
 
 import (
     "github.com/yourusername/goclaw/internal/evaluation"
-    "github.com/yourusername/goclaw/internal/pipeline/stages"
+    "github.com/yourusername/goclaw/internal/agent/intent"
 )
 
 func main() {
@@ -123,8 +123,8 @@ func main() {
         panic(err)
     }
     
-    // Initialize classifier (TODO: implement this)
-    classifier := stages.NewIntentClassifier(apiKey, model)
+    // Initialize classifier
+    classifier := intent.NewClassifier()
     
     // Create evaluator
     evaluator := evaluation.NewEvaluator(classifier, dataset)
@@ -276,9 +276,9 @@ Edit `test_cases.json`:
   "input": "Your test input here",
   "expected_intent": "READ_INFO",
   "expected_confidence_min": 0.85,
-  "expected_tool_calls": ["read_file"],
+  "expected_tool_calls": ["gmail.listEmails"],
   "expected_params": {
-    "path": "test.txt"
+    "query": "from:team"
   },
   "expected_needs_confirm": false,
   "complexity": "medium",
@@ -299,9 +299,9 @@ func GenerateCustomCases() []TestCase {
             Input: "Your test input",
             ExpectedIntent: "READ_INFO",
             ExpectedConfidenceMin: 0.85,
-            ExpectedToolCalls: []string{"read_file"},
+            ExpectedToolCalls: []string{"gmail.listEmails"},
             ExpectedParams: map[string]interface{}{
-                "path": "test.txt",
+                "query": "from:team",
             },
             ExpectedNeedsConfirm: false,
             Complexity: "medium",

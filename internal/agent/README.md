@@ -23,10 +23,10 @@ Confidence thresholds for different intent types:
 
 ### 3. Tool Registry (`tool_registry.go`)
 Centralized registry of all available tools:
-- **Safe Read Tools**: `read_file`, `list_directory`, `web_search`
-- **Dangerous Write Tools**: `delete_file`, `write_file`
-- **Execution Tools**: `exec`
-- **Communication Tools**: `send_email`
+- **Safe Read Tools**: `gmail.listEmails`, `calendar.listEvents`, `chat.listMessages`
+- **Dangerous Write Tools**: `gmail.sendEmail`, `calendar.createEvent`, `calendar.updateEvent`, `calendar.deleteEvent`, `chat.sendMessage`
+- **Execution Tools**: `sandbox.runPython`, `sandbox.runShell`
+- **Communication Tools**: `gmail.sendEmail`, `chat.sendMessage`
 
 Each tool has:
 - Category (SAFE_READ, DANGEROUS_WRITE, EXECUTION, COMMUNICATION)
@@ -207,7 +207,7 @@ go test ./internal/agent/... -cover
 ## Integration
 
 This module integrates with:
-- `internal/pipeline/stages/param_validator.go` - Parameter validation
+- `internal/agent/intent/` - Intent classification and parameter validation
 - `internal/audit/` - Action logging (Phase 4)
 - `internal/memory/` - Session and long-term memory (Phase 2-3)
 - `internal/safety/` - Risk classification (Phase 2)
