@@ -14,7 +14,6 @@ import (
 	"vclaw/internal/connectors/google/chat"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
-	gmailtool "vclaw/internal/tools/office/gmail"
 )
 
 const (
@@ -112,10 +111,10 @@ func runGoogle(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to create calendar client: %w", err)
 		}
-		
+
 		timeMin := time.Now()
 		timeMax := timeMin.AddDate(0, 1, 0) // Next 1 month
-		
+
 		events, err := calClient.ListEvents(ctx, timeMin, timeMax, "")
 		if err != nil {
 			return fmt.Errorf("calendar smoke test failed: %w", err)
@@ -163,138 +162,6 @@ func runGoogle(ctx context.Context, args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown google command %q", args[0])
-	}
-}
-
-func runGoogleGmail(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		printGoogleGmailUsage()
-		return nil
-	}
-
-	switch args[0] {
-	case "list":
-		fs := newGoogleFlagSet("gmail list")
-		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
-		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
-		query := fs.String("query", "", "raw Gmail query")
-		from := fs.String("from", "", "filter by sender address")
-		subject := fs.String("subject", "", "filter by subject")
-		after := fs.String("after", "", "filter emails after date (YYYY-MM-DD)")
-		before := fs.String("before", "", "filter emails before date (YYYY-MM-DD)")
-		labels := fs.String("labels", "", "comma separated label IDs")
-		maxResults := fs.Int64("max-results", 10, "number of emails to return (1-50)")
-		pageToken := fs.String("page-token", "", "optional Gmail page token")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-
-		httpClient, err := googleoauth.Client(ctx, googleoauth.Config{
-			CredentialsPath: *credentialsPath,
-			TokenPath:       *tokenPath,
-			Scopes:          google.G1Scopes,
-		})
-		if err != nil {
-			return err
-		}
-
-		service := gmailtool.NewService(gmailconnector.NewClient(httpClient))
-		output, toolErr := service.ListEmails(ctx, gmailtool.ListEmailsInput{
-			UserID:     *userID,
-			Query:      *query,
-			From:       *from,
-			Subject:    *subject,
-			After:      *after,
-			Before:     *before,
-			LabelIDs:   splitCSV(*labels),
-			MaxResults: *maxResults,
-			PageToken:  *pageToken,
-		})
-		if toolErr != nil {
-			return fmt.Errorf("%s: %s", toolErr.Code, toolErr.Message)
-		}
-
-		fmt.Printf("Resolved query: %s\n", output.Query)
-		if len(output.Messages) == 0 {
-			fmt.Println("No emails found.")
-		}
-		for _, msg := range output.Messages {
-			fmt.Printf("- %s | %s | %s\n", msg.ID, msg.From, msg.Subject)
-			fmt.Printf("  Date: %s\n", msg.Date)
-			fmt.Printf("  Snippet: %s\n", msg.Snippet)
-		}
-		if strings.TrimSpace(output.NextPageToken) != "" {
-			fmt.Printf("Next page token: %s\n", output.NextPageToken)
-		}
-		return nil
-
-	case "get":
-		fs := newGoogleFlagSet("gmail get")
-		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
-		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
-		messageID := fs.String("id", "", "Gmail message ID (required)")
-		renderMode := fs.String("render", "text", "body render mode: text or raw-html")
-		fullBody := fs.Bool("full", false, "print full body output instead of preview")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-
-		httpClient, err := googleoauth.Client(ctx, googleoauth.Config{
-			CredentialsPath: *credentialsPath,
-			TokenPath:       *tokenPath,
-			Scopes:          google.G1Scopes,
-		})
-		if err != nil {
-			return err
-		}
-
-		service := gmailtool.NewService(gmailconnector.NewClient(httpClient))
-		output, toolErr := service.GetEmail(ctx, gmailtool.GetEmailInput{
-			UserID:       *userID,
-			MessageID:    *messageID,
-			RenderMode:   *renderMode,
-			Full:         *fullBody,
-			PreviewChars: 0,
-		})
-		if toolErr != nil {
-			return fmt.Errorf("%s: %s", toolErr.Code, toolErr.Message)
-		}
-
-		msg := output.Message
-		fmt.Printf("ID: %s\n", msg.ID)
-		fmt.Printf("Thread: %s\n", msg.ThreadID)
-		fmt.Printf("From: %s\n", msg.From)
-		fmt.Printf("To: %s\n", msg.To)
-		fmt.Printf("Subject: %s\n", msg.Subject)
-		fmt.Printf("Date: %s\n", msg.Date)
-		fmt.Printf("Snippet: %s\n", msg.Snippet)
-		fmt.Println()
-
-		if output.Display.Mode == gmailtool.RenderModeText {
-			fmt.Printf("Display source: %s\n", output.Display.Source)
-			fmt.Println("Body (rendered text):")
-		} else {
-			fmt.Println("Body (raw html):")
-		}
-		fmt.Println(output.Display.Text)
-		if output.Display.Truncated {
-			fmt.Printf("Preview chars: %d\n", output.Display.PreviewChars)
-		}
-
-		if len(msg.Attachments) > 0 {
-			fmt.Println()
-			fmt.Println("Attachments:")
-			for _, attachment := range msg.Attachments {
-				fmt.Printf("- %s | %s | %d bytes | %s\n", attachment.Filename, attachment.MimeType, attachment.Size, attachment.AttachmentID)
-			}
-		}
-		return nil
-
-	case "help", "-h", "--help":
-		printGoogleGmailUsage()
-		return nil
-	default:
-		return fmt.Errorf("unknown google gmail command %q", args[0])
 	}
 }
 
@@ -387,7 +254,7 @@ func printUsage() {
   vclaw agent -prompt "..."
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
-  vclaw google gmail <list|get>
+  vclaw google gmail <list|get|list-threads|get-thread|create-draft|update-draft|send-draft|reply-draft|forward-draft|download-attachments|modify-message>
   vclaw google chat <list-spaces|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>`)
 }
 
@@ -414,5 +281,32 @@ func printGoogleGmailUsage() {
       List emails with optional Gmail search and filters.
 
   vclaw google gmail get -id <message-id> [-render text|raw-html] [-full]
-      Read one email in detail with safe rendered text (default) or raw HTML output.`)
+      Read one email in detail with safe rendered text (default) or raw HTML output.
+
+  vclaw google gmail list-threads [-query "from:abc@example.com"] [-labels INBOX] [-max-results 10]
+      List Gmail threads.
+
+  vclaw google gmail get-thread -id <thread-id> [-render text|raw-html] [-full]
+      Read one Gmail thread.
+
+  vclaw google gmail create-draft -to a@example.com [-cc b@example.com] -subject "Hello" -text "Body" [-html "<p>Body</p>"]
+      Create a Gmail draft.
+
+  vclaw google gmail update-draft -id <draft-id> -to a@example.com -subject "Hello" -text "Body"
+      Update a Gmail draft.
+
+  vclaw google gmail send-draft -id <draft-id>
+      Send an existing Gmail draft.
+
+  vclaw google gmail reply-draft -id <message-id> -to a@example.com -text "Reply body"
+      Create a reply draft. Use -thread without -id to draft in a known thread.
+
+  vclaw google gmail forward-draft -id <message-id> -to a@example.com -text "Forward note"
+      Create a forward draft without forwarding original attachments.
+
+  vclaw google gmail download-attachments -id <message-id> -output-dir <dir> [-attachment-ids att1,att2]
+      Download Gmail attachments to a local directory.
+
+  vclaw google gmail modify-message -id <message-id> -action markRead|markUnread|star|unstar|archive|moveToInbox|addLabels|removeLabels [-labels LABEL1,LABEL2]
+      Modify Gmail message labels.`)
 }
