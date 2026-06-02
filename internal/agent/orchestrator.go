@@ -6,10 +6,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nxhai/vclaw/internal/audit"
-	"github.com/nxhai/vclaw/internal/intent"
-	"github.com/nxhai/vclaw/internal/memory"
-	"github.com/nxhai/vclaw/internal/providers"
+	"vclaw/internal/audit"
+	"vclaw/internal/intent"
+	"vclaw/internal/memory"
+	"vclaw/internal/providers"
 )
 
 type Orchestrator struct {
@@ -49,7 +49,6 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg InboundMessage) (O
 			UpdateID:     msg.UpdateID,
 			Channel:      channel,
 			ChatID:       msg.ChatID,
-			UserID:       msg.UserID,
 			SessionID:    sessionID,
 			Input:        text,
 			Intent:       string(intent.IntentReadInfo),
@@ -73,7 +72,6 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg InboundMessage) (O
 			UpdateID:     msg.UpdateID,
 			Channel:      channel,
 			ChatID:       msg.ChatID,
-			UserID:       msg.UserID,
 			SessionID:    sessionID,
 			Input:        text,
 			Intent:       string(intent.IntentAmbiguous),
@@ -99,7 +97,6 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg InboundMessage) (O
 		UpdateID:     msg.UpdateID,
 		Channel:      channel,
 		ChatID:       msg.ChatID,
-		UserID:       msg.UserID,
 		SessionID:    sessionID,
 		Input:        text,
 		Intent:       string(classification.Intent),
@@ -127,7 +124,6 @@ func (o *Orchestrator) FinalizeAudit(msg InboundMessage, err error) {
 			RequestID:    msg.EffectiveRequestID(),
 			UpdateID:     msg.UpdateID,
 			ChatID:       msg.ChatID,
-			UserID:       msg.UserID,
 			SessionID:    msg.EffectiveSessionID(),
 			Input:        strings.TrimSpace(msg.Text),
 			Intent:       string(intent.IntentAmbiguous),
@@ -150,7 +146,6 @@ func (o *Orchestrator) RecordIgnored(msg InboundMessage, actionTaken string) {
 		UpdateID:     msg.UpdateID,
 		Channel:      msg.EffectiveChannel(),
 		ChatID:       msg.ChatID,
-		UserID:       msg.UserID,
 		SessionID:    msg.EffectiveSessionID(),
 		Input:        strings.TrimSpace(msg.Text),
 		Intent:       string(intent.IntentAmbiguous),

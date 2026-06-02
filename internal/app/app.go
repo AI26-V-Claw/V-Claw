@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/nxhai/vclaw/internal/agent"
-	"github.com/nxhai/vclaw/internal/audit"
-	"github.com/nxhai/vclaw/internal/channels/telegram"
-	"github.com/nxhai/vclaw/internal/config"
-	"github.com/nxhai/vclaw/internal/intent"
-	"github.com/nxhai/vclaw/internal/memory"
-	"github.com/nxhai/vclaw/internal/providers"
+	"vclaw/internal/agent"
+	"vclaw/internal/audit"
+	"vclaw/internal/channels/telegram"
+	"vclaw/internal/config"
+	"vclaw/internal/intent"
+	"vclaw/internal/memory"
+	"vclaw/internal/providers"
 )
 
 type App struct {

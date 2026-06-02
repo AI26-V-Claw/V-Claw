@@ -12,7 +12,6 @@ type InboundMessage struct {
 	Channel   string
 	UpdateID  int64
 	ChatID    int64
-	UserID    int64
 	Text      string
 	Locale    string
 	Metadata  map[string]any
@@ -33,9 +32,6 @@ func (m InboundMessage) EffectiveRequestID() string {
 func (m InboundMessage) EffectiveSessionID() string {
 	if strings.TrimSpace(m.SessionID) != "" {
 		return strings.TrimSpace(m.SessionID)
-	}
-	if m.UserID != 0 {
-		return fmt.Sprintf("telegram_user_%d", m.UserID)
 	}
 	if m.ChatID != 0 {
 		return fmt.Sprintf("telegram_chat_%d", m.ChatID)

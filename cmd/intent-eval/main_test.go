@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nxhai/vclaw/internal/intent"
+	"vclaw/internal/intent"
 )
 
 func TestIntentCasesDatasetIsValid(t *testing.T) {

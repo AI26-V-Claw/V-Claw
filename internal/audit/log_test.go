@@ -14,7 +14,6 @@ func TestLoggerWritesJSONL(t *testing.T) {
 	entry := Entry{
 		UpdateID:     1,
 		ChatID:       2,
-		UserID:       3,
 		Input:        "hello",
 		Intent:       "GREETING",
 		SystemOpType: "NONE",
@@ -36,7 +35,7 @@ func TestLoggerWritesJSONL(t *testing.T) {
 	if err := json.Unmarshal(bytes, &got); err != nil {
 		t.Fatalf("audit file is not valid JSON: %v", err)
 	}
-	if got.UpdateID != entry.UpdateID || got.ChatID != entry.ChatID || got.UserID != entry.UserID {
+	if got.UpdateID != entry.UpdateID || got.ChatID != entry.ChatID {
 		t.Fatalf("unexpected entry: %+v", got)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nxhai/vclaw/internal/intent"
+	"vclaw/internal/intent"
 )
 
 type intentCase struct {

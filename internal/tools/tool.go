@@ -22,7 +22,6 @@ const (
 	RiskLevelLocalWrite    RiskLevel = "local_write"
 	RiskLevelCodeExecution RiskLevel = "code_execution"
 	RiskLevelDestructive   RiskLevel = "destructive"
-	RiskLevelBlocked       RiskLevel = "blocked"
 )
 
 type ToolSchema map[string]any

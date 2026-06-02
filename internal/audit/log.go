@@ -9,7 +9,6 @@ import (
 )
 
 type Event struct {
-	UserID    string
 	Channel   string
 	Intent    string
 	RiskLevel string
@@ -37,7 +36,6 @@ type Entry struct {
 	UpdateID     int64   `json:"update_id"`
 	Channel      string  `json:"channel,omitempty"`
 	ChatID       int64   `json:"chat_id"`
-	UserID       int64   `json:"user_id"`
 	SessionID    string  `json:"session_id,omitempty"`
 	Input        string  `json:"input"`
 	Intent       string  `json:"intent"`

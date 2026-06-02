@@ -15,6 +15,7 @@ Channel -> Agent Core -> Safety/HITL -> Tool Layer -> Tool Execution -> Agent Co
 - Tool trả kết quả qua `ToolResult`.
 - Action có side effect phải có `RiskDecision`.
 - Nếu `requiresApproval = true`, tool không được execute trước khi có `ApprovalDecision = approved`.
+- MVP là single-owner deployment; không dùng `userId` trong runtime contract.
 
 ---
 
@@ -67,7 +68,6 @@ Channel / Integration -> Agent Core
 {
   "requestId": "req_001",
   "sessionId": "sess_001",
-  "userId": "user_001",
   "channel": "telegram",
   "text": "Kiểm tra mail xem có ai hẹn họp không, nếu có thì xếp lịch giúp tôi.",
   "locale": "vi-VN",
@@ -79,7 +79,7 @@ Channel / Integration -> Agent Core
 Required:
 
 ```text
-requestId, userId, channel, text, timestamp
+requestId, sessionId, channel, text, timestamp
 ```
 
 ---
@@ -124,7 +124,6 @@ Agent Core -> Tool Layer
   "toolCallId": "toolcall_001",
   "requestId": "req_001",
   "sessionId": "sess_001",
-  "userId": "user_001",
   "toolName": "calendar.createEvent",
   "input": {
     "title": "Họp với anh Minh",
@@ -132,14 +131,14 @@ Agent Core -> Tool Layer
     "end": "2026-05-30T11:00:00+07:00",
     "attendees": ["minh@example.com"]
   },
-  "reasonVi": "Tạo lịch họp dựa trên email hẹn họp vừa tìm thấy."
+  "reason": "Create a calendar event based on the meeting email that was found."
 }
 ```
 
 Required:
 
 ```text
-toolCallId, requestId, userId, toolName, input
+toolCallId, requestId, sessionId, toolName, input
 ```
 
 ---
@@ -193,7 +192,7 @@ Safety Layer -> Agent Core / Approvals
   "riskLevel": "external_write",
   "decision": "requires_approval",
   "requiresApproval": true,
-  "reasonVi": "Tạo sự kiện mới trên Google Calendar làm thay đổi dữ liệu bên ngoài.",
+  "reason": "Creating a new Google Calendar event changes external data.",
   "checkedAt": "2026-05-29T09:00:00+07:00"
 }
 ```
@@ -216,8 +215,9 @@ external_write
 local_write
 code_execution
 destructive
-blocked
 ```
+
+`blocked` is a `decision` / `AgentResponse.status`, not a `RiskLevel`.
 
 ---
 
@@ -235,8 +235,8 @@ Safety / Agent Core -> Channel / User
   "toolCallId": "toolcall_001",
   "status": "pending",
   "riskLevel": "external_write",
-  "summaryVi": "Agent muốn tạo lịch họp với anh Minh lúc 10:00 ngày mai.",
-  "detailsVi": "Hành động này sẽ tạo một sự kiện mới trên Google Calendar.",
+  "summary": "The agent wants to create a meeting with Minh at 10:00 tomorrow.",
+  "details": "This action will create a new event in Google Calendar.",
   "toolCall": {
     "toolName": "calendar.createEvent",
     "input": {
@@ -260,6 +260,8 @@ expired
 cancelled
 ```
 
+If `expiresAt` passes before an approval decision is received, the approval becomes `expired`; the tool must not execute, and a later `approved` decision for the same `approvalId` must be rejected.
+
 ---
 
 ## 3.7. ApprovalDecision
@@ -273,7 +275,7 @@ Channel / User -> Approval Service / Agent Core
   "approvalId": "appr_001",
   "requestId": "req_001",
   "decision": "approved",
-  "decidedBy": "user_001",
+  "decidedBy": "owner",
   "decidedAt": "2026-05-29T09:02:00+07:00",
   "comment": "Đồng ý tạo lịch."
 }
@@ -307,6 +309,7 @@ INVALID_INPUT
 MISSING_REQUIRED_FIELD
 UNSUPPORTED_CHANNEL
 TOOL_NOT_FOUND
+RESOURCE_NOT_FOUND
 TOOL_INPUT_INVALID
 AUTH_EXPIRED
 AUTH_MISSING_SCOPE
@@ -335,9 +338,10 @@ Tool owners -> Agent Core / Safety Layer
 {
   "name": "calendar.createEvent",
   "owner": "integration",
-  "descriptionVi": "Tạo sự kiện mới trên Google Calendar.",
+  "description": "Create a new event in Google Calendar.",
   "defaultRiskLevel": "external_write",
   "requiresApproval": true,
+  "timeoutMs": 30000,
   "inputExample": {},
   "outputExample": {}
 }
@@ -346,8 +350,10 @@ Tool owners -> Agent Core / Safety Layer
 Required:
 
 ```text
-name, owner, descriptionVi, defaultRiskLevel, requiresApproval
+name, owner, description, defaultRiskLevel, requiresApproval
 ```
+
+`timeoutMs` is optional. If omitted, the Tool Layer uses its default execution timeout.
 
 ---
 
@@ -360,6 +366,9 @@ name, owner, descriptionVi, defaultRiskLevel, requiresApproval
 | `gmail.listEmails` | Integration | `safe_read` | No |
 | `gmail.getEmail` | Integration | `safe_read` | No |
 | `gmail.sendEmail` | Integration | `external_write` | Yes |
+
+> `gmail.getEmail` trả dữ liệu raw từ connector (headers/body/attachments).  
+> Render text để hiển thị (ví dụ fallback từ HTML sang text) thuộc tool layer, không thuộc connector raw API boundary.
 
 ### Calendar
 

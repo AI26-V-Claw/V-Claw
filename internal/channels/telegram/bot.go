@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nxhai/vclaw/internal/agent"
+	"vclaw/internal/agent"
 )
 
 const longPollTimeout = 30
@@ -102,14 +102,12 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		Channel:   "telegram",
 		UpdateID:  int64(update.UpdateID),
 		ChatID:    update.Message.Chat.ID,
-		UserID:    0,
 		Text:      update.Message.Text,
 		Source:    "telegram",
 		Timestamp: time.Now().UTC(),
 	}
 	if update.Message.From != nil {
-		inbound.UserID = update.Message.From.ID
-		inbound.SessionID = fmt.Sprintf("telegram_user_%d", update.Message.From.ID)
+		inbound.SessionID = fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID)
 	} else if update.Message.Chat.ID != 0 {
 		inbound.SessionID = fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID)
 	}
@@ -122,8 +120,6 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		b.orchestrator.RecordIgnored(inbound, "ignored_unauthorized")
 		return true, nil
 	}
-
-	inbound.UserID = update.Message.From.ID
 
 	outbound, err := b.orchestrator.HandleMessage(ctx, inbound)
 	if err != nil {

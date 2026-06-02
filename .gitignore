@@ -9,3 +9,5 @@ configs/google/token.json
 .gopath/
 bin/
 .appdata/
+data/telegram_offset.txt
+logs/audit.jsonl
