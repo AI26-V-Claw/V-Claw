@@ -54,7 +54,54 @@ Additional Chat test commands are available under:
 go run ./cmd/vclaw google chat help
 ```
 
+Additional Gmail test commands are available under:
+
+```powershell
+go run ./cmd/vclaw google gmail help
+```
+
 Mutating Chat commands are for manual CLI testing. Agent-triggered `chat.sendMessage` remains an `external_write` tool and must pass the approval boundary before execution.
+Mutating Gmail commands are also for manual CLI testing. Agent-triggered Gmail draft, send, attachment download, and modify tools must pass the approval boundary before execution.
+
+## Gmail manual test commands
+
+List messages and threads:
+
+```powershell
+go run ./cmd/vclaw google gmail list -query "is:unread" -max-results 10
+go run ./cmd/vclaw google gmail list-threads -query "from:alice@example.com" -max-results 10
+```
+
+Read one message or thread:
+
+```powershell
+go run ./cmd/vclaw google gmail get -id MESSAGE_ID -full
+go run ./cmd/vclaw google gmail get-thread -id THREAD_ID -full
+```
+
+Create, update, and send drafts:
+
+```powershell
+go run ./cmd/vclaw google gmail create-draft -to alice@example.com -subject "Hello" -text "Draft body"
+go run ./cmd/vclaw google gmail update-draft -id DRAFT_ID -to alice@example.com -subject "Hello" -text "Updated body"
+go run ./cmd/vclaw google gmail send-draft -id DRAFT_ID
+```
+
+Create reply or forward drafts:
+
+```powershell
+go run ./cmd/vclaw google gmail reply-draft -id MESSAGE_ID -to alice@example.com -text "Reply body"
+go run ./cmd/vclaw google gmail forward-draft -id MESSAGE_ID -to alice@example.com -text "Forward note"
+```
+
+Download attachments and modify message labels:
+
+```powershell
+go run ./cmd/vclaw google gmail download-attachments -id MESSAGE_ID -output-dir C:\tmp\vclaw-gmail
+go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action markRead
+go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action archive
+go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action addLabels -labels LABEL_ID
+```
 
 ## Google Chat manual test commands
 
@@ -138,6 +185,9 @@ During auth, V-Claw starts a temporary local callback server on `127.0.0.1`, so 
 
 ```text
 https://www.googleapis.com/auth/gmail.readonly
+https://www.googleapis.com/auth/gmail.compose
+https://www.googleapis.com/auth/gmail.send
+https://www.googleapis.com/auth/gmail.modify
 https://www.googleapis.com/auth/calendar.readonly
 https://www.googleapis.com/auth/chat.spaces.readonly
 https://www.googleapis.com/auth/chat.messages.create
@@ -147,10 +197,10 @@ https://www.googleapis.com/auth/chat.memberships
 https://www.googleapis.com/auth/chat.spaces
 ```
 
-`chat.messages.create` is used by the smoke test when you send a text message to a Chat space. The broader Chat scopes support listing messages, sending text replies/attachments, updating or deleting messages, creating spaces, and adding or removing members.
+`gmail.readonly` is used for message/thread reads and attachment metadata. `gmail.compose`, `gmail.send`, and `gmail.modify` support draft creation/update/send, attachment download, and message label changes. `chat.messages.create` is used by the smoke test when you send a text message to a Chat space. The broader Chat scopes support listing messages, sending text replies/attachments, updating or deleting messages, creating spaces, and adding or removing members.
 
 Card messages are not supported by the current user OAuth flow. Use `google chat send -space ... -text ...` for normal messages. If the project needs rich cards later, add a Google Chat app authentication flow and update the tool contract, docs, and tests before exposing it to agents.
 
-If you change OAuth scopes later, delete `configs/google/token.json` and run auth again.
+If you change OAuth scopes later, delete `configs/google/token.json` and run auth again. This is required after pulling the Gmail draft/modify scope expansion.
 
 If Chat smoke test returns `Google Chat app not found`, open the Google Chat API Configuration tab in Google Cloud Console, fill in Application info, turn Interactive features off, click Save, wait a few minutes, then run smoke again.
