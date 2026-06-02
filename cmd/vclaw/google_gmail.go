@@ -20,6 +20,34 @@ func runGoogleGmail(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "labels":
+		fs := newGoogleFlagSet("gmail labels")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleGmailService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.ListLabels(ctx, gmailtool.ListLabelsInput{UserID: *userID})
+		return printGmailToolOutput(output, toolErr)
+
+	case "profile":
+		fs := newGoogleFlagSet("gmail profile")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleGmailService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.GetProfile(ctx, gmailtool.GetProfileInput{UserID: *userID})
+		return printGmailToolOutput(output, toolErr)
+
 	case "list":
 		fs := newGoogleFlagSet("gmail list")
 		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
@@ -212,6 +240,39 @@ func runGoogleGmail(ctx context.Context, args []string) error {
 		}
 		return nil
 
+	case "list-drafts":
+		fs := newGoogleFlagSet("gmail list-drafts")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
+		maxResults := fs.Int64("max-results", 10, "number of drafts to return (1-50)")
+		pageToken := fs.String("page-token", "", "optional Gmail page token")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleGmailService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.ListDrafts(ctx, gmailtool.ListDraftsInput{UserID: *userID, MaxResults: *maxResults, PageToken: *pageToken})
+		return printGmailToolOutput(output, toolErr)
+
+	case "get-draft":
+		fs := newGoogleFlagSet("gmail get-draft")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
+		draftID := fs.String("id", "", "Gmail draft ID (required)")
+		renderMode := fs.String("render", "text", "body render mode: text or raw-html")
+		fullBody := fs.Bool("full", false, "print full body output instead of preview")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleGmailService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.GetDraft(ctx, gmailtool.GetDraftInput{UserID: *userID, DraftID: *draftID, RenderMode: *renderMode, Full: *fullBody})
+		return printGmailToolOutput(output, toolErr)
+
 	case "create-draft":
 		fs := newGoogleFlagSet("gmail create-draft")
 		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
@@ -257,6 +318,21 @@ func runGoogleGmail(ctx context.Context, args []string) error {
 			return err
 		}
 		output, toolErr := service.SendDraft(ctx, gmailtool.SendDraftInput{UserID: *userID, DraftID: *draftID})
+		return printGmailToolOutput(output, toolErr)
+
+	case "delete-draft":
+		fs := newGoogleFlagSet("gmail delete-draft")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
+		draftID := fs.String("id", "", "Gmail draft ID (required)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleGmailService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.DeleteDraft(ctx, gmailtool.DeleteDraftInput{UserID: *userID, DraftID: *draftID})
 		return printGmailToolOutput(output, toolErr)
 
 	case "reply-draft":
@@ -339,6 +415,58 @@ func runGoogleGmail(ctx context.Context, args []string) error {
 		})
 		return printGmailToolOutput(output, toolErr)
 
+	case "batch-modify":
+		fs := newGoogleFlagSet("gmail batch-modify")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
+		messageIDs := fs.String("ids", "", "comma separated Gmail message IDs (required)")
+		action := fs.String("action", "", "markRead, markUnread, star, unstar, archive, moveToInbox, addLabels, removeLabels")
+		labels := fs.String("labels", "", "comma separated label IDs for addLabels/removeLabels")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleGmailService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.BatchModifyMessages(ctx, gmailtool.BatchModifyMessagesInput{
+			UserID:     *userID,
+			MessageIDs: splitCSV(*messageIDs),
+			Action:     *action,
+			LabelIDs:   splitCSV(*labels),
+		})
+		return printGmailToolOutput(output, toolErr)
+
+	case "trash-message":
+		fs := newGoogleFlagSet("gmail trash-message")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
+		messageID := fs.String("id", "", "Gmail message ID (required)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleGmailService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.TrashMessage(ctx, gmailtool.TrashMessageInput{UserID: *userID, MessageID: *messageID})
+		return printGmailToolOutput(output, toolErr)
+
+	case "untrash-message":
+		fs := newGoogleFlagSet("gmail untrash-message")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
+		messageID := fs.String("id", "", "Gmail message ID (required)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleGmailService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.UntrashMessage(ctx, gmailtool.UntrashMessageInput{UserID: *userID, MessageID: *messageID})
+		return printGmailToolOutput(output, toolErr)
+
 	case "help", "-h", "--help":
 		printGoogleGmailUsage()
 		return nil
@@ -348,39 +476,42 @@ func runGoogleGmail(ctx context.Context, args []string) error {
 }
 
 type gmailDraftFlags struct {
-	userID   *string
-	to       *string
-	cc       *string
-	bcc      *string
-	subject  *string
-	textBody *string
-	htmlBody *string
-	threadID *string
+	userID      *string
+	to          *string
+	cc          *string
+	bcc         *string
+	subject     *string
+	textBody    *string
+	htmlBody    *string
+	threadID    *string
+	attachments *string
 }
 
 func addGmailDraftFlags(fs *flag.FlagSet) gmailDraftFlags {
 	return gmailDraftFlags{
-		userID:   fs.String("user", "me", "Gmail user ID, use me for the authorized account"),
-		to:       fs.String("to", "", "comma separated To recipients"),
-		cc:       fs.String("cc", "", "comma separated Cc recipients"),
-		bcc:      fs.String("bcc", "", "comma separated Bcc recipients"),
-		subject:  fs.String("subject", "", "email subject"),
-		textBody: fs.String("text", "", "plain text body"),
-		htmlBody: fs.String("html", "", "optional HTML body"),
-		threadID: fs.String("thread", "", "optional Gmail thread ID"),
+		userID:      fs.String("user", "me", "Gmail user ID, use me for the authorized account"),
+		to:          fs.String("to", "", "comma separated To recipients"),
+		cc:          fs.String("cc", "", "comma separated Cc recipients"),
+		bcc:         fs.String("bcc", "", "comma separated Bcc recipients"),
+		subject:     fs.String("subject", "", "email subject"),
+		textBody:    fs.String("text", "", "plain text body"),
+		htmlBody:    fs.String("html", "", "optional HTML body"),
+		threadID:    fs.String("thread", "", "optional Gmail thread ID"),
+		attachments: fs.String("attachments", "", "comma separated local file paths to attach"),
 	}
 }
 
 func gmailDraftInputFromFlags(flags gmailDraftFlags) gmailtool.DraftInput {
 	return gmailtool.DraftInput{
-		UserID:   *flags.userID,
-		To:       splitCSV(*flags.to),
-		Cc:       splitCSV(*flags.cc),
-		Bcc:      splitCSV(*flags.bcc),
-		Subject:  *flags.subject,
-		TextBody: *flags.textBody,
-		HTMLBody: *flags.htmlBody,
-		ThreadID: *flags.threadID,
+		UserID:      *flags.userID,
+		To:          splitCSV(*flags.to),
+		Cc:          splitCSV(*flags.cc),
+		Bcc:         splitCSV(*flags.bcc),
+		Subject:     *flags.subject,
+		TextBody:    *flags.textBody,
+		HTMLBody:    *flags.htmlBody,
+		ThreadID:    *flags.threadID,
+		Attachments: splitCSV(*flags.attachments),
 	}
 }
 

@@ -61,9 +61,16 @@ go run ./cmd/vclaw google gmail help
 ```
 
 Mutating Chat commands are for manual CLI testing. Agent-triggered `chat.sendMessage` remains an `external_write` tool and must pass the approval boundary before execution.
-Mutating Gmail commands are also for manual CLI testing. Agent-triggered Gmail draft, send, attachment download, and modify tools must pass the approval boundary before execution.
+Mutating Gmail commands are also for manual CLI testing. Agent-triggered Gmail draft, send, attachment download, modify, batch modify, delete draft, trash, and untrash tools must pass the approval boundary before execution.
 
 ## Gmail manual test commands
+
+List labels and show the signed-in account profile:
+
+```powershell
+go run ./cmd/vclaw google gmail labels
+go run ./cmd/vclaw google gmail profile
+```
 
 List messages and threads:
 
@@ -79,29 +86,37 @@ go run ./cmd/vclaw google gmail get -id MESSAGE_ID -full
 go run ./cmd/vclaw google gmail get-thread -id THREAD_ID -full
 ```
 
-Create, update, and send drafts:
+List, read, create, update, send, and delete drafts:
 
 ```powershell
-go run ./cmd/vclaw google gmail create-draft -to alice@example.com -subject "Hello" -text "Draft body"
-go run ./cmd/vclaw google gmail update-draft -id DRAFT_ID -to alice@example.com -subject "Hello" -text "Updated body"
+go run ./cmd/vclaw google gmail list-drafts
+go run ./cmd/vclaw google gmail get-draft -id DRAFT_ID -full
+go run ./cmd/vclaw google gmail create-draft -to alice@example.com -subject "Hello" -text "Draft body" -attachments "C:\tmp\report.pdf"
+go run ./cmd/vclaw google gmail update-draft -id DRAFT_ID -to alice@example.com -subject "Hello" -text "Updated body" -attachments "C:\tmp\report.pdf,C:\tmp\notes.txt"
 go run ./cmd/vclaw google gmail send-draft -id DRAFT_ID
+go run ./cmd/vclaw google gmail delete-draft -id DRAFT_ID
 ```
 
 Create reply or forward drafts:
 
 ```powershell
-go run ./cmd/vclaw google gmail reply-draft -id MESSAGE_ID -to alice@example.com -text "Reply body"
-go run ./cmd/vclaw google gmail forward-draft -id MESSAGE_ID -to alice@example.com -text "Forward note"
+go run ./cmd/vclaw google gmail reply-draft -id MESSAGE_ID -to alice@example.com -text "Reply body" -attachments "C:\tmp\reply-context.pdf"
+go run ./cmd/vclaw google gmail forward-draft -id MESSAGE_ID -to alice@example.com -text "Forward note" -attachments "C:\tmp\extra.pdf"
 ```
 
-Download attachments and modify message labels:
+Download attachments, modify labels, and move messages to or from trash:
 
 ```powershell
 go run ./cmd/vclaw google gmail download-attachments -id MESSAGE_ID -output-dir C:\tmp\vclaw-gmail
 go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action markRead
 go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action archive
 go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action addLabels -labels LABEL_ID
+go run ./cmd/vclaw google gmail batch-modify -ids MESSAGE_ID_1,MESSAGE_ID_2 -action markRead
+go run ./cmd/vclaw google gmail trash-message -id MESSAGE_ID
+go run ./cmd/vclaw google gmail untrash-message -id MESSAGE_ID
 ```
+
+Draft attachments are local file paths. V-Claw supports up to 10 files per draft operation and up to 20 MiB total raw attachment data in the current MVP.
 
 ## Google Chat manual test commands
 
@@ -197,7 +212,7 @@ https://www.googleapis.com/auth/chat.memberships
 https://www.googleapis.com/auth/chat.spaces
 ```
 
-`gmail.readonly` is used for message/thread reads and attachment metadata. `gmail.compose`, `gmail.send`, and `gmail.modify` support draft creation/update/send, attachment download, and message label changes. `chat.messages.create` is used by the smoke test when you send a text message to a Chat space. The broader Chat scopes support listing messages, sending text replies/attachments, updating or deleting messages, creating spaces, and adding or removing members.
+`gmail.readonly` is used for message/thread/draft reads, labels, profile, and attachment metadata. `gmail.compose`, `gmail.send`, and `gmail.modify` support draft creation/update/send/delete, local file attachments in drafts, attachment download, message label changes, batch modify, trash, and untrash. These Gmail tool additions do not require new OAuth scopes beyond the G1 scopes above. `chat.messages.create` is used by the smoke test when you send a text message to a Chat space. The broader Chat scopes support listing messages, sending text replies/attachments, updating or deleting messages, creating spaces, and adding or removing members.
 
 Card messages are not supported by the current user OAuth flow. Use `google chat send -space ... -text ...` for normal messages. If the project needs rich cards later, add a Google Chat app authentication flow and update the tool contract, docs, and tests before exposing it to agents.
 

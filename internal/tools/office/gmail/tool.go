@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,15 +21,23 @@ import (
 const (
 	ToolNameListEmails          = "gmail.listEmails"
 	ToolNameGetEmail            = "gmail.getEmail"
+	ToolNameListLabels          = "gmail.listLabels"
+	ToolNameGetProfile          = "gmail.getProfile"
 	ToolNameListThreads         = "gmail.listThreads"
 	ToolNameGetThread           = "gmail.getThread"
+	ToolNameListDrafts          = "gmail.listDrafts"
+	ToolNameGetDraft            = "gmail.getDraft"
 	ToolNameCreateDraft         = "gmail.createDraft"
 	ToolNameUpdateDraft         = "gmail.updateDraft"
 	ToolNameSendDraft           = "gmail.sendDraft"
+	ToolNameDeleteDraft         = "gmail.deleteDraft"
 	ToolNameReplyDraft          = "gmail.replyDraft"
 	ToolNameForwardDraft        = "gmail.forwardDraft"
 	ToolNameDownloadAttachments = "gmail.downloadAttachments"
 	ToolNameModifyMessage       = "gmail.modifyMessage"
+	ToolNameBatchModifyMessages = "gmail.batchModifyMessages"
+	ToolNameTrashMessage        = "gmail.trashMessage"
+	ToolNameUntrashMessage      = "gmail.untrashMessage"
 )
 
 const (
@@ -37,8 +46,10 @@ const (
 )
 
 const (
-	defaultMaxResults = int64(10)
-	maxAllowedResults = int64(50)
+	defaultMaxResults     = int64(10)
+	maxAllowedResults     = int64(50)
+	maxDraftAttachments   = 10
+	maxDraftAttachmentRaw = int64(20 * 1024 * 1024)
 )
 
 type ToolRegistryEntry struct {
@@ -52,15 +63,23 @@ type ToolRegistryEntry struct {
 var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetEmail, Owner: "integration", Description: "Read one email in detail.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListLabels, Owner: "integration", Description: "List Gmail labels.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameGetProfile, Owner: "integration", Description: "Read the Gmail account profile.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameListThreads, Owner: "integration", Description: "List Gmail threads by search criteria.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetThread, Owner: "integration", Description: "Read a Gmail thread in detail.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListDrafts, Owner: "integration", Description: "List Gmail drafts.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameGetDraft, Owner: "integration", Description: "Read one Gmail draft in detail.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameCreateDraft, Owner: "integration", Description: "Create a Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateDraft, Owner: "integration", Description: "Update a Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameSendDraft, Owner: "integration", Description: "Send an existing Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameDeleteDraft, Owner: "integration", Description: "Delete an existing Gmail draft.", DefaultRiskLevel: "destructive", RequiresApproval: true},
 	{Name: ToolNameReplyDraft, Owner: "integration", Description: "Create a Gmail reply draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameForwardDraft, Owner: "integration", Description: "Create a Gmail forward draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameDownloadAttachments, Owner: "integration", Description: "Download Gmail attachments to a local directory.", DefaultRiskLevel: "local_write", RequiresApproval: true},
 	{Name: ToolNameModifyMessage, Owner: "integration", Description: "Modify Gmail message labels such as read, unread, starred, archive, or inbox.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameBatchModifyMessages, Owner: "integration", Description: "Modify Gmail labels for multiple messages.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameTrashMessage, Owner: "integration", Description: "Move a Gmail message to trash.", DefaultRiskLevel: "destructive", RequiresApproval: true},
+	{Name: ToolNameUntrashMessage, Owner: "integration", Description: "Restore a Gmail message from trash.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 }
 
 type ErrorShape struct {
@@ -70,15 +89,23 @@ type ErrorShape struct {
 }
 
 type Connector interface {
+	ListLabels(ctx context.Context, userID string) ([]gmailconnector.Label, error)
+	GetProfile(ctx context.Context, userID string) (gmailconnector.Profile, error)
 	ListMessages(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error)
 	GetMessage(ctx context.Context, userID string, messageID string) (gmailconnector.MessageDetail, error)
 	ListThreads(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.ThreadSummary, string, error)
 	GetThread(ctx context.Context, userID string, threadID string) (gmailconnector.ThreadDetail, error)
+	ListDrafts(ctx context.Context, userID string, maxResults int64, pageToken string) (gmailconnector.ListDraftsOutput, error)
+	GetDraft(ctx context.Context, userID string, draftID string) (gmailconnector.DraftDetail, error)
 	CreateDraft(ctx context.Context, userID string, input gmailconnector.DraftMessageInput) (gmailconnector.DraftSummary, error)
 	UpdateDraft(ctx context.Context, userID string, draftID string, input gmailconnector.DraftMessageInput) (gmailconnector.DraftSummary, error)
 	SendDraft(ctx context.Context, userID string, draftID string) (gmailconnector.MessageSummary, error)
+	DeleteDraft(ctx context.Context, userID string, draftID string) error
 	DownloadAttachment(ctx context.Context, userID string, messageID string, attachment gmailconnector.Attachment) (gmailconnector.AttachmentData, error)
 	ModifyMessage(ctx context.Context, userID string, messageID string, input gmailconnector.ModifyMessageInput) (gmailconnector.ModifyMessageOutput, error)
+	BatchModifyMessages(ctx context.Context, userID string, messageIDs []string, input gmailconnector.ModifyMessageInput) (gmailconnector.BatchModifyMessagesOutput, error)
+	TrashMessage(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error)
+	UntrashMessage(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error)
 }
 
 type Service struct {
@@ -105,6 +132,22 @@ type ListEmailsOutput struct {
 	Query         string
 	Messages      []gmailconnector.MessageSummary
 	NextPageToken string
+}
+
+type ListLabelsInput struct {
+	UserID string
+}
+
+type ListLabelsOutput struct {
+	Labels []gmailconnector.Label
+}
+
+type GetProfileInput struct {
+	UserID string
+}
+
+type GetProfileOutput struct {
+	Profile gmailconnector.Profile
 }
 
 type GetEmailInput struct {
@@ -156,15 +199,40 @@ type GetThreadOutput struct {
 	Messages []ThreadMessageDisplay
 }
 
+type ListDraftsInput struct {
+	UserID     string
+	MaxResults int64
+	PageToken  string
+}
+
+type ListDraftsOutput struct {
+	Drafts        []gmailconnector.DraftSummary
+	NextPageToken string
+}
+
+type GetDraftInput struct {
+	UserID       string
+	DraftID      string
+	RenderMode   string
+	Full         bool
+	PreviewChars int
+}
+
+type GetDraftOutput struct {
+	Draft   gmailconnector.DraftDetail
+	Display DisplayOutput
+}
+
 type DraftInput struct {
-	UserID   string
-	To       []string
-	Cc       []string
-	Bcc      []string
-	Subject  string
-	TextBody string
-	HTMLBody string
-	ThreadID string
+	UserID      string
+	To          []string
+	Cc          []string
+	Bcc         []string
+	Subject     string
+	TextBody    string
+	HTMLBody    string
+	ThreadID    string
+	Attachments []string
 }
 
 type CreateDraftOutput struct {
@@ -183,6 +251,15 @@ type SendDraftInput struct {
 
 type SendDraftOutput struct {
 	Message gmailconnector.MessageSummary
+}
+
+type DeleteDraftInput struct {
+	UserID  string
+	DraftID string
+}
+
+type DeleteDraftOutput struct {
+	DraftID string
 }
 
 type ReplyDraftInput struct {
@@ -224,6 +301,35 @@ type ModifyMessageOutput struct {
 	Message gmailconnector.ModifyMessageOutput
 }
 
+type BatchModifyMessagesInput struct {
+	UserID     string
+	MessageIDs []string
+	Action     string
+	LabelIDs   []string
+}
+
+type BatchModifyMessagesOutput struct {
+	Result gmailconnector.BatchModifyMessagesOutput
+}
+
+type TrashMessageInput struct {
+	UserID    string
+	MessageID string
+}
+
+type TrashMessageOutput struct {
+	Message gmailconnector.MessageSummary
+}
+
+type UntrashMessageInput struct {
+	UserID    string
+	MessageID string
+}
+
+type UntrashMessageOutput struct {
+	Message gmailconnector.MessageSummary
+}
+
 type DisplayOutput struct {
 	Mode         string
 	Source       string
@@ -249,6 +355,28 @@ func (s *Service) ListEmails(ctx context.Context, input ListEmailsInput) (ListEm
 		return ListEmailsOutput{}, MapError(err)
 	}
 	return ListEmailsOutput{Query: query, Messages: messages, NextPageToken: nextPageToken}, nil
+}
+
+func (s *Service) ListLabels(ctx context.Context, input ListLabelsInput) (ListLabelsOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return ListLabelsOutput{}, errShape
+	}
+	labels, err := s.connector.ListLabels(ctx, normalizeUserID(input.UserID))
+	if err != nil {
+		return ListLabelsOutput{}, MapError(err)
+	}
+	return ListLabelsOutput{Labels: labels}, nil
+}
+
+func (s *Service) GetProfile(ctx context.Context, input GetProfileInput) (GetProfileOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return GetProfileOutput{}, errShape
+	}
+	profile, err := s.connector.GetProfile(ctx, normalizeUserID(input.UserID))
+	if err != nil {
+		return GetProfileOutput{}, MapError(err)
+	}
+	return GetProfileOutput{Profile: profile}, nil
 }
 
 func (s *Service) GetEmail(ctx context.Context, input GetEmailInput) (GetEmailOutput, *ErrorShape) {
@@ -310,6 +438,39 @@ func (s *Service) GetThread(ctx context.Context, input GetThreadInput) (GetThrea
 	return output, nil
 }
 
+func (s *Service) ListDrafts(ctx context.Context, input ListDraftsInput) (ListDraftsOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return ListDraftsOutput{}, errShape
+	}
+	maxResults, errShape := normalizeMaxResults(input.MaxResults)
+	if errShape != nil {
+		return ListDraftsOutput{}, errShape
+	}
+	output, err := s.connector.ListDrafts(ctx, normalizeUserID(input.UserID), maxResults, input.PageToken)
+	if err != nil {
+		return ListDraftsOutput{}, MapError(err)
+	}
+	return ListDraftsOutput{Drafts: output.Drafts, NextPageToken: output.NextPageToken}, nil
+}
+
+func (s *Service) GetDraft(ctx context.Context, input GetDraftInput) (GetDraftOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return GetDraftOutput{}, errShape
+	}
+	if strings.TrimSpace(input.DraftID) == "" {
+		return GetDraftOutput{}, invalidInput("draftId is required")
+	}
+	draft, err := s.connector.GetDraft(ctx, normalizeUserID(input.UserID), input.DraftID)
+	if err != nil {
+		return GetDraftOutput{}, MapError(err)
+	}
+	display, errShape := buildDisplay(draft.Message, GetEmailInput{RenderMode: input.RenderMode, Full: input.Full, PreviewChars: input.PreviewChars})
+	if errShape != nil {
+		return GetDraftOutput{}, errShape
+	}
+	return GetDraftOutput{Draft: draft, Display: display}, nil
+}
+
 func (s *Service) CreateDraft(ctx context.Context, input DraftInput) (CreateDraftOutput, *ErrorShape) {
 	if errShape := s.validateConnector(); errShape != nil {
 		return CreateDraftOutput{}, errShape
@@ -355,6 +516,19 @@ func (s *Service) SendDraft(ctx context.Context, input SendDraftInput) (SendDraf
 		return SendDraftOutput{}, MapError(err)
 	}
 	return SendDraftOutput{Message: message}, nil
+}
+
+func (s *Service) DeleteDraft(ctx context.Context, input DeleteDraftInput) (DeleteDraftOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return DeleteDraftOutput{}, errShape
+	}
+	if strings.TrimSpace(input.DraftID) == "" {
+		return DeleteDraftOutput{}, invalidInput("draftId is required")
+	}
+	if err := s.connector.DeleteDraft(ctx, normalizeUserID(input.UserID), input.DraftID); err != nil {
+		return DeleteDraftOutput{}, MapError(err)
+	}
+	return DeleteDraftOutput{DraftID: input.DraftID}, nil
 }
 
 func (s *Service) ReplyDraft(ctx context.Context, input ReplyDraftInput) (CreateDraftOutput, *ErrorShape) {
@@ -470,6 +644,56 @@ func (s *Service) ModifyMessage(ctx context.Context, input ModifyMessageInput) (
 	return ModifyMessageOutput{Message: message}, nil
 }
 
+func (s *Service) BatchModifyMessages(ctx context.Context, input BatchModifyMessagesInput) (BatchModifyMessagesOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return BatchModifyMessagesOutput{}, errShape
+	}
+	messageIDs := cleanStringSlice(input.MessageIDs)
+	if len(messageIDs) == 0 {
+		return BatchModifyMessagesOutput{}, invalidInput("messageIds is required")
+	}
+	if len(messageIDs) > int(maxAllowedResults) {
+		return BatchModifyMessagesOutput{}, invalidInput(fmt.Sprintf("messageIds must contain between 1 and %d ids", maxAllowedResults))
+	}
+	modifyInput, errShape := buildModifyMessageInput(ModifyMessageInput{Action: input.Action, LabelIDs: input.LabelIDs})
+	if errShape != nil {
+		return BatchModifyMessagesOutput{}, errShape
+	}
+	result, err := s.connector.BatchModifyMessages(ctx, normalizeUserID(input.UserID), messageIDs, modifyInput)
+	if err != nil {
+		return BatchModifyMessagesOutput{}, MapError(err)
+	}
+	return BatchModifyMessagesOutput{Result: result}, nil
+}
+
+func (s *Service) TrashMessage(ctx context.Context, input TrashMessageInput) (TrashMessageOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return TrashMessageOutput{}, errShape
+	}
+	if strings.TrimSpace(input.MessageID) == "" {
+		return TrashMessageOutput{}, invalidInput("messageId is required")
+	}
+	message, err := s.connector.TrashMessage(ctx, normalizeUserID(input.UserID), input.MessageID)
+	if err != nil {
+		return TrashMessageOutput{}, MapError(err)
+	}
+	return TrashMessageOutput{Message: message}, nil
+}
+
+func (s *Service) UntrashMessage(ctx context.Context, input UntrashMessageInput) (UntrashMessageOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return UntrashMessageOutput{}, errShape
+	}
+	if strings.TrimSpace(input.MessageID) == "" {
+		return UntrashMessageOutput{}, invalidInput("messageId is required")
+	}
+	message, err := s.connector.UntrashMessage(ctx, normalizeUserID(input.UserID), input.MessageID)
+	if err != nil {
+		return UntrashMessageOutput{}, MapError(err)
+	}
+	return UntrashMessageOutput{Message: message}, nil
+}
+
 func (s *Service) validateConnector() *ErrorShape {
 	if s == nil || s.connector == nil {
 		return internalError("gmail connector is not configured")
@@ -561,15 +785,62 @@ func buildDraftMessageInput(input DraftInput, requireRecipient bool) (gmailconne
 	if strings.TrimSpace(input.TextBody) == "" && strings.TrimSpace(input.HTMLBody) == "" {
 		return gmailconnector.DraftMessageInput{}, invalidInput("textBody or htmlBody is required")
 	}
+	attachments, errShape := loadDraftAttachments(input.Attachments)
+	if errShape != nil {
+		return gmailconnector.DraftMessageInput{}, errShape
+	}
 	return gmailconnector.DraftMessageInput{
-		To:       cleanStringSlice(input.To),
-		Cc:       cleanStringSlice(input.Cc),
-		Bcc:      cleanStringSlice(input.Bcc),
-		Subject:  input.Subject,
-		TextBody: input.TextBody,
-		HTMLBody: input.HTMLBody,
-		ThreadID: input.ThreadID,
+		To:          cleanStringSlice(input.To),
+		Cc:          cleanStringSlice(input.Cc),
+		Bcc:         cleanStringSlice(input.Bcc),
+		Subject:     input.Subject,
+		TextBody:    input.TextBody,
+		HTMLBody:    input.HTMLBody,
+		ThreadID:    input.ThreadID,
+		Attachments: attachments,
 	}, nil
+}
+
+func loadDraftAttachments(paths []string) ([]gmailconnector.DraftAttachmentInput, *ErrorShape) {
+	cleaned := cleanStringSlice(paths)
+	if len(cleaned) == 0 {
+		return nil, nil
+	}
+	if len(cleaned) > maxDraftAttachments {
+		return nil, invalidInput(fmt.Sprintf("attachments must contain at most %d files", maxDraftAttachments))
+	}
+
+	totalSize := int64(0)
+	attachments := make([]gmailconnector.DraftAttachmentInput, 0, len(cleaned))
+	for _, path := range cleaned {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, invalidInput("attachment not found: " + path)
+		}
+		if info.IsDir() {
+			return nil, invalidInput("attachment must be a file: " + path)
+		}
+		totalSize += info.Size()
+		if totalSize > maxDraftAttachmentRaw {
+			return nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, internalError("read attachment: " + err.Error())
+		}
+		filename := safeDraftAttachmentFilename(path)
+		mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		attachments = append(attachments, gmailconnector.DraftAttachmentInput{
+			Filename: filename,
+			MimeType: mimeType,
+			Data:     data,
+		})
+	}
+	return attachments, nil
 }
 
 func replyDraftMessageInput(input gmailconnector.DraftMessageInput, original gmailconnector.MessageDetail) gmailconnector.DraftMessageInput {
@@ -722,6 +993,23 @@ func safeAttachmentFilename(attachment gmailconnector.Attachment) string {
 	return filename
 }
 
+func safeDraftAttachmentFilename(path string) string {
+	filename := filepath.Base(strings.TrimSpace(path))
+	if filename == "." || filename == string(filepath.Separator) || filename == "" {
+		filename = "attachment.dat"
+	}
+	filename = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, filename)
+	if strings.Trim(filename, "._ ") == "" {
+		return "attachment.dat"
+	}
+	return filename
+}
+
 func cleanStringSlice(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
@@ -782,16 +1070,26 @@ func (t GmailTool) Description() string {
 		return "List Gmail messages by search criteria."
 	case ToolNameGetEmail:
 		return "Read one Gmail message in detail."
+	case ToolNameListLabels:
+		return "List Gmail labels."
+	case ToolNameGetProfile:
+		return "Read the Gmail account profile."
 	case ToolNameListThreads:
 		return "List Gmail threads by search criteria."
 	case ToolNameGetThread:
 		return "Read one Gmail thread in detail."
+	case ToolNameListDrafts:
+		return "List Gmail drafts."
+	case ToolNameGetDraft:
+		return "Read one Gmail draft in detail."
 	case ToolNameCreateDraft:
 		return "Create a Gmail draft. This external write requires approval."
 	case ToolNameUpdateDraft:
 		return "Update a Gmail draft. This external write requires approval."
 	case ToolNameSendDraft:
 		return "Send an existing Gmail draft. This external write requires approval."
+	case ToolNameDeleteDraft:
+		return "Delete an existing Gmail draft. This destructive action requires approval."
 	case ToolNameReplyDraft:
 		return "Create a Gmail reply draft. This external write requires approval."
 	case ToolNameForwardDraft:
@@ -800,6 +1098,12 @@ func (t GmailTool) Description() string {
 		return "Download Gmail attachments to a local directory. This local write requires approval."
 	case ToolNameModifyMessage:
 		return "Modify Gmail message labels such as read, unread, starred, archive, or inbox. This external write requires approval."
+	case ToolNameBatchModifyMessages:
+		return "Modify Gmail labels for multiple messages. This external write requires approval."
+	case ToolNameTrashMessage:
+		return "Move a Gmail message to trash. This destructive action requires approval."
+	case ToolNameUntrashMessage:
+		return "Restore a Gmail message from trash. This external write requires approval."
 	default:
 		return "Gmail tool."
 	}
@@ -809,10 +1113,16 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 	switch t.name {
 	case ToolNameListEmails, ToolNameListThreads:
 		return listSchema()
+	case ToolNameListLabels, ToolNameGetProfile:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
 	case ToolNameGetEmail:
 		return getEmailSchema()
 	case ToolNameGetThread:
 		return getThreadSchema()
+	case ToolNameListDrafts:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"maxResults": map[string]any{"type": "number"}, "pageToken": map[string]any{"type": "string"}}, "additionalProperties": false}
+	case ToolNameGetDraft:
+		return getDraftSchema()
 	case ToolNameCreateDraft:
 		return draftSchema([]string{"to"})
 	case ToolNameUpdateDraft:
@@ -821,6 +1131,8 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 		props["draftId"] = map[string]any{"type": "string"}
 		return schema
 	case ToolNameSendDraft:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"draftId": map[string]any{"type": "string"}}, "required": []string{"draftId"}, "additionalProperties": false}
+	case ToolNameDeleteDraft:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{"draftId": map[string]any{"type": "string"}}, "required": []string{"draftId"}, "additionalProperties": false}
 	case ToolNameReplyDraft:
 		return replyDraftSchema()
@@ -839,6 +1151,19 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 			"required":             []string{"messageId", "action"},
 			"additionalProperties": false,
 		}
+	case ToolNameBatchModifyMessages:
+		return tools.ToolSchema{
+			"type": "object",
+			"properties": map[string]any{
+				"messageIds": arrayStringSchema(),
+				"action":     map[string]any{"type": "string", "enum": []string{"markRead", "markUnread", "star", "unstar", "archive", "moveToInbox", "addLabels", "removeLabels"}},
+				"labelIds":   arrayStringSchema(),
+			},
+			"required":             []string{"messageIds", "action"},
+			"additionalProperties": false,
+		}
+	case ToolNameTrashMessage, ToolNameUntrashMessage:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}}, "required": []string{"messageId"}, "additionalProperties": false}
 	default:
 		return tools.ToolSchema{"type": "object"}
 	}
@@ -846,7 +1171,7 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 
 func (t GmailTool) Capability() tools.Capability {
 	switch t.name {
-	case ToolNameListEmails, ToolNameGetEmail, ToolNameListThreads, ToolNameGetThread:
+	case ToolNameListEmails, ToolNameGetEmail, ToolNameListLabels, ToolNameGetProfile, ToolNameListThreads, ToolNameGetThread, ToolNameListDrafts, ToolNameGetDraft:
 		return tools.CapabilityReadOnly
 	default:
 		return tools.CapabilityMutating
@@ -855,10 +1180,12 @@ func (t GmailTool) Capability() tools.Capability {
 
 func (t GmailTool) RiskLevel() tools.RiskLevel {
 	switch t.name {
-	case ToolNameListEmails, ToolNameGetEmail, ToolNameListThreads, ToolNameGetThread:
+	case ToolNameListEmails, ToolNameGetEmail, ToolNameListLabels, ToolNameGetProfile, ToolNameListThreads, ToolNameGetThread, ToolNameListDrafts, ToolNameGetDraft:
 		return tools.RiskLevelSafeRead
 	case ToolNameDownloadAttachments:
 		return tools.RiskLevelLocalWrite
+	case ToolNameDeleteDraft, ToolNameTrashMessage:
+		return tools.RiskLevelDestructive
 	default:
 		return tools.RiskLevelExternalWrite
 	}
@@ -869,6 +1196,12 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	case ToolNameListEmails:
 		output, errShape := t.service.ListEmails(ctx, ListEmailsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: int64Arg(call.Arguments, "maxResults"), PageToken: stringArg(call.Arguments, "pageToken")})
 		return outputToolResult(call, output, errShape)
+	case ToolNameListLabels:
+		output, errShape := t.service.ListLabels(ctx, ListLabelsInput{})
+		return outputToolResult(call, output, errShape)
+	case ToolNameGetProfile:
+		output, errShape := t.service.GetProfile(ctx, GetProfileInput{})
+		return outputToolResult(call, output, errShape)
 	case ToolNameGetEmail:
 		output, errShape := t.service.GetEmail(ctx, GetEmailInput{MessageID: stringArg(call.Arguments, "messageId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
 		return outputToolResult(call, output, errShape)
@@ -877,6 +1210,12 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		return outputToolResult(call, output, errShape)
 	case ToolNameGetThread:
 		output, errShape := t.service.GetThread(ctx, GetThreadInput{ThreadID: stringArg(call.Arguments, "threadId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameListDrafts:
+		output, errShape := t.service.ListDrafts(ctx, ListDraftsInput{MaxResults: int64Arg(call.Arguments, "maxResults"), PageToken: stringArg(call.Arguments, "pageToken")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameGetDraft:
+		output, errShape := t.service.GetDraft(ctx, GetDraftInput{DraftID: stringArg(call.Arguments, "draftId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameCreateDraft:
 		output, errShape := t.service.CreateDraft(ctx, draftInputFromArgs(call.Arguments))
@@ -887,6 +1226,9 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		return outputToolResult(call, output, errShape)
 	case ToolNameSendDraft:
 		output, errShape := t.service.SendDraft(ctx, SendDraftInput{DraftID: stringArg(call.Arguments, "draftId")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameDeleteDraft:
+		output, errShape := t.service.DeleteDraft(ctx, DeleteDraftInput{DraftID: stringArg(call.Arguments, "draftId")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameReplyDraft:
 		input := ReplyDraftInput{DraftInput: draftInputFromArgs(call.Arguments), MessageID: stringArg(call.Arguments, "messageId")}
@@ -902,13 +1244,22 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	case ToolNameModifyMessage:
 		output, errShape := t.service.ModifyMessage(ctx, ModifyMessageInput{MessageID: stringArg(call.Arguments, "messageId"), Action: stringArg(call.Arguments, "action"), LabelIDs: stringSliceArg(call.Arguments, "labelIds")})
 		return outputToolResult(call, output, errShape)
+	case ToolNameBatchModifyMessages:
+		output, errShape := t.service.BatchModifyMessages(ctx, BatchModifyMessagesInput{MessageIDs: stringSliceArg(call.Arguments, "messageIds"), Action: stringArg(call.Arguments, "action"), LabelIDs: stringSliceArg(call.Arguments, "labelIds")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameTrashMessage:
+		output, errShape := t.service.TrashMessage(ctx, TrashMessageInput{MessageID: stringArg(call.Arguments, "messageId")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameUntrashMessage:
+		output, errShape := t.service.UntrashMessage(ctx, UntrashMessageInput{MessageID: stringArg(call.Arguments, "messageId")})
+		return outputToolResult(call, output, errShape)
 	default:
 		return tools.ToolNotFoundResult(call)
 	}
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	for _, name := range []string{ToolNameListEmails, ToolNameGetEmail, ToolNameListThreads, ToolNameGetThread, ToolNameCreateDraft, ToolNameUpdateDraft, ToolNameSendDraft, ToolNameReplyDraft, ToolNameForwardDraft, ToolNameDownloadAttachments, ToolNameModifyMessage} {
+	for _, name := range []string{ToolNameListEmails, ToolNameGetEmail, ToolNameListLabels, ToolNameGetProfile, ToolNameListThreads, ToolNameGetThread, ToolNameListDrafts, ToolNameGetDraft, ToolNameCreateDraft, ToolNameUpdateDraft, ToolNameSendDraft, ToolNameDeleteDraft, ToolNameReplyDraft, ToolNameForwardDraft, ToolNameDownloadAttachments, ToolNameModifyMessage, ToolNameBatchModifyMessages, ToolNameTrashMessage, ToolNameUntrashMessage} {
 		if err := registry.Register(NewTool(name, service)); err != nil {
 			return err
 		}
@@ -937,7 +1288,7 @@ func formatJSON(output any) string {
 }
 
 func draftInputFromArgs(args map[string]any) DraftInput {
-	return DraftInput{To: stringSliceArg(args, "to"), Cc: stringSliceArg(args, "cc"), Bcc: stringSliceArg(args, "bcc"), Subject: stringArg(args, "subject"), TextBody: stringArg(args, "textBody"), HTMLBody: stringArg(args, "htmlBody"), ThreadID: stringArg(args, "threadId")}
+	return DraftInput{To: stringSliceArg(args, "to"), Cc: stringSliceArg(args, "cc"), Bcc: stringSliceArg(args, "bcc"), Subject: stringArg(args, "subject"), TextBody: stringArg(args, "textBody"), HTMLBody: stringArg(args, "htmlBody"), ThreadID: stringArg(args, "threadId"), Attachments: stringSliceArg(args, "attachments")}
 }
 
 func listSchema() tools.ToolSchema {
@@ -952,8 +1303,12 @@ func getThreadSchema() tools.ToolSchema {
 	return tools.ToolSchema{"type": "object", "properties": map[string]any{"threadId": map[string]any{"type": "string"}, "renderMode": map[string]any{"type": "string", "enum": []string{RenderModeText, RenderModeRawHTML}}, "full": map[string]any{"type": "boolean"}, "previewChars": map[string]any{"type": "number"}}, "required": []string{"threadId"}, "additionalProperties": false}
 }
 
+func getDraftSchema() tools.ToolSchema {
+	return tools.ToolSchema{"type": "object", "properties": map[string]any{"draftId": map[string]any{"type": "string"}, "renderMode": map[string]any{"type": "string", "enum": []string{RenderModeText, RenderModeRawHTML}}, "full": map[string]any{"type": "boolean"}, "previewChars": map[string]any{"type": "number"}}, "required": []string{"draftId"}, "additionalProperties": false}
+}
+
 func draftSchema(required []string) tools.ToolSchema {
-	return tools.ToolSchema{"type": "object", "properties": map[string]any{"to": arrayStringSchema(), "cc": arrayStringSchema(), "bcc": arrayStringSchema(), "subject": map[string]any{"type": "string"}, "textBody": map[string]any{"type": "string"}, "htmlBody": map[string]any{"type": "string"}, "threadId": map[string]any{"type": "string"}}, "required": required, "additionalProperties": false}
+	return tools.ToolSchema{"type": "object", "properties": map[string]any{"to": arrayStringSchema(), "cc": arrayStringSchema(), "bcc": arrayStringSchema(), "subject": map[string]any{"type": "string"}, "textBody": map[string]any{"type": "string"}, "htmlBody": map[string]any{"type": "string"}, "threadId": map[string]any{"type": "string"}, "attachments": arrayStringSchema()}, "required": required, "additionalProperties": false}
 }
 
 func replyDraftSchema() tools.ToolSchema {
