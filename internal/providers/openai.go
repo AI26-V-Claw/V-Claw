@@ -6,7 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+<<<<<<< HEAD
 	"time"
+=======
+	"regexp"
+>>>>>>> 85102a60efbf13f9065ed89a2f42f8521b227380
 	"strings"
 )
 
@@ -62,13 +66,14 @@ func (c *OpenAIClient) Chat(ctx context.Context, request ChatRequest) (ChatRespo
 		model = c.model
 	}
 
+	nameMap := newOpenAIToolNameMap(request.Tools)
 	wireRequest := openAIChatRequest{
 		Model:      model,
 		Messages:   make([]openAIMessage, 0, len(request.Messages)),
 		ToolChoice: "auto",
 	}
 	for _, message := range request.Messages {
-		wireRequest.Messages = append(wireRequest.Messages, openAIMessageFromProvider(message))
+		wireRequest.Messages = append(wireRequest.Messages, openAIMessageFromProvider(message, nameMap.safeName))
 	}
 	if len(request.Tools) > 0 {
 		wireRequest.Tools = make([]openAITool, 0, len(request.Tools))
@@ -76,7 +81,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, request ChatRequest) (ChatRespo
 			wireRequest.Tools = append(wireRequest.Tools, openAITool{
 				Type: "function",
 				Function: openAIFunction{
-					Name:        tool.Name,
+					Name:        nameMap.safeName(tool.Name),
 					Description: tool.Description,
 					Parameters:  tool.Parameters,
 				},
@@ -120,7 +125,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, request ChatRequest) (ChatRespo
 		return ChatResponse{}, fmt.Errorf("openai response contained no choices")
 	}
 
-	return ChatResponse{Message: providerMessageFromOpenAI(wireResponse.Choices[0].Message)}, nil
+	return ChatResponse{Message: providerMessageFromOpenAI(wireResponse.Choices[0].Message, nameMap.contractName)}, nil
 }
 
 func (c *OpenAIClient) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
@@ -212,7 +217,7 @@ type openAIChatResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func openAIMessageFromProvider(message Message) openAIMessage {
+func openAIMessageFromProvider(message Message, safeName func(string) string) openAIMessage {
 	wire := openAIMessage{
 		Role:       string(message.Role),
 		Content:    message.Content,
@@ -224,7 +229,7 @@ func openAIMessageFromProvider(message Message) openAIMessage {
 			ID:   toolCall.ID,
 			Type: "function",
 			Function: openAIToolFunction{
-				Name:      toolCall.Name,
+				Name:      safeName(toolCall.Name),
 				Arguments: string(args),
 			},
 		})
@@ -232,7 +237,7 @@ func openAIMessageFromProvider(message Message) openAIMessage {
 	return wire
 }
 
-func providerMessageFromOpenAI(message openAIMessage) Message {
+func providerMessageFromOpenAI(message openAIMessage, contractName func(string) string) Message {
 	providerMessage := Message{
 		Role:       MessageRole(message.Role),
 		Content:    message.Content,
@@ -247,9 +252,68 @@ func providerMessageFromOpenAI(message openAIMessage) Message {
 		}
 		providerMessage.ToolCalls = append(providerMessage.ToolCalls, ToolCall{
 			ID:        toolCall.ID,
-			Name:      toolCall.Function.Name,
+			Name:      contractName(toolCall.Function.Name),
 			Arguments: args,
 		})
 	}
 	return providerMessage
+}
+
+type openAIToolNameMap struct {
+	toSafe     map[string]string
+	toContract map[string]string
+}
+
+func newOpenAIToolNameMap(tools []ToolDefinition) openAIToolNameMap {
+	m := openAIToolNameMap{
+		toSafe:     map[string]string{},
+		toContract: map[string]string{},
+	}
+	for _, tool := range tools {
+		contract := strings.TrimSpace(tool.Name)
+		if contract == "" {
+			continue
+		}
+		base := openAISafeToolName(contract)
+		safe := base
+		for i := 2; ; i++ {
+			existing, exists := m.toContract[safe]
+			if !exists || existing == contract {
+				break
+			}
+			safe = fmt.Sprintf("%s_%d", base, i)
+		}
+		m.toSafe[contract] = safe
+		m.toContract[safe] = contract
+	}
+	return m
+}
+
+func (m openAIToolNameMap) safeName(name string) string {
+	if safe, ok := m.toSafe[name]; ok {
+		return safe
+	}
+	return openAISafeToolName(name)
+}
+
+func (m openAIToolNameMap) contractName(name string) string {
+	if contract, ok := m.toContract[name]; ok {
+		return contract
+	}
+	return name
+}
+
+var openAIToolNameUnsafe = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+
+func openAISafeToolName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "tool"
+	}
+	name = strings.ReplaceAll(name, ".", "__dot__")
+	name = openAIToolNameUnsafe.ReplaceAllString(name, "_")
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	return strings.Trim(name, "_")
 }

@@ -290,6 +290,16 @@ func (t SendMessageTool) Execute(ctx context.Context, call tools.ToolCall) tools
 	}
 }
 
+func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
+	if err := registry.RegisterWithEntry(NewListMessagesTool(service), tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
+		return err
+	}
+	if err := registry.RegisterWithEntry(NewSendMessageTool(service), tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
+		return err
+	}
+	return nil
+}
+
 func MapError(err error) *ErrorShape {
 	if err == nil {
 		return nil

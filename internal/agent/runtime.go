@@ -123,9 +123,10 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	toolResults := []contracts.ToolResult{}
 	for iteration := 1; iteration <= r.maxIterations; iteration++ {
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
+		providerMessages := withRuntimeSystemPrompt(transcript)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
-			Messages:   cloneProviderMessages(transcript),
+			Messages:   providerMessages,
 			Tools:      providers.ToolDefinitionsFromRegistry(r.registry.ListTools()),
 			ToolChoice: "auto",
 		})
@@ -157,6 +158,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 				SessionID:   message.SessionID,
 				Status:      contracts.AgentStatusCompleted,
 				Message:     assistantMessage.Content,
+				Data:        r.traceData(),
 				ToolResults: toolResults,
 			}, nil
 		}
@@ -201,6 +203,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 					Message:         approval.Summary,
 					ApprovalID:      approval.ApprovalID,
 					ApprovalRequest: &approval,
+					Data:            r.traceData(),
 					ToolResults:     toolResults,
 					Error: &contracts.ErrorShape{
 						Code:      contracts.ErrorActionRequiresApproval,
@@ -229,6 +232,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		SessionID:   message.SessionID,
 		Status:      contracts.AgentStatusFailed,
 		Message:     "agent exceeded max iterations",
+		Data:        r.traceData(),
 		ToolResults: toolResults,
 		Error: &contracts.ErrorShape{
 			Code:      contracts.ErrorMaxIterationsExceeded,
@@ -237,6 +241,43 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			Retryable: false,
 		},
 	}, nil
+}
+
+func withRuntimeSystemPrompt(transcript []providers.Message) []providers.Message {
+	messages := make([]providers.Message, 0, len(transcript)+1)
+	messages = append(messages, providers.Message{
+		Role:    providers.MessageRoleSystem,
+		Content: runtimeSystemPrompt(),
+	})
+	messages = append(messages, cloneProviderMessages(transcript)...)
+	return messages
+}
+
+func runtimeSystemPrompt() string {
+	return strings.TrimSpace(`You are V-Claw, an agent connected to real tools through a strict contract.
+Reply in the user's language.
+Use available tools when the user asks for information that a tool can retrieve or compute.
+Never claim that an external action was completed unless a tool result confirms it.
+For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
+For missing required details, ask one concise clarification question instead of inventing values.
+Keep final answers concise and include the useful result, not internal implementation details.`)
+}
+
+func (r *Runtime) traceData() map[string]any {
+	data := map[string]any{
+		"model": r.model,
+	}
+	if r.registry != nil {
+		definitions := r.registry.ListTools()
+		toolNames := make([]string, 0, len(definitions))
+		for _, definition := range definitions {
+			if definition.Enabled {
+				toolNames = append(toolNames, definition.Name)
+			}
+		}
+		data["toolsExposed"] = toolNames
+	}
+	return data
 }
 
 func validateUserMessage(message contracts.UserMessage) *contracts.ErrorShape {
