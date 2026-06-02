@@ -829,7 +829,16 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 	case ToolNameDownloadAttachments:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "attachmentIds": arrayStringSchema(), "outputDir": map[string]any{"type": "string"}}, "required": []string{"messageId", "outputDir"}, "additionalProperties": false}
 	case ToolNameModifyMessage:
-		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "action": map[string]any{"type": "string", "enum": []string{"markRead", "markUnread", "star", "unstar", "archive", "moveToInbox", "addLabels", "removeLabels"}}, "labelIds": arrayStringSchema()}, "required": []string{"messageId", "action"}, "additionalProperties": false}
+		return tools.ToolSchema{
+			"type": "object",
+			"properties": map[string]any{
+				"messageId": map[string]any{"type": "string"},
+				"action":    map[string]any{"type": "string", "enum": []string{"markRead", "markUnread", "star", "unstar", "archive", "moveToInbox", "addLabels", "removeLabels"}},
+				"labelIds":  arrayStringSchema(),
+			},
+			"required":             []string{"messageId", "action"},
+			"additionalProperties": false,
+		}
 	default:
 		return tools.ToolSchema{"type": "object"}
 	}

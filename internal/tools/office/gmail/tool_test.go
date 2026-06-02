@@ -352,6 +352,24 @@ func TestModifyMessageMapsActions(t *testing.T) {
 	}
 }
 
+func TestModifyMessageSchemaIncludesLabelIDsProperty(t *testing.T) {
+	schema := NewTool(ToolNameModifyMessage, nil).Parameters()
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("modify message schema properties missing or invalid: %#v", schema["properties"])
+	}
+
+	for _, key := range []string{"messageId", "action", "labelIds"} {
+		if _, ok := properties[key]; !ok {
+			t.Fatalf("modify message schema missing properties.%s: %#v", key, properties)
+		}
+	}
+
+	if _, ok := schema["labelIds"]; ok {
+		t.Fatalf("modify message schema should not expose top-level labelIds: %#v", schema)
+	}
+}
+
 func TestDownloadAttachmentsWritesFiles(t *testing.T) {
 	service := NewService(&mockConnector{
 		getMessage: func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageDetail, error) {
