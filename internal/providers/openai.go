@@ -6,12 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-<<<<<<< HEAD
-	"time"
-=======
 	"regexp"
->>>>>>> 85102a60efbf13f9065ed89a2f42f8521b227380
 	"strings"
+	"time"
 )
 
 const (
