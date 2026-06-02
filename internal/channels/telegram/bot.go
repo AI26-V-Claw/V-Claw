@@ -25,12 +25,18 @@ type Bot struct {
 	dataDir       string
 	offsetPath    string
 	client        *http.Client
-	orchestrator  *agent.Orchestrator
+	handler       messageHandler
 	logger        *slog.Logger
 	apiBase       string
 }
 
-func New(token string, allowedUserID int64, dataDir string, orchestrator *agent.Orchestrator, logger *slog.Logger) *Bot {
+type messageHandler interface {
+	HandleMessage(ctx context.Context, msg agent.InboundMessage) (agent.OutboundMessage, error)
+	FinalizeAudit(msg agent.InboundMessage, err error)
+	RecordIgnored(msg agent.InboundMessage, actionTaken string)
+}
+
+func New(token string, allowedUserID int64, dataDir string, handler messageHandler, logger *slog.Logger) *Bot {
 	return &Bot{
 		token:         token,
 		allowedUserID: allowedUserID,
@@ -39,9 +45,9 @@ func New(token string, allowedUserID int64, dataDir string, orchestrator *agent.
 		client: &http.Client{
 			Timeout: 65 * time.Second,
 		},
-		orchestrator: orchestrator,
-		logger:       logger,
-		apiBase:      "https://api.telegram.org",
+		handler: handler,
+		logger:  logger,
+		apiBase: "https://api.telegram.org",
 	}
 }
 
@@ -113,17 +119,17 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	}
 
 	if strings.TrimSpace(update.Message.Text) == "" {
-		b.orchestrator.RecordIgnored(inbound, "ignored_non_text")
+		b.handler.RecordIgnored(inbound, "ignored_non_text")
 		return true, nil
 	}
 	if update.Message.From == nil || update.Message.From.ID != b.allowedUserID {
-		b.orchestrator.RecordIgnored(inbound, "ignored_unauthorized")
+		b.handler.RecordIgnored(inbound, "ignored_unauthorized")
 		return true, nil
 	}
 
-	outbound, err := b.orchestrator.HandleMessage(ctx, inbound)
+	outbound, err := b.handler.HandleMessage(ctx, inbound)
 	if err != nil {
-		b.orchestrator.FinalizeAudit(inbound, err)
+		b.handler.FinalizeAudit(inbound, err)
 		return false, err
 	}
 
@@ -132,11 +138,11 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	}
 
 	if err := b.sendMessage(ctx, outbound); err != nil {
-		b.orchestrator.FinalizeAudit(inbound, err)
+		b.handler.FinalizeAudit(inbound, err)
 		return false, err
 	}
 
-	b.orchestrator.FinalizeAudit(inbound, nil)
+	b.handler.FinalizeAudit(inbound, nil)
 	return true, nil
 }
 
