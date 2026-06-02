@@ -3,6 +3,7 @@ package audit
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
