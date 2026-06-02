@@ -9,7 +9,11 @@ configs/google/token.json
 .gopath/
 bin/
 cmd/vclaw-dev/
+.appdata/
+data/telegram_offset.txt
+logs/audit.jsonl
 .antigravity/
 .appdata/
-vclaw.exe
-vclaw-dev.exe
+AGENTS.md
+CLAUDE.md
+v_claw_architect_claude.pdf
