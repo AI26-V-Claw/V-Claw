@@ -8,5 +8,8 @@ configs/google/token.json
 .gocache/
 .gopath/
 bin/
+.appdata/
+data/telegram_offset.txt
+logs/audit.jsonl
 .antigravity/
 .appdata/

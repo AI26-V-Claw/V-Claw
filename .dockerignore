@@ -1,0 +1,5 @@
+.git
+.codex/
+.env
+data/telegram_offset.txt
+logs/audit.jsonl
