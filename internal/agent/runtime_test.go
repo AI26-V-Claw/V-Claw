@@ -123,11 +123,14 @@ func TestRuntimeExecutesReadOnlyToolAndContinuesToFinalAnswer(t *testing.T) {
 		t.Fatalf("expected 2 provider calls, got %d", len(provider.calls))
 	}
 	secondMessages := provider.calls[1].Messages
-	if len(secondMessages) != 3 {
-		t.Fatalf("expected user, assistant tool call, tool result; got %#v", secondMessages)
+	if len(secondMessages) != 4 {
+		t.Fatalf("expected system, user, assistant tool call, tool result; got %#v", secondMessages)
 	}
-	if secondMessages[2].Role != providers.MessageRoleTool || secondMessages[2].ToolCallID != "call_time" {
-		t.Fatalf("unexpected tool observation message: %#v", secondMessages[2])
+	if secondMessages[0].Role != providers.MessageRoleSystem {
+		t.Fatalf("expected system prompt first, got %#v", secondMessages[0])
+	}
+	if secondMessages[3].Role != providers.MessageRoleTool || secondMessages[3].ToolCallID != "call_time" {
+		t.Fatalf("unexpected tool observation message: %#v", secondMessages[3])
 	}
 }
 
