@@ -11,3 +11,5 @@ bin/
 cmd/vclaw-dev/
 .antigravity/
 .appdata/
+vclaw.exe
+vclaw-dev.exe
