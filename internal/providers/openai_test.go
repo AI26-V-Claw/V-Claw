@@ -1,6 +1,13 @@
 package providers
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+)
 
 func TestOpenAIToolNameMapPreservesContractNames(t *testing.T) {
 	nameMap := newOpenAIToolNameMap([]ToolDefinition{
@@ -45,4 +52,44 @@ func TestOpenAIMessageMappingUsesSafeNamesAndRestoresContractNames(t *testing.T)
 	if got := providerMessage.ToolCalls[0].Name; got != "gmail.listEmails" {
 		t.Fatalf("unexpected restored tool name: %q", got)
 	}
+}
+
+func TestOpenAIClientRetriesTransientHTTPError(t *testing.T) {
+	calls := 0
+	client, err := NewOpenAIClient(OpenAIConfig{
+		APIKey:  "test-key",
+		Model:   "test-model",
+		BaseURL: "https://api.test",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return nil, errors.New("connection reset")
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)),
+				Header:     make(http.Header),
+			}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIClient() error = %v", err)
+	}
+
+	response, err := client.Chat(context.Background(), ChatRequest{})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 attempts, got %d", calls)
+	}
+	if response.Message.Content != "ok" {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
