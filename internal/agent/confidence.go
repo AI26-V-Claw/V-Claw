@@ -3,15 +3,17 @@ package agent
 import (
 	"math"
 	"strings"
+	
+	"vclaw/internal/agent/intent"
 )
 
 // ConfidenceScorer calculates confidence scores for intent classification
 type ConfidenceScorer struct {
-	config ConfidenceConfig
+	config intent.ConfidenceConfig
 }
 
 // NewConfidenceScorer creates a new confidence scorer
-func NewConfidenceScorer(config ConfidenceConfig) *ConfidenceScorer {
+func NewConfidenceScorer(config intent.ConfidenceConfig) *ConfidenceScorer {
 	return &ConfidenceScorer{
 		config: config,
 	}
@@ -41,20 +43,20 @@ func (cs *ConfidenceScorer) CalculateFromLogprobs(logprobs []float64) float64 {
 
 // CalculateHeuristic calculates confidence using heuristic rules
 // This is a fallback when logprobs are not available
-func (cs *ConfidenceScorer) CalculateHeuristic(userInput string, intentType IntentType) float64 {
+func (cs *ConfidenceScorer) CalculateHeuristic(userInput string, intentType intent.IntentType) float64 {
 	input := strings.ToLower(strings.TrimSpace(userInput))
 
 	// Base confidence by intent type
 	baseConfidence := 0.5
 
 	switch intentType {
-	case IntentGreeting:
+	case intent.TypeGreeting:
 		baseConfidence = cs.scoreGreeting(input)
-	case IntentReadInfo:
+	case intent.TypeReadInfo:
 		baseConfidence = cs.scoreReadInfo(input)
-	case IntentDangerousAction:
+	case intent.TypeDangerousAction:
 		baseConfidence = cs.scoreDangerousAction(input)
-	case IntentComposite:
+	case intent.TypeComposite:
 		baseConfidence = cs.scoreComposite(input)
 	default:
 		baseConfidence = 0.3
@@ -189,19 +191,19 @@ func (cs *ConfidenceScorer) scoreComposite(input string) float64 {
 }
 
 // ShouldAskForClarification determines if clarification is needed
-func (cs *ConfidenceScorer) ShouldAskForClarification(confidence float64, intentType IntentType) bool {
+func (cs *ConfidenceScorer) ShouldAskForClarification(confidence float64, intentType intent.IntentType) bool {
 	// Greetings never need clarification - they are always safe to proceed
-	if intentType == IntentGreeting {
+	if intentType == intent.TypeGreeting {
 		return false
 	}
 
 	// Always ask for clarification if confidence is too low
-	if confidence < cs.config.AmbiguousRangeLow {
+	if confidence < cs.config.AmbiguousLow {
 		return true
 	}
 
 	// For dangerous actions, require high confidence
-	if intentType == IntentDangerousAction && confidence < cs.config.DangerousActionMinConfidence {
+	if intentType == intent.TypeDangerousAction && confidence < cs.config.DangerousActionMin {
 		return true
 	}
 

@@ -9,3 +9,7 @@ configs/google/token.json
 .gopath/
 bin/
 .appdata/
+
+# Evaluation results (generated artifacts)
+evaluation_results.json
+*_results.json

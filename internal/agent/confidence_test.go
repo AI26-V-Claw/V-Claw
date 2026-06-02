@@ -3,23 +3,25 @@ package agent
 import (
 	"math"
 	"testing"
+	
+	"vclaw/internal/agent/intent"
 )
 
 func TestNewConfidenceScorer(t *testing.T) {
-	config := DefaultConfidenceConfig
+	config := intent.DefaultConfig
 	scorer := NewConfidenceScorer(config)
 
 	if scorer == nil {
 		t.Fatal("Expected non-nil scorer")
 	}
 
-	if scorer.config.DangerousActionMinConfidence != 0.90 {
-		t.Errorf("Expected DangerousActionMinConfidence 0.90, got %.2f", scorer.config.DangerousActionMinConfidence)
+	if scorer.config.DangerousActionMin != 0.90 {
+		t.Errorf("Expected DangerousActionMin 0.90, got %.2f", scorer.config.DangerousActionMin)
 	}
 }
 
 func TestCalculateFromLogprobs(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		name     string
@@ -69,7 +71,7 @@ func TestCalculateFromLogprobs(t *testing.T) {
 }
 
 func TestCalculateHeuristic_Greeting(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		input    string
@@ -87,7 +89,7 @@ func TestCalculateHeuristic_Greeting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			score := scorer.CalculateHeuristic(tt.input, IntentGreeting)
+			score := scorer.CalculateHeuristic(tt.input, intent.TypeGreeting)
 
 			if score < tt.minScore {
 				t.Errorf("Expected score >= %.2f for greeting %q, got %.2f", tt.minScore, tt.input, score)
@@ -97,7 +99,7 @@ func TestCalculateHeuristic_Greeting(t *testing.T) {
 }
 
 func TestCalculateHeuristic_ReadInfo(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		input    string
@@ -114,7 +116,7 @@ func TestCalculateHeuristic_ReadInfo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			score := scorer.CalculateHeuristic(tt.input, IntentReadInfo)
+			score := scorer.CalculateHeuristic(tt.input, intent.TypeReadInfo)
 
 			if score < tt.minScore {
 				t.Errorf("Expected score >= %.2f for read info %q, got %.2f", tt.minScore, tt.input, score)
@@ -124,7 +126,7 @@ func TestCalculateHeuristic_ReadInfo(t *testing.T) {
 }
 
 func TestCalculateHeuristic_DangerousAction(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		input    string
@@ -142,7 +144,7 @@ func TestCalculateHeuristic_DangerousAction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			score := scorer.CalculateHeuristic(tt.input, IntentDangerousAction)
+			score := scorer.CalculateHeuristic(tt.input, intent.TypeDangerousAction)
 
 			if score < tt.minScore {
 				t.Errorf("Expected score >= %.2f for dangerous action %q, got %.2f", tt.minScore, tt.input, score)
@@ -152,7 +154,7 @@ func TestCalculateHeuristic_DangerousAction(t *testing.T) {
 }
 
 func TestCalculateHeuristic_Composite(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		input    string
@@ -167,7 +169,7 @@ func TestCalculateHeuristic_Composite(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			score := scorer.CalculateHeuristic(tt.input, IntentComposite)
+			score := scorer.CalculateHeuristic(tt.input, intent.TypeComposite)
 
 			if score < tt.minScore {
 				t.Errorf("Expected score >= %.2f for composite %q, got %.2f", tt.minScore, tt.input, score)
@@ -177,48 +179,48 @@ func TestCalculateHeuristic_Composite(t *testing.T) {
 }
 
 func TestShouldAskForClarification(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		name       string
 		confidence float64
-		intentType IntentType
+		intentType intent.IntentType
 		shouldAsk  bool
 	}{
 		{
 			name:       "Very low confidence",
 			confidence: 0.40,
-			intentType: IntentReadInfo,
+			intentType: intent.TypeReadInfo,
 			shouldAsk:  true,
 		},
 		{
 			name:       "Ambiguous confidence for read",
 			confidence: 0.75,
-			intentType: IntentReadInfo,
+			intentType: intent.TypeReadInfo,
 			shouldAsk:  true,
 		},
 		{
 			name:       "High confidence for read",
 			confidence: 0.90,
-			intentType: IntentReadInfo,
+			intentType: intent.TypeReadInfo,
 			shouldAsk:  false,
 		},
 		{
 			name:       "Low confidence for dangerous",
 			confidence: 0.85,
-			intentType: IntentDangerousAction,
+			intentType: intent.TypeDangerousAction,
 			shouldAsk:  true,
 		},
 		{
 			name:       "High confidence for dangerous",
 			confidence: 0.95,
-			intentType: IntentDangerousAction,
+			intentType: intent.TypeDangerousAction,
 			shouldAsk:  false,
 		},
 		{
 			name:       "Greeting always ok",
 			confidence: 0.50,
-			intentType: IntentGreeting,
+			intentType: intent.TypeGreeting,
 			shouldAsk:  false,
 		},
 	}
@@ -236,7 +238,7 @@ func TestShouldAskForClarification(t *testing.T) {
 }
 
 func TestScoreGreeting(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		input    string
@@ -265,7 +267,7 @@ func TestScoreGreeting(t *testing.T) {
 }
 
 func TestScoreReadInfo(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		input       string
@@ -297,7 +299,7 @@ func TestScoreReadInfo(t *testing.T) {
 }
 
 func TestScoreDangerousAction(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		input      string
@@ -331,7 +333,7 @@ func TestScoreDangerousAction(t *testing.T) {
 }
 
 func TestScoreComposite(t *testing.T) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	tests := []struct {
 		input      string
@@ -362,7 +364,7 @@ func TestScoreComposite(t *testing.T) {
 }
 
 func BenchmarkCalculateFromLogprobs(b *testing.B) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 	logprobs := []float64{-0.1, -0.2, -0.3, -0.4, -0.5}
 
 	b.ResetTimer()
@@ -372,20 +374,20 @@ func BenchmarkCalculateFromLogprobs(b *testing.B) {
 }
 
 func BenchmarkCalculateHeuristic(b *testing.B) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 	input := "Xóa file config.json trong thư mục /etc"
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		scorer.CalculateHeuristic(input, IntentDangerousAction)
+		scorer.CalculateHeuristic(input, intent.TypeDangerousAction)
 	}
 }
 
 func BenchmarkShouldAskForClarification(b *testing.B) {
-	scorer := NewConfidenceScorer(DefaultConfidenceConfig)
+	scorer := NewConfidenceScorer(intent.DefaultConfig)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		scorer.ShouldAskForClarification(0.75, IntentDangerousAction)
+		scorer.ShouldAskForClarification(0.75, intent.TypeDangerousAction)
 	}
 }

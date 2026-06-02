@@ -33,6 +33,22 @@ func Classify(ctx context.Context, classifier *Classifier, userInput string) (*C
 		return nil, fmt.Errorf("user input cannot be empty")
 	}
 
+	// Step 0: Prompt Injection Guard (runs BEFORE any intent matching)
+	if isPromptInjection(userInput) {
+		return &ClassificationOutput{
+			Intent: &Result{
+				Type:       TypeUnknown,
+				Confidence: 0.05, // Very low confidence
+				ToolCalls:  []ToolCallInfo{},
+				NeedsConfirm: true,
+				Reasoning:  "Phát hiện prompt injection - từ chối xử lý",
+				Timestamp:  time.Now(),
+			},
+			NeedsClarification: true,
+			ClarificationMessage: "Tôi không thể xử lý yêu cầu này. Vui lòng thử lại với câu hỏi khác.",
+		}, nil
+	}
+
 	// Step 1: Determine intent type (heuristic, would be LLM in production)
 	intentType := detectIntentType(userInput)
 
@@ -499,6 +515,49 @@ func generateMissingParamMessage(toolName string, missing []string) string {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// isPromptInjection detects prompt injection attempts
+func isPromptInjection(input string) bool {
+	lower := strings.ToLower(input)
+	
+	// English patterns
+	injectionPatterns := []string{
+		"ignore previous instructions",
+		"disregard previous instructions",
+		"forget previous instructions",
+		"ignore all previous",
+		"disregard all previous",
+		"you are now",
+		"forget your instructions",
+		"new instructions",
+		"system prompt",
+		"override instructions",
+	}
+	
+	// Vietnamese patterns
+	vietnamesePatterns := []string{
+		"bỏ qua hướng dẫn trước",
+		"quên hướng dẫn trước",
+		"bỏ qua chỉ dẫn",
+		"quên chỉ dẫn",
+		"bây giờ bạn là",
+		"hướng dẫn mới",
+	}
+	
+	for _, pattern := range injectionPatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	
+	for _, pattern := range vietnamesePatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	
+	return false
+}
 
 func extractPathParam(input string) map[string]interface{} {
 	params := make(map[string]interface{})
