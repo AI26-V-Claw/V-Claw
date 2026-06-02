@@ -13,3 +13,8 @@ bin/
 # Evaluation results (generated artifacts)
 evaluation_results.json
 *_results.json
+
+# Logging and temporary files
+data/telegram_offset.txt
+logs/audit.jsonl
+.antigravity/

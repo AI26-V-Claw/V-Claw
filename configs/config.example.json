@@ -1,0 +1,19 @@
+{
+  "app_name": "vclaw",
+  "http_addr": ":8080",
+  "approval_mode": "telegram",
+  "telegram": {
+    "enabled": false,
+    "bot_token": ""
+  },
+  "sandbox": {
+    "provider": "docker",
+    "network_enabled_default": false,
+    "workspace_root": "/var/lib/vclaw/workspace"
+  },
+  "google": {
+    "gmail_enabled": false,
+    "calendar_enabled": false,
+    "chat_enabled": false
+  }
+}

@@ -1,73 +1,138 @@
 # Project Structure
 
-This skeleton follows GoClaw's separation of concerns while narrowing V-Claw to a local-first assistant with PostgreSQL, local Docker setup, multiple LLM providers, MCP, Google Workspace connectors, and safe OS control.
+This document explains the intended repository layout for V-Claw. It describes module boundaries at a stable level, not the exact implementation status of every package.
+
+For current implementation scope, ownership, and frozen areas, use [ACTIVE_MODULES.md](ACTIVE_MODULES.md) as the source of truth.
+
+## Top-level layout
 
 ```text
 V-Claw/
-├── cmd/                         # Local CLI entrypoints
-├── configs/                     # Runtime configuration and policy templates
-├── deploy/                      # Local Docker/runtime setup assets
-├── docs/                        # Product, architecture, security, data, and API plans
-├── internal/                    # Private application modules
-│   ├── agent/                   # Personal assistant loop, planning, and intent handling
-│   ├── approvals/               # Human-in-the-loop approval workflows
-│   ├── audit/                   # Action logs and evidence capture
-│   ├── backup/                  # (Sprint 3) Local backup and restore workflows
-│   ├── cache/                   # Short-lived caches for providers, MCP, Google metadata, state
-│   ├── channels/                # Message channels for chatting with and commanding agents
-│   ├── config/                  # Runtime config loading and validation
-│   ├── connectors/google/       # Gmail, Calendar, Drive, Chat, OAuth API clients
-│   ├── crypto/                  # Encryption, hashing, and key primitives
-│   ├── desktop/                 # Low-level desktop drivers only
-│   ├── eventbus/                # Typed local domain events
-│   ├── knowledgegraph/          # (Sprint 3) Entities and relationships across work context
-│   ├── localapi/                # Optional local HTTP/WebSocket control plane
-│   ├── mcp/                     # MCP server/client, transports, registry, and tool bridge
-│   ├── memory/                  # User memory and work context
-│   ├── notifications/           # Outbound approval, reminder, and alert delivery
-│   ├── orchestration/           # Multi-step task routing and coordination
-│   ├── permissions/             # Access-control checks and grants
-│   ├── pipeline/                # Pluggable agent execution stages
-│   ├── policies/                # Tool policy and risk classification
-│   ├── providers/               # Anthropic, OpenAI, OpenAI-compatible, local model adapters
-│   ├── safety/                  # Guardrails for OS and external actions
-│   ├── sandbox/                 # Docker/local sandbox runtime abstractions
-│   ├── scheduler/               # Cron and event-triggered jobs
-│   ├── secrets/                 # Token storage and secret lifecycle
-│   ├── sessions/                # Chat sessions, run lifecycle, cancellation, resume
-│   ├── skills/                  # Runtime SKILL.md loading, search, and injection
-│   ├── store/                   # Persistence interfaces, PostgreSQL implementation, optional SQLite
-│   ├── tasks/                   # Task state, queues, workflows, and results
-│   ├── tokencount/              # Token counting and context-window estimation
-│   ├── tools/                   # Agent tools: office, OS, memory, scheduler
-│   ├── tracing/                 # Spans, run history, metrics, observability
-│   ├── upgrade/                 # Schema/app upgrade coordination
-│   ├── vault/                   # (Sprint 3) Local/Drive document vault and search
-│   ├── version/                 # App version and build metadata
-│   └── workspace/               # Per-user workspace and file isolation
-├── migrations/                  # PostgreSQL database migrations
-├── scripts/                     # Developer and operator helper scripts
-├── skills/                      # V-Claw-specific SKILL.md content
-└── tests/                       # Contract, integration, safety, and e2e test plans
+├── cmd/                  # CLI entrypoints and thin command wiring
+├── configs/              # Local configuration examples and provider setup notes
+├── deploy/               # Local runtime, Docker, and sandbox setup assets
+├── docs/                 # Product, architecture, contract, and scenario documents
+├── internal/             # Private Go application packages
+├── migrations/           # Database migrations when persistence is enabled
+├── scripts/              # Developer and operator helper scripts
+├── skills/               # V-Claw-specific skill content
+└── tests/                # Contract, integration, safety, and E2E tests
 ```
 
-## GoClaw Alignment
+## Main directories
 
-- `internal/providers` mirrors GoClaw's provider abstraction so V-Claw can switch between Anthropic, OpenAI, OpenAI-compatible providers, and local models.
-- `internal/channels` mirrors GoClaw's channel-adapter pattern so users can chat with V-Claw through CLI and messaging platforms.
-- `internal/mcp` mirrors GoClaw's MCP bridge/server layer for connecting external MCP servers and exposing V-Claw tools through MCP.
-- `internal/pipeline`, `internal/sessions`, `internal/eventbus`, `internal/tasks`, and `internal/tokencount` preserve GoClaw's execution and orchestration shape.
-- `internal/tools`, `internal/policies`, `internal/permissions`, `internal/approvals`, `internal/safety`, `internal/sandbox`, and `internal/audit` keep all external actions controlled.
-- `internal/store/pg` is the primary persistence implementation, matching the PostgreSQL-first direction.
-- `internal/skills` loads/searches runtime skills, while root `skills/` stores skill content.
-- `internal/localapi` combines the optional local HTTP handlers and WebSocket RPC control plane.
-- `internal/desktop` is low-level driver code only; agent-facing desktop and clipboard wrappers stay under `internal/tools/os`.
-- `internal/notifications` is outbound-only and may call channel adapters, while channels must not import notifications.
-- `internal/backup`, `internal/vault`, and `internal/knowledgegraph` are included as Sprint 3 boundaries so they are not built too early.
-- `deploy/docker` is kept for local reproducible setup, PostgreSQL, sandbox containers, and optional supporting services. It is not a cloud/server deployment target.
+### `cmd/`
 
-## Deliberately Excluded For Now
+Contains executable entrypoints such as the local `vclaw` CLI.
 
-- `ui/`: no web or desktop UI in the current direction.
-- `audio/`, `tts/`, `media/`: useful later, but not needed for the first local automation core.
-- `edition/`, `webui/`, `updater/`: GoClaw product/runtime concerns that are not required for the initial V-Claw skeleton.
+Command packages should stay thin:
+
+- parse arguments and configuration;
+- call application/bootstrap code;
+- avoid embedding agent, connector, or business logic directly.
+
+### `configs/`
+
+Contains local configuration examples and setup notes for providers or external services.
+
+This directory may include templates or documentation for OAuth credentials, local tokens, sandbox policy, and provider configuration. Real secrets and local tokens must not be committed.
+
+### `deploy/`
+
+Contains local runtime assets such as Docker Compose files, sandbox containers, and reproducible development setup.
+
+V-Claw is currently oriented toward local development and local-first use. Deployment assets should support reproducibility and sandboxing rather than imply a hosted production platform unless that scope is explicitly approved.
+
+### `docs/`
+
+Contains project documentation:
+
+- product brief and roadmap;
+- system design diagrams;
+- usecase diagrams;
+- runtime contracts;
+- canonical sequence scenarios;
+- future ADRs or design decisions.
+
+The most important contract and workflow docs are:
+
+- `docs/00-project-brief.md`
+- `docs/01-system-design.md`
+- `docs/02-usecase-diagram.md`
+- `docs/03-contracts.md`
+- `docs/04-sequences.md`
+
+### `internal/`
+
+Contains private Go packages for the V-Claw application. Package names should follow clear responsibility boundaries and should not expose product APIs directly.
+
+Key package groups:
+
+| Area | Responsibility |
+|---|---|
+| `internal/agent/` | Agent loop, planning, intent handling, and tool-call orchestration. |
+| `internal/approvals/` | Human-in-the-loop approval state and approve/reject flow. |
+| `internal/audit/` | Action logs and execution evidence. |
+| `internal/channels/` | User-facing message adapters such as Telegram or Slack. |
+| `internal/config/` | Runtime configuration loading and validation. |
+| `internal/connectors/` | Raw external API clients and adapters. |
+| `internal/connectors/google/` | Gmail, Calendar, Chat, OAuth, and related Google Workspace clients. |
+| `internal/contracts/` | Shared runtime objects when implemented: messages, tool calls, results, risk, approvals, and errors. |
+| `internal/memory/` | Short-term session context and future long-term memory. |
+| `internal/notifications/` | Outbound notifications for approvals, reminders, or alerts. |
+| `internal/policies/` | Tool policy and risk classification. |
+| `internal/providers/` | LLM provider abstractions and adapters. |
+| `internal/safety/` | Safety checks for external writes, local writes, destructive actions, and code execution. |
+| `internal/sandbox/` | Controlled Python/shell execution and sandbox policy. |
+| `internal/sessions/` | Conversation or run lifecycle state when persistence is introduced. |
+| `internal/skills/` | Runtime skill loading and lookup. |
+| `internal/store/` | Persistence interfaces and database implementation when needed. |
+| `internal/tasks/` | Task state, queues, workflows, and results when needed. |
+| `internal/tools/` | Agent-callable tool interfaces, registry, and wrappers. |
+| `internal/workspace/` | Local workspace and file isolation. |
+
+Some GoClaw-inspired areas may exist as reserved boundaries but are not necessarily active MVP scope. Examples include MCP, event bus, advanced pipeline/orchestration, tracing, backup, vault, desktop UI, and upgrade management. Check `ACTIVE_MODULES.md` before implementing these areas.
+
+## Boundary rules
+
+### Connectors vs tools
+
+```text
+connectors = raw external API clients
+tools      = agent-callable operations
+```
+
+Connectors should not know about agent reasoning, HITL, or tool-call contracts. Tools can call connectors and should expose risk metadata and input/output shapes to the agent/safety layer.
+
+Example:
+
+```text
+internal/connectors/google/gmail/
+  - handles Gmail API calls, OAuth client usage, and raw API responses
+
+internal/tools/office/gmail/
+  - exposes agent-callable Gmail operations
+  - validates tool input/output
+  - declares risk level and approval requirement
+```
+
+### Safety boundary
+
+Actions with side effects must go through a single safety/approval boundary before execution. This includes external writes, local file changes, destructive operations, and Python/shell execution.
+
+### Local-first scope
+
+Prefer a small, working vertical slice before adding platform-level abstractions. Do not add broad infrastructure simply because it exists in GoClaw unless it directly supports the current V-Claw roadmap.
+
+## Tests and support assets
+
+- `tests/contracts/` should cover shared contract compatibility.
+- `tests/safety/` should cover risk classification, approval gates, and sandbox policy.
+- `tests/e2e/` should cover a small number of canonical flows from `docs/04-sequences.md`.
+- `tests/fixtures/` should hold shared mock data for integration and agent-core tests.
+
+## Non-goals for the current structure
+
+The current repository structure is not meant to guarantee that every listed package is already implemented. It is also not a commitment to build every GoClaw subsystem.
+
+Current MVP work should stay aligned with the project brief, contracts, canonical scenarios, and active-module guidance.

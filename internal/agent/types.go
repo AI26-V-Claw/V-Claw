@@ -1,6 +1,10 @@
 package agent
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // IntentType represents the classification of user intent
 type IntentType string
@@ -92,4 +96,58 @@ type ClassificationResult struct {
 	NeedsClarification   bool
 	ClarificationOptions *ClarificationOptions
 	Error                error
+}
+
+// InboundMessage represents a message from user (channel message types from master)
+type InboundMessage struct {
+	RequestID string
+	SessionID string
+	Channel   string
+	UpdateID  int64
+	ChatID    int64
+	Text      string
+	Locale    string
+	Metadata  map[string]any
+	Source    string
+	Timestamp time.Time
+}
+
+func (m InboundMessage) EffectiveRequestID() string {
+	if strings.TrimSpace(m.RequestID) != "" {
+		return strings.TrimSpace(m.RequestID)
+	}
+	if m.UpdateID != 0 {
+		return fmt.Sprintf("update_%d", m.UpdateID)
+	}
+	return "request_default"
+}
+
+func (m InboundMessage) EffectiveSessionID() string {
+	if strings.TrimSpace(m.SessionID) != "" {
+		return strings.TrimSpace(m.SessionID)
+	}
+	if m.ChatID != 0 {
+		return fmt.Sprintf("telegram_chat_%d", m.ChatID)
+	}
+	return "default"
+}
+
+func (m InboundMessage) EffectiveChannel() string {
+	if strings.TrimSpace(m.Channel) != "" {
+		return strings.TrimSpace(m.Channel)
+	}
+	if strings.TrimSpace(m.Source) != "" {
+		return strings.TrimSpace(m.Source)
+	}
+	return "telegram"
+}
+
+// OutboundMessage represents a response message to user
+type OutboundMessage struct {
+	RequestID string
+	SessionID string
+	Status    string
+	Message   string
+	ChatID    int64
+	Text      string
 }

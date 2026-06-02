@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+// SessionMemory Tests
+
 func TestNewSessionMemory(t *testing.T) {
 	sm := NewSessionMemory(10)
 	if sm == nil {
@@ -263,5 +265,43 @@ func BenchmarkGetFilteredHistoryForDangerousAction(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		sm.GetFilteredHistoryForDangerousAction(3)
+	}
+}
+
+// Store Tests (master branch compatibility)
+
+func TestStoreKeepsSlidingWindow(t *testing.T) {
+	store := NewStore()
+
+	for index := 0; index < 25; index++ {
+		store.Append("session-1", RoleUserCompat, "message")
+	}
+
+	history := store.GetHistory("session-1")
+	if len(history) != 20 {
+		t.Fatalf("unexpected history length: %d", len(history))
+	}
+}
+
+func TestStoreClear(t *testing.T) {
+	store := NewStore()
+	store.Append("session-1", RoleUserCompat, "hello")
+	store.Clear("session-1")
+
+	if len(store.GetHistory("session-1")) != 0 {
+		t.Fatal("expected cleared store to be empty")
+	}
+}
+
+func TestStoreSeparatesSessions(t *testing.T) {
+	store := NewStore()
+	store.Append("session-1", RoleUserCompat, "hello")
+	store.Append("session-2", RoleUserCompat, "world")
+
+	if len(store.GetHistory("session-1")) != 1 {
+		t.Fatalf("expected session-1 history to be isolated")
+	}
+	if len(store.GetHistory("session-2")) != 1 {
+		t.Fatalf("expected session-2 history to be isolated")
 	}
 }
