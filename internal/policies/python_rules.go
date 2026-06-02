@@ -119,8 +119,14 @@ var pythonRules = []MatrixEntry{
 		"Code di chuyển file (shutil.move, có thể ghi đè). Cần xác nhận."},
 	{"os.rename(", RiskNeedsApproval, DecisionNeedsApproval,
 		"Code đổi tên file (os.rename, có thể ghi đè). Cần xác nhận."},
-	{"pathlib", RiskNeedsApproval, DecisionNeedsApproval,
-		"Code dùng pathlib (có thể xóa/ghi đè file). Cần xác nhận của người dùng."},
+	{".unlink(", RiskNeedsApproval, DecisionNeedsApproval,
+		"Code xóa file (pathlib.Path.unlink). Cần xác nhận của người dùng."},
+	{".rmdir(", RiskNeedsApproval, DecisionNeedsApproval,
+		"Code xóa thư mục (pathlib.Path.rmdir). Cần xác nhận của người dùng."},
+	{".rename(", RiskNeedsApproval, DecisionNeedsApproval,
+		"Code đổi tên/di chuyển file (pathlib.Path.rename, có thể ghi đè). Cần xác nhận."},
+	{".replace(", RiskNeedsApproval, DecisionNeedsApproval,
+		"Code replace file (pathlib.Path.replace, có thể ghi đè). Cần xác nhận."}
 
 	// ── Safe write (create new files) ─────────────────────────────────────
 
