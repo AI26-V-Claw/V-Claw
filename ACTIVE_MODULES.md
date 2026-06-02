@@ -87,7 +87,7 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 |---|---|---|
 | `internal/tools/` | Shared | Agent-facing tool interface, registry tối giản và wrappers. |
 | `internal/tools/registry/` | Shared | Danh sách tool, input/output shape, default risk level. Cần Lead review khi đổi. |
-| `internal/tools/office/gmail/` | Integration | Agent-callable Gmail tools, ví dụ `listEmails`, `getEmail`, `sendEmail`. |
+| `internal/tools/office/gmail/` | Integration | Agent-callable Gmail tools, ví dụ `listEmails`, `getEmail`, `listThreads`, `getThread`, draft tools, attachment download, `modifyMessage`. |
 | `internal/tools/office/calendar/` | Integration | Agent-callable Calendar tools, ví dụ `listEvents`, `createEvent`, `deleteEvent`. |
 | `internal/tools/office/chat/` | Integration | Agent-callable Google Chat tools theo roadmap Google Workspace. |
 | `internal/tools/system/` | Agent Core | Agent-callable local/system tools đi qua sandbox/safety. |

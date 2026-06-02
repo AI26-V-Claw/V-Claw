@@ -18,3 +18,6 @@ evaluation_results.json
 data/telegram_offset.txt
 logs/audit.jsonl
 .antigravity/
+AGENTS.md
+CLAUDE.md
+v_claw_architect_claude.pdf
