@@ -1,6 +1,12 @@
 package policies
 
-import "vclaw/internal/tools"
+import (
+	"fmt"
+	"time"
+
+	"vclaw/internal/contracts"
+	"vclaw/internal/tools"
+)
 
 type ToolPolicy struct{}
 
@@ -11,7 +17,7 @@ func NewToolPolicy() ToolPolicy {
 func (p ToolPolicy) FilterTools(definitions []tools.ToolDefinition) []tools.ToolDefinition {
 	allowed := make([]tools.ToolDefinition, 0, len(definitions))
 	for _, definition := range definitions {
-		if p.canUse(definition.Capability, definition.RiskLevel) {
+		if definition.Enabled && p.canUse(definition.Capability, definition.RiskLevel) {
 			allowed = append(allowed, definition)
 		}
 	}
@@ -25,6 +31,45 @@ func (p ToolPolicy) CanExecute(tool tools.Tool) bool {
 	return p.canUse(tool.Capability(), tool.RiskLevel())
 }
 
+func (p ToolPolicy) DecideToolCall(toolCallID string, definition tools.ToolDefinition, found bool, checkedAt time.Time) contracts.RiskDecision {
+	if !found {
+		return contracts.RiskDecision{
+			ToolCallID: toolCallID,
+			ToolName:   definition.Name,
+			Decision:   contracts.RiskDecisionBlock,
+			Reason:     "tool not found",
+			CheckedAt:  checkedAt,
+		}
+	}
+
+	decision := contracts.RiskDecision{
+		ToolCallID: toolCallID,
+		ToolName:   definition.Name,
+		RiskLevel:  contracts.RiskLevel(definition.RiskLevel),
+		CheckedAt:  checkedAt,
+	}
+	if !definition.Enabled {
+		decision.Decision = contracts.RiskDecisionBlock
+		decision.Reason = "tool is disabled"
+		return decision
+	}
+	if p.canUse(definition.Capability, definition.RiskLevel) && !definition.RequiresApproval {
+		decision.Decision = contracts.RiskDecisionAllow
+		decision.Reason = "safe read-only or compute tool"
+		return decision
+	}
+	if definition.RequiresApproval || requiresApproval(definition.Capability, definition.RiskLevel) {
+		decision.Decision = contracts.RiskDecisionRequiresApproval
+		decision.RequiresApproval = true
+		decision.Reason = fmt.Sprintf("tool %s requires approval for risk %s", definition.Name, definition.RiskLevel)
+		return decision
+	}
+
+	decision.Decision = contracts.RiskDecisionBlock
+	decision.Reason = "tool blocked by policy"
+	return decision
+}
+
 func (ToolPolicy) canUse(capability tools.Capability, riskLevel tools.RiskLevel) bool {
 	if capability != tools.CapabilityReadOnly {
 		return false
@@ -35,5 +80,17 @@ func (ToolPolicy) canUse(capability tools.Capability, riskLevel tools.RiskLevel)
 		return true
 	default:
 		return false
+	}
+}
+
+func requiresApproval(capability tools.Capability, riskLevel tools.RiskLevel) bool {
+	if capability != tools.CapabilityReadOnly {
+		return true
+	}
+	switch riskLevel {
+	case tools.RiskLevelSafeRead, tools.RiskLevelSafeCompute:
+		return false
+	default:
+		return true
 	}
 }

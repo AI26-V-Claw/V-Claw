@@ -1,0 +1,163 @@
+sequenceDiagram
+    autonumber
+    title SEQ-3B: Update Calendar — Full HITL Flow (missing info, not found, conflict, edit, cancel)
+
+    actor User
+    participant MC as Message Channel
+    participant BE as Backend API
+    participant Agent as Agent Orchestrator
+    participant LLM as LLM Provider
+    participant TR as Tool Router
+    participant Cal as Calendar Tool
+    participant GCal as Google Calendar API
+    participant ST as Storage / Memory
+
+    User->>MC: "Dời họp Review mai"
+    MC->>BE: Forward message
+    BE-)ST: Async log raw message
+    BE->>Agent: Forward request
+
+    Agent->>ST: Load context + history
+    ST-->>Agent: User context + recent conversations
+
+    Agent->>LLM: Understand request + extract params
+    LLM-->>Agent: intent=calendar.update,<br/>target=Review, date=tomorrow,<br/>missing=[new_time]
+
+    Note over Agent: WRITE action → HIGH risk → HITL required
+
+    %% === EDGE CASE 1: Thiếu thông tin ===
+    rect rgb(255, 249, 230)
+        Note over Agent,User: MISSING INFO
+        Agent-->>BE: Hỏi params còn thiếu
+        BE-->>MC: Reply
+        MC-->>User: "Dời sang mấy giờ?"
+        User->>MC: "10h sáng"
+        MC->>BE: Forward
+        BE->>Agent: Bổ sung: new_time=10:00
+
+        Agent->>LLM: Re-extract với params đầy đủ
+        LLM-->>Agent: All params OK
+    end
+
+    %% Tìm event
+    Agent->>TR: search_events(title=Review, date=tomorrow)
+    TR->>Cal: search_events(...)
+    Cal->>GCal: events.list(q=Review, timeMin, timeMax)
+    GCal-->>Cal: Matching events
+    Cal-->>TR: Found events
+    TR-->>Agent: Results
+
+    %% === EDGE CASE 2: Không tìm thấy / nhiều events ===
+    alt Không tìm thấy event
+        Agent->>LLM: Thông báo không tìm thấy
+        LLM-->>Agent: Error message
+        Agent-->>BE: Response
+        BE-->>MC: Reply
+        MC-->>User: "Không tìm thấy cuộc họp Review ngày mai.<br/>Bạn kiểm tra lại tên hoặc ngày?"
+        Note over Agent: Kết thúc
+
+    else Tìm thấy nhiều events
+        rect rgb(255, 249, 230)
+            Note over Agent,User: DISAMBIGUATION
+            Agent-->>BE: Danh sách events
+            BE-->>MC: Reply
+            MC-->>User: "Có 2 cuộc họp Review mai:<br/>1. Review Design 10h<br/>2. Review Sprint 14h<br/>Bạn muốn dời cái nào?"
+            User->>MC: "Cái 2"
+            MC->>BE: Forward
+            BE->>Agent: Selected: Review Sprint (event_id)
+        end
+    end
+
+    %% === EDGE CASE 3: Xung đột ===
+    Agent->>TR: list_events(tomorrow, 10:00-11:00, attendees)
+    TR->>Cal: list_events(...)
+    Cal->>GCal: events.list(...)
+    GCal-->>Cal: 1 event: "Standup 10:00-10:30"
+    Cal-->>TR: Conflict found
+    TR-->>Agent: Conflict
+
+    rect rgb(255, 243, 224)
+        Note over Agent,User: CONFLICT
+        Agent->>LLM: Tìm slot thay thế
+        LLM-->>Agent: Suggest 11:00-12:00
+        Agent-->>BE: Báo conflict + đề xuất
+        BE-->>MC: Reply
+        MC-->>User: "⚠️ 10h có Standup trùng.<br/>Đổi 11h-12h được không?"
+        User->>MC: "OK 11h"
+        MC->>BE: Forward
+        BE->>Agent: Confirm new_time=11:00
+
+        Agent->>TR: list_events(tomorrow, 11:00-12:00, attendees)
+        TR->>Cal: list_events(...)
+        Cal->>GCal: events.list(...)
+        GCal-->>Cal: No events
+        Cal-->>TR: No conflicts
+        TR-->>Agent: Slot trống OK
+    end
+
+    %% === HITL GATE ===
+    rect rgb(252, 228, 236)
+        Note over Agent: HITL GATE
+        Agent-)ST: Lưu pending_action
+        Agent-->>BE: Preview
+        BE-->>MC: Preview
+        MC-->>User: "📅 Sửa lịch họp:<br/>Review Sprint: 14h → 11h mai<br/>👥 3 attendees giữ nguyên<br/><br/>✅ Xác nhận | ✏️ Sửa | ❌ Hủy"
+
+        %% === EDGE CASE 4: User sửa ===
+        alt ✏️ Sửa
+            User->>MC: "Đổi thành 1 tiếng rưỡi<br/>và thêm chị Lan"
+            MC->>BE: edit + instruction
+            BE->>Agent: HITL edit
+
+            Agent->>ST: Resolve "chị Lan" từ contact graph
+            ST-->>Agent: lan@company.com
+
+            Agent->>TR: list_events(tomorrow, 11:00-12:30, updated attendees)
+            TR->>Cal: list_events(...)
+            Cal->>GCal: events.list(...)
+            GCal-->>Cal: No events
+            Cal-->>TR: No conflicts
+            TR-->>Agent: Slot OK
+
+            Agent-)ST: Log edit request
+            Agent-->>BE: Updated preview
+            BE-->>MC: Preview mới
+            MC-->>User: "📅 Review Sprint: 11h-12h30 mai<br/>👥 +chị Lan (4 attendees)<br/><br/>✅ Xác nhận | ✏️ Sửa | ❌ Hủy"
+
+            User->>MC: ✅
+            MC->>BE: approved
+            BE->>Agent: HITL approved
+
+        %% === EDGE CASE 5: User hủy ===
+        else ❌ Hủy
+            User->>MC: ❌
+            MC->>BE: rejected
+            BE->>Agent: HITL rejected
+
+            Agent-)ST: Log rejection
+            Agent->>LLM: Summarize cancellation
+            LLM-->>Agent: Cancel message
+            Agent-->>BE: Response
+            BE-->>MC: Reply
+            MC-->>User: "OK, giữ nguyên Review Sprint 14h mai."
+            Note over Agent: Kết thúc — không execute
+        end
+    end
+
+    %% Execute
+    Agent->>TR: update_event(event_id, new_time, new_duration, new_attendees)
+    TR->>Cal: update_event(...)
+    Cal->>GCal: events.patch(event_id, body)
+    GCal-->>Cal: Updated event
+    Cal-->>TR: OK
+    TR-->>Agent: Event updated
+
+    Agent-)ST: Async log tool_call + HITL decision (redacted)
+
+    Agent->>LLM: Summarize kết quả
+    LLM-->>Agent: Confirmation
+
+    Agent-)ST: Update session memory / audit metadata
+    Agent-->>BE: Final response
+    BE-->>MC: Reply
+    MC-->>User: "✅ Đã dời Review Sprint sang 11h-12h30 mai.<br/>👥 4 attendees đã được cập nhật."
