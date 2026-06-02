@@ -46,6 +46,7 @@ type Membership struct {
 	MemberName  string
 	MemberType  string
 	DisplayName string
+	Email       string
 	State       string
 	Role        string
 }
@@ -77,12 +78,31 @@ type ListMessagesOutput struct {
 	NextPageToken string
 }
 
+type ListSpacesOutput struct {
+	Spaces        []Space
+	NextPageToken string
+}
+
+type ListMembersOutput struct {
+	Members       []Membership
+	NextPageToken string
+}
+
 func (c *Client) ListSpaces(ctx context.Context, pageSize int64) ([]Space, error) {
-	return ListSpaces(ctx, c.httpClient, pageSize)
+	output, err := ListSpaces(ctx, c.httpClient, pageSize, "")
+	return output.Spaces, err
+}
+
+func (c *Client) ListSpacesPage(ctx context.Context, pageSize int64, pageToken string) (ListSpacesOutput, error) {
+	return ListSpaces(ctx, c.httpClient, pageSize, pageToken)
 }
 
 func (c *Client) ListMessages(ctx context.Context, parent string, pageSize int64, pageToken string, showDeleted bool) (ListMessagesOutput, error) {
 	return ListMessages(ctx, c.httpClient, parent, pageSize, pageToken, showDeleted)
+}
+
+func (c *Client) ListMembers(ctx context.Context, parent string, pageSize int64, pageToken string) (ListMembersOutput, error) {
+	return ListMembers(ctx, c.httpClient, parent, pageSize, pageToken)
 }
 
 func (c *Client) CreateTextMessage(ctx context.Context, parent string, text string, options MessageCreateOptions) (Message, error) {
@@ -117,22 +137,26 @@ func (c *Client) UploadAttachment(ctx context.Context, parent string, filename s
 	return UploadAttachment(ctx, c.httpClient, parent, filename, mediaType, reader)
 }
 
-func ListSpaces(ctx context.Context, client *http.Client, pageSize int64) ([]Space, error) {
+func ListSpaces(ctx context.Context, client *http.Client, pageSize int64, pageToken string) (ListSpacesOutput, error) {
 	service, err := serviceFromClient(ctx, client)
 	if err != nil {
-		return nil, err
+		return ListSpacesOutput{}, err
 	}
 
-	response, err := service.Spaces.List().PageSize(pageSize).Do()
+	call := service.Spaces.List().PageSize(pageSize)
+	if strings.TrimSpace(pageToken) != "" {
+		call = call.PageToken(pageToken)
+	}
+	response, err := call.Do()
 	if err != nil {
-		return nil, err
+		return ListSpacesOutput{}, err
 	}
 
 	spaces := make([]Space, 0, len(response.Spaces))
 	for _, space := range response.Spaces {
 		spaces = append(spaces, spaceFromAPI(space))
 	}
-	return spaces, nil
+	return ListSpacesOutput{Spaces: spaces, NextPageToken: response.NextPageToken}, nil
 }
 
 func ListMessages(ctx context.Context, client *http.Client, parent string, pageSize int64, pageToken string, showDeleted bool) (ListMessagesOutput, error) {
@@ -158,6 +182,31 @@ func ListMessages(ctx context.Context, client *http.Client, parent string, pageS
 		Messages:      messages,
 		NextPageToken: response.NextPageToken,
 	}, nil
+}
+
+func ListMembers(ctx context.Context, client *http.Client, parent string, pageSize int64, pageToken string) (ListMembersOutput, error) {
+	if strings.TrimSpace(parent) == "" {
+		return ListMembersOutput{}, errors.New("space name is required")
+	}
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return ListMembersOutput{}, err
+	}
+
+	call := service.Spaces.Members.List(parent).PageSize(pageSize)
+	if strings.TrimSpace(pageToken) != "" {
+		call = call.PageToken(pageToken)
+	}
+	response, err := call.Do()
+	if err != nil {
+		return ListMembersOutput{}, err
+	}
+
+	members := make([]Membership, 0, len(response.Memberships))
+	for _, membership := range response.Memberships {
+		members = append(members, membershipFromAPI(membership))
+	}
+	return ListMembersOutput{Members: members, NextPageToken: response.NextPageToken}, nil
 }
 
 func CreateTextMessage(ctx context.Context, client *http.Client, parent string, text string, options MessageCreateOptions) (Message, error) {
@@ -457,9 +506,22 @@ func membershipFromAPI(membership *chatapi.Membership) Membership {
 		MemberName:  memberName,
 		MemberType:  memberType,
 		DisplayName: displayName,
+		Email:       emailFromUserName(memberName),
 		State:       membership.State,
 		Role:        membership.Role,
 	}
+}
+
+func emailFromUserName(name string) string {
+	value := strings.TrimSpace(name)
+	if !strings.HasPrefix(value, "users/") {
+		return ""
+	}
+	value = strings.TrimPrefix(value, "users/")
+	if !strings.Contains(value, "@") {
+		return ""
+	}
+	return value
 }
 
 func membershipsFromUsers(users []string) []*chatapi.Membership {

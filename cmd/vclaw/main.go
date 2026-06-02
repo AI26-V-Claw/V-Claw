@@ -42,10 +42,10 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "agent":
 		return runAgent(ctx, args[1:])
-	case "telegram":
-		return runTelegram(ctx, args[1:])
 	case "google":
 		return runGoogle(ctx, args[1:])
+	case "telegram":
+		return runTelegram(ctx, args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -133,10 +133,11 @@ func runGoogle(ctx context.Context, args []string) error {
 
 		fmt.Println()
 		fmt.Println("Google Chat spaces:")
-		spaces, err := chat.ListSpaces(ctx, httpClient, 10)
+		spacesOutput, err := chat.ListSpaces(ctx, httpClient, 10, "")
 		if err != nil {
 			return fmt.Errorf("chat smoke test failed: %w", err)
 		}
+		spaces := spacesOutput.Spaces
 		if len(spaces) == 0 {
 			fmt.Println("- no spaces found")
 		}
@@ -158,6 +159,8 @@ func runGoogle(ctx context.Context, args []string) error {
 		return runGoogleGmail(ctx, args[1:])
 	case "chat":
 		return runGoogleChat(ctx, args[1:])
+	case "people":
+		return runGooglePeople(ctx, args[1:])
 
 	case "help", "-h", "--help":
 		printGoogleUsage()
@@ -185,6 +188,14 @@ func envOrDefault(name string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envBool(name string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes"
 }
 
 func loadDotEnv(path string) error {
@@ -259,7 +270,8 @@ func printUsage() {
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
   vclaw google gmail <list|get|list-threads|get-thread|create-draft|update-draft|send-draft|reply-draft|forward-draft|download-attachments|modify-message>
-  vclaw google chat <list-spaces|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>`)
+  vclaw google people <search-directory>
+  vclaw google chat <list-spaces|list-members|find-spaces-by-members|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>`)
 }
 
 func printGoogleUsage() {
@@ -275,6 +287,8 @@ func printGoogleUsage() {
 
 	fmt.Println()
 	printGoogleGmailUsage()
+	fmt.Println()
+	printGooglePeopleUsage()
 	fmt.Println()
 	printGoogleChatUsage()
 }
