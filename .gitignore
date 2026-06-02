@@ -9,3 +9,5 @@ configs/google/token.json
 .gopath/
 bin/
 cmd/vclaw-dev/
+.antigravity/
+.appdata/

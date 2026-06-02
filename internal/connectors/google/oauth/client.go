@@ -179,10 +179,134 @@ func oauthCallbackHandler(state string, resultCh chan<- authResult) http.Handler
 
 		sendAuthResult(resultCh, authResult{code: code})
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, "<!doctype html><title>V-Claw OAuth</title><h1>V-Claw OAuth complete</h1><p>You can close this tab and return to the terminal.</p>")
+		fmt.Fprint(w, oauthSuccessPage)
 	})
 	return mux
 }
+
+const oauthSuccessPage = `<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>V-Claw OAuth Complete</title>
+	<style>
+		:root {
+			color-scheme: light;
+			--bg: #f6f8fb;
+			--card: #ffffff;
+			--ink: #111827;
+			--muted: #5f6b7a;
+			--line: #e6eaf0;
+			--accent: #2563eb;
+			--accent-soft: #dbeafe;
+			--success: #16a34a;
+			--success-soft: #dcfce7;
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			min-height: 100vh;
+			display: grid;
+			place-items: center;
+			background:
+				radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 32rem),
+				linear-gradient(135deg, var(--bg), #eef4ff);
+			color: var(--ink);
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			padding: 2rem;
+		}
+
+		main {
+			width: min(100%, 32rem);
+			background: var(--card);
+			border: 1px solid var(--line);
+			border-radius: 1.25rem;
+			box-shadow: 0 1.5rem 4rem rgba(15, 23, 42, 0.12);
+			padding: 2rem;
+		}
+
+		.brand {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			margin-bottom: 1.5rem;
+			font-weight: 700;
+			letter-spacing: 0.02em;
+		}
+
+		.logo {
+			width: 2.5rem;
+			height: 2.5rem;
+			display: grid;
+			place-items: center;
+			border-radius: 0.85rem;
+			background: var(--accent-soft);
+			color: var(--accent);
+			font-weight: 800;
+		}
+
+		.status {
+			width: 4rem;
+			height: 4rem;
+			display: grid;
+			place-items: center;
+			border-radius: 999px;
+			background: var(--success-soft);
+			color: var(--success);
+			font-size: 2rem;
+			margin-bottom: 1.25rem;
+		}
+
+		h1 {
+			margin: 0;
+			font-size: clamp(2rem, 5vw, 2.75rem);
+			line-height: 1;
+			letter-spacing: -0.03em;
+		}
+
+		p {
+			margin: 1rem 0 0;
+			color: var(--muted);
+			font-size: 1rem;
+			line-height: 1.65;
+		}
+
+		.next {
+			margin-top: 1.5rem;
+			padding: 1rem;
+			border-radius: 0.9rem;
+			background: #f8fafc;
+			border: 1px solid var(--line);
+		}
+
+		.next strong {
+			display: block;
+			margin-bottom: 0.25rem;
+			color: var(--ink);
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<div class="brand" aria-label="V-Claw">
+			<div class="logo">V</div>
+			<span>V-Claw</span>
+		</div>
+		<div class="status" aria-hidden="true">✓</div>
+		<h1>OAuth complete</h1>
+		<p>Your Google Workspace account is connected and the local token has been received by V-Claw.</p>
+		<div class="next">
+			<strong>You can close this tab.</strong>
+			<p>Return to the terminal to continue running the command.</p>
+		</div>
+	</main>
+</body>
+</html>`
 
 func sendAuthResult(resultCh chan<- authResult, result authResult) {
 	select {

@@ -1,0 +1,127 @@
+sequenceDiagram
+    autonumber
+    title SEQ-2B: Create Calendar — Full HITL Flow (missing info, conflict, edit, cancel)
+
+    actor User
+    participant MC as Message Channel
+    participant BE as Backend API
+    participant Agent as Agent Orchestrator
+    participant LLM as LLM Provider
+    participant TR as Tool Router
+    participant Cal as Calendar Tool
+    participant GCal as Google Calendar API
+    participant ST as Storage / Memory
+
+    User->>MC: "Tạo lịch họp review chiều mai mời anh Minh"
+    MC->>BE: Forward message
+    BE-)ST: Async log raw message
+    BE->>Agent: Forward request
+
+    Agent->>ST: Load context + contact graph + history
+    ST-->>Agent: Context + contacts (anh Minh=minh@)
+
+    Agent->>LLM: Understand request + extract params
+    LLM-->>Agent: intent=calendar.create, date=tomorrow,<br/>attendees=[minh@], title=Review,<br/>missing=[time, duration, location]
+
+    Note over Agent: WRITE action → HIGH risk → HITL required
+
+    %% === EDGE CASE 1: Thiếu thông tin ===
+    rect rgb(255, 249, 230)
+        Note over Agent,User: MISSING INFO — hỏi lại user
+        Agent-->>BE: Hỏi lại params còn thiếu
+        BE-->>MC: Reply
+        MC-->>User: "Mấy giờ? Họp bao lâu?<br/>Phòng nào hoặc online?"
+        User->>MC: "3h chiều, 1 tiếng, Meet"
+        MC->>BE: Forward
+        BE->>Agent: Bổ sung: time=15:00,<br/>duration=60min, location=Meet
+
+        Agent->>LLM: Re-extract với params đầy đủ
+        LLM-->>Agent: All params OK
+    end
+
+    %% === EDGE CASE 2: Xung đột lịch ===
+    Agent->>TR: list_events(tomorrow, 15:00-16:00, attendees)
+    TR->>Cal: list_events(...)
+    Cal->>GCal: events.list(...)
+    GCal-->>Cal: 1 event: "Standup 15:00-15:30"
+    Cal-->>TR: Conflict found
+    TR-->>Agent: Conflict: anh Minh bận 15:00-15:30
+
+    rect rgb(255, 243, 224)
+        Note over Agent,User: CONFLICT — đề xuất slot thay thế
+        Agent->>LLM: Tìm slot thay thế gần nhất
+        LLM-->>Agent: Suggest 16:00-17:00
+        Agent-->>BE: Báo conflict + đề xuất
+        BE-->>MC: Reply
+        MC-->>User: "⚠️ 15h anh Minh có Standup.<br/>Đổi 16h-17h được không?"
+        User->>MC: "OK 16h"
+        MC->>BE: Forward
+        BE->>Agent: Confirm time=16:00-17:00
+
+        Agent->>TR: list_events(tomorrow, 16:00-17:00, attendees)
+        TR->>Cal: list_events(...)
+        Cal->>GCal: events.list(...)
+        GCal-->>Cal: No events
+        Cal-->>TR: No conflicts
+        TR-->>Agent: Slot trống OK
+    end
+
+    %% === HITL GATE ===
+    rect rgb(252, 228, 236)
+        Note over Agent: HITL GATE
+        Agent-)ST: Lưu pending_action
+        Agent-->>BE: Approval request + preview
+        BE-->>MC: Preview
+        MC-->>User: "📅 Review 16h-17h mai<br/>👥 anh Minh · 📎 Meet<br/><br/>✅ Tạo | ✏️ Sửa | ❌ Hủy"
+
+        %% === EDGE CASE 3: User sửa ===
+        alt ✏️ Sửa
+            User->>MC: "Thêm chị Lan và anh Tuấn"
+            MC->>BE: edit + instruction
+            BE->>Agent: HITL edit
+
+            Agent->>ST: Resolve contacts từ contact graph
+            ST-->>Agent: chị Lan=lan@, anh Tuấn=tuan@
+
+            Agent-)ST: Log edit request
+            Agent-->>BE: Updated preview
+            BE-->>MC: Preview mới
+            MC-->>User: "📅 Review 16h-17h mai<br/>👥 anh Minh, chị Lan, anh Tuấn<br/>📎 Meet<br/><br/>✅ Tạo | ✏️ Sửa | ❌ Hủy"
+
+            User->>MC: ✅ Tạo
+            MC->>BE: approved
+            BE->>Agent: HITL approved
+
+        %% === EDGE CASE 4: User hủy ===
+        else ❌ Hủy
+            User->>MC: ❌ Hủy
+            MC->>BE: rejected
+            BE->>Agent: HITL rejected
+
+            Agent-)ST: Log rejection + reason
+            Agent->>LLM: Summarize cancellation
+            LLM-->>Agent: Cancel message
+            Agent-->>BE: Response
+            BE-->>MC: Reply
+            MC-->>User: "Đã hủy. Cần tạo lịch khác không?"
+            Note over Agent: Kết thúc — không execute
+        end
+    end
+
+    %% === Execute (chỉ khi approved) ===
+    Agent->>TR: create_event(title, time, attendees, meet)
+    TR->>Cal: create_event(...)
+    Cal->>GCal: events.insert(...)
+    GCal-->>Cal: event_id + meet_link
+    Cal-->>TR: Created event
+    TR-->>Agent: OK
+
+    Agent-)ST: Async log tool_calls + HITL decision (redacted)
+
+    Agent->>LLM: Summarize kết quả
+    LLM-->>Agent: Confirmation
+
+    Agent-)ST: Update session memory / audit metadata
+    Agent-->>BE: Final response
+    BE-->>MC: Reply
+    MC-->>User: "✅ Đã tạo Review 16h-17h mai<br/>📎 meet.google.com/abc-xyz<br/>👥 anh Minh, chị Lan, anh Tuấn"
