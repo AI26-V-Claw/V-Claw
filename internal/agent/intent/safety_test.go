@@ -162,14 +162,12 @@ func TestSafety_MissingParams_MustClarify(t *testing.T) {
 // are properly marked in the registry
 func TestSafety_ToolRegistry_DangerousMarked(t *testing.T) {
 	dangerousTools := []string{
-		"delete_file",
-		"write_file",
+		"system.deleteFile",
+		"system.writeFile",
 		"gmail.sendEmail",
 		"calendar.createEvent",
 		"sandbox.runPython",
 		"sandbox.runShell",
-		"send_email",
-		"exec",
 	}
 	
 	for _, toolName := range dangerousTools {

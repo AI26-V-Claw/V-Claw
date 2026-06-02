@@ -38,24 +38,24 @@ type ParamDef struct {
 // This aligns with the Tool Registry in docs/03-contracts.md.
 var Registry = map[string]ToolDefinition{
 	// ── Safe Read Tools ──────────────────────────────────────────
-	"read_file": {
-		Name: "read_file", Category: CategorySafeRead,
+	"system.readFile": {
+		Name: "system.readFile", Category: CategorySafeRead,
 		Description: "Read content from a file",
 		Dangerous: false, RequiresConfirm: false, Timeout: 30,
 		Parameters: []ParamDef{
 			{Name: "path", Type: "path", Required: true, Description: "File path to read"},
 		},
 	},
-	"list_directory": {
-		Name: "list_directory", Category: CategorySafeRead,
+	"system.listDirectory": {
+		Name: "system.listDirectory", Category: CategorySafeRead,
 		Description: "List files in a directory",
 		Dangerous: false, RequiresConfirm: false, Timeout: 30,
 		Parameters: []ParamDef{
 			{Name: "path", Type: "path", Required: true, Description: "Directory path to list"},
 		},
 	},
-	"web_search": {
-		Name: "web_search", Category: CategorySafeRead,
+	"web.search": {
+		Name: "web.search", Category: CategorySafeRead,
 		Description: "Search the web for information",
 		Dangerous: false, RequiresConfirm: false, Timeout: 45,
 		Parameters: []ParamDef{
@@ -81,8 +81,8 @@ var Registry = map[string]ToolDefinition{
 	},
 
 	// ── Dangerous Write Tools ────────────────────────────────────
-	"delete_file": {
-		Name: "delete_file", Category: CategoryDangerousWrite,
+	"system.deleteFile": {
+		Name: "system.deleteFile", Category: CategoryDangerousWrite,
 		Description: "Delete a file from the filesystem",
 		Dangerous: true, RequiresConfirm: true, Timeout: 60,
 		Parameters: []ParamDef{
@@ -90,8 +90,8 @@ var Registry = map[string]ToolDefinition{
 			{Name: "confirm", Type: "bool", Required: true, Description: "Confirmation flag"},
 		},
 	},
-	"write_file": {
-		Name: "write_file", Category: CategoryDangerousWrite,
+	"system.writeFile": {
+		Name: "system.writeFile", Category: CategoryDangerousWrite,
 		Description: "Write content to a file",
 		Dangerous: true, RequiresConfirm: true, Timeout: 60,
 		Parameters: []ParamDef{
@@ -111,15 +111,6 @@ var Registry = map[string]ToolDefinition{
 	},
 
 	// ── Execution Tools ──────────────────────────────────────────
-	"exec": {
-		Name: "exec", Category: CategoryExecution,
-		Description: "Execute a shell command",
-		Dangerous: true, RequiresConfirm: true, Timeout: 120,
-		Parameters: []ParamDef{
-			{Name: "command", Type: "string", Required: true, Description: "Command to execute"},
-			{Name: "cwd", Type: "path", Required: false, Description: "Working directory"},
-		},
-	},
 	// Maps to sandbox.runPython / sandbox.runShell in contracts
 	"sandbox.runPython": {
 		Name: "sandbox.runPython", Category: CategoryExecution,
@@ -135,20 +126,11 @@ var Registry = map[string]ToolDefinition{
 		Dangerous: true, RequiresConfirm: true, Timeout: 120,
 		Parameters: []ParamDef{
 			{Name: "command", Type: "string", Required: true, Description: "Shell command to run"},
+			{Name: "cwd", Type: "path", Required: false, Description: "Working directory"},
 		},
 	},
 
 	// ── Communication Tools ──────────────────────────────────────
-	"send_email": {
-		Name: "send_email", Category: CategoryCommunication,
-		Description: "Send an email",
-		Dangerous: true, RequiresConfirm: true, Timeout: 60,
-		Parameters: []ParamDef{
-			{Name: "to", Type: "email", Required: true, Description: "Recipient email address"},
-			{Name: "subject", Type: "string", Required: true, Description: "Email subject"},
-			{Name: "body", Type: "string", Required: true, Description: "Email body"},
-		},
-	},
 	// Maps to gmail.sendEmail in contracts
 	"gmail.sendEmail": {
 		Name: "gmail.sendEmail", Category: CategoryCommunication,
@@ -174,6 +156,7 @@ var Registry = map[string]ToolDefinition{
 
 // LookupTool retrieves a tool definition by name.
 func LookupTool(name string) (ToolDefinition, error) {
+	name = NormalizeToolName(name)
 	tool, ok := Registry[name]
 	if !ok {
 		return ToolDefinition{}, fmt.Errorf("tool %q not found in registry", name)

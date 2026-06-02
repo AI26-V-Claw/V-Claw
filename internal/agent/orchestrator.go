@@ -234,7 +234,14 @@ func isPromptInjection(text string) bool {
 	lowered := strings.ToLower(strings.TrimSpace(text))
 	phrases := []string{
 		"ignore previous instructions",
+		"disregard previous instructions",
+		"you are now",
+		"forget your instructions",
+		"forget previous instructions",
 		"bỏ qua chỉ dẫn",
+		"bỏ qua hướng dẫn trước",
+		"quên hướng dẫn trước",
+		"bây giờ bạn là",
 		"bỏ qua mọi chỉ dẫn",
 		"system prompt",
 		"developer message",

@@ -192,7 +192,7 @@ func TestValidate_BlocksDangerousWithMissingParams(t *testing.T) {
 		Confidence:    0.95,
 		MissingParams: []string{"path"},
 		ToolCalls: []ToolCallInfo{
-			{Name: "delete_file", Category: "DANGEROUS_WRITE"},
+			{Name: "system.deleteFile", Category: "DANGEROUS_WRITE"},
 		},
 	}
 

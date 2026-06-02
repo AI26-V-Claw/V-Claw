@@ -9,7 +9,7 @@ type ConfidenceConfig struct {
 	CompositeActionMin float64 // COMPOSITE_ACTION: >= 0.85
 
 	// When confidence falls in this range, show multiple-choice clarification
-	AmbiguousLow  float64 // 0.50
+	AmbiguousLow  float64 // 0.60
 	AmbiguousHigh float64 // 0.85
 }
 
@@ -19,7 +19,7 @@ var DefaultConfig = ConfidenceConfig{
 	ReadInfoMin:        0.70,
 	DangerousActionMin: 0.90,
 	CompositeActionMin: 0.85,
-	AmbiguousLow:       0.50,
+	AmbiguousLow:       0.60,
 	AmbiguousHigh:      0.85,
 }
 
@@ -35,7 +35,7 @@ func (c *ConfidenceConfig) MinConfidenceFor(t IntentType) float64 {
 	case TypeComposite:
 		return c.CompositeActionMin
 	default:
-		return 0.50
+		return c.AmbiguousLow
 	}
 }
 

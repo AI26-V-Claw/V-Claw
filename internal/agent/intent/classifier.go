@@ -363,7 +363,7 @@ func extractToolCalls(input string, t IntentType) []ToolCallInfo {
 func extractReadToolCalls(lower, original string) []ToolCallInfo {
 	if containsAny(lower, "file", "đọc file", "mở file", "read file", "xem nội dung", "readme") {
 		return []ToolCallInfo{{
-			Name: "read_file", Category: "SAFE_READ",
+			Name: "system.readFile", Category: "SAFE_READ",
 			Parameters: extractPathParam(original), Timeout: 30,
 		}}
 	}
@@ -381,13 +381,13 @@ func extractReadToolCalls(lower, original string) []ToolCallInfo {
 	}
 	if containsAny(lower, "list", "danh sách", "liệt kê", "thư mục") {
 		return []ToolCallInfo{{
-			Name: "list_directory", Category: "SAFE_READ",
+			Name: "system.listDirectory", Category: "SAFE_READ",
 			Parameters: extractPathParam(original), Timeout: 30,
 		}}
 	}
 	if containsAny(lower, "tìm", "find", "search", "tra cứu", "thời tiết") {
 		return []ToolCallInfo{{
-			Name: "web_search", Category: "SAFE_READ",
+			Name: "web.search", Category: "SAFE_READ",
 			Parameters: map[string]interface{}{"query": original}, Timeout: 45,
 		}}
 	}
@@ -397,25 +397,25 @@ func extractReadToolCalls(lower, original string) []ToolCallInfo {
 func extractDangerousToolCalls(lower, original string) []ToolCallInfo {
 	if containsAny(lower, "xóa", "delete", "remove") {
 		return []ToolCallInfo{{
-			Name: "delete_file", Category: "DANGEROUS_WRITE",
+			Name: "system.deleteFile", Category: "DANGEROUS_WRITE",
 			Parameters: extractPathParam(original), Timeout: 60,
 		}}
 	}
 	if containsAny(lower, "gửi email", "gửi mail", "send email", "gửi cho", "gửi tài liệu") {
 		return []ToolCallInfo{{
-			Name: "send_email", Category: "COMMUNICATION",
+			Name: "gmail.sendEmail", Category: "COMMUNICATION",
 			Parameters: extractEmailParams(original), Timeout: 60,
 		}}
 	}
 	if containsAny(lower, "chạy", "run", "exec") {
 		return []ToolCallInfo{{
-			Name: "exec", Category: "EXECUTION",
+			Name: "sandbox.runShell", Category: "EXECUTION",
 			Parameters: map[string]interface{}{"command": original}, Timeout: 120,
 		}}
 	}
 	if containsAny(lower, "sửa", "edit", "modify") {
 		return []ToolCallInfo{{
-			Name: "write_file", Category: "DANGEROUS_WRITE",
+			Name: "system.writeFile", Category: "DANGEROUS_WRITE",
 			Parameters: extractPathParam(original), Timeout: 60,
 		}}
 	}
@@ -427,7 +427,7 @@ func extractDangerousToolCalls(lower, original string) []ToolCallInfo {
 	}
 	if containsAny(lower, "tạo file", "create file", "write file", "write ") {
 		return []ToolCallInfo{{
-			Name: "write_file", Category: "DANGEROUS_WRITE",
+			Name: "system.writeFile", Category: "DANGEROUS_WRITE",
 			Parameters: extractPathParam(original), Timeout: 60,
 		}}
 	}

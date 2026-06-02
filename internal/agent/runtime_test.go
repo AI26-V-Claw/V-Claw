@@ -51,6 +51,24 @@ func (p *fakeProvider) Chat(_ context.Context, request providers.ChatRequest) (p
 	return response, nil
 }
 
+func (p *fakeProvider) Generate(ctx context.Context, req *providers.GenerateRequest) (*providers.GenerateResponse, error) {
+	resp, err := p.Chat(ctx, providers.ChatRequest{
+		Model: req.Model,
+		Messages: []providers.Message{
+			{Role: providers.MessageRoleSystem, Content: req.SystemPrompt},
+			{Role: providers.MessageRoleUser, Content: req.UserPrompt},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &providers.GenerateResponse{Text: resp.Message.Content, Model: req.Model}, nil
+}
+
+func (p *fakeProvider) Name() string { return "fake" }
+
+func (p *fakeProvider) Close() error { return nil }
+
 func runtimeTestMessage() contracts.UserMessage {
 	return contracts.UserMessage{
 		RequestID: "req_001",

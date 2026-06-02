@@ -3,6 +3,7 @@ package gemini
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
@@ -35,6 +36,44 @@ func NewClient(ctx context.Context, cfg *providers.Config) (*Client, error) {
 	return &Client{
 		client: client,
 		config: cfg,
+	}, nil
+}
+
+func (c *Client) Chat(ctx context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
+	// Minimal Chat implementation for compatibility with providers.Provider.
+	// Tool calling is not implemented for Gemini in this repo yet.
+	if len(request.Tools) > 0 {
+		return providers.ChatResponse{}, fmt.Errorf("gemini: tools are not supported in Chat yet")
+	}
+
+	modelName := strings.TrimSpace(request.Model)
+	if modelName == "" {
+		modelName = c.config.Model
+	}
+
+	lines := make([]string, 0, len(request.Messages))
+	for _, m := range request.Messages {
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s", m.Role, m.Content))
+	}
+
+	resp, err := c.Generate(ctx, &providers.GenerateRequest{
+		SystemPrompt: "",
+		UserPrompt:   strings.Join(lines, "\n"),
+		Model:        modelName,
+		Timeout:      c.config.Timeout,
+	})
+	if err != nil {
+		return providers.ChatResponse{}, err
+	}
+
+	return providers.ChatResponse{
+		Message: providers.Message{
+			Role:    providers.MessageRoleAssistant,
+			Content: resp.Text,
+		},
 	}, nil
 }
 

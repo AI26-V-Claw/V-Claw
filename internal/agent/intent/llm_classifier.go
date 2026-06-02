@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"vclaw/internal/providers"
@@ -68,22 +69,40 @@ Trả về JSON theo đúng định dạng đã chỉ định.`, userInput)
 
 // loadSystemPrompt loads the system prompt from configs/SOUL.md
 func loadSystemPrompt() (string, error) {
-	data, err := os.ReadFile("configs/SOUL.md")
-	if err != nil {
-		return "", fmt.Errorf("failed to read SOUL.md: %w", err)
+	// Do not hard-code a single working-directory dependent path.
+	// Allow injecting prompt path via env, otherwise try common locations.
+	candidates := []string{}
+	if fromEnv := strings.TrimSpace(os.Getenv("VCLAW_SOUL_MD_PATH")); fromEnv != "" {
+		candidates = append(candidates, fromEnv)
+	}
+	candidates = append(candidates, filepath.Join("configs", "SOUL.md"))
+	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "configs", "SOUL.md"))
 	}
 
-	// Extract the relevant sections for intent classification
-	content := string(data)
-
-	// Find the section starting from "LUẬT SINH TỒN"
-	startIdx := strings.Index(content, "## 🔴 LUẬT SINH TỒN")
-	if startIdx == -1 {
-		return "", fmt.Errorf("SOUL.md missing required section: LUẬT SINH TỒN")
+	var lastErr error
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		content := strings.TrimSpace(string(data))
+		if content == "" {
+			lastErr = fmt.Errorf("SOUL.md at %q is empty", path)
+			continue
+		}
+		// Prefer returning from "LUẬT SINH TỒN" section if present, but do not depend on emoji.
+		if idx := strings.Index(content, "LUẬT SINH TỒN"); idx >= 0 {
+			return strings.TrimSpace(content[idx:]), nil
+		}
+		return content, nil
 	}
 
-	// Return everything from that point onwards
-	return content[startIdx:], nil
+	if lastErr == nil {
+		lastErr = fmt.Errorf("SOUL.md not found in candidate paths")
+	}
+	return "", fmt.Errorf("failed to load SOUL.md: %w", lastErr)
 }
 
 // ClassifyWithMemoryIsolation classifies intent with memory isolation for dangerous actions.
