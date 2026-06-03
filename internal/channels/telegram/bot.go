@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/contracts"
 )
 
 const longPollTimeout = 30
@@ -31,9 +32,9 @@ type Bot struct {
 }
 
 type messageHandler interface {
-	HandleMessage(ctx context.Context, msg agent.InboundMessage) (agent.OutboundMessage, error)
-	FinalizeAudit(msg agent.InboundMessage, err error)
-	RecordIgnored(msg agent.InboundMessage, actionTaken string)
+	HandleMessage(ctx context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error)
+	FinalizeAudit(msg contracts.UserMessage, err error)
+	RecordIgnored(msg contracts.UserMessage, actionTaken string)
 }
 
 func New(token string, allowedUserID int64, dataDir string, handler messageHandler, logger *slog.Logger) *Bot {
@@ -105,23 +106,18 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	if update.Message == nil {
 		return true, nil
 	}
-	inbound := agent.InboundMessage{
+	inbound := contracts.UserMessage{
 		RequestID: fmt.Sprintf("telegram_update_%d", update.UpdateID),
-		SessionID: "",
+		SessionID: fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID),
 		Channel:   "telegram",
-		UpdateID:  int64(update.UpdateID),
-		ChatID:    update.Message.Chat.ID,
 		Text:      update.Message.Text,
-		Source:    "telegram",
+		Locale:    "",
 		Timestamp: time.Now().UTC(),
 		Metadata: map[string]any{
 			"telegramUpdateId": update.UpdateID,
 			"telegramChatId":   update.Message.Chat.ID,
 			"source":           "telegram",
 		},
-	}
-	if update.Message.Chat.ID != 0 {
-		inbound.SessionID = fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID)
 	}
 
 	if strings.TrimSpace(update.Message.Text) == "" {
@@ -165,13 +161,13 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		return true, nil
 	}
 
-	text := telegramTextFromOutbound(outbound)
+	text := telegramTextFromResponse(outbound)
 	if strings.TrimSpace(text) == "" {
 		err := fmt.Errorf("empty outbound message")
 		b.handler.FinalizeAudit(inbound, err)
 		return false, err
 	}
-	if strings.EqualFold(outbound.Status, "failed") {
+	if strings.EqualFold(string(outbound.Status), "failed") {
 		b.logger.Error("agent response error", "request_id", outbound.RequestID, "session_id", outbound.SessionID, "status", outbound.Status, "message", outbound.Message)
 	}
 
@@ -389,21 +385,28 @@ func telegramProgressText(event agent.ProgressEvent) string {
 	}
 }
 
-func telegramTextFromOutbound(outbound agent.OutboundMessage) string {
-	if strings.EqualFold(outbound.Status, "failed") {
+func telegramTextFromResponse(response contracts.AgentResponse) string {
+	if strings.EqualFold(string(response.Status), "failed") {
 		return telegramGenericErrorText()
 	}
-	if strings.TrimSpace(outbound.Text) != "" {
-		return outbound.Text
+	if strings.TrimSpace(response.Message) != "" {
+		return response.Message
 	}
-	if strings.TrimSpace(outbound.Message) != "" {
-		return outbound.Message
+	if response.ApprovalRequest != nil && strings.TrimSpace(response.ApprovalRequest.Summary) != "" {
+		return response.ApprovalRequest.Summary
 	}
-	switch outbound.Status {
-	case "approval_required":
+	switch response.Status {
+	case contracts.AgentStatusApprovalRequired:
 		return "Tôi cần bạn xác nhận trước khi thực hiện hành động này."
-	case "completed":
+	case contracts.AgentStatusCompleted:
 		return "Đã hoàn tất."
+	case contracts.AgentStatusNeedClarification:
+		if response.Data != nil {
+			if clarifyQuestion, ok := response.Data["clarifyQuestion"].(string); ok && strings.TrimSpace(clarifyQuestion) != "" {
+				return clarifyQuestion
+			}
+		}
+		return "Bạn muốn tôi làm gì cụ thể hơn?"
 	default:
 		return "Agent chưa có phản hồi."
 	}

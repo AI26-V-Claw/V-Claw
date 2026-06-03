@@ -7,11 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"vclaw/internal/agent"
-	"vclaw/internal/audit"
 	slackchannel "vclaw/internal/channels/slack"
 	"vclaw/internal/channels/telegram"
 	"vclaw/internal/config"
@@ -37,8 +35,6 @@ func New() (*App, error) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	memoryStore := memory.NewStore()
-	intentClassifier := intent.NewClassifier()
 	llmClient, err := providers.NewClient(providers.Config{
 		Provider: chooseLLMProvider(cfg),
 		APIKey:   chooseLLMAPIKey(cfg),
@@ -48,9 +44,13 @@ func New() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if llmClient == nil {
+		return nil, fmt.Errorf("LLM provider is required for intent classification")
+	}
 
-	auditLogger := audit.NewLogger(filepath.Join(cfg.LogDir, "audit.jsonl"))
-	orchestrator := agent.NewOrchestrator(memoryStore, intentClassifier, llmClient, auditLogger)
+	memoryStore := memory.NewStore()
+	intentClassifier := intent.NewClassifier(llmClient)
+	orchestrator := agent.NewOrchestrator(memoryStore, intentClassifier, llmClient)
 	runners := make([]channelRunner, 0, 2)
 	if cfg.TelegramEnabled {
 		runners = append(runners, telegram.New(cfg.TelegramBotToken, cfg.AllowedTelegramUserID, cfg.DataDir, orchestrator, logger))

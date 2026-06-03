@@ -4,26 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/contracts"
 )
 
 type fakeHandler struct {
 	calls        int
 	ignored      int
 	finalized    int
-	received     agent.InboundMessage
-	outbound     agent.OutboundMessage
+	received     contracts.UserMessage
+	outbound     contracts.AgentResponse
 	progress     []agent.ProgressEvent
 	handleErr    error
 	finalizedErr error
 }
 
-func (f *fakeHandler) HandleMessage(ctx context.Context, message agent.InboundMessage) (agent.OutboundMessage, error) {
+func (f *fakeHandler) HandleMessage(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
 	f.calls++
 	f.received = message
 	for _, event := range f.progress {
@@ -32,20 +33,20 @@ func (f *fakeHandler) HandleMessage(ctx context.Context, message agent.InboundMe
 	return f.outbound, f.handleErr
 }
 
-func (f *fakeHandler) FinalizeAudit(_ agent.InboundMessage, err error) {
+func (f *fakeHandler) FinalizeAudit(_ contracts.UserMessage, err error) {
 	f.finalized++
 	f.finalizedErr = err
 }
 
-func (f *fakeHandler) RecordIgnored(_ agent.InboundMessage, _ string) {
+func (f *fakeHandler) RecordIgnored(_ contracts.UserMessage, _ string) {
 	f.ignored++
 }
 
 func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	handler := &fakeHandler{
-		outbound: agent.OutboundMessage{
-			Status: "completed",
-			Text:   "hello from runtime",
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "hello from runtime",
 		},
 		progress: []agent.ProgressEvent{
 			{Stage: agent.ProgressStageThinking},
@@ -58,7 +59,7 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 		path    string
 		payload map[string]any
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	botTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		if !strings.HasSuffix(r.URL.Path, "/sendMessage") && !strings.HasSuffix(r.URL.Path, "/editMessageText") {
 			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
 		}
@@ -71,15 +72,13 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 			payload map[string]any
 		}{path: r.URL.Path, payload: payload})
 		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":42}}`))
-			return
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
 		}
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	}))
-	defer server.Close()
+		return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+	})
 
 	bot := New("token", 123, t.TempDir(), handler, nil)
-	bot.apiBase = server.URL
+	bot.client = &http.Client{Transport: botTransport}
 
 	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
 		UpdateID: 7,
@@ -131,6 +130,20 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	}
 }
 
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func jsonResponse(statusCode int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
 func TestProcessUpdateIgnoresUnauthorizedUser(t *testing.T) {
 	handler := &fakeHandler{}
 	bot := New("token", 123, t.TempDir(), handler, nil)
@@ -158,10 +171,9 @@ func TestProcessUpdateIgnoresUnauthorizedUser(t *testing.T) {
 }
 
 func TestTelegramTextHidesDetailedFailedErrors(t *testing.T) {
-	text := telegramTextFromOutbound(agent.OutboundMessage{
-		Status:  "failed",
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusFailed,
 		Message: "provider chat failed: openai chat failed: token leaked detail",
-		Text:    "provider chat failed: openai chat failed: token leaked detail",
 	})
 
 	if strings.Contains(text, "openai") || strings.Contains(text, "token leaked detail") {

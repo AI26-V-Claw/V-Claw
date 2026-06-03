@@ -1,62 +1,106 @@
 package intent
 
-import "testing"
+import (
+	"context"
+	"testing"
 
-func TestClassifierRules(t *testing.T) {
-	classifier := NewClassifier()
+	"vclaw/internal/providers"
+)
 
+type fakeChatClient struct {
+	reply       string
+	lastSystem  string
+	lastMessage string
+	calls       int
+}
+
+func (f *fakeChatClient) Complete(_ context.Context, system string, messages []providers.ChatMessage) (string, error) {
+	f.calls++
+	f.lastSystem = system
+	if len(messages) > 0 {
+		f.lastMessage = messages[len(messages)-1].Content
+	}
+	return f.reply, nil
+}
+
+func TestClassifierParsesLLMResponse(t *testing.T) {
 	cases := []struct {
-		name     string
-		input    string
-		intent   Intent
-		systemOp SystemOpType
+		name            string
+		reply           string
+		wantIntent      Intent
+		wantSystemOp    SystemOpType
+		wantClarifyText string
+		wantHistory     bool
 	}{
-		{name: "greeting", input: "xin chào", intent: IntentGreeting, systemOp: SystemOpNone},
-		{name: "greeting chao", input: "chào V-Claw", intent: IntentGreeting, systemOp: SystemOpNone},
-		{name: "greeting morning", input: "chào buổi sáng", intent: IntentGreeting, systemOp: SystemOpNone},
-		{name: "greeting hi token", input: "hi bot", intent: IntentGreeting, systemOp: SystemOpNone},
-		{name: "read info", input: "hôm nay tôi có lịch gì", intent: IntentReadInfo, systemOp: SystemOpNone},
-		{name: "read info not greeting", input: "xem lịch họp chiều nay", intent: IntentReadInfo, systemOp: SystemOpNone},
-		{name: "send", input: "gửi email cho Nam", intent: IntentSystemOp, systemOp: SystemOpSend},
-		{name: "write not greeting", input: "tạo ghi chú cuộc họp", intent: IntentSystemOp, systemOp: SystemOpWrite},
-		{name: "write not greeting 2", input: "ghi file báo cáo tổng kết", intent: IntentSystemOp, systemOp: SystemOpWrite},
-		{name: "ambiguous", input: "làm đi", intent: IntentAmbiguous, systemOp: SystemOpNone},
+		{
+			name:         "greeting",
+			reply:        `{"intent":"GREETING","system_op_type":"NONE","confidence":0.98,"clarify_question":"","is_history_query":false}`,
+			wantIntent:   IntentGreeting,
+			wantSystemOp: SystemOpNone,
+		},
+		{
+			name:         "read info",
+			reply:        `{"intent":"READ_INFO","system_op_type":"NONE","confidence":0.91,"is_history_query":true}`,
+			wantIntent:   IntentReadInfo,
+			wantSystemOp: SystemOpNone,
+			wantHistory:  true,
+		},
+		{
+			name:         "system op",
+			reply:        "```json\n{\"intent\":\"SYSTEM_OP\",\"system_op_type\":\"SEND\",\"confidence\":0.84,\"is_history_query\":false}\n```",
+			wantIntent:   IntentSystemOp,
+			wantSystemOp: SystemOpSend,
+		},
+		{
+			name:            "ambiguous",
+			reply:           `{"intent":"AMBIGUOUS","system_op_type":"NONE","confidence":0.31,"clarify_question":"Bạn muốn tôi làm gì cụ thể hơn?","is_history_query":false}`,
+			wantIntent:      IntentAmbiguous,
+			wantSystemOp:    SystemOpNone,
+			wantClarifyText: "Bạn muốn tôi làm gì cụ thể hơn?",
+		},
 	}
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			result := classifier.Classify(testCase.input)
-			if result.Intent != testCase.intent {
-				t.Fatalf("unexpected intent: got %s want %s", result.Intent, testCase.intent)
+			client := &fakeChatClient{reply: testCase.reply}
+			classifier := NewClassifier(client)
+
+			result := classifier.Classify("đầu vào bất kỳ")
+
+			if result.Intent != testCase.wantIntent {
+				t.Fatalf("unexpected intent: got %s want %s", result.Intent, testCase.wantIntent)
 			}
-			if result.SystemOpType != testCase.systemOp {
-				t.Fatalf("unexpected system op: got %s want %s", result.SystemOpType, testCase.systemOp)
+			if result.SystemOpType != testCase.wantSystemOp {
+				t.Fatalf("unexpected system op: got %s want %s", result.SystemOpType, testCase.wantSystemOp)
 			}
-			if testCase.intent == IntentAmbiguous && result.ClarifyQuestion == "" {
-				t.Fatal("expected clarify question for ambiguous intent")
+			if testCase.wantClarifyText != "" && result.ClarifyQuestion != testCase.wantClarifyText {
+				t.Fatalf("unexpected clarify question: got %q want %q", result.ClarifyQuestion, testCase.wantClarifyText)
+			}
+			if result.IsHistoryQuery != testCase.wantHistory {
+				t.Fatalf("unexpected history flag: got %v want %v", result.IsHistoryQuery, testCase.wantHistory)
+			}
+			if client.calls != 1 {
+				t.Fatalf("expected one llm call, got %d", client.calls)
+			}
+			if client.lastSystem == "" {
+				t.Fatal("expected classifier to send a system prompt")
+			}
+			if client.lastMessage != "đầu vào bất kỳ" {
+				t.Fatalf("unexpected last user message: %q", client.lastMessage)
 			}
 		})
 	}
 }
 
-func TestClassifierDoesNotTreatEmbeddedHiAsGreeting(t *testing.T) {
-	classifier := NewClassifier()
+func TestClassifierFallsBackToAmbiguousOnBadResponse(t *testing.T) {
+	classifier := NewClassifier(&fakeChatClient{reply: "not json"})
 
-	cases := []struct {
-		name  string
-		input string
-	}{
-		{name: "chiều", input: "xem lịch họp chiều nay"},
-		{name: "ghi note", input: "tạo ghi chú cuộc họp"},
-		{name: "ghi file", input: "ghi file báo cáo tổng kết"},
+	result := classifier.Classify("xem lịch")
+
+	if result.Intent != IntentAmbiguous {
+		t.Fatalf("expected ambiguous intent, got %s", result.Intent)
 	}
-
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			result := classifier.Classify(testCase.input)
-			if result.Intent == IntentGreeting {
-				t.Fatalf("unexpected greeting classification for %q", testCase.input)
-			}
-		})
+	if result.ClarifyQuestion == "" {
+		t.Fatal("expected clarify question on fallback")
 	}
 }

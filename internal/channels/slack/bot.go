@@ -11,28 +11,34 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 
-	"vclaw/internal/agent"
+	"vclaw/internal/contracts"
 )
 
 type Config struct {
 	BotToken          string
 	AppToken          string
-	AllowedChannelIDs  []string
-	AllowedUserIDs     []string
+	AllowedChannelIDs []string
+	AllowedUserIDs    []string
 }
 
 type Bot struct {
-	config         Config
-	orchestrator    *agent.Orchestrator
-	logger         *slog.Logger
-	api            *slack.Client
-	socketClient   *socketmode.Client
-	botUserID      string
+	config          Config
+	orchestrator    messageHandler
+	logger          *slog.Logger
+	api             *slack.Client
+	socketClient    *socketmode.Client
+	botUserID       string
 	allowedChannels map[string]struct{}
 	allowedUsers    map[string]struct{}
 }
 
-func New(cfg Config, orchestrator *agent.Orchestrator, logger *slog.Logger) (*Bot, error) {
+type messageHandler interface {
+	HandleMessage(ctx context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error)
+	FinalizeAudit(msg contracts.UserMessage, err error)
+	RecordIgnored(msg contracts.UserMessage, actionTaken string)
+}
+
+func New(cfg Config, orchestrator messageHandler, logger *slog.Logger) (*Bot, error) {
 	if strings.TrimSpace(cfg.BotToken) == "" {
 		return nil, fmt.Errorf("slack bot token is required")
 	}
@@ -44,11 +50,11 @@ func New(cfg Config, orchestrator *agent.Orchestrator, logger *slog.Logger) (*Bo
 	socketClient := socketmode.New(api)
 
 	bot := &Bot{
-		config:         cfg,
+		config:          cfg,
 		orchestrator:    orchestrator,
-		logger:         logger,
-		api:            api,
-		socketClient:   socketClient,
+		logger:          logger,
+		api:             api,
+		socketClient:    socketClient,
 		allowedChannels: makeAllowSet(cfg.AllowedChannelIDs),
 		allowedUsers:    makeAllowSet(cfg.AllowedUserIDs),
 	}
@@ -137,14 +143,14 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 		return err
 	}
 
-	if strings.TrimSpace(outbound.Text) == "" {
+	if strings.TrimSpace(outbound.Message) == "" {
 		return fmt.Errorf("empty outbound message")
 	}
 	replyThreadTimestamp := threadTimestamp
 	if strings.TrimSpace(replyThreadTimestamp) == "" && channelType != "im" {
 		replyThreadTimestamp = timestamp
 	}
-	if err := b.sendMessage(ctx, channelID, outbound.Text, replyThreadTimestamp); err != nil {
+	if err := b.sendMessage(ctx, channelID, outbound.Message, replyThreadTimestamp); err != nil {
 		b.orchestrator.FinalizeAudit(inbound, err)
 		return err
 	}
@@ -179,7 +185,7 @@ func (b *Bot) isAllowed(channelID, userID string) bool {
 	return true
 }
 
-func (b *Bot) inboundMessage(channelID, userID, text, timestamp, threadTimestamp, channelType string) agent.InboundMessage {
+func (b *Bot) inboundMessage(channelID, userID, text, timestamp, threadTimestamp, channelType string) contracts.UserMessage {
 	sessionID := fmt.Sprintf("slack_channel_%s", channelID)
 	if strings.TrimSpace(threadTimestamp) != "" {
 		sessionID = fmt.Sprintf("slack_thread_%s_%s", channelID, threadTimestamp)
@@ -193,14 +199,13 @@ func (b *Bot) inboundMessage(channelID, userID, text, timestamp, threadTimestamp
 		"source":             "slack",
 	}
 
-	return agent.InboundMessage{
+	return contracts.UserMessage{
 		RequestID: fmt.Sprintf("slack_%s_%s", channelID, normalizeSlackTimestamp(timestamp)),
 		SessionID: sessionID,
 		Channel:   "slack",
 		Text:      strings.TrimSpace(text),
 		Locale:    "",
 		Metadata:  meta,
-		Source:    "slack",
 		Timestamp: time.Now().UTC(),
 	}
 }
