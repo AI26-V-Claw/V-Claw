@@ -185,6 +185,50 @@ func sleepBeforeOpenAIRetry(ctx context.Context, attempt int) error {
 	}
 }
 
+func (c *OpenAIClient) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	if c == nil {
+		return nil, fmt.Errorf("openai client is nil")
+	}
+	start := time.Now()
+
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = c.model
+	}
+
+	messages := make([]Message, 0, 2)
+	if strings.TrimSpace(req.SystemPrompt) != "" {
+		messages = append(messages, Message{Role: MessageRoleSystem, Content: req.SystemPrompt})
+	}
+	if strings.TrimSpace(req.UserPrompt) != "" {
+		messages = append(messages, Message{Role: MessageRoleUser, Content: req.UserPrompt})
+	}
+
+	resp, err := c.Chat(ctx, ChatRequest{
+		Model:    model,
+		Messages: messages,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &GenerateResponse{
+		Text:         resp.Message.Content,
+		FinishReason: "stop",
+		Latency:      time.Since(start),
+		Model:        model,
+	}, nil
+}
+
+func (c *OpenAIClient) Name() string {
+	return "openai"
+}
+
+func (c *OpenAIClient) Close() error {
+	// OpenAI client is stateless; no resources to release.
+	return nil
+}
+
 type openAIChatRequest struct {
 	Model      string          `json:"model"`
 	Messages   []openAIMessage `json:"messages"`

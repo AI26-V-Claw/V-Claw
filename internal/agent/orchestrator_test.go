@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"vclaw/internal/agent/intent"
 	"vclaw/internal/audit"
-	"vclaw/internal/intent"
 	"vclaw/internal/memory"
 	"vclaw/internal/providers"
 )
@@ -16,8 +16,8 @@ func TestHandleMessageReturnsHistorySummary(t *testing.T) {
 	dir := t.TempDir()
 	orchestrator := NewOrchestrator(memory.NewStore(), intent.NewClassifier(), nil, audit.NewLogger(filepath.Join(dir, "audit.jsonl")))
 	sessionID := "telegram_chat_20"
-	orchestrator.memory.Append(sessionID, memory.RoleUser, "xin chào")
-	orchestrator.memory.Append(sessionID, memory.RoleAssistant, "Chào bạn, tôi là V-Claw.")
+	orchestrator.memory.Append(sessionID, memory.RoleUserCompat, "xin chào")
+	orchestrator.memory.Append(sessionID, memory.RoleAssistantCompat, "Chào bạn, tôi là V-Claw.")
 
 	outbound, err := orchestrator.HandleMessage(context.Background(), InboundMessage{
 		RequestID: "telegram_update_10",
@@ -56,8 +56,8 @@ func TestHandleMessageRecognizesHistoryVariants(t *testing.T) {
 			dir := t.TempDir()
 			orchestrator := NewOrchestrator(memory.NewStore(), intent.NewClassifier(), nil, audit.NewLogger(filepath.Join(dir, "audit.jsonl")))
 			sessionID := "telegram_chat_21"
-			orchestrator.memory.Append(sessionID, memory.RoleUser, "mình đã nhắc lịch họp")
-			orchestrator.memory.Append(sessionID, memory.RoleAssistant, "Tôi đã ghi nhận lịch họp.")
+			orchestrator.memory.Append(sessionID, memory.RoleUserCompat, "mình đã nhắc lịch họp")
+			orchestrator.memory.Append(sessionID, memory.RoleAssistantCompat, "Tôi đã ghi nhận lịch họp.")
 
 			outbound, err := orchestrator.HandleMessage(context.Background(), InboundMessage{
 				RequestID: "telegram_update_11",
@@ -86,10 +86,10 @@ func TestHandleMessageFiltersPreviousRecallQueriesFromSummary(t *testing.T) {
 	dir := t.TempDir()
 	orchestrator := NewOrchestrator(memory.NewStore(), intent.NewClassifier(), nil, audit.NewLogger(filepath.Join(dir, "audit.jsonl")))
 	sessionID := "telegram_chat_23"
-	orchestrator.memory.Append(sessionID, memory.RoleUser, "xin chào")
-	orchestrator.memory.Append(sessionID, memory.RoleAssistant, "Chào bạn, tôi là V-Claw.")
-	orchestrator.memory.Append(sessionID, memory.RoleUser, "nãy tôi vừa nói gì")
-	orchestrator.memory.Append(sessionID, memory.RoleAssistant, "Đây là những gì bạn đã nói gần đây:\n1. Bạn: xin chào")
+	orchestrator.memory.Append(sessionID, memory.RoleUserCompat, "xin chào")
+	orchestrator.memory.Append(sessionID, memory.RoleAssistantCompat, "Chào bạn, tôi là V-Claw.")
+	orchestrator.memory.Append(sessionID, memory.RoleUserCompat, "nãy tôi vừa nói gì")
+	orchestrator.memory.Append(sessionID, memory.RoleAssistantCompat, "Đây là những gì bạn đã nói gần đây:\n1. Bạn: xin chào")
 
 	outbound, err := orchestrator.HandleMessage(context.Background(), InboundMessage{
 		RequestID: "telegram_update_13",
@@ -137,7 +137,7 @@ func TestHandleMessageReturnsEmptyHistoryMessage(t *testing.T) {
 
 type stubResponder struct {
 	reply string
-	calls  int
+	calls int
 }
 
 func (s *stubResponder) Complete(_ context.Context, _ string, _ []providers.ChatMessage) (string, error) {
@@ -232,8 +232,8 @@ func TestHandleMessageBlocksPromptInjection(t *testing.T) {
 func TestHandleMessageKeepsSessionsSeparate(t *testing.T) {
 	dir := t.TempDir()
 	orchestrator := NewOrchestrator(memory.NewStore(), intent.NewClassifier(), nil, audit.NewLogger(filepath.Join(dir, "audit.jsonl")))
-	orchestrator.memory.Append("telegram_chat_100", memory.RoleUser, "chỉ của chat 100")
-	orchestrator.memory.Append("telegram_chat_200", memory.RoleUser, "chỉ của chat 200")
+	orchestrator.memory.Append("telegram_chat_100", memory.RoleUserCompat, "chỉ của chat 100")
+	orchestrator.memory.Append("telegram_chat_200", memory.RoleUserCompat, "chỉ của chat 200")
 
 	outbound, err := orchestrator.HandleMessage(context.Background(), InboundMessage{
 		RequestID: "telegram_update_16",

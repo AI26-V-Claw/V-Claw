@@ -36,6 +36,7 @@ func (p ToolPolicy) DecideToolCall(toolCallID string, definition tools.ToolDefin
 		return contracts.RiskDecision{
 			ToolCallID: toolCallID,
 			ToolName:   definition.Name,
+			RiskLevel:  contracts.RiskLevelDestructive,
 			Decision:   contracts.RiskDecisionBlock,
 			Reason:     "tool not found",
 			CheckedAt:  checkedAt,
