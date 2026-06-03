@@ -67,6 +67,7 @@ const (
 	ErrorToolInputInvalid       = "TOOL_INPUT_INVALID"
 	ErrorProviderError          = "PROVIDER_ERROR"
 	ErrorProviderTimeout        = "PROVIDER_TIMEOUT"
+	ErrorProviderUnavailable    = "PROVIDER_UNAVAILABLE"
 	ErrorActionRequiresApproval = "ACTION_REQUIRES_APPROVAL"
 	ErrorActionBlockedByPolicy  = "ACTION_BLOCKED_BY_POLICY"
 	ErrorInternal               = "INTERNAL_ERROR"
