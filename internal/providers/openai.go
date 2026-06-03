@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 const (
 	DefaultOpenAIModel   = "gpt-4o"
 	defaultOpenAIBaseURL = "https://api.openai.com/v1"
+	openAIMaxAttempts    = 3
 )
 
 type OpenAIConfig struct {
@@ -94,6 +96,24 @@ func (c *OpenAIClient) Chat(ctx context.Context, request ChatRequest) (ChatRespo
 		return ChatResponse{}, fmt.Errorf("marshal openai request: %w", err)
 	}
 
+	var lastErr error
+	for attempt := 0; attempt < openAIMaxAttempts; attempt++ {
+		response, err := c.chatOnce(ctx, body, nameMap.contractName)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if !IsRetryableError(err) || attempt == openAIMaxAttempts-1 {
+			break
+		}
+		if err := sleepBeforeOpenAIRetry(ctx, attempt); err != nil {
+			return ChatResponse{}, err
+		}
+	}
+	return ChatResponse{}, lastErr
+}
+
+func (c *OpenAIClient) chatOnce(ctx context.Context, body []byte, contractName func(string) string) (ChatResponse, error) {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return ChatResponse{}, err
@@ -103,7 +123,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, request ChatRequest) (ChatRespo
 
 	httpResponse, err := c.httpClient.Do(httpRequest)
 	if err != nil {
-		return ChatResponse{}, err
+		return ChatResponse{}, retryableProviderError{err: err}
 	}
 	defer httpResponse.Body.Close()
 
@@ -116,13 +136,53 @@ func (c *OpenAIClient) Chat(ctx context.Context, request ChatRequest) (ChatRespo
 		if message == "" {
 			message = httpResponse.Status
 		}
-		return ChatResponse{}, fmt.Errorf("openai chat failed: %s", message)
+		err := fmt.Errorf("openai chat failed: %s", message)
+		if httpResponse.StatusCode == http.StatusTooManyRequests || httpResponse.StatusCode >= 500 {
+			return ChatResponse{}, retryableProviderError{err: err}
+		}
+		return ChatResponse{}, err
 	}
 	if len(wireResponse.Choices) == 0 {
 		return ChatResponse{}, fmt.Errorf("openai response contained no choices")
 	}
 
-	return ChatResponse{Message: providerMessageFromOpenAI(wireResponse.Choices[0].Message, nameMap.contractName)}, nil
+	return ChatResponse{Message: providerMessageFromOpenAI(wireResponse.Choices[0].Message, contractName)}, nil
+}
+
+type retryableProviderError struct {
+	err error
+}
+
+func NewRetryableError(err error) error {
+	return retryableProviderError{err: err}
+}
+
+func (e retryableProviderError) Error() string {
+	if e.err == nil {
+		return "retryable provider error"
+	}
+	return e.err.Error()
+}
+
+func (e retryableProviderError) Unwrap() error {
+	return e.err
+}
+
+func IsRetryableError(err error) bool {
+	var retryable retryableProviderError
+	return errors.As(err, &retryable)
+}
+
+func sleepBeforeOpenAIRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt+1) * 250 * time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *OpenAIClient) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
@@ -312,5 +372,9 @@ func openAISafeToolName(name string) string {
 	if len(name) > 64 {
 		name = name[:64]
 	}
-	return strings.Trim(name, "_")
+	name = strings.Trim(name, "_")
+	if name == "" {
+		return "tool"
+	}
+	return name
 }

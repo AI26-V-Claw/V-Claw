@@ -152,6 +152,52 @@ func TestRuntimeExecutesReadOnlyToolAndContinuesToFinalAnswer(t *testing.T) {
 	}
 }
 
+func TestRuntimeEmitsProgressForToolExecution(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call_time",
+				Name: "get_current_time",
+			}},
+		}},
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "done"}},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(tools.NewCurrentTimeToolWithClock(fixedTestTime)); err != nil {
+		t.Fatalf("register current time: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{Provider: provider, Registry: registry})
+
+	events := []ProgressEvent{}
+	ctx := WithProgressSink(context.Background(), func(_ context.Context, event ProgressEvent) {
+		events = append(events, event)
+	})
+	response, err := runtime.Run(ctx, runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed, got %#v", response)
+	}
+
+	if !hasProgressEvent(events, ProgressStageToolStarted, "get_current_time") {
+		t.Fatalf("missing tool started progress event: %#v", events)
+	}
+	if !hasProgressEvent(events, ProgressStageToolCompleted, "get_current_time") {
+		t.Fatalf("missing tool completed progress event: %#v", events)
+	}
+}
+
+func hasProgressEvent(events []ProgressEvent, stage ProgressStage, toolName string) bool {
+	for _, event := range events {
+		if event.Stage == stage && event.ToolName == toolName {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRuntimeReturnsApprovalRequiredForSideEffectTool(t *testing.T) {
 	executions := 0
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
@@ -192,6 +238,96 @@ func TestRuntimeReturnsApprovalRequiredForSideEffectTool(t *testing.T) {
 	}
 }
 
+func TestRuntimeStoresToolObservationForApprovalRequiredTool(t *testing.T) {
+	executions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_write",
+				Name:      "danger.count",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	store := sessions.NewInMemoryStore()
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		SessionStore: store,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", response)
+	}
+
+	transcript, err := store.LoadTranscript(context.Background(), runtimeTestMessage().SessionID)
+	if err != nil {
+		t.Fatalf("load transcript: %v", err)
+	}
+	if len(transcript) != 3 {
+		t.Fatalf("expected user, assistant tool call, policy tool observation; got %#v", transcript)
+	}
+	if transcript[2].Role != providers.MessageRoleTool || transcript[2].ToolCallID != "call_write" {
+		t.Fatalf("expected tool observation for approval-required call, got %#v", transcript[2])
+	}
+}
+
+func TestRuntimeStoresSkippedObservationsForRemainingToolCalls(t *testing.T) {
+	executions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{
+				{ID: "call_write", Name: "danger.count"},
+				{ID: "call_time", Name: "get_current_time"},
+			},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	if err := registry.Register(tools.NewCurrentTimeToolWithClock(fixedTestTime)); err != nil {
+		t.Fatalf("register time tool: %v", err)
+	}
+	store := sessions.NewInMemoryStore()
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		SessionStore: store,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", response)
+	}
+
+	transcript, err := store.LoadTranscript(context.Background(), runtimeTestMessage().SessionID)
+	if err != nil {
+		t.Fatalf("load transcript: %v", err)
+	}
+	if len(transcript) != 4 {
+		t.Fatalf("expected user, assistant, and two tool observations; got %#v", transcript)
+	}
+	if transcript[2].ToolCallID != "call_write" || transcript[3].ToolCallID != "call_time" {
+		t.Fatalf("missing tool observations for all tool calls: %#v", transcript)
+	}
+}
+
 func TestRuntimeProviderErrorReturnsFailedErrorShape(t *testing.T) {
 	provider := &fakeProvider{err: fmt.Errorf("network down")}
 	runtime := NewRuntime(RuntimeConfig{
@@ -208,6 +344,25 @@ func TestRuntimeProviderErrorReturnsFailedErrorShape(t *testing.T) {
 	}
 	if response.Error == nil || response.Error.Code != contracts.ErrorProviderError {
 		t.Fatalf("expected provider error shape, got %#v", response.Error)
+	}
+}
+
+func TestRuntimeRetryableProviderErrorReturnsUnavailableShape(t *testing.T) {
+	provider := &fakeProvider{err: providers.NewRetryableError(fmt.Errorf("connection reset"))}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: tools.NewToolRegistry(),
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("unexpected runtime error: %v", err)
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected failed, got %#v", response)
+	}
+	if response.Error == nil || response.Error.Code != contracts.ErrorProviderUnavailable || !response.Error.Retryable {
+		t.Fatalf("expected retryable provider unavailable error shape, got %#v", response.Error)
 	}
 }
 

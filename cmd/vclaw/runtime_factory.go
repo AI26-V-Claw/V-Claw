@@ -13,12 +13,14 @@ import (
 	gchatconnector "vclaw/internal/connectors/google/chat"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
+	gpeopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 	caltools "vclaw/internal/tools/office/calendar"
 	chattools "vclaw/internal/tools/office/chat"
 	gmailtools "vclaw/internal/tools/office/gmail"
+	peopletools "vclaw/internal/tools/office/people"
 	sandboxtools "vclaw/internal/tools/system/sandbox"
 )
 
@@ -129,6 +131,11 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, opti
 
 	chatService := chattools.NewService(gchatconnector.NewClient(httpClient))
 	if err := chattools.RegisterTools(registry, chatService); err != nil {
+		return err
+	}
+
+	peopleService := peopletools.NewService(gpeopleconnector.NewClient(httpClient))
+	if err := peopletools.RegisterTools(registry, peopleService); err != nil {
 		return err
 	}
 	return nil
