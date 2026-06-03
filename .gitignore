@@ -23,4 +23,8 @@ logs/audit.jsonl
 AGENTS.md
 CLAUDE.md
 v_claw_architect_claude.pdf
-./vclaw
+vclaw
+tests/safety/
+examples/
+configs/SOUL.md
+configs/intent_classifier_prompt.md
