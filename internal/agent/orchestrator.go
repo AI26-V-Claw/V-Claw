@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
+	"vclaw/internal/agent/intent"
 	"vclaw/internal/audit"
-	"vclaw/internal/intent"
 	"vclaw/internal/memory"
 	"vclaw/internal/providers"
 )
@@ -40,9 +40,10 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg InboundMessage) (O
 	channel := msg.EffectiveChannel()
 
 	if isHistoryQuery(text) {
-		reply := formatHistory(o.memory.GetHistory(sessionID))
-		o.memory.Append(sessionID, memory.RoleUser, text)
-		o.memory.Append(sessionID, memory.RoleAssistant, reply)
+		history := o.memory.GetHistory(sessionID)
+		reply := formatStoreHistory(history)
+		o.memory.Append(sessionID, memory.RoleUserCompat, text)
+		o.memory.Append(sessionID, memory.RoleAssistantCompat, reply)
 		o.mu.Lock()
 		o.pending[msg.UpdateID] = audit.Entry{
 			RequestID:    msg.EffectiveRequestID(),
@@ -64,8 +65,8 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg InboundMessage) (O
 
 	if isPromptInjection(text) {
 		reply := "Mình không thể làm theo chỉ dẫn nằm trong tin nhắn. Bạn hãy nói rõ yêu cầu của bạn nhé."
-		o.memory.Append(sessionID, memory.RoleUser, text)
-		o.memory.Append(sessionID, memory.RoleAssistant, reply)
+		o.memory.Append(sessionID, memory.RoleUserCompat, text)
+		o.memory.Append(sessionID, memory.RoleAssistantCompat, reply)
 		o.mu.Lock()
 		o.pending[msg.UpdateID] = audit.Entry{
 			RequestID:    msg.EffectiveRequestID(),
@@ -88,8 +89,8 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg InboundMessage) (O
 	classification := o.classifier.Classify(text)
 	reply, actionTaken := o.replyFor(ctx, sessionID, text, classification)
 
-	o.memory.Append(sessionID, memory.RoleUser, text)
-	o.memory.Append(sessionID, memory.RoleAssistant, reply)
+	o.memory.Append(sessionID, memory.RoleUserCompat, text)
+	o.memory.Append(sessionID, memory.RoleAssistantCompat, reply)
 
 	o.mu.Lock()
 	o.pending[msg.UpdateID] = audit.Entry{
@@ -157,7 +158,7 @@ func (o *Orchestrator) RecordIgnored(msg InboundMessage, actionTaken string) {
 
 func (o *Orchestrator) replyFor(ctx context.Context, sessionID, text string, classification intent.IntentResult) (string, string) {
 	if isHistoryQuery(text) {
-		return formatHistory(o.memory.GetHistory(sessionID)), "memory_summary"
+		return formatStoreHistory(o.memory.GetHistory(sessionID)), "memory_summary"
 	}
 
 	if o.responder != nil && classification.Intent != intent.IntentSystemOp {
@@ -207,7 +208,7 @@ func (o *Orchestrator) generateLLMReply(ctx context.Context, sessionID, text str
 	messages := make([]providers.ChatMessage, 0, len(history)+1)
 	for _, message := range history {
 		switch message.Role {
-		case memory.RoleAssistant:
+		case memory.RoleAssistantCompat:
 			messages = append(messages, providers.ChatMessage{Role: "assistant", Content: message.Text})
 		default:
 			messages = append(messages, providers.ChatMessage{Role: "user", Content: message.Text})
@@ -233,7 +234,14 @@ func isPromptInjection(text string) bool {
 	lowered := strings.ToLower(strings.TrimSpace(text))
 	phrases := []string{
 		"ignore previous instructions",
+		"disregard previous instructions",
+		"you are now",
+		"forget your instructions",
+		"forget previous instructions",
 		"bỏ qua chỉ dẫn",
+		"bỏ qua hướng dẫn trước",
+		"quên hướng dẫn trước",
+		"bây giờ bạn là",
 		"bỏ qua mọi chỉ dẫn",
 		"system prompt",
 		"developer message",
@@ -286,7 +294,31 @@ func formatHistory(history []memory.Message) string {
 
 	userMessages := make([]memory.Message, 0, len(history))
 	for _, message := range history {
-		if message.Role == memory.RoleUser && !isHistoryQuery(message.Text) {
+		if message.Role == memory.RoleUser && !isHistoryQuery(message.Content) {
+			userMessages = append(userMessages, message)
+		}
+	}
+
+	if len(userMessages) == 0 {
+		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
+	}
+
+	var builder strings.Builder
+	builder.WriteString("Đây là những gì bạn đã nói gần đây:\n")
+	for index, message := range userMessages {
+		builder.WriteString(fmt.Sprintf("%d. Bạn: %s\n", index+1, message.Content))
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func formatStoreHistory(history []memory.StoreMessage) string {
+	if len(history) == 0 {
+		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
+	}
+
+	userMessages := make([]memory.StoreMessage, 0, len(history))
+	for _, message := range history {
+		if message.Role == memory.RoleUserCompat && !isHistoryQuery(message.Text) {
 			userMessages = append(userMessages, message)
 		}
 	}

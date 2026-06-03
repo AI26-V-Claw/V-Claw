@@ -10,10 +10,15 @@ configs/google/token.json
 bin/
 cmd/vclaw-dev/
 .appdata/
+
+# Evaluation results (generated artifacts)
+evaluation_results.json
+*_results.json
+
+# Logging and temporary files
 data/telegram_offset.txt
 logs/audit.jsonl
 .antigravity/
-.appdata/
 .gotmp/
 .localappdata/
 AGENTS.md
