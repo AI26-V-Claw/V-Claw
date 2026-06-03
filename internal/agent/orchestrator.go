@@ -35,6 +35,7 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg contracts.UserMess
 	if sessionID == "" {
 		sessionID = "default"
 	}
+
 	classification := o.classifier.Classify(text)
 	if o.memory != nil && classification.IsHistoryQuery {
 		reply := formatHistory(o.memory.GetHistory(sessionID))
@@ -55,8 +56,8 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg contracts.UserMess
 	reply, actionTaken := o.replyFor(ctx, text, classification)
 
 	if o.memory != nil {
-		o.memory.Append(sessionID, memory.RoleUser, text)
-		o.memory.Append(sessionID, memory.RoleAssistant, reply)
+		o.memory.Append(sessionID, memory.RoleUserCompat, text)
+		o.memory.Append(sessionID, memory.RoleAssistantCompat, reply)
 	}
 
 	return contracts.AgentResponse{
@@ -147,14 +148,15 @@ func normalizeLLMReply(reply string) string {
 	}
 	return trimmed
 }
-func formatHistory(history []memory.Message) string {
+
+func formatHistory(history []memory.StoreMessage) string {
 	if len(history) == 0 {
 		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
 	}
 
 	userMessages := make([]string, 0, len(history))
 	for _, message := range history {
-		if message.Role == memory.RoleUser {
+		if message.Role == memory.RoleUserCompat {
 			userMessages = append(userMessages, message.Text)
 		}
 	}

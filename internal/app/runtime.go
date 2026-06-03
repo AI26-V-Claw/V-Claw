@@ -12,14 +12,12 @@ import (
 	gchat "vclaw/internal/connectors/google/chat"
 	ggmail "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
-	gpeople "vclaw/internal/connectors/google/people"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
 	gmailtool "vclaw/internal/tools/office/gmail"
-	peopletool "vclaw/internal/tools/office/people"
 )
 
 type AgentRuntimeConfig struct {
@@ -107,11 +105,6 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	gmailService := gmailtool.NewService(ggmail.NewClient(httpClient))
 	if err := gmailtool.RegisterTools(registry, gmailService); err != nil {
 		return nil, fmt.Errorf("register gmail tools: %w", err)
-	}
-
-	peopleService := peopletool.NewService(gpeople.NewClient(httpClient))
-	if err := peopletool.RegisterTools(registry, peopleService); err != nil {
-		return nil, fmt.Errorf("register people tools: %w", err)
 	}
 
 	return registry, nil

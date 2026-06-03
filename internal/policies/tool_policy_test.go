@@ -80,4 +80,7 @@ func TestToolPolicyDecideToolCallBlocksDisabledOrUnknownTool(t *testing.T) {
 	if unknown.Decision != contracts.RiskDecisionBlock {
 		t.Fatalf("expected unknown tool to block, got %#v", unknown)
 	}
+	if unknown.RiskLevel != contracts.RiskLevelDestructive {
+		t.Fatalf("expected unknown tool riskLevel=destructive, got %#v", unknown)
+	}
 }

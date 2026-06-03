@@ -9,12 +9,18 @@ configs/google/token.json
 .gopath/
 bin/
 .appdata/
+
+# Evaluation results (generated artifacts)
+evaluation_results.json
+*_results.json
+
+# Logging and temporary files
 data/telegram_offset.txt
 logs/audit.jsonl
 .antigravity/
-.appdata/
 .gotmp/
 .localappdata/
 AGENTS.md
 CLAUDE.md
 v_claw_architect_claude.pdf
+./vclaw

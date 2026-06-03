@@ -135,8 +135,8 @@ func TestHandleMessageAsksClarifyForAmbiguous(t *testing.T) {
 
 func TestHandleMessageReturnsHistorySummary(t *testing.T) {
 	orchestrator, _ := newTestOrchestrator("should not be used")
-	orchestrator.memory.Append("sess_001", memory.RoleUser, "xin chào")
-	orchestrator.memory.Append("sess_001", memory.RoleAssistant, "Chào bạn!")
+	orchestrator.memory.Append("sess_001", memory.RoleUserCompat, "xin chào")
+	orchestrator.memory.Append("sess_001", memory.RoleAssistantCompat, "Chào bạn!")
 
 	response, err := orchestrator.HandleMessage(context.Background(), contracts.UserMessage{
 		RequestID: "req_002",
@@ -158,8 +158,8 @@ func TestHandleMessageReturnsHistorySummary(t *testing.T) {
 
 func TestHandleMessageRecognizesPlainHistoryQuestion(t *testing.T) {
 	orchestrator, _ := newTestOrchestrator("should not be used")
-	orchestrator.memory.Append("sess_003", memory.RoleUser, "đặt lịch họp mai")
-	orchestrator.memory.Append("sess_003", memory.RoleAssistant, "Đã ghi nhận.")
+	orchestrator.memory.Append("sess_003", memory.RoleUserCompat, "đặt lịch họp mai")
+	orchestrator.memory.Append("sess_003", memory.RoleAssistantCompat, "Đã ghi nhận.")
 
 	response, err := orchestrator.HandleMessage(context.Background(), contracts.UserMessage{
 		RequestID: "req_004",
@@ -181,8 +181,8 @@ func TestHandleMessageRecognizesPlainHistoryQuestion(t *testing.T) {
 
 func TestHandleMessageRecognizesTungHistoryQuestion(t *testing.T) {
 	orchestrator, _ := newTestOrchestrator("should not be used")
-	orchestrator.memory.Append("sess_004", memory.RoleUser, "gửi mail cho nam")
-	orchestrator.memory.Append("sess_004", memory.RoleAssistant, "Đã gửi yêu cầu.")
+	orchestrator.memory.Append("sess_004", memory.RoleUserCompat, "gửi mail cho nam")
+	orchestrator.memory.Append("sess_004", memory.RoleAssistantCompat, "Đã gửi yêu cầu.")
 
 	response, err := orchestrator.HandleMessage(context.Background(), contracts.UserMessage{
 		RequestID: "req_005",
@@ -204,7 +204,7 @@ func TestHandleMessageRecognizesTungHistoryQuestion(t *testing.T) {
 
 func TestHistoryQueryDoesNotPolluteHistory(t *testing.T) {
 	orchestrator, _ := newTestOrchestrator("should not be used")
-	orchestrator.memory.Append("sess_005", memory.RoleUser, "ghi chú hôm nay")
+	orchestrator.memory.Append("sess_005", memory.RoleUserCompat, "ghi chú hôm nay")
 
 	first, err := orchestrator.HandleMessage(context.Background(), contracts.UserMessage{
 		RequestID: "req_006",
