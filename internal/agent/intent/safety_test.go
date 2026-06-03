@@ -3,6 +3,8 @@ package intent
 import (
 	"context"
 	"testing"
+
+	"vclaw/internal/contracts"
 )
 
 // TestSafety_PromptInjection_MustBlock tests that prompt injection MUST be blocked
@@ -164,6 +166,7 @@ func TestSafety_ToolRegistry_DangerousMarked(t *testing.T) {
 	dangerousTools := []string{
 		"gmail.sendEmail",
 		"calendar.createEvent",
+		"calendar.deleteEvent",
 		"sandbox.runPython",
 		"sandbox.runShell",
 	}
@@ -184,6 +187,54 @@ func TestSafety_ToolRegistry_DangerousMarked(t *testing.T) {
 			// MUST require confirmation
 			if !tool.RequiresConfirm {
 				t.Fatalf("SECURITY VIOLATION: Tool %s does not require confirmation", toolName)
+			}
+
+			// MUST require approval according to docs/03-contracts.md ToolRegistryEntry
+			if !tool.RequiresApproval {
+				t.Fatalf("SECURITY VIOLATION: Tool %s does not require approval", toolName)
+			}
+		})
+	}
+}
+
+func TestSafety_ToolRegistry_ContractFields(t *testing.T) {
+	tests := []struct {
+		name             string
+		owner            string
+		defaultRiskLevel contracts.RiskLevel
+		requiresApproval bool
+		timeoutMs        int
+	}{
+		{name: "gmail.listEmails", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
+		{name: "gmail.getEmail", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
+		{name: "calendar.listEvents", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
+		{name: "chat.listMessages", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
+		{name: "calendar.createEvent", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 60000},
+		{name: "calendar.updateEvent", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 60000},
+		{name: "calendar.deleteEvent", owner: "integration", defaultRiskLevel: contracts.RiskLevelDestructive, requiresApproval: true, timeoutMs: 60000},
+		{name: "sandbox.runPython", owner: "agent_core", defaultRiskLevel: contracts.RiskLevelCodeExecution, requiresApproval: true, timeoutMs: 120000},
+		{name: "sandbox.runShell", owner: "agent_core", defaultRiskLevel: contracts.RiskLevelCodeExecution, requiresApproval: true, timeoutMs: 120000},
+		{name: "gmail.sendEmail", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 60000},
+		{name: "chat.sendMessage", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 30000},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, err := LookupTool(tc.name)
+			if err != nil {
+				t.Fatalf("LookupTool(%q): %v", tc.name, err)
+			}
+			if tool.Owner != tc.owner {
+				t.Fatalf("Owner = %q, want %q", tool.Owner, tc.owner)
+			}
+			if tool.DefaultRiskLevel != tc.defaultRiskLevel {
+				t.Fatalf("DefaultRiskLevel = %q, want %q", tool.DefaultRiskLevel, tc.defaultRiskLevel)
+			}
+			if tool.RequiresApproval != tc.requiresApproval {
+				t.Fatalf("RequiresApproval = %v, want %v", tool.RequiresApproval, tc.requiresApproval)
+			}
+			if tool.TimeoutMs != tc.timeoutMs {
+				t.Fatalf("TimeoutMs = %d, want %d", tool.TimeoutMs, tc.timeoutMs)
 			}
 		})
 	}
