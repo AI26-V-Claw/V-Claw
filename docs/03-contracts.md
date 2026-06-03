@@ -365,10 +365,21 @@ name, owner, description, defaultRiskLevel, requiresApproval
 |---|---|---|---|
 | `gmail.listEmails` | Integration | `safe_read` | No |
 | `gmail.getEmail` | Integration | `safe_read` | No |
-| `gmail.sendEmail` | Integration | `external_write` | Yes |
+| `gmail.listThreads` | Integration | `safe_read` | No |
+| `gmail.getThread` | Integration | `safe_read` | No |
+| `gmail.createDraft` | Integration | `external_write` | Yes |
+| `gmail.updateDraft` | Integration | `external_write` | Yes |
+| `gmail.sendDraft` | Integration | `external_write` | Yes |
+| `gmail.replyDraft` | Integration | `external_write` | Yes |
+| `gmail.forwardDraft` | Integration | `external_write` | Yes |
+| `gmail.downloadAttachments` | Integration | `local_write` | Yes |
+| `gmail.modifyMessage` | Integration | `external_write` | Yes |
 
 > `gmail.getEmail` trả dữ liệu raw từ connector (headers/body/attachments).  
 > Render text để hiển thị (ví dụ fallback từ HTML sang text) thuộc tool layer, không thuộc connector raw API boundary.
+
+> Draft/reply/forward tools create or send Gmail drafts and must pass the approval boundary before agent-triggered execution.
+> `gmail.downloadAttachments` writes local files and is treated as `local_write`; `gmail.modifyMessage` supports read/unread, star/unstar, archive, moveToInbox, addLabels, and removeLabels.
 
 ### Calendar
 
@@ -383,11 +394,23 @@ name, owner, description, defaultRiskLevel, requiresApproval
 
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
+| `chat.listSpaces` | Integration | `safe_read` | No |
+| `chat.listMembers` | Integration | `safe_read` | No |
+| `chat.findSpacesByMembers` | Integration | `safe_read` | No |
 | `chat.listMessages` | Integration | `safe_read` | No |
 | `chat.sendMessage` | Integration | `external_write` | Yes |
 
 > `chat.sendMessage` bao gồm cả gửi tin nhắn mới và trả lời trong một thread/message cụ thể.  
 > Nếu là reply, input có thể kèm `threadId` hoặc `replyToMessageId`. Không tách `chat.replyMessage` nếu chưa có nhu cầu riêng.
+> `chat.findSpacesByMembers` chỉ đọc danh sách spaces/members để tìm space chứa các `users/...` đã resolve từ People API trước khi gọi `chat.listMessages`.
+
+### People
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `people.searchDirectory` | Integration | `safe_read` | No |
+
+> `people.searchDirectory` only reads Google Workspace directory profiles to resolve names/emails before matching Google Chat members.
 
 ### Sandbox
 

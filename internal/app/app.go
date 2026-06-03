@@ -48,6 +48,7 @@ func New() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	auditLogger := audit.NewLogger(filepath.Join(cfg.LogDir, "audit.jsonl"))
 	orchestrator := agent.NewOrchestrator(memoryStore, intentClassifier, llmClient, auditLogger)
 	runners := make([]channelRunner, 0, 2)
@@ -56,10 +57,10 @@ func New() (*App, error) {
 	}
 	if cfg.SlackEnabled {
 		slackBot, err := slackchannel.New(slackchannel.Config{
-			BotToken:            cfg.SlackBotToken,
-			AppToken:            cfg.SlackAppToken,
-			AllowedChannelIDs:   cfg.SlackAllowedChannelIDs,
-			AllowedUserIDs:      cfg.SlackAllowedUserIDs,
+			BotToken:          cfg.SlackBotToken,
+			AppToken:          cfg.SlackAppToken,
+			AllowedChannelIDs: cfg.SlackAllowedChannelIDs,
+			AllowedUserIDs:    cfg.SlackAllowedUserIDs,
 		}, orchestrator, logger)
 		if err != nil {
 			return nil, err

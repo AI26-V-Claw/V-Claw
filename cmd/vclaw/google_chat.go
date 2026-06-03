@@ -25,6 +25,7 @@ func runGoogleChat(ctx context.Context, args []string) error {
 		fs := newGoogleFlagSet("chat list-spaces")
 		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
 		pageSize := fs.Int64("page-size", 10, "number of spaces to return")
+		pageToken := fs.String("page-token", "", "optional Chat page token")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -33,18 +34,114 @@ func runGoogleChat(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		spaces, err := client.ListSpaces(ctx, *pageSize)
-		if err != nil {
-			return err
+
+		service := chattool.NewService(client)
+		output, toolErr := service.ListSpaces(ctx, chattool.ListSpacesInput{
+			MaxResults: *pageSize,
+			PageToken:  *pageToken,
+		})
+		if toolErr != nil {
+			return fmt.Errorf("%s: %s", toolErr.Code, toolErr.Message)
 		}
-		if len(spaces) == 0 {
+		if len(output.Spaces) == 0 {
 			fmt.Println("No Google Chat spaces found.")
 		}
-		for _, space := range spaces {
+		for _, space := range output.Spaces {
 			fmt.Printf("- %s | %s | %s\n", space.Name, emptyForCLI(space.DisplayName, "(no display name)"), emptyForCLI(space.SpaceType, emptyForCLI(space.Type, "(no type)")))
 			if strings.TrimSpace(space.SpaceURI) != "" {
 				fmt.Printf("  URI: %s\n", space.SpaceURI)
 			}
+		}
+		if strings.TrimSpace(output.NextPageToken) != "" {
+			fmt.Printf("Next page token: %s\n", output.NextPageToken)
+		}
+		return nil
+
+	case "list-members":
+		fs := newGoogleFlagSet("chat list-members")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		space := fs.String("space", "", "Google Chat space resource name, for example spaces/AAAA...")
+		maxResults := fs.Int64("max-results", 50, "number of members to return (1-50)")
+		pageToken := fs.String("page-token", "", "optional Chat page token")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		client, err := googleChatClient(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+
+		service := chattool.NewService(client)
+		output, toolErr := service.ListMembers(ctx, chattool.ListMembersInput{
+			Space:      *space,
+			MaxResults: *maxResults,
+			PageToken:  *pageToken,
+		})
+		if toolErr != nil {
+			return fmt.Errorf("%s: %s", toolErr.Code, toolErr.Message)
+		}
+		if len(output.Members) == 0 {
+			fmt.Println("No Chat members found.")
+		}
+		for _, member := range output.Members {
+			fmt.Printf("- %s | %s | %s | %s | %s\n",
+				member.Name,
+				emptyForCLI(member.MemberName, "(no member)"),
+				emptyForCLI(member.DisplayName, "(no display name)"),
+				emptyForCLI(member.Email, "(no email)"),
+				emptyForCLI(member.MemberType, "(no type)"),
+			)
+		}
+		if strings.TrimSpace(output.NextPageToken) != "" {
+			fmt.Printf("Next page token: %s\n", output.NextPageToken)
+		}
+		return nil
+
+	case "find-spaces-by-members":
+		fs := newGoogleFlagSet("chat find-spaces-by-members")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		members := fs.String("members", "", "comma separated Chat user resource names, for example users/123,users/456")
+		spaceType := fs.String("type", "", "optional space type filter: SPACE, GROUP_CHAT, or DIRECT_MESSAGE")
+		maxResults := fs.Int64("max-results", 50, "number of spaces to scan (1-50)")
+		pageToken := fs.String("page-token", "", "optional Chat spaces page token")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		client, err := googleChatClient(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+
+		service := chattool.NewService(client)
+		output, toolErr := service.FindSpacesByMembers(ctx, chattool.FindSpacesByMembersInput{
+			MemberUserNames: splitCSV(*members),
+			MaxResults:      *maxResults,
+			PageToken:       *pageToken,
+			SpaceType:       *spaceType,
+		})
+		if toolErr != nil {
+			return fmt.Errorf("%s: %s", toolErr.Code, toolErr.Message)
+		}
+		if len(output.Spaces) == 0 {
+			fmt.Println("No Google Chat spaces matched the requested members.")
+		}
+		for _, match := range output.Spaces {
+			fmt.Printf("- %s | %s | %s\n",
+				match.Space.Name,
+				emptyForCLI(match.Space.DisplayName, "(no display name)"),
+				emptyForCLI(match.Space.SpaceType, emptyForCLI(match.Space.Type, "(no type)")),
+			)
+			if strings.TrimSpace(match.Space.SpaceURI) != "" {
+				fmt.Printf("  URI: %s\n", match.Space.SpaceURI)
+			}
+			if len(match.Members) > 0 {
+				fmt.Printf("  Members: %s\n", chatMemberNamesForCLI(match.Members))
+			}
+		}
+		if strings.TrimSpace(output.NextPageToken) != "" {
+			fmt.Printf("Next page token: %s\n", output.NextPageToken)
 		}
 		return nil
 
@@ -400,10 +497,31 @@ func mapKeys(values map[string]struct{}) []string {
 	return keys
 }
 
+func chatMemberNamesForCLI(members []chatconnector.Membership) string {
+	names := make([]string, 0, len(members))
+	for _, member := range members {
+		name := strings.TrimSpace(member.MemberName)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return "(no members)"
+	}
+	return strings.Join(names, ",")
+}
+
 func printGoogleChatUsage() {
 	fmt.Println(`Google Chat commands:
-  vclaw google chat list-spaces [-page-size 10]
+  vclaw google chat list-spaces [-page-size 10] [-page-token token]
       List Google Chat spaces.
+
+  vclaw google chat list-members -space spaces/AAAA... [-max-results 50] [-page-token token]
+      List members in a Google Chat space.
+
+  vclaw google chat find-spaces-by-members -members users/123[,users/456] [-type DIRECT_MESSAGE|GROUP_CHAT|SPACE] [-max-results 50] [-page-token token]
+      Find spaces that contain all requested Chat user resource names.
 
   vclaw google chat list-messages -space spaces/AAAA... [-max-results 10] [-page-token token] [-show-deleted]
       List messages in a Google Chat space.

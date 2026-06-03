@@ -79,6 +79,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 }
 
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageStarted, Message: "Agent run started"})
 	base := contracts.AgentResponse{
 		RequestID: message.RequestID,
 		SessionID: message.SessionID,
@@ -123,18 +124,25 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	toolResults := []contracts.ToolResult{}
 	for iteration := 1; iteration <= r.maxIterations; iteration++ {
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
+		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
+		providerMessages := withRuntimeSystemPrompt(transcript)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
-			Messages:   cloneProviderMessages(transcript),
+			Messages:   providerMessages,
 			Tools:      providers.ToolDefinitionsFromRegistry(r.registry.ListTools()),
 			ToolChoice: "auto",
 		})
 		if err != nil {
+			code := contracts.ErrorProviderError
+			retryable := providers.IsRetryableError(err)
+			if retryable {
+				code = contracts.ErrorProviderUnavailable
+			}
 			base.Error = &contracts.ErrorShape{
-				Code:      contracts.ErrorProviderError,
+				Code:      code,
 				Message:   "provider chat failed: " + err.Error(),
 				Source:    contracts.ErrorSourceProvider,
-				Retryable: false,
+				Retryable: retryable,
 			}
 			base.Message = base.Error.Message
 			return base, nil
@@ -152,16 +160,18 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
+			emitProgress(ctx, ProgressEvent{Stage: ProgressStageFinalizing, Message: "Agent is finalizing the response"})
 			return contracts.AgentResponse{
 				RequestID:   message.RequestID,
 				SessionID:   message.SessionID,
 				Status:      contracts.AgentStatusCompleted,
 				Message:     assistantMessage.Content,
+				Data:        r.traceData(),
 				ToolResults: toolResults,
 			}, nil
 		}
 
-		for _, providerToolCall := range assistantMessage.ToolCalls {
+		for index, providerToolCall := range assistantMessage.ToolCalls {
 			definition, found := r.registry.GetDefinition(providerToolCall.Name)
 			if !found {
 				definition.Name = providerToolCall.Name
@@ -194,6 +204,20 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 
 			case contracts.RiskDecisionRequiresApproval:
 				approval := r.approvalRequest(message, providerToolCall, decision)
+				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
+					Role:       providers.MessageRoleTool,
+					ToolCallID: providerToolCall.ID,
+					Content:    truncateToolContentForLLM("ACTION_REQUIRES_APPROVAL: " + approval.Summary),
+				}); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				if err := r.appendSkippedToolObservations(ctx, message.SessionID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because another tool call requires approval"); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
 				return contracts.AgentResponse{
 					RequestID:       message.RequestID,
 					SessionID:       message.SessionID,
@@ -201,6 +225,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 					Message:         approval.Summary,
 					ApprovalID:      approval.ApprovalID,
 					ApprovalRequest: &approval,
+					Data:            r.traceData(),
 					ToolResults:     toolResults,
 					Error: &contracts.ErrorShape{
 						Code:      contracts.ErrorActionRequiresApproval,
@@ -211,10 +236,28 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 				}, nil
 
 			default:
+				reason := decision.Reason
+				if strings.TrimSpace(reason) == "" {
+					reason = "tool blocked by policy"
+				}
+				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
+					Role:       providers.MessageRoleTool,
+					ToolCallID: providerToolCall.ID,
+					Content:    truncateToolContentForLLM(policyErrorCode(found) + ": " + reason),
+				}); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				if err := r.appendSkippedToolObservations(ctx, message.SessionID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because another tool call was blocked"); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
 				base.ToolResults = toolResults
 				base.Error = &contracts.ErrorShape{
 					Code:      policyErrorCode(found),
-					Message:   decision.Reason,
+					Message:   reason,
 					Source:    contracts.ErrorSourcePolicy,
 					Retryable: false,
 				}
@@ -229,6 +272,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		SessionID:   message.SessionID,
 		Status:      contracts.AgentStatusFailed,
 		Message:     "agent exceeded max iterations",
+		Data:        r.traceData(),
 		ToolResults: toolResults,
 		Error: &contracts.ErrorShape{
 			Code:      contracts.ErrorMaxIterationsExceeded,
@@ -237,6 +281,75 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			Retryable: false,
 		},
 	}, nil
+}
+
+func withRuntimeSystemPrompt(transcript []providers.Message) []providers.Message {
+	messages := make([]providers.Message, 0, len(transcript)+1)
+	messages = append(messages, providers.Message{
+		Role:    providers.MessageRoleSystem,
+		Content: runtimeSystemPrompt(),
+	})
+	messages = append(messages, cloneProviderMessages(transcript)...)
+	return messages
+}
+
+func runtimeSystemPrompt() string {
+	return strings.TrimSpace(`You are V-Claw, an agent connected to real tools through a strict contract.
+Reply in the user's language.
+Use available tools when the user asks for information that a tool can retrieve or compute.
+Never claim that an external action was completed unless a tool result confirms it.
+For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
+For missing required details, ask one concise clarification question instead of inventing values.
+Keep final answers concise and include the useful result, not internal implementation details.
+
+Format final answers for chat channels:
+- Start with one short summary line.
+- For Gmail, Calendar, Chat, or People results, use compact bullets with the important fields only.
+- Prefer 5 to 10 bullets unless the user asks for more.
+- Do not dump raw JSON, raw tool outputs, internal tool names, or opaque IDs unless the user explicitly asks.
+- Use plain text only. Do not use Markdown bold, italic, inline code, headings, or syntax markers like **, __, backticks, or #.
+- Avoid Markdown tables because Telegram renders them poorly in plain text.
+- If no relevant result is found, say that plainly and suggest the next useful query.`)
+}
+
+func (r *Runtime) traceData() map[string]any {
+	data := map[string]any{
+		"model": r.model,
+	}
+	if r.registry != nil {
+		definitions := r.registry.ListTools()
+		toolNames := make([]string, 0, len(definitions))
+		for _, definition := range definitions {
+			if definition.Enabled {
+				toolNames = append(toolNames, definition.Name)
+			}
+		}
+		data["toolsExposed"] = toolNames
+	}
+	return data
+}
+
+func (r *Runtime) appendToolObservation(ctx context.Context, sessionID string, _ []providers.Message, message providers.Message) *contracts.ErrorShape {
+	if strings.TrimSpace(message.ToolCallID) == "" {
+		return internalError("append tool message: missing tool call id", contracts.ErrorSourceSession)
+	}
+	if err := r.sessionStore.AppendMessage(ctx, sessionID, message); err != nil {
+		return internalError("append tool message: "+err.Error(), contracts.ErrorSourceSession)
+	}
+	return nil
+}
+
+func (r *Runtime) appendSkippedToolObservations(ctx context.Context, sessionID string, toolCalls []providers.ToolCall, content string) *contracts.ErrorShape {
+	for _, toolCall := range toolCalls {
+		if err := r.appendToolObservation(ctx, sessionID, nil, providers.Message{
+			Role:       providers.MessageRoleTool,
+			ToolCallID: toolCall.ID,
+			Content:    truncateToolContentForLLM(content),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateUserMessage(message contracts.UserMessage) *contracts.ErrorShape {
@@ -270,6 +383,12 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	if !ok {
 		return tools.ToolNotFoundResult(providerToolCallToToolCall(toolCall))
 	}
+	emitProgress(ctx, ProgressEvent{
+		Stage:      ProgressStageToolStarted,
+		ToolName:   toolCall.Name,
+		ToolCallID: toolCall.ID,
+		Message:    "Tool started",
+	})
 
 	timeout := definition.Timeout
 	if timeout <= 0 {
@@ -285,8 +404,24 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 
 	select {
 	case result := <-resultCh:
+		stage := ProgressStageToolCompleted
+		if !result.Success {
+			stage = ProgressStageToolFailed
+		}
+		emitProgress(ctx, ProgressEvent{
+			Stage:      stage,
+			ToolName:   toolCall.Name,
+			ToolCallID: toolCall.ID,
+			Message:    "Tool finished",
+		})
 		return result
 	case <-toolCtx.Done():
+		emitProgress(ctx, ProgressEvent{
+			Stage:      ProgressStageToolFailed,
+			ToolName:   toolCall.Name,
+			ToolCallID: toolCall.ID,
+			Message:    toolCtx.Err().Error(),
+		})
 		return tools.ToolResult{
 			ToolCallID:     toolCall.ID,
 			ToolName:       toolCall.Name,
