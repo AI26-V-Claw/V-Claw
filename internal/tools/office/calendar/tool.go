@@ -183,7 +183,7 @@ func (s *Service) ListEvents(ctx context.Context, input ListEventsInput) (ListEv
 		return ListEventsOutput{}, invalidInput("timeMax must be in ISO-8601 format (e.g. 2026-05-29T09:00:00+07:00)")
 	}
 
-	events, err := s.connector.ListEvents(ctx, timeMin, timeMax, input.Query)
+	events, err := s.connector.ListEvents(ctx, timeMin, timeMax, normalizeListEventsQuery(input.Query))
 	if err != nil {
 		return ListEventsOutput{}, mapConnectorError(err)
 	}
@@ -384,4 +384,64 @@ func internalError(message string) *ErrorShape {
 		Message:   message,
 		Retryable: false,
 	}
+}
+
+func normalizeListEventsQuery(query string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	dateOnlyPhrases := []string{
+		"hôm nay",
+		"hom nay",
+		"ngày hôm nay",
+		"ngay hom nay",
+		"tuần này",
+		"tuan nay",
+		"trong tuần này",
+		"trong tuan nay",
+		"tuần sau",
+		"tuan sau",
+		"next week",
+		"this week",
+		"today",
+		"tomorrow",
+	}
+	for _, phrase := range dateOnlyPhrases {
+		if lower == phrase {
+			return ""
+		}
+	}
+	if containsCalendarIntentWords(lower) && containsDatePhrase(lower) && !containsLikelySearchKeyword(lower) {
+		return ""
+	}
+	return trimmed
+}
+
+func containsCalendarIntentWords(text string) bool {
+	for _, word := range []string{"lịch", "lich", "calendar", "event", "sự kiện", "su kien", "có gì", "co gi"} {
+		if strings.Contains(text, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDatePhrase(text string) bool {
+	for _, phrase := range []string{"hôm nay", "hom nay", "tuần này", "tuan nay", "tuần sau", "tuan sau", "today", "this week", "next week"} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsLikelySearchKeyword(text string) bool {
+	for _, marker := range []string{"với ", "voi ", "cùng ", "cung ", "bao", "tung", "abc", "standup", "meeting", "project"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }

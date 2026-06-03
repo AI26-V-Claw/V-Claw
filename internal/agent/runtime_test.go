@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +102,53 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected 1 provider call, got %d", len(provider.calls))
+	}
+}
+
+func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.T) {
+	now := time.Date(2026, 6, 3, 17, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
+	prompt := runtimeSystemPrompt(now)
+
+	if !strings.Contains(prompt, "2026-06-03T17:30:00+07:00") {
+		t.Fatalf("expected current time in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "this week") || !strings.Contains(prompt, "next Monday") {
+		t.Fatalf("expected calendar range guidance in prompt, got: %s", prompt)
+	}
+}
+
+func TestNormalizeCalendarListEventsThisWeekOverridesWrongModelRange(t *testing.T) {
+	now := time.Date(2026, 6, 3, 17, 39, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "calendar.listEvents",
+		Arguments: map[string]any{
+			"timeMin": "2026-06-05T00:00:00+07:00",
+			"timeMax": "2026-06-12T00:00:00+07:00",
+			"query":   "",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "lịch trình tuần này như thế nào")
+
+	if normalized.Arguments["timeMin"] != "2026-06-01T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMin: %#v", normalized.Arguments["timeMin"])
+	}
+	if normalized.Arguments["timeMax"] != "2026-06-08T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMax: %#v", normalized.Arguments["timeMax"])
+	}
+}
+
+func TestNormalizeCalendarListEventsNextMonth(t *testing.T) {
+	now := time.Date(2026, 6, 3, 17, 39, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{Name: "calendar.listEvents", Arguments: map[string]any{}}
+
+	normalized := normalizeProviderToolCall(now, call, "lịch trình tháng tới")
+
+	if normalized.Arguments["timeMin"] != "2026-07-01T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMin: %#v", normalized.Arguments["timeMin"])
+	}
+	if normalized.Arguments["timeMax"] != "2026-08-01T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMax: %#v", normalized.Arguments["timeMax"])
 	}
 }
 

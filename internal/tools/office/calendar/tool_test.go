@@ -158,6 +158,52 @@ func TestListEvents_PassesQuery(t *testing.T) {
 	}
 }
 
+func TestListEvents_DropsDateOnlyQuery(t *testing.T) {
+	var capturedQuery string
+	mock := &mockConnector{
+		listEventsFunc: func(ctx context.Context, timeMin, timeMax time.Time, query string) ([]gcal.Event, error) {
+			capturedQuery = query
+			return nil, nil
+		},
+	}
+	svc := NewService(mock)
+
+	_, errShape := svc.ListEvents(context.Background(), ListEventsInput{
+		TimeMin: "2026-06-01T00:00:00+07:00",
+		TimeMax: "2026-06-08T00:00:00+07:00",
+		Query:   "trong tuần này tôi có lịch gì không",
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if capturedQuery != "" {
+		t.Fatalf("expected date-only query to be dropped, got %q", capturedQuery)
+	}
+}
+
+func TestListEvents_KeepsSpecificSearchQuery(t *testing.T) {
+	var capturedQuery string
+	mock := &mockConnector{
+		listEventsFunc: func(ctx context.Context, timeMin, timeMax time.Time, query string) ([]gcal.Event, error) {
+			capturedQuery = query
+			return nil, nil
+		},
+	}
+	svc := NewService(mock)
+
+	_, errShape := svc.ListEvents(context.Background(), ListEventsInput{
+		TimeMin: "2026-06-01T00:00:00+07:00",
+		TimeMax: "2026-06-08T00:00:00+07:00",
+		Query:   "standup",
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if capturedQuery != "standup" {
+		t.Fatalf("expected search query to be kept, got %q", capturedQuery)
+	}
+}
+
 func TestCreateEvent_Success(t *testing.T) {
 	mock := &mockConnector{
 		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {

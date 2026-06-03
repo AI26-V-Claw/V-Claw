@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"vclaw/internal/contracts"
 )
@@ -20,42 +19,26 @@ func NewRuntimeMessenger(runtime *Runtime) *RuntimeMessenger {
 	return &RuntimeMessenger{runtime: runtime}
 }
 
-func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg InboundMessage) (OutboundMessage, error) {
+func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error) {
 	if m == nil || m.runtime == nil {
-		return OutboundMessage{}, fmt.Errorf("runtime is required")
+		return contracts.AgentResponse{}, fmt.Errorf("runtime is required")
 	}
 
-	timestamp := msg.Timestamp
-	if timestamp.IsZero() {
-		timestamp = time.Now().UTC()
-	}
-	response, err := m.runtime.Run(ctx, contracts.UserMessage{
-		RequestID: msg.EffectiveRequestID(),
-		SessionID: msg.EffectiveSessionID(),
-		Channel:   msg.EffectiveChannel(),
-		Text:      strings.TrimSpace(msg.Text),
-		Locale:    msg.Locale,
-		Timestamp: timestamp,
-		Metadata:  msg.Metadata,
-	})
+	msg.Text = strings.TrimSpace(msg.Text)
+	response, err := m.runtime.Run(ctx, msg)
 	if err != nil {
-		return OutboundMessage{}, err
+		return contracts.AgentResponse{}, err
 	}
 
-	text := renderAgentResponse(response)
-	return OutboundMessage{
-		RequestID: response.RequestID,
-		SessionID: response.SessionID,
-		Status:    string(response.Status),
-		Message:   response.Message,
-		ChatID:    msg.ChatID,
-		Text:      text,
-	}, nil
+	if text := renderAgentResponse(response); strings.TrimSpace(text) != "" {
+		response.Message = text
+	}
+	return response, nil
 }
 
-func (m *RuntimeMessenger) FinalizeAudit(_ InboundMessage, _ error) {}
+func (m *RuntimeMessenger) FinalizeAudit(_ contracts.UserMessage, _ error) {}
 
-func (m *RuntimeMessenger) RecordIgnored(_ InboundMessage, _ string) {}
+func (m *RuntimeMessenger) RecordIgnored(_ contracts.UserMessage, _ string) {}
 
 func renderAgentResponse(response contracts.AgentResponse) string {
 	if response.ApprovalRequest != nil {
