@@ -394,11 +394,23 @@ name, owner, description, defaultRiskLevel, requiresApproval
 
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
+| `chat.listSpaces` | Integration | `safe_read` | No |
+| `chat.listMembers` | Integration | `safe_read` | No |
+| `chat.findSpacesByMembers` | Integration | `safe_read` | No |
 | `chat.listMessages` | Integration | `safe_read` | No |
 | `chat.sendMessage` | Integration | `external_write` | Yes |
 
 > `chat.sendMessage` bao gồm cả gửi tin nhắn mới và trả lời trong một thread/message cụ thể.  
 > Nếu là reply, input có thể kèm `threadId` hoặc `replyToMessageId`. Không tách `chat.replyMessage` nếu chưa có nhu cầu riêng.
+> `chat.findSpacesByMembers` chỉ đọc danh sách spaces/members để tìm space chứa các `users/...` đã resolve từ People API trước khi gọi `chat.listMessages`.
+
+### People
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `people.searchDirectory` | Integration | `safe_read` | No |
+
+> `people.searchDirectory` only reads Google Workspace directory profiles to resolve names/emails before matching Google Chat members.
 
 ### Sandbox
 

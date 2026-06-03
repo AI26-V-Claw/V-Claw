@@ -12,6 +12,7 @@ const (
 	ScopeChatSpacesReadonly   = "https://www.googleapis.com/auth/chat.spaces.readonly"
 	ScopeChatMessagesCreate   = "https://www.googleapis.com/auth/chat.messages.create"
 	ScopeChatMessagesReadonly = "https://www.googleapis.com/auth/chat.messages.readonly"
+	ScopeDirectoryReadonly    = "https://www.googleapis.com/auth/directory.readonly"
 )
 
 var G1Scopes = []string{
@@ -26,4 +27,5 @@ var G1Scopes = []string{
 	ScopeChatMessages,
 	ScopeChatMemberships,
 	ScopeChatSpaces,
+	ScopeDirectoryReadonly,
 }

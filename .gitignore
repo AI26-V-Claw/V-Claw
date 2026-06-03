@@ -14,6 +14,8 @@ data/telegram_offset.txt
 logs/audit.jsonl
 .antigravity/
 .appdata/
+.gotmp/
+.localappdata/
 AGENTS.md
 CLAUDE.md
 v_claw_architect_claude.pdf
