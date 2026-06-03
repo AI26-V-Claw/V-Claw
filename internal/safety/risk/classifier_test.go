@@ -34,8 +34,8 @@ func TestClassifier_Assess(t *testing.T) {
 			expectedApproval: false,
 		},
 		{
-			name:             "External write - gmail.sendEmail",
-			toolName:         "gmail.sendEmail",
+			name:             "External write - gmail.createDraft",
+			toolName:         "gmail.createDraft",
 			intentType:       intent.TypeDangerousAction,
 			expectedRisk:     ExternalWrite,
 			expectedDecision: RequiresApproval,

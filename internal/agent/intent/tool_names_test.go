@@ -8,9 +8,9 @@ func TestNormalizeToolName(t *testing.T) {
 		expected string
 	}{
 		// Gmail
-		{"send_email", "gmail.sendEmail"},
+		{"send_email", "gmail.createDraft"},
 		{"list_emails", "gmail.listEmails"},
-		{"gmail.sendEmail", "gmail.sendEmail"}, // already compliant
+		{"gmail.createDraft", "gmail.createDraft"}, // already compliant
 
 		// Calendar
 		{"create_event", "calendar.createEvent"},
@@ -50,7 +50,7 @@ func TestIsContractCompliant(t *testing.T) {
 		expected bool
 	}{
 		// Compliant
-		{"gmail.sendEmail", true},
+		{"gmail.createDraft", true},
 		{"calendar.createEvent", true},
 		{"sandbox.runPython", true},
 		{"gmail.getEmail", true},
@@ -62,7 +62,7 @@ func TestIsContractCompliant(t *testing.T) {
 		{"exec", false},           // no domain
 		{"read_file", false},      // no domain
 		{"gmail.", false},         // empty action
-		{".sendEmail", false},     // empty domain
+		{".createDraft", false},   // empty domain
 		{"", false},               // empty
 		{"tool.with.dots", false}, // too many dots
 		{"nodot", false},          // no dot

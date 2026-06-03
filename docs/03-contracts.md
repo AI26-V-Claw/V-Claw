@@ -367,7 +367,6 @@ name, owner, description, defaultRiskLevel, requiresApproval
 | `gmail.getEmail` | Integration | `safe_read` | No |
 | `gmail.listThreads` | Integration | `safe_read` | No |
 | `gmail.getThread` | Integration | `safe_read` | No |
-| `gmail.sendEmail` | Integration | `external_write` | Yes |
 | `gmail.createDraft` | Integration | `external_write` | Yes |
 | `gmail.updateDraft` | Integration | `external_write` | Yes |
 | `gmail.sendDraft` | Integration | `external_write` | Yes |

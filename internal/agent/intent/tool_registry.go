@@ -98,9 +98,9 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 120000,
 		Parameters: []ParamDef{{Name: "command", Type: "string", Required: true, Description: "Shell command to run"}, {Name: "cwd", Type: "path", Required: false, Description: "Working directory"}},
 	},
-	"gmail.sendEmail": {
-		Name: "gmail.sendEmail", Category: CategoryCommunication,
-		Description: "Send an email via Gmail",
+	"gmail.createDraft": {
+		Name: "gmail.createDraft", Category: CategoryCommunication,
+		Description: "Create a Gmail draft",
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "to", Type: "email", Required: true, Description: "Recipient email address"}, {Name: "subject", Type: "string", Required: true, Description: "Email subject"}, {Name: "body", Type: "string", Required: true, Description: "Email body"}},
 	},

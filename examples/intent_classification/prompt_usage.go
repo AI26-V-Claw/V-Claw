@@ -64,7 +64,7 @@ func example2_WithToolRegistry() {
 			"category":    "SAFE_READ",
 			"params":      []string{"query"},
 		},
-		"gmail.sendEmail": map[string]interface{}{
+		"gmail.createDraft": map[string]interface{}{
 			"description": "Send an email",
 			"category":    "COMMUNICATION",
 			"params":      []string{"to", "subject", "body", "confirm"},

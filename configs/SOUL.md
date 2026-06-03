@@ -250,7 +250,7 @@ Response:
   "missing_params": ["to", "subject", "body", "confirm"],
   "tool_calls": [
     {
-      "name": "gmail.sendEmail",
+      "name": "gmail.createDraft",
       "category": "COMMUNICATION",
       "parameters": {},
       "timeout": 60

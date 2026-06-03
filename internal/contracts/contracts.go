@@ -98,10 +98,10 @@ type AgentResponse struct {
 
 type ToolCall struct {
 	ToolCallID string         `json:"toolCallId"`
-	RequestID  string         `json:"requestId"`
-	SessionID  string         `json:"sessionId"`
+	RequestID  string         `json:"requestId,omitempty"`
+	SessionID  string         `json:"sessionId,omitempty"`
 	ToolName   string         `json:"toolName"`
-	Input      map[string]any `json:"input"`
+	Input      map[string]any `json:"input,omitempty"`
 	Reason     string         `json:"reason,omitempty"`
 }
 

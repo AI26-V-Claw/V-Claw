@@ -145,7 +145,7 @@ func runSafetyExample() {
 	}{
 		{"gmail.listEmails", intent.TypeReadInfo},
 		{"sandbox.runShell", intent.TypeDangerousAction},
-		{"gmail.sendEmail", intent.TypeDangerousAction},
+		{"gmail.createDraft", intent.TypeDangerousAction},
 		{"sandbox.runShell", intent.TypeDangerousAction},
 		{"format_disk", intent.TypeDangerousAction},
 	}

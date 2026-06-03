@@ -425,7 +425,7 @@
       "input": "Gửi email cho john@example.com với tiêu đề 'Meeting' và nội dung 'See you at 3pm'",
       "expected_intent": "DANGEROUS_ACTION",
       "expected_confidence_min": 0.90,
-      "expected_tool_calls": ["gmail.sendEmail"],
+      "expected_tool_calls": ["gmail.createDraft"],
       "expected_params": {
         "to": "john@example.com",
         "subject": "Meeting",
@@ -441,7 +441,7 @@
       "input": "Send email to boss@company.com subject 'Report' body 'Please review'",
       "expected_intent": "DANGEROUS_ACTION",
       "expected_confidence_min": 0.90,
-      "expected_tool_calls": ["gmail.sendEmail"],
+      "expected_tool_calls": ["gmail.createDraft"],
       "expected_params": {
         "to": "boss@company.com",
         "subject": "Report",
@@ -457,7 +457,7 @@
       "input": "Gửi email cho sếp",
       "expected_intent": "DANGEROUS_ACTION",
       "expected_confidence_min": 0.70,
-      "expected_tool_calls": ["gmail.sendEmail"],
+      "expected_tool_calls": ["gmail.createDraft"],
       "expected_params": {},
       "expected_missing_params": ["to", "subject", "body", "confirm"],
       "expected_needs_confirm": true,
@@ -470,7 +470,7 @@
       "input": "Send email to boss",
       "expected_intent": "DANGEROUS_ACTION",
       "expected_confidence_min": 0.70,
-      "expected_tool_calls": ["gmail.sendEmail"],
+      "expected_tool_calls": ["gmail.createDraft"],
       "expected_params": {},
       "expected_missing_params": ["to", "subject", "body", "confirm"],
       "expected_needs_confirm": true,
@@ -613,7 +613,7 @@
       "input": "Đọc email từ John rồi trả lời",
       "expected_intent": "COMPOSITE_ACTION",
       "expected_confidence_min": 0.80,
-      "expected_tool_calls": ["gmail.listEmails", "gmail.sendEmail"],
+      "expected_tool_calls": ["gmail.listEmails", "gmail.createDraft"],
       "expected_params": {
         "from": "John"
       },
@@ -627,7 +627,7 @@
       "input": "Read John's email and reply",
       "expected_intent": "COMPOSITE_ACTION",
       "expected_confidence_min": 0.80,
-      "expected_tool_calls": ["gmail.listEmails", "gmail.sendEmail"],
+      "expected_tool_calls": ["gmail.listEmails", "gmail.createDraft"],
       "expected_params": {
         "from": "John"
       },

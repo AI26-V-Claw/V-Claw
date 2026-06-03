@@ -24,9 +24,9 @@ Confidence thresholds for different intent types:
 ### 3. Tool Registry (`tool_registry.go`)
 Centralized registry of all available tools:
 - **Safe Read Tools**: `gmail.listEmails`, `calendar.listEvents`, `chat.listMessages`
-- **Dangerous Write Tools**: `gmail.sendEmail`, `calendar.createEvent`, `calendar.updateEvent`, `calendar.deleteEvent`, `chat.sendMessage`
+- **Dangerous Write Tools**: `gmail.createDraft`, `calendar.createEvent`, `calendar.updateEvent`, `calendar.deleteEvent`, `chat.sendMessage`
 - **Execution Tools**: `sandbox.runPython`, `sandbox.runShell`
-- **Communication Tools**: `gmail.sendEmail`, `chat.sendMessage`
+- **Communication Tools**: `gmail.createDraft`, `chat.sendMessage`
 
 Each tool has:
 - Category (SAFE_READ, DANGEROUS_WRITE, EXECUTION, COMMUNICATION)

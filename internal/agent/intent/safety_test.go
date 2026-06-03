@@ -164,7 +164,7 @@ func TestSafety_MissingParams_MustClarify(t *testing.T) {
 // are properly marked in the registry
 func TestSafety_ToolRegistry_DangerousMarked(t *testing.T) {
 	dangerousTools := []string{
-		"gmail.sendEmail",
+		"gmail.createDraft",
 		"calendar.createEvent",
 		"calendar.deleteEvent",
 		"sandbox.runPython",
@@ -214,7 +214,7 @@ func TestSafety_ToolRegistry_ContractFields(t *testing.T) {
 		{name: "calendar.deleteEvent", owner: "integration", defaultRiskLevel: contracts.RiskLevelDestructive, requiresApproval: true, timeoutMs: 60000},
 		{name: "sandbox.runPython", owner: "agent_core", defaultRiskLevel: contracts.RiskLevelCodeExecution, requiresApproval: true, timeoutMs: 120000},
 		{name: "sandbox.runShell", owner: "agent_core", defaultRiskLevel: contracts.RiskLevelCodeExecution, requiresApproval: true, timeoutMs: 120000},
-		{name: "gmail.sendEmail", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 60000},
+		{name: "gmail.createDraft", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 60000},
 		{name: "chat.sendMessage", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 30000},
 	}
 

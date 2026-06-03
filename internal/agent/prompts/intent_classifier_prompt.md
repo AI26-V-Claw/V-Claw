@@ -55,7 +55,7 @@ You are an **Intent Classification Specialist** for an AI Agent system. Your ONL
 - "Thay đổi quyền file" / "Change file permissions"
 
 **Characteristics**:
-- Uses dangerous contract tools: `sandbox.runShell`, `sandbox.runPython`, `gmail.sendEmail`, `calendar.createEvent`, `chat.sendMessage`
+- Uses dangerous contract tools: `sandbox.runShell`, `sandbox.runPython`, `gmail.createDraft`, `calendar.createEvent`, `chat.sendMessage`
 - Requires explicit user confirmation
 - Confidence threshold: > 0.90
 - **CRITICAL**: Must have ALL required parameters
@@ -275,7 +275,7 @@ User: "Tìm file log cũ và xóa chúng"
 ### Communication Tools (COMMUNICATION)
 | Tool | Required Params | Description |
 |------|----------------|-------------|
-| `gmail.sendEmail` | `to`, `subject`, `body` | Send email |
+| `gmail.createDraft` | `to`, `subject`, `body` | Create Gmail draft |
 | `chat.sendMessage` | `recipient`, `message` | Send instant message |
 
 ---

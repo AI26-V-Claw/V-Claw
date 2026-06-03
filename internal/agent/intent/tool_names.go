@@ -8,7 +8,7 @@ var toolNameAliases = map[string]string{
 	// Gmail tools
 	"list_emails":  "gmail.listEmails",
 	"get_email":    "gmail.getEmail",
-	"send_email":   "gmail.sendEmail",
+	"send_email":   "gmail.createDraft",
 	"search_email": "gmail.listEmails",
 
 	// Calendar tools

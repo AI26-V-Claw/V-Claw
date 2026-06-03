@@ -109,7 +109,6 @@ func buildDefaultPolicy() map[string]Level {
 		"gmail.forwardDraft":        ExternalWrite,
 		"gmail.downloadAttachments": LocalWrite,
 		"gmail.modifyMessage":       ExternalWrite,
-		"gmail.sendEmail":           ExternalWrite,
 		"calendar.createEvent":      ExternalWrite,
 		"calendar.updateEvent":      ExternalWrite,
 		"calendar.deleteEvent":      Destructive,

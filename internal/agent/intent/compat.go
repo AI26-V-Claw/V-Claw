@@ -72,7 +72,7 @@ func mapSystemOp(calls []ToolCallInfo) SystemOpType {
 	for _, call := range calls {
 		name := NormalizeToolName(call.Name)
 		switch {
-		case name == "gmail.sendEmail" || name == "chat.sendMessage":
+		case name == "gmail.createDraft" || name == "gmail.sendDraft" || name == "chat.sendMessage":
 			return SystemOpSend
 		case name == "calendar.deleteEvent":
 			return SystemOpDelete

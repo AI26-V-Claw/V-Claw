@@ -384,7 +384,7 @@ func extractReadToolCalls(lower, original string) []ToolCallInfo {
 func extractDangerousToolCalls(lower, original string) []ToolCallInfo {
 	if containsAny(lower, "gửi email", "gửi mail", "send email", "gửi cho", "gửi tài liệu") {
 		return []ToolCallInfo{{
-			Name: "gmail.sendEmail", Category: "COMMUNICATION",
+			Name: "gmail.createDraft", Category: "COMMUNICATION",
 			Parameters: extractEmailParams(original), Timeout: 60,
 		}}
 	}
