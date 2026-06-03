@@ -66,6 +66,14 @@ var pythonRules = []MatrixEntry{
 		"Code dùng ctypes (gọi thư viện C). Bị chặn trong sandbox."},
 	{"cffi", RiskHighRisk, DecisionBlock,
 		"Code dùng cffi (gọi C). Bị chặn trong sandbox."},
+	{"import winreg", RiskHighRisk, DecisionBlock,
+		"Code truy cap Windows Registry qua winreg. Bi chan trong sandbox."},
+	{"winreg.", RiskHighRisk, DecisionBlock,
+		"Code truy cap Windows Registry qua winreg. Bi chan trong sandbox."},
+	{"hkey_local_machine", RiskHighRisk, DecisionBlock,
+		"Code tham chieu HKEY_LOCAL_MACHINE. Bi chan trong sandbox."},
+	{"hkey_current_user", RiskHighRisk, DecisionBlock,
+		"Code tham chieu HKEY_CURRENT_USER. Bi chan trong sandbox."},
 	{"__import__(", RiskHighRisk, DecisionBlock,
 		"Code dùng __import__() động. Bị chặn vì có thể bypass import rules."},
 
@@ -130,6 +138,8 @@ var pythonRules = []MatrixEntry{
 
 	// ── Safe write (create new files) ─────────────────────────────────────
 
+	{"import csv", RiskSafeRead, DecisionAllow,
+		"Code dung csv module de doc du lieu. Duoc phep."},
 	{"open(", RiskSafeWrite, DecisionAllow,
 		"Code mở file để đọc/ghi. Được phép trong workspace."},
 	{"os.makedirs(", RiskSafeWrite, DecisionAllow,

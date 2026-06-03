@@ -20,6 +20,39 @@ package policies
 // │ Read-only ops            │ safe_read            │ allow            │
 // └──────────────────────────┴─────────────────────┴──────────────────┘
 var shellRules = []MatrixEntry{
+	// Windows service control and registry commands (always block).
+	{"sc.exe", RiskHighRisk, DecisionBlock,
+		"Lenh sc.exe quan ly Windows service. Bi chan hoan toan."},
+	{"sc stop", RiskHighRisk, DecisionBlock,
+		"Lenh dung Windows service. Bi chan hoan toan."},
+	{"sc start", RiskHighRisk, DecisionBlock,
+		"Lenh khoi dong Windows service. Bi chan hoan toan."},
+	{"sc create", RiskHighRisk, DecisionBlock,
+		"Lenh tao Windows service. Bi chan hoan toan."},
+	{"sc delete", RiskHighRisk, DecisionBlock,
+		"Lenh xoa Windows service. Bi chan hoan toan."},
+	{"net stop", RiskHighRisk, DecisionBlock,
+		"Lenh dung Windows service bang net stop. Bi chan hoan toan."},
+	{"net start", RiskHighRisk, DecisionBlock,
+		"Lenh khoi dong Windows service bang net start. Bi chan hoan toan."},
+	{"reg.exe", RiskHighRisk, DecisionBlock,
+		"Lenh reg.exe truy cap Windows Registry. Bi chan hoan toan."},
+	{"reg add", RiskHighRisk, DecisionBlock,
+		"Lenh them Windows Registry key. Bi chan hoan toan."},
+	{"reg delete", RiskHighRisk, DecisionBlock,
+		"Lenh xoa Windows Registry key. Bi chan hoan toan."},
+	{"reg query", RiskHighRisk, DecisionBlock,
+		"Lenh doc Windows Registry. Bi chan hoan toan."},
+	{"regedit", RiskHighRisk, DecisionBlock,
+		"Lenh mo Registry Editor. Bi chan hoan toan."},
+	{"hklm\\", RiskHighRisk, DecisionBlock,
+		"Lenh tham chieu HKEY_LOCAL_MACHINE. Bi chan hoan toan."},
+	{"hkcu\\", RiskHighRisk, DecisionBlock,
+		"Lenh tham chieu HKEY_CURRENT_USER. Bi chan hoan toan."},
+	{"hkey_local_machine", RiskHighRisk, DecisionBlock,
+		"Lenh tham chieu HKEY_LOCAL_MACHINE. Bi chan hoan toan."},
+	{"hkey_current_user", RiskHighRisk, DecisionBlock,
+		"Lenh tham chieu HKEY_CURRENT_USER. Bi chan hoan toan."},
 
 	// ── Credential access (highest priority, always block) ────────────────
 
