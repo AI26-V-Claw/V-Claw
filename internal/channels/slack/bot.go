@@ -11,14 +11,15 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 
+	"vclaw/internal/agent"
 	"vclaw/internal/contracts"
 )
 
 type Config struct {
 	BotToken          string
 	AppToken          string
+	OwnerUserID       string
 	AllowedChannelIDs []string
-	AllowedUserIDs    []string
 }
 
 type Bot struct {
@@ -28,8 +29,8 @@ type Bot struct {
 	api             *slack.Client
 	socketClient    *socketmode.Client
 	botUserID       string
+	ownerUserID     string
 	allowedChannels map[string]struct{}
-	allowedUsers    map[string]struct{}
 }
 
 type messageHandler interface {
@@ -45,6 +46,9 @@ func New(cfg Config, orchestrator messageHandler, logger *slog.Logger) (*Bot, er
 	if strings.TrimSpace(cfg.AppToken) == "" {
 		return nil, fmt.Errorf("slack app token is required")
 	}
+	if strings.TrimSpace(cfg.OwnerUserID) == "" {
+		return nil, fmt.Errorf("slack owner user id is required")
+	}
 
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken))
 	socketClient := socketmode.New(api)
@@ -55,8 +59,8 @@ func New(cfg Config, orchestrator messageHandler, logger *slog.Logger) (*Bot, er
 		logger:          logger,
 		api:             api,
 		socketClient:    socketClient,
+		ownerUserID:     strings.TrimSpace(cfg.OwnerUserID),
 		allowedChannels: makeAllowSet(cfg.AllowedChannelIDs),
-		allowedUsers:    makeAllowSet(cfg.AllowedUserIDs),
 	}
 
 	auth, err := api.AuthTest()
@@ -137,29 +141,58 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 	}
 
 	inbound := b.inboundMessage(channelID, userID, text, timestamp, threadTimestamp, channelType)
-	outbound, err := b.orchestrator.HandleMessage(ctx, inbound)
-	if err != nil {
-		b.orchestrator.FinalizeAudit(inbound, err)
-		return err
-	}
-
-	if strings.TrimSpace(outbound.Message) == "" {
-		return fmt.Errorf("empty outbound message")
-	}
 	replyThreadTimestamp := threadTimestamp
 	if strings.TrimSpace(replyThreadTimestamp) == "" && channelType != "im" {
 		replyThreadTimestamp = timestamp
 	}
-	if err := b.sendMessage(ctx, channelID, outbound.Message, replyThreadTimestamp); err != nil {
+
+	processingTimestamp, err := b.sendMessage(ctx, channelID, "Đang xử lý...", replyThreadTimestamp)
+	if err != nil {
 		b.orchestrator.FinalizeAudit(inbound, err)
 		return err
+	}
+	progress := newSlackProgressEditor(b, channelID, processingTimestamp)
+
+	progressCtx := agent.WithProgressSink(ctx, func(progressCtx context.Context, event agent.ProgressEvent) {
+		progressText := slackProgressText(event)
+		if strings.TrimSpace(progressText) == "" {
+			return
+		}
+		if err := progress.Update(progressCtx, progressText); err != nil {
+			b.logger.Error("slack progress update failed", "error", err)
+		}
+	})
+
+	outbound, err := b.orchestrator.HandleMessage(progressCtx, inbound)
+	if err != nil {
+		b.orchestrator.FinalizeAudit(inbound, err)
+		b.logger.Error("agent handler failed", "request_id", inbound.RequestID, "session_id", inbound.SessionID, "error", err)
+		_ = progress.Update(ctx, slackGenericErrorText())
+		return nil
+	}
+
+	outboundText := slackTextFromResponse(outbound)
+	if strings.TrimSpace(outboundText) == "" {
+		err := fmt.Errorf("empty outbound message")
+		b.orchestrator.FinalizeAudit(inbound, err)
+		return err
+	}
+	if strings.EqualFold(string(outbound.Status), "failed") {
+		b.logger.Error("agent response error", "request_id", outbound.RequestID, "session_id", outbound.SessionID, "status", outbound.Status, "message", outbound.Message)
+	}
+	if err := progress.Update(ctx, outboundText); err != nil {
+		b.logger.Error("slack final update failed", "error", err)
+		if _, sendErr := b.sendMessage(ctx, channelID, outboundText, replyThreadTimestamp); sendErr != nil {
+			b.orchestrator.FinalizeAudit(inbound, sendErr)
+			return sendErr
+		}
 	}
 
 	b.orchestrator.FinalizeAudit(inbound, nil)
 	return nil
 }
 
-func (b *Bot) sendMessage(ctx context.Context, channelID, text, threadTimestamp string) error {
+func (b *Bot) sendMessage(ctx context.Context, channelID, text, threadTimestamp string) (string, error) {
 	options := []slack.MsgOption{slack.MsgOptionText(text, false)}
 	if strings.TrimSpace(threadTimestamp) != "" {
 		options = append(options, slack.MsgOptionPostMessageParameters(slack.PostMessageParameters{
@@ -167,18 +200,21 @@ func (b *Bot) sendMessage(ctx context.Context, channelID, text, threadTimestamp 
 		}))
 	}
 
-	_, _, err := b.api.PostMessageContext(ctx, channelID, options...)
+	_, timestamp, err := b.api.PostMessageContext(ctx, channelID, options...)
+	return timestamp, err
+}
+
+func (b *Bot) updateMessage(ctx context.Context, channelID, timestamp, text string) error {
+	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp, slack.MsgOptionText(text, false))
 	return err
 }
 
 func (b *Bot) isAllowed(channelID, userID string) bool {
+	if strings.TrimSpace(userID) != b.ownerUserID {
+		return false
+	}
 	if len(b.allowedChannels) > 0 {
 		if _, ok := b.allowedChannels[channelID]; !ok {
-			return false
-		}
-	}
-	if len(b.allowedUsers) > 0 {
-		if _, ok := b.allowedUsers[userID]; !ok {
 			return false
 		}
 	}
@@ -245,4 +281,90 @@ func normalizeSlackTimestamp(timestamp string) string {
 		return "unknown"
 	}
 	return strings.ReplaceAll(trimmed, ".", "_")
+}
+
+type slackProgressEditor struct {
+	bot       *Bot
+	channelID string
+	timestamp string
+	lastText  string
+}
+
+func newSlackProgressEditor(bot *Bot, channelID, timestamp string) *slackProgressEditor {
+	return &slackProgressEditor{
+		bot:       bot,
+		channelID: channelID,
+		timestamp: timestamp,
+		lastText:  "Đang xử lý...",
+	}
+}
+
+func (e *slackProgressEditor) Update(ctx context.Context, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" || text == e.lastText {
+		return nil
+	}
+	e.lastText = text
+	return e.bot.updateMessage(ctx, e.channelID, e.timestamp, text)
+}
+
+func slackProgressText(event agent.ProgressEvent) string {
+	switch event.Stage {
+	case agent.ProgressStageThinking:
+		return "Đang phân tích yêu cầu..."
+	case agent.ProgressStageToolStarted:
+		switch event.ToolName {
+		case "people.searchDirectory":
+			return "Đang tìm người trong Workspace..."
+		case "chat.listSpaces":
+			return "Đang dò Google Chat spaces..."
+		case "chat.listMembers":
+			return "Đang kiểm tra thành viên trong Chat space..."
+		case "chat.findSpacesByMembers":
+			return "Đang tìm Chat space phù hợp..."
+		case "chat.listMessages":
+			return "Đang lấy tin nhắn trong Google Chat..."
+		case "gmail.listEmails", "gmail.getEmail", "gmail.listThreads", "gmail.getThread":
+			return "Đang đọc Gmail..."
+		case "calendar.listEvents":
+			return "Đang đọc Google Calendar..."
+		default:
+			return "Đang chạy tool " + event.ToolName + "..."
+		}
+	case agent.ProgressStageFinalizing:
+		return "Đang tổng hợp câu trả lời..."
+	default:
+		return ""
+	}
+}
+
+func slackTextFromResponse(response contracts.AgentResponse) string {
+	if strings.EqualFold(string(response.Status), "failed") {
+		return slackGenericErrorText()
+	}
+	if strings.TrimSpace(response.Message) != "" {
+		return response.Message
+	}
+	if response.ApprovalRequest != nil && strings.TrimSpace(response.ApprovalRequest.Summary) != "" {
+		return response.ApprovalRequest.Summary
+	}
+	switch response.Status {
+	case contracts.AgentStatusApprovalRequired:
+		return "Tôi cần bạn xác nhận trước khi thực hiện hành động này."
+	case contracts.AgentStatusCompleted:
+		return "Đã hoàn tất."
+	case contracts.AgentStatusNeedClarification:
+		if response.Data != nil {
+			if clarifyQuestion, ok := response.Data["clarifyQuestion"].(string); ok && strings.TrimSpace(clarifyQuestion) != "" {
+				return clarifyQuestion
+			}
+		}
+		return "Bạn muốn tôi làm gì cụ thể hơn?"
+	default:
+		return "Agent chưa có phản hồi."
+	}
+}
+
+func slackGenericErrorText() string {
+	return "Mình chưa thể hoàn tất yêu cầu này. Chi tiết lỗi đã được ghi ở terminal local."
 }

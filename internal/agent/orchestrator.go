@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"vclaw/internal/agent/intent"
 	"vclaw/internal/contracts"
-	"vclaw/internal/intent"
 	"vclaw/internal/memory"
 	"vclaw/internal/providers"
 )
@@ -36,8 +36,7 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg contracts.UserMess
 		sessionID = "default"
 	}
 
-	classification := o.classifier.Classify(text)
-	if o.memory != nil && classification.IsHistoryQuery {
+	if o.memory != nil && isHistoryQuery(text) {
 		reply := formatHistory(o.memory.GetHistory(sessionID))
 		return contracts.AgentResponse{
 			RequestID: msg.RequestID,
@@ -47,12 +46,13 @@ func (o *Orchestrator) HandleMessage(ctx context.Context, msg contracts.UserMess
 			Data: map[string]any{
 				"intent":       string(intent.IntentReadInfo),
 				"systemOpType": string(intent.SystemOpNone),
-				"confidence":   classification.Confidence,
+				"confidence":   1.0,
 				"actionTaken":  "memory_summary",
 			},
 		}, nil
 	}
 
+	classification := o.classifier.Classify(text)
 	reply, actionTaken := o.replyFor(ctx, text, classification)
 
 	if o.memory != nil {
@@ -170,4 +170,28 @@ func formatHistory(history []memory.StoreMessage) string {
 		builder.WriteString(fmt.Sprintf("%d. Bạn: %s\n", index+1, text))
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func isHistoryQuery(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	return containsHistoryPattern(
+		lower,
+		"tôi vừa nói gì",
+		"toi vua noi gi",
+		"xem lịch sử",
+		"xem lich su",
+		"tôi đã nói những gì",
+		"toi da noi nhung gi",
+		"tôi đã từng nói gì",
+		"toi da tung noi gi",
+	)
+}
+
+func containsHistoryPattern(text string, patterns ...string) bool {
+	for _, pattern := range patterns {
+		if strings.Contains(text, pattern) {
+			return true
+		}
+	}
+	return false
 }

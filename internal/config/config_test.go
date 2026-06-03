@@ -77,8 +77,8 @@ func TestLoadParsesSlackConfig(t *testing.T) {
 	t.Setenv("VCLAW_SLACK_ENABLED", "true")
 	t.Setenv("VCLAW_SLACK_BOT_TOKEN", "xoxb-test")
 	t.Setenv("VCLAW_SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("VCLAW_SLACK_OWNER_USER_ID", "U1")
 	t.Setenv("VCLAW_SLACK_ALLOWED_CHANNEL_IDS", "C1, C2")
-	t.Setenv("VCLAW_SLACK_ALLOWED_USER_IDS", "U1,U2")
 
 	cfg, err := Load()
 	if err != nil {
@@ -94,11 +94,11 @@ func TestLoadParsesSlackConfig(t *testing.T) {
 	if cfg.SlackAppToken != "xapp-test" {
 		t.Fatalf("unexpected slack app token: %q", cfg.SlackAppToken)
 	}
+	if cfg.SlackOwnerUserID != "U1" {
+		t.Fatalf("unexpected slack owner user id: %q", cfg.SlackOwnerUserID)
+	}
 	if len(cfg.SlackAllowedChannelIDs) != 2 || cfg.SlackAllowedChannelIDs[0] != "C1" || cfg.SlackAllowedChannelIDs[1] != "C2" {
 		t.Fatalf("unexpected slack channel ids: %#v", cfg.SlackAllowedChannelIDs)
-	}
-	if len(cfg.SlackAllowedUserIDs) != 2 || cfg.SlackAllowedUserIDs[0] != "U1" || cfg.SlackAllowedUserIDs[1] != "U2" {
-		t.Fatalf("unexpected slack user ids: %#v", cfg.SlackAllowedUserIDs)
 	}
 }
 

@@ -14,8 +14,8 @@ type Config struct {
 	SlackEnabled             bool
 	SlackBotToken            string
 	SlackAppToken            string
+	SlackOwnerUserID         string
 	SlackAllowedChannelIDs   []string
-	SlackAllowedUserIDs      []string
 	DataDir                  string
 	LogDir                   string
 	LLMProvider              string
@@ -60,14 +60,17 @@ func Load() (Config, error) {
 
 	slackBotToken := firstNonEmptyEnv("VCLAW_SLACK_BOT_TOKEN")
 	slackAppToken := firstNonEmptyEnv("VCLAW_SLACK_APP_TOKEN")
+	slackOwnerUserID := firstCSVValue(firstNonEmptyEnv("VCLAW_SLACK_OWNER_USER_ID", "VCLAW_SLACK_ALLOWED_USER_ID", "VCLAW_SLACK_ALLOWED_USER_IDS"))
 	slackAllowedChannelIDs := splitCSV(firstNonEmptyEnv("VCLAW_SLACK_ALLOWED_CHANNEL_IDS"))
-	slackAllowedUserIDs := splitCSV(firstNonEmptyEnv("VCLAW_SLACK_ALLOWED_USER_IDS"))
 	if slackEnabled {
 		if strings.TrimSpace(slackBotToken) == "" {
 			return Config{}, fmt.Errorf("VCLAW_SLACK_BOT_TOKEN is required when VCLAW_SLACK_ENABLED=true")
 		}
 		if strings.TrimSpace(slackAppToken) == "" {
 			return Config{}, fmt.Errorf("VCLAW_SLACK_APP_TOKEN is required when VCLAW_SLACK_ENABLED=true")
+		}
+		if strings.TrimSpace(slackOwnerUserID) == "" {
+			return Config{}, fmt.Errorf("VCLAW_SLACK_OWNER_USER_ID is required when VCLAW_SLACK_ENABLED=true")
 		}
 	}
 
@@ -78,8 +81,8 @@ func Load() (Config, error) {
 		SlackEnabled:             slackEnabled,
 		SlackBotToken:            slackBotToken,
 		SlackAppToken:            slackAppToken,
+		SlackOwnerUserID:         slackOwnerUserID,
 		SlackAllowedChannelIDs:   slackAllowedChannelIDs,
-		SlackAllowedUserIDs:      slackAllowedUserIDs,
 		DataDir:                  envOrDefault("DATA_DIR", "./data"),
 		LogDir:                   envOrDefault("LOG_DIR", "./logs"),
 		LLMProvider:              strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER"))),

@@ -125,7 +125,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	for iteration := 1; iteration <= r.maxIterations; iteration++ {
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := withRuntimeSystemPrompt(transcript)
+		providerMessages := r.withRuntimeSystemPrompt(transcript)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
@@ -160,6 +160,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
+			r.logger.Info("agent completed without tool calls",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"iteration", iteration,
+				"content_preview", logPreview(assistantMessage.Content, 180),
+			)
 			emitProgress(ctx, ProgressEvent{Stage: ProgressStageFinalizing, Message: "Agent is finalizing the response"})
 			return contracts.AgentResponse{
 				RequestID:   message.RequestID,
@@ -178,8 +184,19 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			}
 
 			decision := r.policy.DecideToolCall(providerToolCall.ID, definition, found, r.now())
+			r.logger.Info("agent tool call proposed",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"iteration", iteration,
+				"tool_call_id", providerToolCall.ID,
+				"tool_name", providerToolCall.Name,
+				"decision", decision.Decision,
+				"risk_level", decision.RiskLevel,
+				"arguments", logToolArguments(providerToolCall.Name, providerToolCall.Arguments),
+			)
 			switch decision.Decision {
 			case contracts.RiskDecisionAllow:
+				providerToolCall = normalizeProviderToolCall(r.now(), providerToolCall, message.Text)
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
 				contractResult := contractToolResult(result)
 				toolResults = append(toolResults, contractResult)
@@ -283,24 +300,36 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	}, nil
 }
 
-func withRuntimeSystemPrompt(transcript []providers.Message) []providers.Message {
+func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message) []providers.Message {
 	messages := make([]providers.Message, 0, len(transcript)+1)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
-		Content: runtimeSystemPrompt(),
+		Content: runtimeSystemPrompt(r.now()),
 	})
 	messages = append(messages, cloneProviderMessages(transcript)...)
 	return messages
 }
 
-func runtimeSystemPrompt() string {
-	return strings.TrimSpace(`You are V-Claw, an agent connected to real tools through a strict contract.
+func runtimeSystemPrompt(now time.Time) string {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return strings.TrimSpace(fmt.Sprintf(`You are V-Claw, an agent connected to real tools through a strict contract.
 Reply in the user's language.
 Use available tools when the user asks for information that a tool can retrieve or compute.
 Never claim that an external action was completed unless a tool result confirms it.
 For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
 For missing required details, ask one concise clarification question instead of inventing values.
 Keep final answers concise and include the useful result, not internal implementation details.
+
+Current date and time: %s.
+When users ask about relative dates or ranges, convert them to concrete ISO-8601 tool arguments before calling tools.
+For calendar.listEvents:
+- "today" / "hôm nay" means local start of today through local start of tomorrow.
+- "this week" / "tuần này" means Monday 00:00 through next Monday 00:00 in the current local timezone.
+- "next week" / "tuần sau" means next Monday 00:00 through the following Monday 00:00.
+- For a date range, set timeMin to the beginning of the range and timeMax to the exclusive end of the range.
+- Do not put date words like "today", "this week", "hôm nay", or "tuần này" into query. Use query only for event title, description, location, or attendee keywords.
 
 Format final answers for chat channels:
 - Start with one short summary line.
@@ -309,7 +338,7 @@ Format final answers for chat channels:
 - Do not dump raw JSON, raw tool outputs, internal tool names, or opaque IDs unless the user explicitly asks.
 - Use plain text only. Do not use Markdown bold, italic, inline code, headings, or syntax markers like **, __, backticks, or #.
 - Avoid Markdown tables because Telegram renders them poorly in plain text.
-- If no relevant result is found, say that plainly and suggest the next useful query.`)
+- If no relevant result is found, say that plainly and suggest the next useful query.`, now.Format(time.RFC3339)))
 }
 
 func (r *Runtime) traceData() map[string]any {
@@ -383,6 +412,11 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	if !ok {
 		return tools.ToolNotFoundResult(providerToolCallToToolCall(toolCall))
 	}
+	r.logger.Info("tool execution started",
+		"tool_call_id", toolCall.ID,
+		"tool_name", toolCall.Name,
+		"arguments", logToolArguments(toolCall.Name, toolCall.Arguments),
+	)
 	emitProgress(ctx, ProgressEvent{
 		Stage:      ProgressStageToolStarted,
 		ToolName:   toolCall.Name,
@@ -408,6 +442,13 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 		if !result.Success {
 			stage = ProgressStageToolFailed
 		}
+		r.logger.Info("tool execution completed",
+			"tool_call_id", toolCall.ID,
+			"tool_name", toolCall.Name,
+			"success", result.Success,
+			"error_code", toolErrorCode(result),
+			"content_preview", logPreview(result.ContentForLLM, 260),
+		)
 		emitProgress(ctx, ProgressEvent{
 			Stage:      stage,
 			ToolName:   toolCall.Name,
@@ -434,6 +475,149 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 			},
 		}
 	}
+}
+
+func logToolArguments(toolName string, args map[string]any) any {
+	if args == nil {
+		return map[string]any{}
+	}
+	if toolName == "calendar.listEvents" {
+		return map[string]any{
+			"timeMin": stringLogArg(args, "timeMin"),
+			"timeMax": stringLogArg(args, "timeMax"),
+			"query":   stringLogArg(args, "query"),
+		}
+	}
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	return map[string]any{"keys": keys}
+}
+
+func stringLogArg(args map[string]any, key string) string {
+	value, ok := args[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
+func toolErrorCode(result tools.ToolResult) string {
+	if result.Error == nil {
+		return ""
+	}
+	return result.Error.Code
+}
+
+func logPreview(text string, limit int) string {
+	trimmed := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if limit > 0 && len(runes) > limit {
+		return string(runes[:limit]) + "..."
+	}
+	return trimmed
+}
+
+func normalizeProviderToolCall(now time.Time, toolCall providers.ToolCall, userText string) providers.ToolCall {
+	if toolCall.Name != "calendar.listEvents" {
+		return toolCall
+	}
+	normalizedArgs := normalizeCalendarListEventsArgs(now, toolCall.Arguments, userText)
+	if normalizedArgs == nil {
+		return toolCall
+	}
+	toolCall.Arguments = normalizedArgs
+	return toolCall
+}
+
+func normalizeCalendarListEventsArgs(now time.Time, args map[string]any, userText string) map[string]any {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	lower := strings.ToLower(strings.TrimSpace(userText))
+	if lower == "" {
+		return nil
+	}
+
+	var start, end time.Time
+	switch {
+	case containsAnyText(lower, "tuần sau", "tuan sau", "next week"):
+		thisWeek := startOfWeekMonday(now)
+		start = thisWeek.AddDate(0, 0, 7)
+		end = start.AddDate(0, 0, 7)
+	case containsAnyText(lower, "tuần này", "tuan nay", "this week", "trong tuần", "trong tuan"):
+		start = startOfWeekMonday(now)
+		end = start.AddDate(0, 0, 7)
+	case containsAnyText(lower, "tháng tới", "thang toi", "tháng sau", "thang sau", "next month"):
+		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		start = thisMonth.AddDate(0, 1, 0)
+		end = start.AddDate(0, 1, 0)
+	case containsAnyText(lower, "tháng này", "thang nay", "this month"):
+		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		end = start.AddDate(0, 1, 0)
+	case containsAnyText(lower, "ngày mai", "ngay mai", "tomorrow"):
+		start = startOfDay(now).AddDate(0, 0, 1)
+		end = start.AddDate(0, 0, 1)
+	case containsAnyText(lower, "hôm nay", "hom nay", "today"):
+		start = startOfDay(now)
+		end = start.AddDate(0, 0, 1)
+	default:
+		return nil
+	}
+
+	normalized := cloneArguments(args)
+	if normalized == nil {
+		normalized = map[string]any{}
+	}
+	normalized["timeMin"] = start.Format(time.RFC3339)
+	normalized["timeMax"] = end.Format(time.RFC3339)
+	if query, ok := normalized["query"].(string); ok {
+		normalized["query"] = normalizeRelativeCalendarQuery(query, userText)
+	}
+	return normalized
+}
+
+func normalizeRelativeCalendarQuery(query string, userText string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return ""
+	}
+	lowerQuery := strings.ToLower(trimmed)
+	lowerText := strings.ToLower(strings.TrimSpace(userText))
+	if lowerQuery == lowerText {
+		return ""
+	}
+	if containsAnyText(lowerQuery, "tuần này", "tuan nay", "tuần sau", "tuan sau", "tháng này", "thang nay", "tháng tới", "thang toi", "hôm nay", "hom nay", "today", "this week", "next week", "this month", "next month") &&
+		containsAnyText(lowerQuery, "lịch", "lich", "calendar", "sự kiện", "su kien", "event") {
+		return ""
+	}
+	return trimmed
+}
+
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func startOfWeekMonday(t time.Time) time.Time {
+	dayStart := startOfDay(t)
+	weekday := int(dayStart.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	return dayStart.AddDate(0, 0, -(weekday - 1))
+}
+
+func containsAnyText(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision) contracts.ApprovalRequest {
