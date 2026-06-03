@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"vclaw/internal/app"
 	"vclaw/internal/connectors/google"
 	"vclaw/internal/connectors/google/calendar"
 	"vclaw/internal/connectors/google/chat"
@@ -43,6 +44,8 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "agent":
 		return runAgent(ctx, args[1:])
+	case "bot":
+		return runBot(ctx, args[1:])
 	case "google":
 		return runGoogle(ctx, args[1:])
 	case "help", "-h", "--help":
@@ -51,6 +54,18 @@ func run(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runBot(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("vclaw bot does not take arguments")
+	}
+
+	application, err := app.New()
+	if err != nil {
+		return err
+	}
+	return application.Run()
 }
 
 func runGoogle(ctx context.Context, args []string) error {
@@ -385,6 +400,7 @@ func splitCSV(value string) []string {
 func printUsage() {
 	fmt.Println(`Usage:
   vclaw agent -prompt "..."
+  vclaw bot
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
   vclaw google gmail <list|get>

@@ -40,15 +40,12 @@ func TestHandleMessageReturnsHistorySummary(t *testing.T) {
 
 func TestHandleMessageRecognizesHistoryVariants(t *testing.T) {
 	cases := []string{
-		"nãy mình nói gì",
-		"nãy mình vừa nói gì",
-		"nãy t vừa nói gì",
-		"hãy kể những việc tôi vừa nói",
-		"kể những việc tôi vừa nói",
-		"hãy kể lại những gì tôi vừa nói",
-		"kể những việc mình vừa nói",
-		"vừa rồi mình nói gì",
+		"tôi vừa nói gì",
 		"nãy tôi vừa nói gì",
+		"mình vừa nói gì",
+		"tôi vừa nói những gì",
+		"nãy mình nói gì",
+		"kể lại những gì tôi vừa nói",
 	}
 
 	for _, input := range cases {
@@ -82,13 +79,38 @@ func TestHandleMessageRecognizesHistoryVariants(t *testing.T) {
 	}
 }
 
+func TestHandleMessageRecognizesNearMatchHistoryQuery(t *testing.T) {
+	dir := t.TempDir()
+	orchestrator := NewOrchestrator(memory.NewStore(), intent.NewClassifier(), nil, audit.NewLogger(filepath.Join(dir, "audit.jsonl")))
+	sessionID := "telegram_chat_29"
+	orchestrator.memory.Append(sessionID, memory.RoleUser, "xin chào")
+
+	outbound, err := orchestrator.HandleMessage(context.Background(), InboundMessage{
+		RequestID: "telegram_update_19",
+		SessionID: sessionID,
+		UpdateID:  19,
+		ChatID:    29,
+		Text:      "tôi vừa nói gì vậy",
+		Source:    "telegram",
+	})
+	if err != nil {
+		t.Fatalf("HandleMessage() returned error: %v", err)
+	}
+
+	if !strings.Contains(outbound.Text, "xin chào") {
+		t.Fatalf("expected near-match to be recognized as recall, got: %q", outbound.Text)
+	}
+
+	orchestrator.FinalizeAudit(InboundMessage{RequestID: "telegram_update_19", SessionID: sessionID, UpdateID: 19, ChatID: 29, Text: "tôi vừa nói gì vậy"}, nil)
+}
+
 func TestHandleMessageFiltersPreviousRecallQueriesFromSummary(t *testing.T) {
 	dir := t.TempDir()
 	orchestrator := NewOrchestrator(memory.NewStore(), intent.NewClassifier(), nil, audit.NewLogger(filepath.Join(dir, "audit.jsonl")))
 	sessionID := "telegram_chat_23"
 	orchestrator.memory.Append(sessionID, memory.RoleUser, "xin chào")
 	orchestrator.memory.Append(sessionID, memory.RoleAssistant, "Chào bạn, tôi là V-Claw.")
-	orchestrator.memory.Append(sessionID, memory.RoleUser, "nãy tôi vừa nói gì")
+	orchestrator.memory.Append(sessionID, memory.RoleUser, "tôi vừa nói gì")
 	orchestrator.memory.Append(sessionID, memory.RoleAssistant, "Đây là những gì bạn đã nói gần đây:\n1. Bạn: xin chào")
 
 	outbound, err := orchestrator.HandleMessage(context.Background(), InboundMessage{
@@ -96,21 +118,21 @@ func TestHandleMessageFiltersPreviousRecallQueriesFromSummary(t *testing.T) {
 		SessionID: sessionID,
 		UpdateID:  13,
 		ChatID:    23,
-		Text:      "hãy kể những việc tôi vừa nói",
+		Text:      "tôi vừa nói gì vậy",
 		Source:    "telegram",
 	})
 	if err != nil {
 		t.Fatalf("HandleMessage() returned error: %v", err)
 	}
 
-	if strings.Contains(outbound.Text, "nãy tôi vừa nói gì") {
+	if strings.Contains(outbound.Text, "tôi vừa nói gì vậy") {
 		t.Fatalf("expected recall queries to be filtered out, got: %q", outbound.Text)
 	}
 	if !strings.Contains(outbound.Text, "xin chào") {
 		t.Fatalf("expected meaningful history to remain, got: %q", outbound.Text)
 	}
 
-	orchestrator.FinalizeAudit(InboundMessage{RequestID: "telegram_update_13", SessionID: sessionID, UpdateID: 13, ChatID: 23, Text: "hãy kể những việc tôi vừa nói"}, nil)
+	orchestrator.FinalizeAudit(InboundMessage{RequestID: "telegram_update_13", SessionID: sessionID, UpdateID: 13, ChatID: 23, Text: "tôi vừa nói gì vậy"}, nil)
 }
 
 func TestHandleMessageReturnsEmptyHistoryMessage(t *testing.T) {
@@ -155,7 +177,7 @@ func TestHandleMessageUsesLLMReplyWhenAvailable(t *testing.T) {
 		SessionID: "telegram_chat_24",
 		UpdateID:  14,
 		ChatID:    24,
-		Text:      "xin chào",
+		Text:      "đọc mail chưa?",
 		Source:    "telegram",
 	})
 	if err != nil {
@@ -169,7 +191,34 @@ func TestHandleMessageUsesLLMReplyWhenAvailable(t *testing.T) {
 		t.Fatalf("expected responder to be called once, got %d", responder.calls)
 	}
 
-	orchestrator.FinalizeAudit(InboundMessage{RequestID: "telegram_update_14", SessionID: "telegram_chat_24", UpdateID: 14, ChatID: 24, Text: "xin chào"}, nil)
+	orchestrator.FinalizeAudit(InboundMessage{RequestID: "telegram_update_14", SessionID: "telegram_chat_24", UpdateID: 14, ChatID: 24, Text: "đọc mail chưa?"}, nil)
+}
+
+func TestHandleMessageUsesFixedGreeting(t *testing.T) {
+	dir := t.TempDir()
+	responder := &stubResponder{reply: "should not be used"}
+	orchestrator := NewOrchestrator(memory.NewStore(), intent.NewClassifier(), responder, audit.NewLogger(filepath.Join(dir, "audit.jsonl")))
+
+	outbound, err := orchestrator.HandleMessage(context.Background(), InboundMessage{
+		RequestID: "telegram_update_18",
+		SessionID: "telegram_chat_28",
+		UpdateID:  18,
+		ChatID:    28,
+		Text:      "xin chào",
+		Source:    "telegram",
+	})
+	if err != nil {
+		t.Fatalf("HandleMessage() returned error: %v", err)
+	}
+
+	if strings.Contains(outbound.Text, "should not be used") {
+		t.Fatalf("expected greeting to bypass llm, got: %q", outbound.Text)
+	}
+	if responder.calls != 0 {
+		t.Fatalf("expected responder not to be called, got %d", responder.calls)
+	}
+
+	orchestrator.FinalizeAudit(InboundMessage{RequestID: "telegram_update_18", SessionID: "telegram_chat_28", UpdateID: 18, ChatID: 28, Text: "xin chào"}, nil)
 }
 
 func TestHandleMessageKeepsSystemOpGuardWithoutLLM(t *testing.T) {

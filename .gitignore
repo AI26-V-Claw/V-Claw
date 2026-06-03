@@ -11,5 +11,4 @@ bin/
 .appdata/
 data/telegram_offset.txt
 logs/audit.jsonl
-.antigravity/
-.appdata/
+CLAUDE.md

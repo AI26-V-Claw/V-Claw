@@ -160,7 +160,7 @@ func (o *Orchestrator) replyFor(ctx context.Context, sessionID, text string, cla
 		return formatHistory(o.memory.GetHistory(sessionID)), "memory_summary"
 	}
 
-	if o.responder != nil && classification.Intent != intent.IntentSystemOp {
+	if o.responder != nil && classification.Intent == intent.IntentReadInfo {
 		reply, err := o.generateLLMReply(ctx, sessionID, text, classification)
 		if err == nil && strings.TrimSpace(reply) != "" {
 			return reply, "llm_reply"
@@ -169,7 +169,7 @@ func (o *Orchestrator) replyFor(ctx context.Context, sessionID, text string, cla
 
 	switch classification.Intent {
 	case intent.IntentGreeting:
-		return "Chào bạn, tôi là V-Claw.", "greeting_reply"
+		return "Chào bạn! Mình là V-Claw, mình có thể giúp gì cho bạn?", "greeting_reply"
 	case intent.IntentReadInfo:
 		return "Tôi hiểu đây là yêu cầu đọc thông tin. Connector sẽ được nối ở bước sau.", "read_info_placeholder"
 	case intent.IntentSystemOp:
@@ -216,7 +216,11 @@ func (o *Orchestrator) generateLLMReply(ctx context.Context, sessionID, text str
 	messages = append(messages, providers.ChatMessage{Role: "user", Content: text})
 
 	systemPrompt := buildSystemPrompt(classification)
-	return o.responder.Complete(ctx, systemPrompt, messages)
+	reply, err := o.responder.Complete(ctx, systemPrompt, messages)
+	if err != nil {
+		return "", err
+	}
+	return normalizeLLMReply(reply), nil
 }
 
 func buildSystemPrompt(classification intent.IntentResult) string {
@@ -250,33 +254,45 @@ func isPromptInjection(text string) bool {
 
 func isHistoryQuery(text string) bool {
 	lowered := strings.ToLower(strings.TrimSpace(text))
-	phrases := []string{
-		"nãy tôi vừa nói gì",
-		"nãy t vừa nói gì",
-		"nãy mình vừa nói gì",
+	normalized := normalizeQuery(lowered)
+	strongPhrases := []string{
 		"tôi vừa nói gì",
-		"t vừa nói gì",
-		"vừa rồi tôi nói gì",
-		"vừa rồi mình nói gì",
-		"nãy mình nói gì",
-		"nãy giờ mình nói gì",
-		"vừa rồi nói gì",
+		"nãy tôi vừa nói gì",
 		"mình vừa nói gì",
-		"kể những việc tôi vừa nói",
+		"tôi vừa nói những gì",
+		"nãy mình nói gì",
 		"kể lại những gì tôi vừa nói",
-		"kể những việc mình vừa nói",
-		"kể lại những gì mình vừa nói",
-		"hãy kể những việc tôi vừa nói",
-		"hãy kể lại những gì tôi vừa nói",
-		"hãy kể những việc mình vừa nói",
-		"hãy kể lại những gì mình vừa nói",
+		"tôi vừa nói gì vậy",
+		"nãy mình vừa nói gì",
 	}
-	for _, phrase := range phrases {
-		if strings.Contains(lowered, phrase) {
+	for _, phrase := range strongPhrases {
+		if strings.Contains(normalized, phrase) {
 			return true
 		}
 	}
-	return false
+
+	coreTerms := []string{
+		"nãy",
+		"vừa",
+		"vừa rồi",
+		"mình",
+		"tôi",
+		"nói",
+		"kể",
+		"nhắc",
+	}
+	queryTerms := []string{
+		"gì",
+		"những gì",
+		"nói gì",
+		"nhắc gì",
+		"vừa nói",
+		"vừa nhắc",
+		"kể lại",
+		"lịch sử",
+		"vừa rồi",
+	}
+	return semanticKeywordMatch(normalized, coreTerms, queryTerms)
 }
 
 func formatHistory(history []memory.Message) string {
@@ -301,4 +317,75 @@ func formatHistory(history []memory.Message) string {
 		builder.WriteString(fmt.Sprintf("%d. Bạn: %s\n", index+1, message.Text))
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func normalizeLLMReply(reply string) string {
+	trimmed := strings.TrimSpace(reply)
+	if trimmed == "" {
+		return ""
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		joined := strings.Join(strings.Fields(line), " ")
+		if len([]rune(joined)) <= 240 {
+			return joined
+		}
+		runes := []rune(joined)
+		return strings.TrimSpace(string(runes[:237])) + "..."
+	}
+	return trimmed
+}
+
+func normalizeQuery(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	replacer := strings.NewReplacer(
+		",", " ",
+		".", " ",
+		"!", " ",
+		"?", " ",
+		":", " ",
+		";", " ",
+		"(", " ",
+		")", " ",
+		"[", " ",
+		"]", " ",
+		"{", " ",
+		"}", " ",
+		"“", " ",
+		"”", " ",
+		"'", " ",
+		"\"", " ",
+	)
+	text = replacer.Replace(text)
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func semanticKeywordMatch(text string, coreTerms, queryTerms []string) bool {
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+
+	coreHits := 0
+	for _, term := range coreTerms {
+		if strings.Contains(text, term) {
+			coreHits++
+		}
+	}
+	if coreHits == 0 {
+		return false
+	}
+
+	queryHits := 0
+	for _, term := range queryTerms {
+		if strings.Contains(text, term) {
+			queryHits++
+		}
+	}
+
+	return queryHits > 0
 }

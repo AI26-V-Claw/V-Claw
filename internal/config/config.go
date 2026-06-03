@@ -8,8 +8,14 @@ import (
 )
 
 type Config struct {
+	TelegramEnabled          bool
 	TelegramBotToken         string
 	AllowedTelegramUserID    int64
+	SlackEnabled             bool
+	SlackBotToken            string
+	SlackAppToken            string
+	SlackAllowedChannelIDs   []string
+	SlackAllowedUserIDs      []string
 	DataDir                  string
 	LogDir                   string
 	LLMProvider              string
@@ -23,24 +29,51 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
-	if token == "" {
-		return Config{}, fmt.Errorf("TELEGRAM_BOT_TOKEN is required")
+	telegramEnabled := envBool("VCLAW_TELEGRAM_ENABLED", false)
+	slackEnabled := envBool("VCLAW_SLACK_ENABLED", false)
+
+	telegramToken := firstNonEmptyEnv("TELEGRAM_BOT_TOKEN", "VCLAW_TELEGRAM_BOT_TOKEN")
+	allowedUserIDRaw := firstNonEmptyEnv("ALLOWED_TELEGRAM_USER_ID", "VCLAW_TELEGRAM_ALLOWED_USER_ID", "VCLAW_TELEGRAM_ALLOWED_USER_IDS")
+	allowedUserID := int64(0)
+	if strings.TrimSpace(allowedUserIDRaw) != "" {
+		allowedUserID, _ = strconv.ParseInt(firstCSVValue(allowedUserIDRaw), 10, 64)
+	}
+	if telegramEnabled {
+		if telegramToken == "" {
+			return Config{}, fmt.Errorf("TELEGRAM_BOT_TOKEN is required when VCLAW_TELEGRAM_ENABLED=true")
+		}
+		if strings.TrimSpace(allowedUserIDRaw) == "" {
+			return Config{}, fmt.Errorf("ALLOWED_TELEGRAM_USER_ID is required when VCLAW_TELEGRAM_ENABLED=true")
+		}
+		var err error
+		allowedUserID, err = strconv.ParseInt(firstCSVValue(allowedUserIDRaw), 10, 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("ALLOWED_TELEGRAM_USER_ID must be an integer: %w", err)
+		}
 	}
 
-	allowedUserIDRaw := strings.TrimSpace(os.Getenv("ALLOWED_TELEGRAM_USER_ID"))
-	if allowedUserIDRaw == "" {
-		return Config{}, fmt.Errorf("ALLOWED_TELEGRAM_USER_ID is required")
-	}
-
-	allowedUserID, err := strconv.ParseInt(allowedUserIDRaw, 10, 64)
-	if err != nil {
-		return Config{}, fmt.Errorf("ALLOWED_TELEGRAM_USER_ID must be an integer: %w", err)
+	slackBotToken := firstNonEmptyEnv("VCLAW_SLACK_BOT_TOKEN")
+	slackAppToken := firstNonEmptyEnv("VCLAW_SLACK_APP_TOKEN")
+	slackAllowedChannelIDs := splitCSV(firstNonEmptyEnv("VCLAW_SLACK_ALLOWED_CHANNEL_IDS"))
+	slackAllowedUserIDs := splitCSV(firstNonEmptyEnv("VCLAW_SLACK_ALLOWED_USER_IDS"))
+	if slackEnabled {
+		if strings.TrimSpace(slackBotToken) == "" {
+			return Config{}, fmt.Errorf("VCLAW_SLACK_BOT_TOKEN is required when VCLAW_SLACK_ENABLED=true")
+		}
+		if strings.TrimSpace(slackAppToken) == "" {
+			return Config{}, fmt.Errorf("VCLAW_SLACK_APP_TOKEN is required when VCLAW_SLACK_ENABLED=true")
+		}
 	}
 
 	return Config{
-		TelegramBotToken:         token,
+		TelegramEnabled:          telegramEnabled,
+		TelegramBotToken:         telegramToken,
 		AllowedTelegramUserID:    allowedUserID,
+		SlackEnabled:             slackEnabled,
+		SlackBotToken:            slackBotToken,
+		SlackAppToken:            slackAppToken,
+		SlackAllowedChannelIDs:   slackAllowedChannelIDs,
+		SlackAllowedUserIDs:      slackAllowedUserIDs,
 		DataDir:                  envOrDefault("DATA_DIR", "./data"),
 		LogDir:                   envOrDefault("LOG_DIR", "./logs"),
 		LLMProvider:              strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER"))),
@@ -50,7 +83,7 @@ func Load() (Config, error) {
 		AnthropicAPIKey:          strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
 		AnthropicClassifierModel: strings.TrimSpace(os.Getenv("ANTHROPIC_CLASSIFIER_MODEL")),
 		AnthropicResponseModel:   strings.TrimSpace(os.Getenv("ANTHROPIC_RESPONSE_MODEL")),
-		UseLLMClassifier:         envOrDefault("USE_LLM_CLASSIFIER", "false") == "true",
+		UseLLMClassifier:         envBool("USE_LLM_CLASSIFIER", false),
 	}, nil
 }
 
@@ -60,4 +93,51 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func splitCSV(value string) []string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.Split(trimmed, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if entry := strings.TrimSpace(part); entry != "" {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+func firstCSVValue(value string) string {
+	parts := splitCSV(value)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
 }
