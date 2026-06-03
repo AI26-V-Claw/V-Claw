@@ -60,7 +60,7 @@ func (s *stubRunner) RunShell(_ context.Context, req *runtime.RunShellRequest) (
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
-func newGate(stub *stubRunner, logger audit.Logger) *gate.GatedRunner {
+func newGate(stub *stubRunner, logger audit.AuditEventLogger) *gate.GatedRunner {
 	return gate.NewGatedRunner(gate.Config{
 		Checker:  policies.DefaultChecker,
 		Detector: safety.DefaultScanner,

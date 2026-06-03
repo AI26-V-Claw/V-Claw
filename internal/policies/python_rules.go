@@ -126,7 +126,7 @@ var pythonRules = []MatrixEntry{
 	{".rename(", RiskNeedsApproval, DecisionNeedsApproval,
 		"Code đổi tên/di chuyển file (pathlib.Path.rename, có thể ghi đè). Cần xác nhận."},
 	{".replace(", RiskNeedsApproval, DecisionNeedsApproval,
-		"Code replace file (pathlib.Path.replace, có thể ghi đè). Cần xác nhận."}
+		"Code replace file (pathlib.Path.replace, có thể ghi đè). Cần xác nhận."},
 
 	// ── Safe write (create new files) ─────────────────────────────────────
 

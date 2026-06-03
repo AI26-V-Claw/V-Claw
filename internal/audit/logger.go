@@ -3,18 +3,17 @@ package audit
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"sync"
 	"time"
 )
 
-// ─── Logger interface ─────────────────────────────────────────────────────────
+// ─── AuditEventLogger interface ───────────────────────────────────────────────
 
-// Logger is the interface for writing and querying audit events.
+// AuditEventLogger is the interface for writing and querying audit events.
 // All sandbox pipeline stages log through this interface; implementations
 // may write to memory, a file, or a database.
-type Logger interface {
+type AuditEventLogger interface {
 	// Log writes an AuditEvent to the audit store.
 	// It must be safe to call concurrently.
 	Log(event AuditEvent) error
@@ -26,7 +25,7 @@ type Logger interface {
 
 // ─── Filter ───────────────────────────────────────────────────────────────────
 
-// Filter restricts the events returned by Logger.Query.
+// Filter restricts the events returned by AuditEventLogger.Query.
 // Zero-value fields are ignored (no restriction on that dimension).
 type Filter struct {
 	// RequestID filters to events for a specific tool invocation.
@@ -63,7 +62,7 @@ type Filter struct {
 // about audit output.
 type NopLogger struct{}
 
-func (n *NopLogger) Log(_ AuditEvent) error        { return nil }
+func (n *NopLogger) Log(_ AuditEvent) error               { return nil }
 func (n *NopLogger) Query(_ Filter) ([]AuditEvent, error) { return nil, nil }
 
 // ─── MemoryLogger ─────────────────────────────────────────────────────────────
@@ -207,19 +206,19 @@ func (fl *FileLogger) Close() error {
 
 // ─── MultiLogger ──────────────────────────────────────────────────────────────
 
-// MultiLogger fans out Log calls to multiple Logger implementations.
+// MultiLogger fans out Log calls to multiple AuditEventLogger implementations.
 // Query is delegated to the first logger only (typically the primary store).
 //
 // Usage: combine MemoryLogger (for tests) and FileLogger (for persistence).
 //
 //	multi := audit.NewMultiLogger(fileLogger, memLogger)
 type MultiLogger struct {
-	loggers []Logger
+	loggers []AuditEventLogger
 }
 
 // NewMultiLogger creates a MultiLogger backed by the given loggers.
 // At least one logger must be provided.
-func NewMultiLogger(loggers ...Logger) *MultiLogger {
+func NewMultiLogger(loggers ...AuditEventLogger) *MultiLogger {
 	return &MultiLogger{loggers: loggers}
 }
 

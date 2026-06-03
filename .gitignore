@@ -24,3 +24,7 @@ logs/audit.jsonl
 AGENTS.md
 CLAUDE.md
 v_claw_architect_claude.pdf
+
+# sandbox
+.sandbox-workspace/
+sandbox_smoke.go

@@ -118,7 +118,7 @@ type Config struct {
 
 	// Logger records all pipeline events to the audit log.
 	// Optional — if nil, a NopLogger is used.
-	Logger audit.Logger
+	Logger audit.AuditEventLogger
 
 	// Runner is the underlying executor that dispatches jobs to Docker.
 	// Required.
@@ -136,7 +136,7 @@ type Config struct {
 type GatedRunner struct {
 	checker  policies.Checker
 	detector safety.Detector
-	logger   audit.Logger
+	logger   audit.AuditEventLogger
 	runner   runtime.Runner
 }
 

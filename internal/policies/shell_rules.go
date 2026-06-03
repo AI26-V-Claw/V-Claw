@@ -108,7 +108,8 @@ var shellRules = []MatrixEntry{
 	{"ssh ", RiskExternalNetwork, DecisionNeedsApproval,
 		"Lệnh SSH ra ngoài. Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."},
 	{"scp ", RiskExternalNetwork, DecisionNeedsApproval,
-		"Lệnh copy qua SSH. Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."}
+		"Lệnh copy qua SSH. Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."},
+	{"sftp ", RiskExternalNetwork, DecisionBlock,
 		"Lệnh SFTP. Sandbox không có mạng."},
 	{"ftp ", RiskExternalNetwork, DecisionBlock,
 		"Lệnh FTP. Sandbox không có mạng."},
