@@ -45,6 +45,27 @@ func TestToolPolicyDecideToolCallAllowsSafeReadOnlyTool(t *testing.T) {
 	}
 }
 
+func TestToolPolicyDecideToolCallAllowsWebReadTools(t *testing.T) {
+	policy := NewToolPolicy()
+	for _, name := range []string{"web.search", "web.fetch"} {
+		t.Run(name, func(t *testing.T) {
+			decision := policy.DecideToolCall("call_web", tools.ToolDefinition{
+				Name:       name,
+				Capability: tools.CapabilityReadOnly,
+				RiskLevel:  tools.RiskLevelSafeRead,
+				Enabled:    true,
+			}, true, time.Now())
+
+			if decision.Decision != contracts.RiskDecisionAllow {
+				t.Fatalf("expected allow, got %#v", decision)
+			}
+			if decision.RequiresApproval {
+				t.Fatalf("%s should not require approval", name)
+			}
+		})
+	}
+}
+
 func TestToolPolicyDecideToolCallRequiresApprovalForSideEffectTool(t *testing.T) {
 	policy := NewToolPolicy()
 	decision := policy.DecideToolCall("call_write", tools.ToolDefinition{

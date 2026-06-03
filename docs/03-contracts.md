@@ -423,6 +423,18 @@ name, owner, description, defaultRiskLevel, requiresApproval
 
 > `people.searchDirectory` only reads Google Workspace directory profiles to resolve names/emails before matching Google Chat members.
 
+### Web
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `web.search` | Integration | `safe_read` | No |
+| `web.fetch` | Integration | `safe_read` | No |
+
+> `web.search` searches the public web through the configured web provider and returns concise result snippets with URLs.  
+> `web.fetch` extracts readable content from one public `http` or `https` URL and truncates long page content before returning it to the agent.
+> Tavily is the current implementation provider, but the public tool contract remains provider-neutral.
+> These tools are read-only, but user prompts and tool descriptions should avoid sending private or sensitive data to the external web provider unless the user explicitly asks for it.
+
 ### Sandbox
 
 | Tool | Owner | Risk | Approval |

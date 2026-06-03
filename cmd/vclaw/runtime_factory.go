@@ -14,6 +14,7 @@ import (
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeopleconnector "vclaw/internal/connectors/google/people"
+	"vclaw/internal/connectors/tavily"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
@@ -22,17 +23,23 @@ import (
 	gmailtools "vclaw/internal/tools/office/gmail"
 	peopletools "vclaw/internal/tools/office/people"
 	sandboxtools "vclaw/internal/tools/system/sandbox"
+	webtools "vclaw/internal/tools/web"
 )
 
 const (
 	googleToolsAuto     = "auto"
 	googleToolsRequired = "required"
 	googleToolsOff      = "off"
+
+	webToolsAuto     = "auto"
+	webToolsRequired = "required"
+	webToolsOff      = "off"
 )
 
 type agentRuntimeOptions struct {
 	MaxIterations   int
 	GoogleToolsMode string
+	WebToolsMode    string
 	CredentialsPath string
 	GoogleTokenPath string
 	Logger          *slog.Logger
@@ -66,6 +73,9 @@ func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRun
 	if err := sandboxtools.RegisterTools(registry); err != nil {
 		return agentRuntimeBundle{}, err
 	}
+	if err := registerWebTools(registry, options); err != nil {
+		return agentRuntimeBundle{}, err
+	}
 	if err := registerGoogleTools(ctx, registry, options); err != nil {
 		return agentRuntimeBundle{}, err
 	}
@@ -79,6 +89,38 @@ func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRun
 		Logger:        options.Logger,
 	})
 	return agentRuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
+}
+
+func registerWebTools(registry *tools.ToolRegistry, options agentRuntimeOptions) error {
+	mode := strings.ToLower(strings.TrimSpace(options.WebToolsMode))
+	if mode == "" {
+		mode = strings.ToLower(strings.TrimSpace(os.Getenv("VCLAW_WEB_TOOLS_MODE")))
+	}
+	if mode == "" {
+		mode = webToolsAuto
+	}
+	if mode == webToolsOff {
+		return nil
+	}
+	if mode != webToolsAuto && mode != webToolsRequired {
+		return fmt.Errorf("web tools mode must be one of: auto, required, off")
+	}
+
+	apiKey := envFirst("TAVILY_API_KEY", "TALIVY_API_KEY")
+	if apiKey == "" {
+		if mode == webToolsAuto {
+			return nil
+		}
+		return fmt.Errorf("TAVILY_API_KEY is required when web tools mode is required")
+	}
+	client, err := tavily.NewClient(tavily.Config{
+		APIKey:  apiKey,
+		BaseURL: envOrDefault("TAVILY_BASE_URL", ""),
+	})
+	if err != nil {
+		return fmt.Errorf("configure web tools: %w", err)
+	}
+	return webtools.RegisterTools(registry, webtools.NewService(client))
 }
 
 func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, options agentRuntimeOptions) error {

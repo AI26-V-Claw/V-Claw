@@ -209,6 +209,8 @@ func TestSafety_ToolRegistry_ContractFields(t *testing.T) {
 		{name: "gmail.getEmail", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
 		{name: "calendar.listEvents", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
 		{name: "chat.listMessages", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
+		{name: "web.search", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
+		{name: "web.fetch", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
 		{name: "calendar.createEvent", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 60000},
 		{name: "calendar.updateEvent", owner: "integration", defaultRiskLevel: contracts.RiskLevelExternalWrite, requiresApproval: true, timeoutMs: 60000},
 		{name: "calendar.deleteEvent", owner: "integration", defaultRiskLevel: contracts.RiskLevelDestructive, requiresApproval: true, timeoutMs: 60000},
@@ -248,6 +250,8 @@ func TestSafety_SafeTools_NoConfirm(t *testing.T) {
 		"gmail.getEmail",
 		"calendar.listEvents",
 		"chat.listMessages",
+		"web.search",
+		"web.fetch",
 	}
 
 	for _, toolName := range safeTools {

@@ -68,6 +68,18 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "space", Type: "string", Required: false, Description: "Chat space"}},
 	},
+	"web.search": {
+		Name: "web.search", Category: CategorySafeRead,
+		Description: "Search the public web for current information",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "query", Type: "string", Required: true, Description: "Search query"}},
+	},
+	"web.fetch": {
+		Name: "web.fetch", Category: CategorySafeRead,
+		Description: "Fetch and extract readable content from a public web page URL",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "url", Type: "string", Required: true, Description: "HTTP or HTTPS URL"}},
+	},
 	"calendar.createEvent": {
 		Name: "calendar.createEvent", Category: CategoryDangerousWrite,
 		Description: "Create a new calendar event",

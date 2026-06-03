@@ -271,7 +271,11 @@ func printUsage() {
   vclaw google smoke [-chat-space spaces/AAAA...]
   vclaw google gmail <labels|profile|list|get|list-threads|get-thread|list-drafts|get-draft|create-draft|update-draft|send-draft|delete-draft|reply-draft|forward-draft|download-attachments|modify-message|batch-modify|trash-message|untrash-message>
   vclaw google people <search-directory>
-  vclaw google chat <list-spaces|list-members|find-spaces-by-members|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>`)
+  vclaw google chat <list-spaces|list-members|find-spaces-by-members|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>
+
+Agent runtime env:
+  VCLAW_WEB_TOOLS_MODE=auto|required|off
+  TAVILY_API_KEY=...`)
 }
 
 func printGoogleUsage() {
