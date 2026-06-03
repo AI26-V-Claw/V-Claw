@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
@@ -21,6 +22,38 @@ type fakeProvider struct {
 
 type blockingRuntimeTool struct {
 	release chan struct{}
+}
+
+type stubIntentClassifier struct {
+	output       *agentintent.ClassificationOutput
+	err          error
+	calls        int
+	historyCalls int
+	lastHistory  []string
+}
+
+type stubTaskPlanner struct {
+	result    *TaskPlanResult
+	err       error
+	calls     int
+	lastInput TaskPlanningInput
+}
+
+func (c *stubIntentClassifier) Classify(context.Context, string) (*agentintent.ClassificationOutput, error) {
+	c.calls++
+	return c.output, c.err
+}
+
+func (c *stubIntentClassifier) ClassifyWithMemoryIsolation(_ context.Context, _ string, recentHistory []string) (*agentintent.ClassificationOutput, error) {
+	c.historyCalls++
+	c.lastHistory = append([]string(nil), recentHistory...)
+	return c.output, c.err
+}
+
+func (p *stubTaskPlanner) Plan(_ context.Context, input TaskPlanningInput) (*TaskPlanResult, error) {
+	p.calls++
+	p.lastInput = input
+	return p.result, p.err
 }
 
 func (blockingRuntimeTool) Name() string                 { return "test.blocking" }
@@ -105,6 +138,206 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}
 }
 
+func TestRuntimeReturnsClarificationFromIntentClassifierBeforeProviderChat(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "should not be called"},
+	}}}
+	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
+		Intent: &agentintent.Result{
+			Type:       agentintent.TypeUnknown,
+			Confidence: 0.4,
+			Reasoning:  "Yêu cầu chưa rõ.",
+		},
+		NeedsClarification:   true,
+		ClarificationMessage: "Bạn muốn tôi tra cứu thông tin gì?",
+	}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:         provider,
+		Registry:         tools.NewToolRegistry(),
+		IntentClassifier: classifier,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusNeedClarification {
+		t.Fatalf("expected need_clarification, got %#v", response)
+	}
+	if response.Message != "Bạn muốn tôi tra cứu thông tin gì?" {
+		t.Fatalf("unexpected clarification message: %q", response.Message)
+	}
+	if classifier.calls != 1 {
+		t.Fatalf("expected classifier to be called once, got %d", classifier.calls)
+	}
+	if len(provider.calls) != 0 {
+		t.Fatalf("provider chat should not be called before clarification, got %d calls", len(provider.calls))
+	}
+}
+
+func TestRuntimeAddsTaskPlanBeforeProviderChat(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "done"},
+	}}}
+	planner := &stubTaskPlanner{result: &TaskPlanResult{Plan: contracts.Plan{Steps: []contracts.PlanStep{{
+		ID:          "step_1",
+		Description: "gmail.listEmails: đọc email gần đây",
+		Status:      "pending",
+	}}}}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:    provider,
+		Registry:    tools.NewToolRegistry(),
+		TaskPlanner: planner,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed, got %#v", response)
+	}
+	if planner.calls != 1 {
+		t.Fatalf("expected planner call, got %d", planner.calls)
+	}
+	if response.Plan == nil || len(response.Plan.Steps) != 1 {
+		t.Fatalf("expected response plan, got %#v", response.Plan)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("expected one provider call, got %d", len(provider.calls))
+	}
+	foundPlanPrompt := false
+	for _, msg := range provider.calls[0].Messages {
+		if msg.Role == providers.MessageRoleSystem && strings.Contains(msg.Content, "Task planner result") {
+			foundPlanPrompt = true
+			break
+		}
+	}
+	if !foundPlanPrompt {
+		t.Fatalf("expected task planner context prompt, got %#v", provider.calls[0].Messages)
+	}
+}
+
+func TestRuntimeReturnsClarificationFromTaskPlannerBeforeProviderChat(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "should not be called"},
+	}}}
+	planner := &stubTaskPlanner{result: &TaskPlanResult{
+		NeedsClarification:   true,
+		ClarificationMessage: "Bạn muốn gửi email cho ai?",
+	}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:    provider,
+		Registry:    tools.NewToolRegistry(),
+		TaskPlanner: planner,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusNeedClarification {
+		t.Fatalf("expected need_clarification, got %#v", response)
+	}
+	if response.Message != "Bạn muốn gửi email cho ai?" {
+		t.Fatalf("unexpected clarification message: %q", response.Message)
+	}
+	if len(provider.calls) != 0 {
+		t.Fatalf("provider chat should not be called before planning clarification, got %d calls", len(provider.calls))
+	}
+}
+
+func TestRuntimePassesRecentSessionHistoryToClassifierAndPlanner(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "ok"},
+	}}}
+	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
+		Intent: &agentintent.Result{
+			Type:       agentintent.TypeDangerousAction,
+			Confidence: 0.95,
+		},
+	}}
+	planner := &stubTaskPlanner{result: &TaskPlanResult{}}
+	store := sessions.NewInMemoryStore()
+	ctx := context.Background()
+	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
+		Role:    providers.MessageRoleUser,
+		Content: "Create a meeting with Bao tomorrow at 10am about sprint1",
+	}); err != nil {
+		t.Fatalf("append prior user message: %v", err)
+	}
+	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
+		Role:    providers.MessageRoleAssistant,
+		Content: "What time should the meeting end?",
+	}); err != nil {
+		t.Fatalf("append prior assistant message: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:         provider,
+		Registry:         tools.NewToolRegistry(),
+		IntentClassifier: classifier,
+		TaskPlanner:      planner,
+		SessionStore:     store,
+	})
+	message := runtimeTestMessage()
+	message.Text = "11am"
+
+	response, err := runtime.Run(ctx, message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed, got %#v", response)
+	}
+	if classifier.historyCalls != 1 {
+		t.Fatalf("expected memory-aware classifier call, got %d", classifier.historyCalls)
+	}
+	joinedHistory := strings.Join(classifier.lastHistory, "\n")
+	if !strings.Contains(joinedHistory, "10am") || !strings.Contains(joinedHistory, "meeting end") {
+		t.Fatalf("expected prior request and clarification in classifier history, got %#v", classifier.lastHistory)
+	}
+	plannerHistory := strings.Join(planner.lastInput.RecentHistory, "\n")
+	if !strings.Contains(plannerHistory, "10am") || !strings.Contains(plannerHistory, "meeting end") {
+		t.Fatalf("expected prior request and clarification in planner history, got %#v", planner.lastInput.RecentHistory)
+	}
+}
+
+func TestRuntimeStoresClarificationInSessionTranscript(t *testing.T) {
+	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
+		Intent: &agentintent.Result{
+			Type:       agentintent.TypeUnknown,
+			Confidence: 0.3,
+		},
+		NeedsClarification:   true,
+		ClarificationMessage: "Please clarify the request.",
+	}}
+	store := sessions.NewInMemoryStore()
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:         &fakeProvider{},
+		Registry:         tools.NewToolRegistry(),
+		IntentClassifier: classifier,
+		SessionStore:     store,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusNeedClarification {
+		t.Fatalf("expected need_clarification, got %#v", response)
+	}
+	transcript, err := store.LoadTranscript(context.Background(), runtimeTestMessage().SessionID)
+	if err != nil {
+		t.Fatalf("load transcript: %v", err)
+	}
+	if len(transcript) != 2 {
+		t.Fatalf("expected user and assistant clarification in transcript, got %#v", transcript)
+	}
+	if transcript[1].Role != providers.MessageRoleAssistant || transcript[1].Content != "Please clarify the request." {
+		t.Fatalf("expected assistant clarification stored, got %#v", transcript[1])
+	}
+}
+
 func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.T) {
 	now := time.Date(2026, 6, 3, 17, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
 	prompt := runtimeSystemPrompt(now)
@@ -114,6 +347,9 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	}
 	if !strings.Contains(prompt, "this week") || !strings.Contains(prompt, "next Monday") {
 		t.Fatalf("expected calendar range guidance in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "people.searchDirectory") || !strings.Contains(prompt, "Attendees must be valid email addresses") {
+		t.Fatalf("expected attendee resolution guidance in prompt, got: %s", prompt)
 	}
 }
 
@@ -283,6 +519,144 @@ func TestRuntimeReturnsApprovalRequiredForSideEffectTool(t *testing.T) {
 	}
 	if executions != 0 {
 		t.Fatalf("side-effect tool must not execute before approval, executions=%d", executions)
+	}
+}
+
+func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
+	executions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_write",
+				Name:      "danger.count",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if pending.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", pending)
+	}
+	if executions != 0 {
+		t.Fatalf("side-effect tool must not execute before approval, executions=%d", executions)
+	}
+
+	response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed after approval, got %#v", response)
+	}
+	if executions != 1 {
+		t.Fatalf("expected side-effect tool to execute once after approval, executions=%d", executions)
+	}
+	if len(response.ToolResults) != 1 || !response.ToolResults[0].Success {
+		t.Fatalf("expected successful tool result, got %#v", response.ToolResults)
+	}
+}
+
+func TestRuntimeRejectsPendingApprovalWithoutExecutingTool(t *testing.T) {
+	executions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role:      providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{ID: "call_write", Name: "danger.count"}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_reject",
+		Decision:   contracts.ApprovalDecisionRejected,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if response.Status != contracts.AgentStatusBlocked {
+		t.Fatalf("expected blocked after rejection, got %#v", response)
+	}
+	if executions != 0 {
+		t.Fatalf("rejected tool must not execute, executions=%d", executions)
+	}
+}
+
+func TestRuntimeRevisionCommentReturnsClarificationWithoutExecutingTool(t *testing.T) {
+	executions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role:      providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{ID: "call_write", Name: "danger.count"}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_revise",
+		Decision:   contracts.ApprovalDecisionRejected,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+		Comment:    "đổi giờ sang 10:00",
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if response.Status != contracts.AgentStatusNeedClarification {
+		t.Fatalf("expected need_clarification after revision comment, got %#v", response)
+	}
+	if !strings.Contains(response.Message, "đổi giờ sang 10:00") {
+		t.Fatalf("expected revision comment in response, got %q", response.Message)
+	}
+	if executions != 0 {
+		t.Fatalf("revision must not execute original tool, executions=%d", executions)
 	}
 }
 

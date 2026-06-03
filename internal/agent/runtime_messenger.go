@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"vclaw/internal/contracts"
 )
@@ -25,6 +26,24 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 	}
 
 	msg.Text = strings.TrimSpace(msg.Text)
+	if command, ok := parseApprovalCommand(msg.Text, m.runtime.HasPendingApproval(msg.SessionID)); ok {
+		response, err := m.runtime.ResolveApproval(ctx, msg.SessionID, contracts.ApprovalDecision{
+			ApprovalID: command.approvalID,
+			RequestID:  msg.RequestID,
+			Decision:   command.decision,
+			DecidedBy:  "owner",
+			DecidedAt:  time.Now().UTC(),
+			Comment:    command.comment,
+		})
+		if err != nil {
+			return contracts.AgentResponse{}, err
+		}
+		if text := renderAgentResponse(response); strings.TrimSpace(text) != "" {
+			response.Message = text
+		}
+		return response, nil
+	}
+
 	response, err := m.runtime.Run(ctx, msg)
 	if err != nil {
 		return contracts.AgentResponse{}, err
@@ -74,6 +93,12 @@ func renderApprovalRequest(approval contracts.ApprovalRequest) string {
 	}
 	lines = append(lines, "Tool: "+strings.TrimSpace(approval.ToolCall.ToolName))
 	lines = append(lines, "Risk: "+string(approval.RiskLevel))
+	lines = append(lines, "Approval ID: "+strings.TrimSpace(approval.ApprovalID))
+	lines = append(lines, "")
+	lines = append(lines, "Trả lời một trong các lệnh:")
+	lines = append(lines, "- approve")
+	lines = append(lines, "- reject")
+	lines = append(lines, "- revise <nội dung muốn chỉnh>")
 
 	body := formatOutboundText(strings.Join(lines, "\n"))
 	if len(approval.ToolCall.Input) > 0 {
@@ -152,4 +177,52 @@ func limitOutboundText(text string) string {
 		return text
 	}
 	return strings.TrimSpace(string(runes[:maxOutboundTextRunes])) + "\n\n...[đã rút gọn]"
+}
+
+type approvalCommand struct {
+	decision   contracts.ApprovalDecisionStatus
+	approvalID string
+	comment    string
+}
+
+func parseApprovalCommand(text string, hasPending bool) (approvalCommand, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return approvalCommand{}, false
+	}
+	lower := strings.ToLower(trimmed)
+	parts := strings.Fields(trimmed)
+	first := ""
+	if len(parts) > 0 {
+		first = strings.ToLower(parts[0])
+	}
+
+	switch first {
+	case "/approve", "approve", "approved":
+		return approvalCommand{decision: contracts.ApprovalDecisionApproved, approvalID: secondField(parts)}, true
+	case "/reject", "reject", "rejected":
+		return approvalCommand{decision: contracts.ApprovalDecisionRejected, approvalID: secondField(parts)}, true
+	case "/revise", "revise", "sửa", "sua", "chỉnh", "chinh":
+		return approvalCommand{
+			decision: contracts.ApprovalDecisionRejected,
+			comment:  strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0])),
+		}, true
+	}
+
+	if hasPending {
+		switch lower {
+		case "ok", "yes", "duyệt", "dong-y", "đồng-ý", "đồng ý", "dong y", "xác nhận", "xac nhan":
+			return approvalCommand{decision: contracts.ApprovalDecisionApproved}, true
+		case "no", "cancel", "hủy", "huy", "từ-chối", "tu-choi", "từ chối", "tu choi", "không", "khong", "hủy bỏ", "huy bo":
+			return approvalCommand{decision: contracts.ApprovalDecisionRejected}, true
+		}
+	}
+	return approvalCommand{}, false
+}
+
+func secondField(parts []string) string {
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
 }

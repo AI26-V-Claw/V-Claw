@@ -38,6 +38,10 @@ func TestRenderAgentResponseFormatsApprovalForChat(t *testing.T) {
 		"Tóm tắt: Send a Google Chat message.",
 		"Tool: chat.sendMessage",
 		"Risk: external_write",
+		"Approval ID: appr_1",
+		"approve",
+		"reject",
+		"revise <nội dung muốn chỉnh>",
 		"Input:",
 	} {
 		if !strings.Contains(got, want) {
@@ -110,5 +114,34 @@ func TestRenderAgentResponseStripsInlineMarkdownMarkers(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected readable label %q, got %q", want, got)
 		}
+	}
+}
+
+func TestParseApprovalCommandApprovesPendingRequest(t *testing.T) {
+	command, ok := parseApprovalCommand("đồng ý", true)
+	if !ok {
+		t.Fatal("expected approval command")
+	}
+	if command.decision != contracts.ApprovalDecisionApproved {
+		t.Fatalf("expected approved, got %s", command.decision)
+	}
+}
+
+func TestParseApprovalCommandIgnoresNaturalAckWithoutPendingRequest(t *testing.T) {
+	if command, ok := parseApprovalCommand("ok", false); ok {
+		t.Fatalf("expected natural ack without pending approval to be ignored, got %#v", command)
+	}
+}
+
+func TestParseApprovalCommandRejectsWithRevisionComment(t *testing.T) {
+	command, ok := parseApprovalCommand("revise đổi giờ sang 10:00", true)
+	if !ok {
+		t.Fatal("expected revise command")
+	}
+	if command.decision != contracts.ApprovalDecisionRejected {
+		t.Fatalf("expected rejected decision, got %s", command.decision)
+	}
+	if command.comment != "đổi giờ sang 10:00" {
+		t.Fatalf("unexpected comment: %q", command.comment)
 	}
 }

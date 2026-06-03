@@ -70,6 +70,8 @@ const (
 	ErrorProviderUnavailable    = "PROVIDER_UNAVAILABLE"
 	ErrorActionRequiresApproval = "ACTION_REQUIRES_APPROVAL"
 	ErrorActionBlockedByPolicy  = "ACTION_BLOCKED_BY_POLICY"
+	ErrorApprovalNotFound       = "APPROVAL_NOT_FOUND"
+	ErrorApprovalExpired        = "APPROVAL_EXPIRED"
 	ErrorInternal               = "INTERNAL_ERROR"
 	ErrorMaxIterationsExceeded  = "MAX_ITERATIONS_EXCEEDED"
 )

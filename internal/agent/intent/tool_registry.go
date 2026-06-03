@@ -56,6 +56,18 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "id", Type: "string", Required: false, Description: "Email ID"}},
 	},
+	"gmail.listThreads": {
+		Name: "gmail.listThreads", Category: CategorySafeRead,
+		Description: "List Gmail threads",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "query", Type: "string", Required: false, Description: "Gmail thread search query"}},
+	},
+	"gmail.getThread": {
+		Name: "gmail.getThread", Category: CategorySafeRead,
+		Description: "Get a Gmail thread",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: false, Description: "Gmail thread ID"}},
+	},
 	"calendar.listEvents": {
 		Name: "calendar.listEvents", Category: CategorySafeRead,
 		Description: "List events from Google Calendar",
@@ -67,6 +79,30 @@ var Registry = map[string]ToolDefinition{
 		Description: "List Google Chat messages",
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "space", Type: "string", Required: false, Description: "Chat space"}},
+	},
+	"chat.listSpaces": {
+		Name: "chat.listSpaces", Category: CategorySafeRead,
+		Description: "List Google Chat spaces",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "pageSize", Type: "int", Required: false, Description: "Maximum spaces to list"}},
+	},
+	"chat.listMembers": {
+		Name: "chat.listMembers", Category: CategorySafeRead,
+		Description: "List members in a Google Chat space",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "space", Type: "string", Required: true, Description: "Chat space resource name"}},
+	},
+	"chat.findSpacesByMembers": {
+		Name: "chat.findSpacesByMembers", Category: CategorySafeRead,
+		Description: "Find Google Chat spaces containing resolved member resource names",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "members", Type: "string", Required: true, Description: "Comma-separated users/... member resources"}},
+	},
+	"people.searchDirectory": {
+		Name: "people.searchDirectory", Category: CategorySafeRead,
+		Description: "Search Google Workspace directory profiles",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "query", Type: "string", Required: true, Description: "Name or email to search"}},
 	},
 	"calendar.createEvent": {
 		Name: "calendar.createEvent", Category: CategoryDangerousWrite,
@@ -103,6 +139,43 @@ var Registry = map[string]ToolDefinition{
 		Description: "Create a Gmail draft",
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "to", Type: "email", Required: true, Description: "Recipient email address"}, {Name: "subject", Type: "string", Required: true, Description: "Email subject"}, {Name: "body", Type: "string", Required: true, Description: "Email body"}},
+	},
+	"gmail.updateDraft": {
+		Name: "gmail.updateDraft", Category: CategoryCommunication,
+		Description: "Update a Gmail draft",
+		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Draft ID"}, {Name: "to", Type: "email", Required: false, Description: "Recipient email address"}, {Name: "subject", Type: "string", Required: false, Description: "Email subject"}, {Name: "body", Type: "string", Required: false, Description: "Email body"}},
+	},
+	"gmail.sendDraft": {
+		Name: "gmail.sendDraft", Category: CategoryCommunication,
+		Description: "Send an existing Gmail draft",
+		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Draft ID"}},
+	},
+	"gmail.replyDraft": {
+		Name: "gmail.replyDraft", Category: CategoryCommunication,
+		Description: "Create a Gmail reply draft",
+		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Message ID"}, {Name: "body", Type: "string", Required: true, Description: "Reply body"}},
+	},
+	"gmail.forwardDraft": {
+		Name: "gmail.forwardDraft", Category: CategoryCommunication,
+		Description: "Create a Gmail forward draft",
+		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Message ID"}, {Name: "to", Type: "email", Required: true, Description: "Recipient email address"}},
+	},
+	"gmail.downloadAttachments": {
+		Name: "gmail.downloadAttachments", Category: CategoryDangerousWrite,
+		Description:      "Download Gmail attachments to local files",
+		DefaultRiskLevel: contracts.RiskLevelLocalWrite,
+		Dangerous:        true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Message ID"}, {Name: "outputDir", Type: "path", Required: true, Description: "Local output directory"}},
+	},
+	"gmail.modifyMessage": {
+		Name: "gmail.modifyMessage", Category: CategoryDangerousWrite,
+		Description: "Modify Gmail message labels or state",
+		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Message ID"}, {Name: "action", Type: "string", Required: true, Description: "markRead, markUnread, archive, star, unstar, addLabels, removeLabels"}},
 	},
 	"chat.sendMessage": {
 		Name: "chat.sendMessage", Category: CategoryCommunication,

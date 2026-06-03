@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -225,6 +226,13 @@ func (s *Service) CreateEvent(ctx context.Context, input CreateEventInput) (Crea
 	}
 
 	for _, email := range input.Attendees {
+		email = strings.TrimSpace(email)
+		if email == "" {
+			continue
+		}
+		if _, err := mail.ParseAddress(email); err != nil {
+			return CreateEventOutput{}, invalidInput("attendee must be a valid email address: " + email)
+		}
 		event.Attendees = append(event.Attendees, gcal.Attendee{Email: email})
 	}
 

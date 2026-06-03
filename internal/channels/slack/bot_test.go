@@ -2,8 +2,11 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/slack-go/slack"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/contracts"
@@ -63,4 +66,73 @@ func TestSlackTextFromFailedResponseHidesDetails(t *testing.T) {
 	if text == "" {
 		t.Fatal("expected generic error text")
 	}
+}
+
+func TestSlackApprovalValueRoundTrip(t *testing.T) {
+	value := slackApprovalValue("approve", "appr_123", "slack_channel_C1")
+	action, approvalID, sessionID, ok := parseSlackApprovalValue(value)
+	if !ok {
+		t.Fatalf("expected approval value to parse: %q", value)
+	}
+	if action != "approve" || approvalID != "appr_123" || sessionID != "slack_channel_C1" {
+		t.Fatalf("unexpected parse result action=%q approvalID=%q sessionID=%q", action, approvalID, sessionID)
+	}
+}
+
+func TestSlackApprovalBlocksContainMultipleChoiceButtons(t *testing.T) {
+	blocks := slackApprovalBlocks("Approval required", "appr_123", "sess_1")
+	if len(blocks) != 2 {
+		t.Fatalf("expected section and actions blocks, got %#v", blocks)
+	}
+	actionBlock, ok := blocks[1].(*slack.ActionBlock)
+	if !ok {
+		t.Fatalf("expected action block, got %T", blocks[1])
+	}
+	if len(actionBlock.Elements.ElementSet) != 3 {
+		t.Fatalf("expected three approval buttons, got %#v", actionBlock.Elements.ElementSet)
+	}
+	labels := []string{}
+	for _, element := range actionBlock.Elements.ElementSet {
+		button, ok := element.(*slack.ButtonBlockElement)
+		if !ok {
+			t.Fatalf("expected button element, got %T", element)
+		}
+		labels = append(labels, button.Text.Text)
+	}
+	for _, want := range []string{"Yes", "No", "Revise"} {
+		if !containsString(labels, want) {
+			t.Fatalf("expected labels to contain %q, got %#v", want, labels)
+		}
+	}
+}
+
+func TestSlackReviseCommentReadsModalState(t *testing.T) {
+	var callback slack.InteractionCallback
+	raw := `{
+		"type":"view_submission",
+		"view":{
+			"state":{
+				"values":{
+					"vclaw_approval_comment":{
+						"comment":{"type":"plain_text_input","value":"đổi giờ sang 10:00"}
+					}
+				}
+			}
+		}
+	}`
+	if err := json.Unmarshal([]byte(raw), &callback); err != nil {
+		t.Fatalf("unmarshal callback: %v", err)
+	}
+	if got := slackReviseComment(callback); got != "đổi giờ sang 10:00" {
+		t.Fatalf("unexpected revise comment: %q", got)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
