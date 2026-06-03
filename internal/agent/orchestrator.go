@@ -4,165 +4,83 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"vclaw/internal/agent/intent"
-	"vclaw/internal/audit"
+	"vclaw/internal/contracts"
 	"vclaw/internal/memory"
 	"vclaw/internal/providers"
 )
 
 type Orchestrator struct {
-	memory     *memory.Store
 	classifier *intent.Classifier
 	responder  providers.ChatClient
-	auditor    *audit.Logger
-	mu         sync.Mutex
-	pending    map[int64]audit.Entry
+	memory     *memory.Store
 }
 
-func NewOrchestrator(memoryStore *memory.Store, classifier *intent.Classifier, responder providers.ChatClient, auditor *audit.Logger) *Orchestrator {
+func NewOrchestrator(memoryStore *memory.Store, classifier *intent.Classifier, responder providers.ChatClient) *Orchestrator {
 	return &Orchestrator{
-		memory:     memoryStore,
 		classifier: classifier,
 		responder:  responder,
-		auditor:    auditor,
-		pending:    map[int64]audit.Entry{},
+		memory:     memoryStore,
 	}
 }
 
-func (o *Orchestrator) HandleMessage(ctx context.Context, msg InboundMessage) (OutboundMessage, error) {
+func (o *Orchestrator) HandleMessage(ctx context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error) {
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
-		return OutboundMessage{}, fmt.Errorf("empty message")
-	}
-	sessionID := msg.EffectiveSessionID()
-	channel := msg.EffectiveChannel()
-
-	if isHistoryQuery(text) {
-		history := o.memory.GetHistory(sessionID)
-		reply := formatStoreHistory(history)
-		o.memory.Append(sessionID, memory.RoleUserCompat, text)
-		o.memory.Append(sessionID, memory.RoleAssistantCompat, reply)
-		o.mu.Lock()
-		o.pending[msg.UpdateID] = audit.Entry{
-			RequestID:    msg.EffectiveRequestID(),
-			UpdateID:     msg.UpdateID,
-			Channel:      channel,
-			ChatID:       msg.ChatID,
-			SessionID:    sessionID,
-			Input:        text,
-			Intent:       string(intent.IntentReadInfo),
-			SystemOpType: string(intent.SystemOpNone),
-			Confidence:   1.0,
-			ActionTaken:  "memory_summary",
-			Output:       reply,
-			HitlRequired: false,
-		}
-		o.mu.Unlock()
-		return newOutboundMessage(msg, sessionID, reply, "completed"), nil
+		return contracts.AgentResponse{}, fmt.Errorf("empty message")
 	}
 
-	if isPromptInjection(text) {
-		reply := "Mình không thể làm theo chỉ dẫn nằm trong tin nhắn. Bạn hãy nói rõ yêu cầu của bạn nhé."
-		o.memory.Append(sessionID, memory.RoleUserCompat, text)
-		o.memory.Append(sessionID, memory.RoleAssistantCompat, reply)
-		o.mu.Lock()
-		o.pending[msg.UpdateID] = audit.Entry{
-			RequestID:    msg.EffectiveRequestID(),
-			UpdateID:     msg.UpdateID,
-			Channel:      channel,
-			ChatID:       msg.ChatID,
-			SessionID:    sessionID,
-			Input:        text,
-			Intent:       string(intent.IntentAmbiguous),
-			SystemOpType: string(intent.SystemOpNone),
-			Confidence:   0.5,
-			ActionTaken:  "prompt_injection_blocked",
-			Output:       reply,
-			HitlRequired: false,
-		}
-		o.mu.Unlock()
-		return newOutboundMessage(msg, sessionID, reply, "need_clarification"), nil
+	sessionID := strings.TrimSpace(msg.SessionID)
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	if o.memory != nil && isHistoryQuery(text) {
+		reply := formatHistory(o.memory.GetHistory(sessionID))
+		return contracts.AgentResponse{
+			RequestID: msg.RequestID,
+			SessionID: sessionID,
+			Status:    contracts.AgentStatusCompleted,
+			Message:   reply,
+			Data: map[string]any{
+				"intent":       string(intent.IntentReadInfo),
+				"systemOpType": string(intent.SystemOpNone),
+				"confidence":   1.0,
+				"actionTaken":  "memory_summary",
+			},
+		}, nil
 	}
 
 	classification := o.classifier.Classify(text)
-	reply, actionTaken := o.replyFor(ctx, sessionID, text, classification)
+	reply, actionTaken := o.replyFor(ctx, text, classification)
 
-	o.memory.Append(sessionID, memory.RoleUserCompat, text)
-	o.memory.Append(sessionID, memory.RoleAssistantCompat, reply)
-
-	o.mu.Lock()
-	o.pending[msg.UpdateID] = audit.Entry{
-		RequestID:    msg.EffectiveRequestID(),
-		UpdateID:     msg.UpdateID,
-		Channel:      channel,
-		ChatID:       msg.ChatID,
-		SessionID:    sessionID,
-		Input:        text,
-		Intent:       string(classification.Intent),
-		SystemOpType: string(classification.SystemOpType),
-		Confidence:   classification.Confidence,
-		ActionTaken:  actionTaken,
-		Output:       reply,
-		HitlRequired: false,
+	if o.memory != nil {
+		o.memory.Append(sessionID, memory.RoleUserCompat, text)
+		o.memory.Append(sessionID, memory.RoleAssistantCompat, reply)
 	}
-	o.mu.Unlock()
 
-	return newOutboundMessage(msg, sessionID, reply, statusForIntent(classification.Intent)), nil
+	return contracts.AgentResponse{
+		RequestID: msg.RequestID,
+		SessionID: sessionID,
+		Status:    statusForIntent(classification.Intent),
+		Message:   reply,
+		Data: map[string]any{
+			"intent":       string(classification.Intent),
+			"systemOpType": string(classification.SystemOpType),
+			"confidence":   classification.Confidence,
+			"actionTaken":  actionTaken,
+		},
+	}, nil
 }
 
-func (o *Orchestrator) FinalizeAudit(msg InboundMessage, err error) {
-	o.mu.Lock()
-	entry, ok := o.pending[msg.UpdateID]
-	if ok {
-		delete(o.pending, msg.UpdateID)
-	}
-	o.mu.Unlock()
+func (o *Orchestrator) FinalizeAudit(contracts.UserMessage, error) {}
 
-	if !ok {
-		entry = audit.Entry{
-			RequestID:    msg.EffectiveRequestID(),
-			UpdateID:     msg.UpdateID,
-			ChatID:       msg.ChatID,
-			SessionID:    msg.EffectiveSessionID(),
-			Input:        strings.TrimSpace(msg.Text),
-			Intent:       string(intent.IntentAmbiguous),
-			SystemOpType: string(intent.SystemOpNone),
-			ActionTaken:  "error",
-			HitlRequired: false,
-		}
-	}
+func (o *Orchestrator) RecordIgnored(contracts.UserMessage, string) {}
 
-	if err != nil {
-		entry.Error = err.Error()
-	}
-
-	_ = o.auditor.Record(entry)
-}
-
-func (o *Orchestrator) RecordIgnored(msg InboundMessage, actionTaken string) {
-	_ = o.auditor.Record(audit.Entry{
-		RequestID:    msg.EffectiveRequestID(),
-		UpdateID:     msg.UpdateID,
-		Channel:      msg.EffectiveChannel(),
-		ChatID:       msg.ChatID,
-		SessionID:    msg.EffectiveSessionID(),
-		Input:        strings.TrimSpace(msg.Text),
-		Intent:       string(intent.IntentAmbiguous),
-		SystemOpType: string(intent.SystemOpNone),
-		ActionTaken:  actionTaken,
-		HitlRequired: false,
-	})
-}
-
-func (o *Orchestrator) replyFor(ctx context.Context, sessionID, text string, classification intent.IntentResult) (string, string) {
-	if isHistoryQuery(text) {
-		return formatStoreHistory(o.memory.GetHistory(sessionID)), "memory_summary"
-	}
-
-	if o.responder != nil && classification.Intent != intent.IntentSystemOp {
-		reply, err := o.generateLLMReply(ctx, sessionID, text, classification)
+func (o *Orchestrator) replyFor(ctx context.Context, text string, classification intent.IntentResult) (string, string) {
+	if o.responder != nil && classification.Intent == intent.IntentReadInfo {
+		reply, err := o.generateLLMReply(ctx, text, classification)
 		if err == nil && strings.TrimSpace(reply) != "" {
 			return reply, "llm_reply"
 		}
@@ -170,11 +88,11 @@ func (o *Orchestrator) replyFor(ctx context.Context, sessionID, text string, cla
 
 	switch classification.Intent {
 	case intent.IntentGreeting:
-		return "Chào bạn, tôi là V-Claw.", "greeting_reply"
+		return "Chào bạn! Mình là V-Claw, mình có thể giúp gì cho bạn?", "greeting_reply"
 	case intent.IntentReadInfo:
-		return "Tôi hiểu đây là yêu cầu đọc thông tin. Connector sẽ được nối ở bước sau.", "read_info_placeholder"
+		return "Tôi hiểu đây là yêu cầu đọc thông tin.", "read_info_placeholder"
 	case intent.IntentSystemOp:
-		return "Đây là hành động cần xác nhận. Sprint này tôi chưa thực thi hành động nguy hiểm.", "system_op_guard"
+		return "Đây là hành động cần xác nhận.", "system_op_guard"
 	case intent.IntentAmbiguous:
 		if strings.TrimSpace(classification.ClarifyQuestion) != "" {
 			return classification.ClarifyQuestion, "clarify_question"
@@ -185,152 +103,95 @@ func (o *Orchestrator) replyFor(ctx context.Context, sessionID, text string, cla
 	}
 }
 
-func newOutboundMessage(msg InboundMessage, sessionID, reply, status string) OutboundMessage {
-	return OutboundMessage{
-		RequestID: msg.EffectiveRequestID(),
-		SessionID: sessionID,
-		Status:    status,
-		Message:   reply,
-		ChatID:    msg.ChatID,
-		Text:      reply,
-	}
-}
-
-func statusForIntent(intentType intent.Intent) string {
+func statusForIntent(intentType intent.Intent) contracts.AgentStatus {
 	if intentType == intent.IntentAmbiguous {
-		return "need_clarification"
+		return contracts.AgentStatusNeedClarification
 	}
-	return "completed"
+	return contracts.AgentStatusCompleted
 }
 
-func (o *Orchestrator) generateLLMReply(ctx context.Context, sessionID, text string, classification intent.IntentResult) (string, error) {
-	history := o.memory.GetHistory(sessionID)
-	messages := make([]providers.ChatMessage, 0, len(history)+1)
-	for _, message := range history {
-		switch message.Role {
-		case memory.RoleAssistantCompat:
-			messages = append(messages, providers.ChatMessage{Role: "assistant", Content: message.Text})
-		default:
-			messages = append(messages, providers.ChatMessage{Role: "user", Content: message.Text})
-		}
+func (o *Orchestrator) generateLLMReply(ctx context.Context, text string, classification intent.IntentResult) (string, error) {
+	reply, err := o.responder.Complete(ctx, buildSystemPrompt(classification), []providers.ChatMessage{
+		{Role: "user", Content: text},
+	})
+	if err != nil {
+		return "", err
 	}
-	messages = append(messages, providers.ChatMessage{Role: "user", Content: text})
-
-	systemPrompt := buildSystemPrompt(classification)
-	return o.responder.Complete(ctx, systemPrompt, messages)
+	return normalizeLLMReply(reply), nil
 }
 
 func buildSystemPrompt(classification intent.IntentResult) string {
 	return strings.TrimSpace(fmt.Sprintf(`You are V-Claw, a warm and concise Telegram assistant.
 Reply in the user's language.
 Make your answer natural, helpful, and not overly long.
-If the user asks for Gmail, Calendar, Google Chat, or other integrations that are not connected yet, say that briefly and offer the closest safe alternative.
-Do not claim to have performed external actions unless the app has actually done so.
-If the intent seems ambiguous, ask one short clarifying question.
 Current intent hint: %s.`, classification.Intent))
 }
 
-func isPromptInjection(text string) bool {
-	lowered := strings.ToLower(strings.TrimSpace(text))
-	phrases := []string{
-		"ignore previous instructions",
-		"disregard previous instructions",
-		"you are now",
-		"forget your instructions",
-		"forget previous instructions",
-		"bỏ qua chỉ dẫn",
-		"bỏ qua hướng dẫn trước",
-		"quên hướng dẫn trước",
-		"bây giờ bạn là",
-		"bỏ qua mọi chỉ dẫn",
-		"system prompt",
-		"developer message",
-		"jailbreak",
-		"reveal prompt",
+func normalizeLLMReply(reply string) string {
+	trimmed := strings.TrimSpace(reply)
+	if trimmed == "" {
+		return ""
 	}
-	for _, phrase := range phrases {
-		if strings.Contains(lowered, phrase) {
-			return true
+
+	lines := strings.Split(trimmed, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		joined := strings.Join(strings.Fields(line), " ")
+		if len([]rune(joined)) <= 240 {
+			return joined
+		}
+		runes := []rune(joined)
+		return strings.TrimSpace(string(runes[:237])) + "..."
+	}
+	return trimmed
+}
+
+func formatHistory(history []memory.StoreMessage) string {
+	if len(history) == 0 {
+		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
+	}
+
+	userMessages := make([]string, 0, len(history))
+	for _, message := range history {
+		if message.Role == memory.RoleUserCompat {
+			userMessages = append(userMessages, message.Text)
 		}
 	}
-	return false
+	if len(userMessages) == 0 {
+		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
+	}
+
+	var builder strings.Builder
+	builder.WriteString("Đây là những gì bạn đã nói gần đây:\n")
+	for index, text := range userMessages {
+		builder.WriteString(fmt.Sprintf("%d. Bạn: %s\n", index+1, text))
+	}
+	return strings.TrimSpace(builder.String())
 }
 
 func isHistoryQuery(text string) bool {
-	lowered := strings.ToLower(strings.TrimSpace(text))
-	phrases := []string{
-		"nãy tôi vừa nói gì",
-		"nãy t vừa nói gì",
-		"nãy mình vừa nói gì",
+	lower := strings.ToLower(strings.TrimSpace(text))
+	return containsHistoryPattern(
+		lower,
 		"tôi vừa nói gì",
-		"t vừa nói gì",
-		"vừa rồi tôi nói gì",
-		"vừa rồi mình nói gì",
-		"nãy mình nói gì",
-		"nãy giờ mình nói gì",
-		"vừa rồi nói gì",
-		"mình vừa nói gì",
-		"kể những việc tôi vừa nói",
-		"kể lại những gì tôi vừa nói",
-		"kể những việc mình vừa nói",
-		"kể lại những gì mình vừa nói",
-		"hãy kể những việc tôi vừa nói",
-		"hãy kể lại những gì tôi vừa nói",
-		"hãy kể những việc mình vừa nói",
-		"hãy kể lại những gì mình vừa nói",
-	}
-	for _, phrase := range phrases {
-		if strings.Contains(lowered, phrase) {
+		"toi vua noi gi",
+		"xem lịch sử",
+		"xem lich su",
+		"tôi đã nói những gì",
+		"toi da noi nhung gi",
+		"tôi đã từng nói gì",
+		"toi da tung noi gi",
+	)
+}
+
+func containsHistoryPattern(text string, patterns ...string) bool {
+	for _, pattern := range patterns {
+		if strings.Contains(text, pattern) {
 			return true
 		}
 	}
 	return false
-}
-
-func formatHistory(history []memory.Message) string {
-	if len(history) == 0 {
-		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
-	}
-
-	userMessages := make([]memory.Message, 0, len(history))
-	for _, message := range history {
-		if message.Role == memory.RoleUser && !isHistoryQuery(message.Content) {
-			userMessages = append(userMessages, message)
-		}
-	}
-
-	if len(userMessages) == 0 {
-		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
-	}
-
-	var builder strings.Builder
-	builder.WriteString("Đây là những gì bạn đã nói gần đây:\n")
-	for index, message := range userMessages {
-		builder.WriteString(fmt.Sprintf("%d. Bạn: %s\n", index+1, message.Content))
-	}
-	return strings.TrimSpace(builder.String())
-}
-
-func formatStoreHistory(history []memory.StoreMessage) string {
-	if len(history) == 0 {
-		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
-	}
-
-	userMessages := make([]memory.StoreMessage, 0, len(history))
-	for _, message := range history {
-		if message.Role == memory.RoleUserCompat && !isHistoryQuery(message.Text) {
-			userMessages = append(userMessages, message)
-		}
-	}
-
-	if len(userMessages) == 0 {
-		return "Tôi chưa có lịch sử hội thoại nào trong phiên này."
-	}
-
-	var builder strings.Builder
-	builder.WriteString("Đây là những gì bạn đã nói gần đây:\n")
-	for index, message := range userMessages {
-		builder.WriteString(fmt.Sprintf("%d. Bạn: %s\n", index+1, message.Text))
-	}
-	return strings.TrimSpace(builder.String())
 }

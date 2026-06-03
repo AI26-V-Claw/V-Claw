@@ -158,6 +158,52 @@ func TestListEvents_PassesQuery(t *testing.T) {
 	}
 }
 
+func TestListEvents_DropsDateOnlyQuery(t *testing.T) {
+	var capturedQuery string
+	mock := &mockConnector{
+		listEventsFunc: func(ctx context.Context, timeMin, timeMax time.Time, query string) ([]gcal.Event, error) {
+			capturedQuery = query
+			return nil, nil
+		},
+	}
+	svc := NewService(mock)
+
+	_, errShape := svc.ListEvents(context.Background(), ListEventsInput{
+		TimeMin: "2026-06-01T00:00:00+07:00",
+		TimeMax: "2026-06-08T00:00:00+07:00",
+		Query:   "trong tuần này tôi có lịch gì không",
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if capturedQuery != "" {
+		t.Fatalf("expected date-only query to be dropped, got %q", capturedQuery)
+	}
+}
+
+func TestListEvents_KeepsSpecificSearchQuery(t *testing.T) {
+	var capturedQuery string
+	mock := &mockConnector{
+		listEventsFunc: func(ctx context.Context, timeMin, timeMax time.Time, query string) ([]gcal.Event, error) {
+			capturedQuery = query
+			return nil, nil
+		},
+	}
+	svc := NewService(mock)
+
+	_, errShape := svc.ListEvents(context.Background(), ListEventsInput{
+		TimeMin: "2026-06-01T00:00:00+07:00",
+		TimeMax: "2026-06-08T00:00:00+07:00",
+		Query:   "standup",
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if capturedQuery != "standup" {
+		t.Fatalf("expected search query to be kept, got %q", capturedQuery)
+	}
+}
+
 func TestCreateEvent_Success(t *testing.T) {
 	mock := &mockConnector{
 		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {
@@ -394,6 +440,39 @@ func TestCreateEventTool_Execute(t *testing.T) {
 	}
 	if result.ToolCallID != "tc_002" {
 		t.Errorf("expected ToolCallID 'tc_002', got %q", result.ToolCallID)
+	}
+}
+
+func TestCreateEventToolRejectsInvalidAttendeeEmail(t *testing.T) {
+	called := false
+	mock := &mockConnector{
+		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {
+			called = true
+			return gcal.Event{}, nil
+		},
+	}
+	svc := NewService(mock)
+	tool := &CreateEventTool{service: svc}
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "tc_invalid_attendee",
+		Name: ToolNameCreateEvent,
+		Arguments: map[string]any{
+			"title":     "Team standup",
+			"start":     "2026-05-30T10:00:00+07:00",
+			"end":       "2026-05-30T10:30:00+07:00",
+			"attendees": []any{"Bao"},
+		},
+	})
+
+	if result.Success {
+		t.Fatal("expected invalid attendee to fail")
+	}
+	if result.Error == nil || result.Error.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %#v", result.Error)
+	}
+	if called {
+		t.Fatal("connector should not be called for invalid attendee email")
 	}
 }
 
