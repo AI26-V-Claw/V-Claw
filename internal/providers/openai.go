@@ -67,9 +67,8 @@ func (c *OpenAIClient) Chat(ctx context.Context, request ChatRequest) (ChatRespo
 
 	nameMap := newOpenAIToolNameMap(request.Tools)
 	wireRequest := openAIChatRequest{
-		Model:      model,
-		Messages:   make([]openAIMessage, 0, len(request.Messages)),
-		ToolChoice: "auto",
+		Model:    model,
+		Messages: make([]openAIMessage, 0, len(request.Messages)),
 	}
 	for _, message := range request.Messages {
 		wireRequest.Messages = append(wireRequest.Messages, openAIMessageFromProvider(message, nameMap.safeName))
@@ -86,9 +85,10 @@ func (c *OpenAIClient) Chat(ctx context.Context, request ChatRequest) (ChatRespo
 				},
 			})
 		}
-	}
-	if strings.TrimSpace(request.ToolChoice) != "" {
-		wireRequest.ToolChoice = request.ToolChoice
+		wireRequest.ToolChoice = "auto"
+		if strings.TrimSpace(request.ToolChoice) != "" {
+			wireRequest.ToolChoice = request.ToolChoice
+		}
 	}
 
 	body, err := json.Marshal(wireRequest)

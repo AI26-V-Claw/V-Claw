@@ -190,3 +190,27 @@ func TestRedactTelegramToken(t *testing.T) {
 		t.Fatalf("token was not redacted: %q", got)
 	}
 }
+
+func TestTelegramApprovalCallbackRoundTrip(t *testing.T) {
+	data := telegramApprovalCallbackData("approve", "appr_123")
+	action, approvalID, ok := parseTelegramApprovalCallback(data)
+	if !ok {
+		t.Fatalf("expected callback to parse: %q", data)
+	}
+	if action != "approve" || approvalID != "appr_123" {
+		t.Fatalf("unexpected callback parse result action=%q approvalID=%q", action, approvalID)
+	}
+}
+
+func TestTelegramApprovalKeyboardContainsMultipleChoiceButtons(t *testing.T) {
+	keyboard := telegramApprovalKeyboard("appr_123")
+	rows, ok := keyboard["inline_keyboard"].([][]map[string]string)
+	if !ok || len(rows) != 1 || len(rows[0]) != 3 {
+		t.Fatalf("unexpected keyboard shape: %#v", keyboard)
+	}
+	for index, want := range []string{"Yes", "No", "Revise"} {
+		if rows[0][index]["text"] != want {
+			t.Fatalf("expected button %d to be %q, got %#v", index, want, rows[0][index])
+		}
+	}
+}

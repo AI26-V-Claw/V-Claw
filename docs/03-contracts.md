@@ -7,8 +7,12 @@
 ## 1. Boundary
 
 ```text
-Channel -> Agent Core -> Safety/HITL -> Tool Layer -> Tool Execution -> Agent Core -> Channel
+Channel -> Agent Core -> Intent/Safety -> Task Planning -> HITL -> Tool Layer -> Tool Execution -> Agent Core -> Channel
 ```
+
+- Intent/Safety may return `need_clarification` before planning or tool calls.
+- Task Planning creates `Plan` only; planner must not execute tools.
+- Channel approval UI, such as Telegram/Slack buttons or modal comments, must resolve to `ApprovalDecision`.
 
 - Channel chuẩn hóa input thành `UserMessage`.
 - Agent Core chỉ gọi tool qua `ToolCall`.
@@ -97,6 +101,15 @@ Agent Core -> Channel / Integration
   "status": "approval_required",
   "message": "Tôi cần bạn xác nhận trước khi tạo sự kiện lịch.",
   "approvalId": "appr_001",
+  "plan": {
+    "steps": [
+      {
+        "id": "step_1",
+        "description": "calendar.createEvent: Tao su kien lich sau khi user approve.",
+        "status": "pending"
+      }
+    ]
+  },
   "data": {}
 }
 ```
@@ -109,7 +122,10 @@ approval_required
 need_clarification
 failed
 blocked
+max_iterations_reached
 ```
+
+`max_iterations_reached` is reserved for an agent runtime that exhausts its loop budget before producing a final answer. It must not be used as a `RiskLevel`.
 
 ---
 
@@ -140,6 +156,20 @@ Required:
 ```text
 toolCallId, requestId, sessionId, toolName, input
 ```
+
+Runtime boundary rule:
+
+- `contracts.ToolCall` with `toolCallId`, `requestId`, `sessionId`, `toolName`, and `input` is the canonical contract shape at Agent Core, approval, audit, and channel boundaries.
+- The Go tool execution layer may use an internal adapter struct such as `tools.ToolCall{ID, Name, Arguments}` after the runtime has already attached request/session context.
+- Internal adapter fields map as follows:
+
+```text
+ID        -> toolCallId
+Name      -> toolName
+Arguments -> input
+```
+
+- Internal `tools.ToolCall` must not cross channel, approval, audit, or external API boundaries without being converted back to the canonical contract shape.
 
 ---
 
@@ -314,6 +344,7 @@ TOOL_INPUT_INVALID
 AUTH_EXPIRED
 AUTH_MISSING_SCOPE
 RATE_LIMITED
+PROVIDER_ERROR
 PROVIDER_TIMEOUT
 PROVIDER_UNAVAILABLE
 ACTION_REQUIRES_APPROVAL
@@ -324,7 +355,12 @@ SANDBOX_TIMEOUT
 COMMAND_NOT_ALLOWED
 FILE_ACCESS_DENIED
 INTERNAL_ERROR
+MAX_ITERATIONS_EXCEEDED
 ```
+
+`PROVIDER_ERROR` is used for non-retryable LLM/provider failures. `PROVIDER_UNAVAILABLE` is used for retryable provider outages.
+
+`MAX_ITERATIONS_EXCEEDED` is used when the agent runtime reaches its configured iteration limit before completing the request.
 
 ---
 
@@ -354,6 +390,39 @@ name, owner, description, defaultRiskLevel, requiresApproval
 ```
 
 `timeoutMs` is optional. If omitted, the Tool Layer uses its default execution timeout.
+
+---
+
+## 3.10. Plan
+
+```text
+Task Planning -> Agent Core -> Channel / Integration
+```
+
+```json
+{
+  "steps": [
+    {
+      "id": "step_1",
+      "description": "gmail.listEmails: Doc email gan day de tim thong tin hop.",
+      "status": "pending"
+    },
+    {
+      "id": "step_2",
+      "description": "calendar.createEvent: Tao su kien lich neu user approve.",
+      "status": "pending"
+    }
+  ]
+}
+```
+
+Rules:
+
+- `Plan` is optional on `AgentResponse`.
+- `Plan` is advisory only. It does not authorize tool execution.
+- Planner must not execute tools, call connectors, or bypass safety.
+- Side-effect tools in a plan still require `RiskDecision` and `ApprovalRequest` before execution.
+- If the planner cannot build a safe plan because required information is missing, Agent Core must return `need_clarification`.
 
 ---
 
@@ -429,6 +498,14 @@ agent.run.completed
 agent.run.failed
 agent.run.cancelled
 
+intent.classified
+intent.clarification_required
+
+task.plan.started
+task.plan.completed
+task.plan.failed
+task.plan.clarification_required
+
 tool.call.requested
 tool.call.started
 tool.call.completed
@@ -465,6 +542,8 @@ Expected:
 
 ```text
 UserMessage
+-> Intent/Safety classification
+-> Task Planning
 -> gmail.listEmails
 -> calendar.listEvents
 -> calendar.createEvent proposed
@@ -495,6 +574,8 @@ Expected:
 
 ```text
 UserMessage
+-> Intent/Safety classification
+-> Task Planning
 -> sandbox.runShell or sandbox.runPython proposed
 -> RiskDecision: destructive/code_execution, requires_approval
 -> ApprovalRequest
@@ -517,6 +598,7 @@ file deletion or command execution before approval
 |---|---|---|
 | `UserMessage` | Integration/Channels | Agent Core |
 | `AgentResponse` | Agent Core | Integration/Channels |
+| `Plan` | Task Planning / Agent Core | Agent Core / Channels |
 | `ToolCall` | Agent Core | Tools |
 | `ToolResult` | Tools | Agent Core |
 | `RiskDecision` | Safety | Agent Core/Approvals |

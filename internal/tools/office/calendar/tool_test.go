@@ -443,6 +443,39 @@ func TestCreateEventTool_Execute(t *testing.T) {
 	}
 }
 
+func TestCreateEventToolRejectsInvalidAttendeeEmail(t *testing.T) {
+	called := false
+	mock := &mockConnector{
+		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {
+			called = true
+			return gcal.Event{}, nil
+		},
+	}
+	svc := NewService(mock)
+	tool := &CreateEventTool{service: svc}
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "tc_invalid_attendee",
+		Name: ToolNameCreateEvent,
+		Arguments: map[string]any{
+			"title":     "Team standup",
+			"start":     "2026-05-30T10:00:00+07:00",
+			"end":       "2026-05-30T10:30:00+07:00",
+			"attendees": []any{"Bao"},
+		},
+	})
+
+	if result.Success {
+		t.Fatal("expected invalid attendee to fail")
+	}
+	if result.Error == nil || result.Error.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %#v", result.Error)
+	}
+	if called {
+		t.Fatal("connector should not be called for invalid attendee email")
+	}
+}
+
 func TestDeleteEventTool_Execute_Error(t *testing.T) {
 	mock := &mockConnector{
 		deleteEventFunc: func(ctx context.Context, eventID string) error {

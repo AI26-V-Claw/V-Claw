@@ -88,6 +88,86 @@ func TestOpenAIClientRetriesTransientHTTPError(t *testing.T) {
 	}
 }
 
+func TestOpenAIClientOmitsToolChoiceWhenNoToolsAreSpecified(t *testing.T) {
+	var requestBody string
+	client, err := NewOpenAIClient(OpenAIConfig{
+		APIKey:  "test-key",
+		Model:   "test-model",
+		BaseURL: "https://api.test",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				return nil, err
+			}
+			requestBody = string(body)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)),
+				Header:     make(http.Header),
+			}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIClient() error = %v", err)
+	}
+
+	if _, err := client.Chat(context.Background(), ChatRequest{
+		Messages:   []Message{{Role: MessageRoleUser, Content: "plan"}},
+		ToolChoice: "auto",
+	}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	if strings.Contains(requestBody, "tool_choice") {
+		t.Fatalf("expected request without tool_choice when no tools are provided, got %s", requestBody)
+	}
+	if strings.Contains(requestBody, `"tools"`) {
+		t.Fatalf("expected request without tools, got %s", requestBody)
+	}
+}
+
+func TestOpenAIClientSendsToolChoiceWhenToolsAreSpecified(t *testing.T) {
+	var requestBody string
+	client, err := NewOpenAIClient(OpenAIConfig{
+		APIKey:  "test-key",
+		Model:   "test-model",
+		BaseURL: "https://api.test",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				return nil, err
+			}
+			requestBody = string(body)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)),
+				Header:     make(http.Header),
+			}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIClient() error = %v", err)
+	}
+
+	if _, err := client.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: MessageRoleUser, Content: "use tool"}},
+		Tools: []ToolDefinition{{
+			Name:        "calendar.listEvents",
+			Description: "List calendar events",
+			Parameters:  map[string]any{"type": "object"},
+		}},
+	}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	if !strings.Contains(requestBody, `"tool_choice":"auto"`) {
+		t.Fatalf("expected request with automatic tool_choice, got %s", requestBody)
+	}
+	if !strings.Contains(requestBody, `"tools"`) {
+		t.Fatalf("expected request with tools, got %s", requestBody)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
