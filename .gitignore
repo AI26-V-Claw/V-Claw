@@ -30,3 +30,4 @@ tests/safety/
 examples/
 configs/SOUL.md
 configs/intent_classifier_prompt.md
+.codeboarding/
