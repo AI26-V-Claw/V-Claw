@@ -7,17 +7,18 @@
 ## 1. Boundary
 
 ```text
-Channel -> Agent Core -> Intent/Safety -> Task Planning -> HITL -> Tool Layer -> Tool Execution -> Agent Core -> Channel
+Channel -> Agent Core -> Turn Router -> Agent Loop -> Tool Policy -> Tool Layer -> Tool Execution -> Agent Core -> Channel
 ```
 
-- Intent/Safety may return `need_clarification` before planning or tool calls.
-- Task Planning creates `Plan` only; planner must not execute tools.
+- Turn Router only decides tool exposure mode: `no_tool`, `tool_enabled`, or `blocked_prompt_injection`. It must not decide intent, tool name, risk, approval, plan, or clarification.
+- Agent Loop may return `need_clarification` by calling the internal `clarify` tool when required information is missing.
+- `Plan` is optional/advisory only; it must not authorize tool execution.
 - Channel approval UI, such as Telegram/Slack buttons or modal comments, must resolve to `ApprovalDecision`.
 
 - Channel chuẩn hóa input thành `UserMessage`.
 - Agent Core chỉ gọi tool qua `ToolCall`.
 - Tool trả kết quả qua `ToolResult`.
-- Action có side effect phải có `RiskDecision`.
+- Action có side effect phải đi qua Tool Policy và có `RiskDecision`.
 - Nếu `requiresApproval = true`, tool không được execute trước khi có `ApprovalDecision = approved`.
 - MVP là single-owner deployment; không dùng `userId` trong runtime contract.
 
@@ -212,7 +213,7 @@ Error:
 ## 3.5. RiskDecision
 
 ```text
-Safety Layer -> Agent Core / Approvals
+Tool Policy -> Agent Core / Approvals
 ```
 
 ```json
@@ -367,7 +368,7 @@ MAX_ITERATIONS_EXCEEDED
 ## 3.9. ToolRegistryEntry
 
 ```text
-Tool owners -> Agent Core / Safety Layer
+Tool owners -> Agent Core / Tool Policy
 ```
 
 ```json
@@ -396,7 +397,7 @@ name, owner, description, defaultRiskLevel, requiresApproval
 ## 3.10. Plan
 
 ```text
-Task Planning -> Agent Core -> Channel / Integration
+Agent Loop / Optional Planning -> Agent Core -> Channel / Integration
 ```
 
 ```json
@@ -422,7 +423,7 @@ Rules:
 - `Plan` is advisory only. It does not authorize tool execution.
 - Planner must not execute tools, call connectors, or bypass safety.
 - Side-effect tools in a plan still require `RiskDecision` and `ApprovalRequest` before execution.
-- If the planner cannot build a safe plan because required information is missing, Agent Core must return `need_clarification`.
+- If required information is missing, Agent Core should ask through the internal `clarify` tool and return `need_clarification`.
 
 ---
 
@@ -529,8 +530,9 @@ agent.run.completed
 agent.run.failed
 agent.run.cancelled
 
-intent.classified
-intent.clarification_required
+turn.routed
+turn.blocked_prompt_injection
+clarify.requested
 
 task.plan.started
 task.plan.completed
@@ -573,8 +575,8 @@ Expected:
 
 ```text
 UserMessage
--> Intent/Safety classification
--> Task Planning
+-> Turn Router: tool_enabled
+-> Agent Loop
 -> gmail.listEmails
 -> calendar.listEvents
 -> calendar.createEvent proposed
@@ -605,8 +607,8 @@ Expected:
 
 ```text
 UserMessage
--> Intent/Safety classification
--> Task Planning
+-> Turn Router: tool_enabled
+-> Agent Loop
 -> sandbox.runShell or sandbox.runPython proposed
 -> RiskDecision: destructive/code_execution, requires_approval
 -> ApprovalRequest
@@ -629,14 +631,14 @@ file deletion or command execution before approval
 |---|---|---|
 | `UserMessage` | Integration/Channels | Agent Core |
 | `AgentResponse` | Agent Core | Integration/Channels |
-| `Plan` | Task Planning / Agent Core | Agent Core / Channels |
+| `Plan` | Optional Planning / Agent Core | Agent Core / Channels |
 | `ToolCall` | Agent Core | Tools |
 | `ToolResult` | Tools | Agent Core |
-| `RiskDecision` | Safety | Agent Core/Approvals |
-| `ApprovalRequest` | Safety/Approvals | Channel/User |
+| `RiskDecision` | Tool Policy | Agent Core/Approvals |
+| `ApprovalRequest` | Tool Policy/Approvals | Channel/User |
 | `ApprovalDecision` | Channel/User | Approvals/Agent Core |
 | `ErrorShape` | All modules | All modules |
-| `ToolRegistryEntry` | Tool owners | Agent Core/Safety |
+| `ToolRegistryEntry` | Tool owners | Agent Core/Tool Policy |
 
 ---
 

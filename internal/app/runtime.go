@@ -59,11 +59,6 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 		return nil, err
 	}
 
-	intentClassifier, err := NewIntentClassifier(provider)
-	if err != nil {
-		return nil, fmt.Errorf("create intent classifier: %w", err)
-	}
-
 	model := strings.TrimSpace(config.OpenAIModel)
 	if model == "" {
 		model = providers.DefaultOpenAIModel
@@ -77,10 +72,8 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 	}
 
 	return agent.NewRuntime(agent.RuntimeConfig{
-		Provider:         provider,
-		Registry:         registry,
-		IntentClassifier: intentClassifier,
-		TaskPlanner:      agent.NewLLMTaskPlanner(provider, model),
+		Provider: provider,
+		Registry: registry,
 		ReferenceResolver: reference.NewFallbackResolver(
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),

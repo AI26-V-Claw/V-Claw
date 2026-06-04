@@ -55,6 +55,21 @@ func TestSlackProgressTextMapsKnownTools(t *testing.T) {
 	}
 }
 
+func TestSlackProgressTextHidesInternalRoutingStages(t *testing.T) {
+	for _, stage := range []agent.ProgressStage{
+		agent.ProgressStageClassifying,
+		agent.ProgressStageClassified,
+		agent.ProgressStagePlanning,
+		agent.ProgressStagePlanned,
+		agent.ProgressStageThinking,
+		agent.ProgressStageFinalizing,
+	} {
+		if got := slackProgressText(agent.ProgressEvent{Stage: stage}); got != "" {
+			t.Fatalf("expected stage %s to be hidden, got %q", stage, got)
+		}
+	}
+}
+
 func TestSlackTextFromFailedResponseHidesDetails(t *testing.T) {
 	text := slackTextFromResponse(contracts.AgentResponse{
 		Status:  contracts.AgentStatusFailed,

@@ -36,6 +36,7 @@ type RuntimeConfig struct {
 	Registry          *tools.ToolRegistry
 	IntentClassifier  IntentClassifier
 	TaskPlanner       TaskPlanner
+	TurnRouter        TurnRouter
 	ReferenceResolver reference.Resolver
 	Policy            policies.ToolPolicy
 	SessionStore      sessions.Store
@@ -59,6 +60,7 @@ type Runtime struct {
 	registry          *tools.ToolRegistry
 	intentClassifier  IntentClassifier
 	taskPlanner       TaskPlanner
+	turnRouter        TurnRouter
 	referenceResolver reference.Resolver
 	policy            policies.ToolPolicy
 	sessionStore      sessions.Store
@@ -109,6 +111,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if now == nil {
 		now = time.Now
 	}
+	turnRouter := config.TurnRouter
+	if turnRouter == nil {
+		turnRouter = NewLLMTurnRouter(config.Provider, config.Model)
+	}
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
 		referenceResolver = reference.NewHeuristicResolver()
@@ -118,6 +124,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		registry:          config.Registry,
 		intentClassifier:  config.IntentClassifier,
 		taskPlanner:       config.TaskPlanner,
+		turnRouter:        turnRouter,
 		referenceResolver: referenceResolver,
 		policy:            config.Policy,
 		sessionStore:      sessionStore,
@@ -275,49 +282,37 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		understandingMessage.Text = contextualReferenceText(history, referenceResolution, message.Text)
 	}
 	understandingMessage.Text = textWithAttachmentContext(understandingMessage.Text, message.Metadata)
-	activeContext := activeClarification || resultFollowUp || contextualFollowUp || resolvedReference
 
-	classification, errShape := r.classifyIntent(ctx, understandingMessage, understandingHistory)
+	route, errShape := r.routeTurn(ctx, understandingMessage, understandingHistory)
 	if errShape != nil {
 		base.Error = errShape
 		base.Message = errShape.Message
 		return base, nil
 	}
-	if clarification := r.clarificationResponse(message, classification, activeContext); clarification != nil {
-		if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.Message); errShape != nil {
-			clarification.Error = errShape
-			clarification.Message = errShape.Message
-			clarification.Status = contracts.AgentStatusFailed
-			return *clarification, nil
+	if route.Mode == TurnModeBlockedPromptInjection {
+		blocked := "Tôi không thể hỗ trợ yêu cầu cố gắng thay đổi hoặc bỏ qua hướng dẫn hệ thống."
+		if errShape := r.appendAssistantTranscript(ctx, message.SessionID, blocked); errShape != nil {
+			base.Error = errShape
+			base.Message = errShape.Message
+			return base, nil
 		}
-		if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromClassification(message.Text, clarification.Message, classification)); errShape != nil {
-			clarification.Error = errShape
-			clarification.Message = errShape.Message
-			clarification.Status = contracts.AgentStatusFailed
-		}
-		return *clarification, nil
+		return contracts.AgentResponse{
+			RequestID: message.RequestID,
+			SessionID: message.SessionID,
+			Status:    contracts.AgentStatusBlocked,
+			Message:   blocked,
+			Data:      r.traceData(nil, nil, nil, route),
+			Error: &contracts.ErrorShape{
+				Code:      contracts.ErrorActionBlockedByPolicy,
+				Message:   "prompt injection blocked",
+				Source:    contracts.ErrorSourcePolicy,
+				Retryable: false,
+			},
+		}, nil
 	}
 
-	planResult, errShape := r.planTask(ctx, understandingMessage, classification, understandingHistory)
-	if errShape != nil {
-		base.Error = errShape
-		base.Message = base.Error.Message
-		return base, nil
-	}
-	if clarification := r.planningClarificationResponse(message, classification, planResult, activeContext); clarification != nil {
-		if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.Message); errShape != nil {
-			clarification.Error = errShape
-			clarification.Message = errShape.Message
-			clarification.Status = contracts.AgentStatusFailed
-			return *clarification, nil
-		}
-		if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromPlan(message.Text, clarification.Message, classification, planResult)); errShape != nil {
-			clarification.Error = errShape
-			clarification.Message = errShape.Message
-			clarification.Status = contracts.AgentStatusFailed
-		}
-		return *clarification, nil
-	}
+	var classification *agentintent.ClassificationOutput
+	var planResult *TaskPlanResult
 
 	providerTranscript := transcript
 	providerMemory := sessionMemory
@@ -339,12 +334,12 @@ agentLoop:
 	for iteration := 1; iteration <= r.maxIterations; iteration++ {
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, classification, planResult, providerMemory, providerReference)
+		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, classification, planResult, providerMemory, providerReference, route)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
-			Tools:      providers.ToolDefinitionsFromRegistry(r.registry.ListTools()),
-			ToolChoice: "auto",
+			Tools:      r.providerToolsForRoute(route),
+			ToolChoice: toolChoiceForRoute(route),
 		})
 		if err != nil {
 			code := contracts.ErrorProviderError
@@ -404,15 +399,49 @@ If required information is missing, ask one concise clarification question inste
 				SessionID:   message.SessionID,
 				Status:      contracts.AgentStatusCompleted,
 				Message:     assistantMessage.Content,
-				Data:        r.traceData(classification, planResult, referenceResolution),
+				Data:        r.traceData(classification, planResult, referenceResolution, route),
 				ToolResults: toolResults,
-				Plan:        responsePlan(planResult),
 			}, nil
 		}
 
 		for index, providerToolCall := range assistantMessage.ToolCalls {
 			evidenceText := providerTranscriptEvidenceText(providerTranscript)
 			providerToolCall = sanitizeUnsupportedOptionalArguments(providerToolCall, evidenceText)
+			if isClarifyToolCall(providerToolCall) {
+				clarification := clarificationFromToolCall(providerToolCall)
+				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
+					Role:       providers.MessageRoleTool,
+					ToolCallID: providerToolCall.ID,
+					Content:    truncateToolContentForLLM("CLARIFICATION_REQUESTED: " + clarification.question),
+				}); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				if err := r.appendSkippedToolObservations(ctx, message.SessionID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because clarification is required first"); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.question); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(message.Text, clarification.question, providerToolCall, stringSliceArg(providerToolCall.Arguments, "missing_fields"))); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				return contracts.AgentResponse{
+					RequestID: message.RequestID,
+					SessionID: message.SessionID,
+					Status:    contracts.AgentStatusNeedClarification,
+					Message:   clarification.question,
+					Data:      r.traceData(classification, planResult, referenceResolution, route),
+				}, nil
+			}
+
 			definition, found := r.registry.GetDefinition(providerToolCall.Name)
 			if !found {
 				definition.Name = providerToolCall.Name
@@ -542,9 +571,8 @@ If required information is missing, ask one concise clarification question inste
 					Message:         approval.Summary,
 					ApprovalID:      approval.ApprovalID,
 					ApprovalRequest: &approval,
-					Data:            r.traceData(classification, planResult, referenceResolution),
+					Data:            r.traceData(classification, planResult, referenceResolution, route),
 					ToolResults:     toolResults,
-					Plan:            responsePlan(planResult),
 					Error: &contracts.ErrorShape{
 						Code:      contracts.ErrorActionRequiresApproval,
 						Message:   approval.Summary,
@@ -590,9 +618,8 @@ If required information is missing, ask one concise clarification question inste
 		SessionID:   message.SessionID,
 		Status:      contracts.AgentStatusFailed,
 		Message:     "agent exceeded max iterations",
-		Data:        r.traceData(classification, planResult, referenceResolution),
+		Data:        r.traceData(classification, planResult, referenceResolution, route),
 		ToolResults: toolResults,
-		Plan:        responsePlan(planResult),
 		Error: &contracts.ErrorShape{
 			Code:      contracts.ErrorMaxIterationsExceeded,
 			Message:   "agent exceeded max iterations",
@@ -770,8 +797,8 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 	return r.Run(ctx, revisionMessage)
 }
 
-func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, classification *agentintent.ClassificationOutput, planResult *TaskPlanResult, memory sessions.SessionMemory, resolution *reference.Resolution) []providers.Message {
-	messages := make([]providers.Message, 0, len(transcript)+5)
+func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, classification *agentintent.ClassificationOutput, planResult *TaskPlanResult, memory sessions.SessionMemory, resolution *reference.Resolution, route *TurnRoute) []providers.Message {
+	messages := make([]providers.Message, 0, len(transcript)+6)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
 		Content: runtimeSystemPrompt(r.now()),
@@ -783,6 +810,12 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, classi
 		})
 	}
 	if prompt := referenceContextPrompt(resolution); prompt != "" {
+		messages = append(messages, providers.Message{
+			Role:    providers.MessageRoleSystem,
+			Content: prompt,
+		})
+	}
+	if prompt := routeContextPrompt(route); prompt != "" {
 		messages = append(messages, providers.Message{
 			Role:    providers.MessageRoleSystem,
 			Content: prompt,
@@ -804,6 +837,18 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, classi
 	return messages
 }
 
+func routeContextPrompt(route *TurnRoute) string {
+	if route == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf(`Turn router result:
+- tool_exposure_mode: %s
+- reason: %s
+
+This is not an intent label, not a tool choice, not a clarification decision, and not a risk decision.
+If tools are available, decide naturally whether to answer directly, call a relevant tool, or call clarify when required information is missing.`, route.Mode, strings.TrimSpace(route.Reason)))
+}
+
 func runtimeSystemPrompt(now time.Time) string {
 	if now.IsZero() {
 		now = time.Now()
@@ -815,7 +860,7 @@ Use available tools when the user asks for information that a tool can retrieve 
 Do not answer explicit Google Workspace read requests from conversation memory alone. If the current user asks for Gmail, Calendar, Chat, or People data for a concrete date/range/query, call the matching read tool.
 Never claim that an external action was completed unless a tool result confirms it.
 For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
-For missing required details, ask one concise clarification question instead of inventing values.
+When tools are available and required details are missing, call clarify with one concise question instead of inventing values. In no-tool mode, ask normally if the conversation needs it.
 Keep final answers concise and include the useful result, not internal implementation details.
 
 Current date and time: %s.
@@ -989,6 +1034,62 @@ func (r *Runtime) classifyIntent(ctx context.Context, message contracts.UserMess
 	)
 	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassified, Message: "Intent classification completed"})
 	return classification, nil
+}
+
+func (r *Runtime) routeTurn(ctx context.Context, message contracts.UserMessage, recentHistory []string) (*TurnRoute, *contracts.ErrorShape) {
+	if r.turnRouter == nil {
+		route := TurnRoute{Mode: TurnModeToolEnabled, Reason: "router unavailable; exposing tools by default"}
+		return &route, nil
+	}
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassifying, Message: "Turn routing started"})
+	route, err := r.turnRouter.RouteTurn(ctx, TurnRouteInput{
+		Message:       message.Text,
+		RecentHistory: recentHistory,
+		Now:           r.now(),
+	})
+	if err != nil {
+		retryable := providers.IsRetryableError(err)
+		code := contracts.ErrorProviderError
+		if retryable {
+			code = contracts.ErrorProviderUnavailable
+		}
+		return nil, &contracts.ErrorShape{
+			Code:      code,
+			Message:   "turn routing failed: " + err.Error(),
+			Source:    contracts.ErrorSourceProvider,
+			Retryable: retryable,
+		}
+	}
+	if route.Mode == "" {
+		route.Mode = TurnModeToolEnabled
+	}
+	if strings.TrimSpace(route.Reason) == "" {
+		route.Reason = string(route.Mode)
+	}
+	r.logger.Info("turn routed",
+		"request_id", message.RequestID,
+		"session_id", message.SessionID,
+		"mode", route.Mode,
+		"reason", route.Reason,
+	)
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassified, Message: "Turn routing completed"})
+	return &route, nil
+}
+
+func (r *Runtime) providerToolsForRoute(route *TurnRoute) []providers.ToolDefinition {
+	if route == nil || route.Mode != TurnModeToolEnabled {
+		return nil
+	}
+	definitions := providers.ToolDefinitionsFromRegistry(r.registry.ListTools())
+	definitions = append(definitions, clarifyToolDefinition())
+	return definitions
+}
+
+func toolChoiceForRoute(route *TurnRoute) string {
+	if route == nil || route.Mode != TurnModeToolEnabled {
+		return "none"
+	}
+	return "auto"
 }
 
 func (r *Runtime) clarificationResponse(message contracts.UserMessage, classification *agentintent.ClassificationOutput, activeClarification bool) *contracts.AgentResponse {
@@ -1860,7 +1961,7 @@ func responsePlan(planResult *TaskPlanResult) *contracts.Plan {
 	return &plan
 }
 
-func (r *Runtime) traceData(classification *agentintent.ClassificationOutput, planResult *TaskPlanResult, resolution *reference.Resolution) map[string]any {
+func (r *Runtime) traceData(classification *agentintent.ClassificationOutput, planResult *TaskPlanResult, resolution *reference.Resolution, routes ...*TurnRoute) map[string]any {
 	data := map[string]any{
 		"model": r.model,
 	}
@@ -1872,6 +1973,12 @@ func (r *Runtime) traceData(classification *agentintent.ClassificationOutput, pl
 			"source":             resolution.Source,
 			"confidence":         resolution.Confidence,
 			"needsClarification": resolution.NeedsClarification,
+		}
+	}
+	if len(routes) > 0 && routes[0] != nil {
+		data["turnRouter"] = map[string]any{
+			"mode":   routes[0].Mode,
+			"reason": routes[0].Reason,
 		}
 	}
 	if classification != nil && classification.Intent != nil {

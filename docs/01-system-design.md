@@ -64,9 +64,10 @@ flowchart TB
   end
  subgraph Core["Agent Core"]
         LOOP["Agent Loop / Orchestrator"]
-        SAFETY["Intent, Context & Safety Layer<br>Intent Classification / Missing Info / Risk Gate"]
+        TURN_ROUTER["Turn Router<br>Tool Exposure Only<br>no_tool / tool_enabled / blocked_prompt_injection"]
+        POLICY["Tool Policy Boundary<br>Risk / Approval Decision"]
         HITL["HITL Approval Manager<br>Approve / Reject / Revise"]
-        PLANNER["Task Planning & Execution Control"]
+        CLARIFY["Clarify Tool<br>Pending User Input"]
   end
  subgraph Tools["Tool Layer"]
         ROUTER["Tool Router & Executor"]
@@ -86,15 +87,18 @@ flowchart TB
 
     Channels --> API
     API --> LOOP
-    LOOP --> SAFETY & PG & REDIS & VDB
+    LOOP --> TURN_ROUTER & PG & REDIS & VDB
     LOOP --> MODEL_ROUTER
-    SAFETY --> PLANNER
-    PLANNER --> ROUTER
-    ROUTER --> GTOOLS & SANDBOX & LOOP & PG
+    LOOP --> ROUTER
+    LOOP --> CLARIFY
+    ROUTER --> POLICY
+    POLICY --> GTOOLS & SANDBOX
+    ROUTER --> LOOP & PG
     GTOOLS --> GAPI
     SANDBOX --> DOCKER
     DOCKER --> FILES
-    SAFETY -. needs approval / clarification .-> HITL
+    POLICY -. requires approval .-> HITL
+    CLARIFY -. need_clarification .-> API
     HITL -. approval UI .-> API
     API -. approval decision / revision comment .-> HITL
     HITL --> LOOP & PG
@@ -103,9 +107,10 @@ flowchart TB
     CHATAPP:::channel
     API:::backend
     LOOP:::core
-    SAFETY:::safety
+    TURN_ROUTER:::safety
+    POLICY:::safety
     HITL:::hitl
-    PLANNER:::core
+    CLARIFY:::core
     MODEL_ROUTER:::llm
     LLM_ALL:::llm
     ROUTER:::tool

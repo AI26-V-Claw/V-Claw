@@ -110,7 +110,7 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	if handler.finalized != 1 || handler.finalizedErr != nil {
 		t.Fatalf("expected successful audit finalization, got count=%d err=%v", handler.finalized, handler.finalizedErr)
 	}
-	if len(calls) < 4 {
+	if len(calls) < 3 {
 		t.Fatalf("expected processing, progress, and final edits, got %#v", calls)
 	}
 	if !strings.HasSuffix(calls[0].path, "/sendMessage") || calls[0].payload["text"] != "Đang xử lý..." {
@@ -125,9 +125,30 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	if !seenMessageProgress {
 		t.Fatalf("expected chat message progress edit, got %#v", calls)
 	}
+	for _, call := range calls {
+		text := fmt.Sprint(call.payload["text"])
+		if strings.Contains(text, "phân loại") || strings.Contains(text, "lập kế hoạch") || strings.Contains(text, "phân tích yêu cầu") || strings.Contains(text, "tổng hợp") {
+			t.Fatalf("internal progress should not be exposed to Telegram, got %#v", call)
+		}
+	}
 	last := calls[len(calls)-1]
 	if !strings.HasSuffix(last.path, "/editMessageText") || last.payload["text"] != "hello from runtime" {
 		t.Fatalf("unexpected final telegram call: %#v", last)
+	}
+}
+
+func TestTelegramProgressTextHidesInternalRoutingStages(t *testing.T) {
+	for _, stage := range []agent.ProgressStage{
+		agent.ProgressStageClassifying,
+		agent.ProgressStageClassified,
+		agent.ProgressStagePlanning,
+		agent.ProgressStagePlanned,
+		agent.ProgressStageThinking,
+		agent.ProgressStageFinalizing,
+	} {
+		if got := telegramProgressText(agent.ProgressEvent{Stage: stage}); got != "" {
+			t.Fatalf("expected stage %s to be hidden, got %q", stage, got)
+		}
 	}
 }
 
