@@ -54,6 +54,42 @@ func isValidSystemOpType(value string) bool {
 	}
 }
 
+func TestEvalSystemOp(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		predicted intent.IntentResult
+		want     intent.SystemOpType
+	}{
+		{
+			name: "delete shell",
+			input: "xóa file cũ",
+			predicted: intent.IntentResult{SystemOpType: intent.SystemOpShell},
+			want: intent.SystemOpDelete,
+		},
+		{
+			name: "write shell",
+			input: "ghi file báo cáo tổng kết",
+			predicted: intent.IntentResult{SystemOpType: intent.SystemOpShell},
+			want: intent.SystemOpWrite,
+		},
+		{
+			name: "keep shell",
+			input: "mở shell và kiểm tra thư mục",
+			predicted: intent.IntentResult{SystemOpType: intent.SystemOpShell},
+			want: intent.SystemOpShell,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := evalSystemOp(tc.input, tc.predicted); got != tc.want {
+				t.Fatalf("expected %s, got %s", tc.want, got)
+			}
+		})
+	}
+}
+
 func mustIntentCasesPath(t *testing.T) string {
 	t.Helper()
 

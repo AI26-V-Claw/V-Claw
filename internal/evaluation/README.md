@@ -162,6 +162,41 @@ go run cmd/evaluate/main.go -generate
 go run cmd/evaluate/main.go
 ```
 
+### 5. Intent Demo Commands
+
+```bash
+# Show all demo presets
+go run ./cmd/intent-eval -list-scenarios
+
+# Run the full G3 set
+go run ./cmd/intent-eval -scenario g3_full
+
+# Run smaller demo slices
+go run ./cmd/intent-eval -scenario read_info
+go run ./cmd/intent-eval -scenario send
+go run ./cmd/intent-eval -scenario delete
+go run ./cmd/intent-eval -scenario write
+go run ./cmd/intent-eval -scenario shell
+go run ./cmd/intent-eval -scenario ambiguous
+
+# Narrow by keyword when you want a custom mini demo
+go run ./cmd/intent-eval -scenario g3_full -input-contains "email"
+go run ./cmd/intent-eval -scenario g3_full -input-contains "file"
+```
+
+If you prefer `make`, the repo now includes matching shortcuts:
+
+```bash
+make intent-eval-list
+make intent-eval-g3
+make intent-eval-read
+make intent-eval-send
+make intent-eval-delete
+make intent-eval-write
+make intent-eval-shell
+make intent-eval-ambiguous
+```
+
 ## Evaluation Metrics
 
 ### Overall Metrics

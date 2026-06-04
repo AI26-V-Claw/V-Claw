@@ -72,8 +72,12 @@ func mapSystemOp(calls []ToolCallInfo) SystemOpType {
 	for _, call := range calls {
 		name := NormalizeToolName(call.Name)
 		switch {
-		case name == "gmail.createDraft" || name == "gmail.sendDraft" || name == "chat.sendMessage":
+		case name == "gmail.createDraft" || name == "gmail.updateDraft" || name == "gmail.replyDraft" || name == "gmail.forwardDraft":
+			return SystemOpWrite
+		case name == "gmail.sendDraft" || name == "chat.sendMessage":
 			return SystemOpSend
+		case name == "gmail.deleteDraft" || name == "gmail.modifyMessage":
+			return SystemOpDelete
 		case name == "calendar.deleteEvent":
 			return SystemOpDelete
 		case name == "calendar.createEvent" || name == "calendar.updateEvent":
@@ -82,6 +86,9 @@ func mapSystemOp(calls []ToolCallInfo) SystemOpType {
 			lower := strings.ToLower(toString(call.Parameters["command"]) + " " + toString(call.Parameters["code"]))
 			if strings.Contains(lower, "delete") || strings.Contains(lower, "rm ") || strings.Contains(lower, "xóa") || strings.Contains(lower, "xoá") {
 				return SystemOpDelete
+			}
+			if strings.Contains(lower, "ghi") || strings.Contains(lower, "tao") || strings.Contains(lower, "tạo") || strings.Contains(lower, "write") || strings.Contains(lower, "create") {
+				return SystemOpWrite
 			}
 			return SystemOpShell
 		}
