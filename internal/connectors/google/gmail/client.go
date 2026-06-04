@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 
 	"google.golang.org/api/gmail/v1"
@@ -67,22 +69,46 @@ type ThreadDetail struct {
 	Messages []MessageDetail
 }
 
+type Profile struct {
+	EmailAddress  string
+	MessagesTotal int64
+	ThreadsTotal  int64
+	HistoryID     uint64
+}
+
+type DraftAttachmentInput struct {
+	Filename string
+	MimeType string
+	Data     []byte
+}
+
 type DraftMessageInput struct {
-	To         []string
-	Cc         []string
-	Bcc        []string
-	Subject    string
-	TextBody   string
-	HTMLBody   string
-	ThreadID   string
-	InReplyTo  string
-	References string
+	To          []string
+	Cc          []string
+	Bcc         []string
+	Subject     string
+	TextBody    string
+	HTMLBody    string
+	ThreadID    string
+	InReplyTo   string
+	References  string
+	Attachments []DraftAttachmentInput
 }
 
 type DraftSummary struct {
 	ID        string
 	MessageID string
 	ThreadID  string
+}
+
+type DraftDetail struct {
+	DraftSummary
+	Message MessageDetail
+}
+
+type ListDraftsOutput struct {
+	Drafts        []DraftSummary
+	NextPageToken string
 }
 
 type AttachmentData struct {
@@ -101,8 +127,18 @@ type ModifyMessageOutput struct {
 	LabelIDs []string
 }
 
+type BatchModifyMessagesOutput struct {
+	MessageIDs     []string
+	AddLabelIDs    []string
+	RemoveLabelIDs []string
+}
+
 func (c *Client) ListLabels(ctx context.Context, userID string) ([]Label, error) {
 	return ListLabels(ctx, c.httpClient, userID)
+}
+
+func (c *Client) GetProfile(ctx context.Context, userID string) (Profile, error) {
+	return GetProfile(ctx, c.httpClient, userID)
 }
 
 func (c *Client) ListMessages(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]MessageSummary, string, error) {
@@ -121,6 +157,14 @@ func (c *Client) GetThread(ctx context.Context, userID string, threadID string) 
 	return GetThread(ctx, c.httpClient, userID, threadID)
 }
 
+func (c *Client) ListDrafts(ctx context.Context, userID string, maxResults int64, pageToken string) (ListDraftsOutput, error) {
+	return ListDrafts(ctx, c.httpClient, userID, maxResults, pageToken)
+}
+
+func (c *Client) GetDraft(ctx context.Context, userID string, draftID string) (DraftDetail, error) {
+	return GetDraft(ctx, c.httpClient, userID, draftID)
+}
+
 func (c *Client) CreateDraft(ctx context.Context, userID string, input DraftMessageInput) (DraftSummary, error) {
 	return CreateDraft(ctx, c.httpClient, userID, input)
 }
@@ -133,12 +177,28 @@ func (c *Client) SendDraft(ctx context.Context, userID string, draftID string) (
 	return SendDraft(ctx, c.httpClient, userID, draftID)
 }
 
+func (c *Client) DeleteDraft(ctx context.Context, userID string, draftID string) error {
+	return DeleteDraft(ctx, c.httpClient, userID, draftID)
+}
+
 func (c *Client) DownloadAttachment(ctx context.Context, userID string, messageID string, attachment Attachment) (AttachmentData, error) {
 	return DownloadAttachment(ctx, c.httpClient, userID, messageID, attachment)
 }
 
 func (c *Client) ModifyMessage(ctx context.Context, userID string, messageID string, input ModifyMessageInput) (ModifyMessageOutput, error) {
 	return ModifyMessage(ctx, c.httpClient, userID, messageID, input)
+}
+
+func (c *Client) BatchModifyMessages(ctx context.Context, userID string, messageIDs []string, input ModifyMessageInput) (BatchModifyMessagesOutput, error) {
+	return BatchModifyMessages(ctx, c.httpClient, userID, messageIDs, input)
+}
+
+func (c *Client) TrashMessage(ctx context.Context, userID string, messageID string) (MessageSummary, error) {
+	return TrashMessage(ctx, c.httpClient, userID, messageID)
+}
+
+func (c *Client) UntrashMessage(ctx context.Context, userID string, messageID string) (MessageSummary, error) {
+	return UntrashMessage(ctx, c.httpClient, userID, messageID)
 }
 
 func ListLabels(ctx context.Context, client *http.Client, userID string) ([]Label, error) {
@@ -160,6 +220,25 @@ func ListLabels(ctx context.Context, client *http.Client, userID string) ([]Labe
 		})
 	}
 	return labels, nil
+}
+
+func GetProfile(ctx context.Context, client *http.Client, userID string) (Profile, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return Profile{}, err
+	}
+
+	profile, err := service.Users.GetProfile(userID).Do()
+	if err != nil {
+		return Profile{}, err
+	}
+
+	return Profile{
+		EmailAddress:  profile.EmailAddress,
+		MessagesTotal: profile.MessagesTotal,
+		ThreadsTotal:  profile.ThreadsTotal,
+		HistoryID:     profile.HistoryId,
+	}, nil
 }
 
 func ListMessages(ctx context.Context, client *http.Client, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]MessageSummary, string, error) {
@@ -260,6 +339,43 @@ func GetThread(ctx context.Context, client *http.Client, userID string, threadID
 	return detail, nil
 }
 
+func ListDrafts(ctx context.Context, client *http.Client, userID string, maxResults int64, pageToken string) (ListDraftsOutput, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return ListDraftsOutput{}, err
+	}
+
+	call := service.Users.Drafts.List(userID).MaxResults(maxResults)
+	if strings.TrimSpace(pageToken) != "" {
+		call = call.PageToken(pageToken)
+	}
+
+	response, err := call.Do()
+	if err != nil {
+		return ListDraftsOutput{}, err
+	}
+
+	output := ListDraftsOutput{NextPageToken: response.NextPageToken}
+	for _, draft := range response.Drafts {
+		output.Drafts = append(output.Drafts, draftSummaryFromAPI(draft))
+	}
+	return output, nil
+}
+
+func GetDraft(ctx context.Context, client *http.Client, userID string, draftID string) (DraftDetail, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return DraftDetail{}, err
+	}
+
+	draft, err := service.Users.Drafts.Get(userID, draftID).Format("full").Do()
+	if err != nil {
+		return DraftDetail{}, err
+	}
+
+	return draftDetailFromAPI(draft), nil
+}
+
 func CreateDraft(ctx context.Context, client *http.Client, userID string, input DraftMessageInput) (DraftSummary, error) {
 	service, err := serviceFromClient(ctx, client)
 	if err != nil {
@@ -301,6 +417,15 @@ func SendDraft(ctx context.Context, client *http.Client, userID string, draftID 
 	return messageSummaryFromAPI(message), nil
 }
 
+func DeleteDraft(ctx context.Context, client *http.Client, userID string, draftID string) error {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return err
+	}
+
+	return service.Users.Drafts.Delete(userID, draftID).Do()
+}
+
 func DownloadAttachment(ctx context.Context, client *http.Client, userID string, messageID string, attachment Attachment) (AttachmentData, error) {
 	service, err := serviceFromClient(ctx, client)
 	if err != nil {
@@ -339,6 +464,54 @@ func ModifyMessage(ctx context.Context, client *http.Client, userID string, mess
 	}, nil
 }
 
+func BatchModifyMessages(ctx context.Context, client *http.Client, userID string, messageIDs []string, input ModifyMessageInput) (BatchModifyMessagesOutput, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return BatchModifyMessagesOutput{}, err
+	}
+
+	err = service.Users.Messages.BatchModify(userID, &gmail.BatchModifyMessagesRequest{
+		Ids:            append([]string(nil), messageIDs...),
+		AddLabelIds:    input.AddLabelIDs,
+		RemoveLabelIds: input.RemoveLabelIDs,
+	}).Do()
+	if err != nil {
+		return BatchModifyMessagesOutput{}, err
+	}
+
+	return BatchModifyMessagesOutput{
+		MessageIDs:     append([]string(nil), messageIDs...),
+		AddLabelIDs:    append([]string(nil), input.AddLabelIDs...),
+		RemoveLabelIDs: append([]string(nil), input.RemoveLabelIDs...),
+	}, nil
+}
+
+func TrashMessage(ctx context.Context, client *http.Client, userID string, messageID string) (MessageSummary, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return MessageSummary{}, err
+	}
+
+	message, err := service.Users.Messages.Trash(userID, messageID).Do()
+	if err != nil {
+		return MessageSummary{}, err
+	}
+	return messageSummaryFromAPI(message), nil
+}
+
+func UntrashMessage(ctx context.Context, client *http.Client, userID string, messageID string) (MessageSummary, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return MessageSummary{}, err
+	}
+
+	message, err := service.Users.Messages.Untrash(userID, messageID).Do()
+	if err != nil {
+		return MessageSummary{}, err
+	}
+	return messageSummaryFromAPI(message), nil
+}
+
 func serviceFromClient(ctx context.Context, client *http.Client) (*gmail.Service, error) {
 	if client == nil {
 		return nil, errors.New("http client is required")
@@ -373,6 +546,17 @@ func draftSummaryFromAPI(draft *gmail.Draft) DraftSummary {
 		summary.ThreadID = draft.Message.ThreadId
 	}
 	return summary
+}
+
+func draftDetailFromAPI(draft *gmail.Draft) DraftDetail {
+	if draft == nil {
+		return DraftDetail{}
+	}
+	detail := DraftDetail{DraftSummary: draftSummaryFromAPI(draft)}
+	if draft.Message != nil {
+		detail.Message = messageDetailFromAPI(draft.Message)
+	}
+	return detail
 }
 
 func messageDetailFromAPI(message *gmail.Message) MessageDetail {
@@ -482,6 +666,10 @@ func rawMessageFromInput(input DraftMessageInput) string {
 }
 
 func mimeMessageFromInput(input DraftMessageInput) string {
+	if len(input.Attachments) > 0 {
+		return mimeMultipartMixedMessageFromInput(input)
+	}
+
 	var b strings.Builder
 	writeAddressHeader(&b, "To", input.To)
 	writeAddressHeader(&b, "Cc", input.Cc)
@@ -509,6 +697,92 @@ func mimeMessageFromInput(input DraftMessageInput) string {
 	writeHeader(&b, "Content-Type", "text/plain; charset=UTF-8")
 	b.WriteString("\r\n")
 	b.WriteString(normalizeBody(input.TextBody))
+	return b.String()
+}
+
+func mimeMultipartMixedMessageFromInput(input DraftMessageInput) string {
+	var b strings.Builder
+	writeAddressHeader(&b, "To", input.To)
+	writeAddressHeader(&b, "Cc", input.Cc)
+	writeAddressHeader(&b, "Bcc", input.Bcc)
+	writeHeader(&b, "Subject", mime.QEncoding.Encode("utf-8", sanitizeHeader(input.Subject)))
+	writeHeader(&b, "In-Reply-To", input.InReplyTo)
+	writeHeader(&b, "References", input.References)
+	writeHeader(&b, "MIME-Version", "1.0")
+
+	writer := multipart.NewWriter(&b)
+	writeHeader(&b, "Content-Type", `multipart/mixed; boundary="`+writer.Boundary()+`"`)
+	b.WriteString("\r\n")
+
+	if strings.TrimSpace(input.HTMLBody) != "" {
+		addAlternativeBodyPart(writer, input)
+	} else {
+		addTextPart(writer, "text/plain; charset=UTF-8", normalizeBody(input.TextBody))
+	}
+
+	for _, attachment := range input.Attachments {
+		addAttachmentPart(writer, attachment)
+	}
+	_ = writer.Close()
+	return b.String()
+}
+
+func addAlternativeBodyPart(writer *multipart.Writer, input DraftMessageInput) {
+	var body bytes.Buffer
+	altWriter := multipart.NewWriter(&body)
+	addTextPart(altWriter, "text/plain; charset=UTF-8", normalizeBody(input.TextBody))
+	addTextPart(altWriter, "text/html; charset=UTF-8", normalizeBody(input.HTMLBody))
+	_ = altWriter.Close()
+
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Type", `multipart/alternative; boundary="`+altWriter.Boundary()+`"`)
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return
+	}
+	_, _ = part.Write(body.Bytes())
+}
+
+func addTextPart(writer *multipart.Writer, contentType string, body string) {
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Type", contentType)
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return
+	}
+	_, _ = part.Write([]byte(body))
+}
+
+func addAttachmentPart(writer *multipart.Writer, attachment DraftAttachmentInput) {
+	filename := sanitizeHeader(attachment.Filename)
+	mimeType := sanitizeHeader(attachment.MimeType)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Type", mimeType)
+	header.Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	header.Set("Content-Transfer-Encoding", "base64")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return
+	}
+	_, _ = part.Write([]byte(wrapBase64(base64.StdEncoding.EncodeToString(attachment.Data))))
+}
+
+func wrapBase64(encoded string) string {
+	if encoded == "" {
+		return "\r\n"
+	}
+	var b strings.Builder
+	for len(encoded) > 76 {
+		b.WriteString(encoded[:76])
+		b.WriteString("\r\n")
+		encoded = encoded[76:]
+	}
+	b.WriteString(encoded)
+	b.WriteString("\r\n")
 	return b.String()
 }
 

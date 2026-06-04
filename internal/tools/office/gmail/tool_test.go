@@ -15,15 +15,37 @@ import (
 )
 
 type mockConnector struct {
+	listLabels         func(ctx context.Context, userID string) ([]gmailconnector.Label, error)
+	getProfile         func(ctx context.Context, userID string) (gmailconnector.Profile, error)
 	listMessages       func(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error)
 	getMessage         func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageDetail, error)
 	listThreads        func(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.ThreadSummary, string, error)
 	getThread          func(ctx context.Context, userID string, threadID string) (gmailconnector.ThreadDetail, error)
+	listDrafts         func(ctx context.Context, userID string, maxResults int64, pageToken string) (gmailconnector.ListDraftsOutput, error)
+	getDraft           func(ctx context.Context, userID string, draftID string) (gmailconnector.DraftDetail, error)
 	createDraft        func(ctx context.Context, userID string, input gmailconnector.DraftMessageInput) (gmailconnector.DraftSummary, error)
 	updateDraft        func(ctx context.Context, userID string, draftID string, input gmailconnector.DraftMessageInput) (gmailconnector.DraftSummary, error)
 	sendDraft          func(ctx context.Context, userID string, draftID string) (gmailconnector.MessageSummary, error)
+	deleteDraft        func(ctx context.Context, userID string, draftID string) error
 	downloadAttachment func(ctx context.Context, userID string, messageID string, attachment gmailconnector.Attachment) (gmailconnector.AttachmentData, error)
 	modifyMessage      func(ctx context.Context, userID string, messageID string, input gmailconnector.ModifyMessageInput) (gmailconnector.ModifyMessageOutput, error)
+	batchModify        func(ctx context.Context, userID string, messageIDs []string, input gmailconnector.ModifyMessageInput) (gmailconnector.BatchModifyMessagesOutput, error)
+	trashMessage       func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error)
+	untrashMessage     func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error)
+}
+
+func (m *mockConnector) ListLabels(ctx context.Context, userID string) ([]gmailconnector.Label, error) {
+	if m.listLabels == nil {
+		return nil, nil
+	}
+	return m.listLabels(ctx, userID)
+}
+
+func (m *mockConnector) GetProfile(ctx context.Context, userID string) (gmailconnector.Profile, error) {
+	if m.getProfile == nil {
+		return gmailconnector.Profile{}, nil
+	}
+	return m.getProfile(ctx, userID)
 }
 
 func (m *mockConnector) ListMessages(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error) {
@@ -54,6 +76,20 @@ func (m *mockConnector) GetThread(ctx context.Context, userID string, threadID s
 	return m.getThread(ctx, userID, threadID)
 }
 
+func (m *mockConnector) ListDrafts(ctx context.Context, userID string, maxResults int64, pageToken string) (gmailconnector.ListDraftsOutput, error) {
+	if m.listDrafts == nil {
+		return gmailconnector.ListDraftsOutput{}, nil
+	}
+	return m.listDrafts(ctx, userID, maxResults, pageToken)
+}
+
+func (m *mockConnector) GetDraft(ctx context.Context, userID string, draftID string) (gmailconnector.DraftDetail, error) {
+	if m.getDraft == nil {
+		return gmailconnector.DraftDetail{}, nil
+	}
+	return m.getDraft(ctx, userID, draftID)
+}
+
 func (m *mockConnector) CreateDraft(ctx context.Context, userID string, input gmailconnector.DraftMessageInput) (gmailconnector.DraftSummary, error) {
 	if m.createDraft == nil {
 		return gmailconnector.DraftSummary{}, nil
@@ -75,6 +111,13 @@ func (m *mockConnector) SendDraft(ctx context.Context, userID string, draftID st
 	return m.sendDraft(ctx, userID, draftID)
 }
 
+func (m *mockConnector) DeleteDraft(ctx context.Context, userID string, draftID string) error {
+	if m.deleteDraft == nil {
+		return nil
+	}
+	return m.deleteDraft(ctx, userID, draftID)
+}
+
 func (m *mockConnector) DownloadAttachment(ctx context.Context, userID string, messageID string, attachment gmailconnector.Attachment) (gmailconnector.AttachmentData, error) {
 	if m.downloadAttachment == nil {
 		return gmailconnector.AttachmentData{}, nil
@@ -87,6 +130,27 @@ func (m *mockConnector) ModifyMessage(ctx context.Context, userID string, messag
 		return gmailconnector.ModifyMessageOutput{}, nil
 	}
 	return m.modifyMessage(ctx, userID, messageID, input)
+}
+
+func (m *mockConnector) BatchModifyMessages(ctx context.Context, userID string, messageIDs []string, input gmailconnector.ModifyMessageInput) (gmailconnector.BatchModifyMessagesOutput, error) {
+	if m.batchModify == nil {
+		return gmailconnector.BatchModifyMessagesOutput{}, nil
+	}
+	return m.batchModify(ctx, userID, messageIDs, input)
+}
+
+func (m *mockConnector) TrashMessage(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error) {
+	if m.trashMessage == nil {
+		return gmailconnector.MessageSummary{}, nil
+	}
+	return m.trashMessage(ctx, userID, messageID)
+}
+
+func (m *mockConnector) UntrashMessage(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error) {
+	if m.untrashMessage == nil {
+		return gmailconnector.MessageSummary{}, nil
+	}
+	return m.untrashMessage(ctx, userID, messageID)
 }
 
 func TestBuildSearchQuery(t *testing.T) {
@@ -205,6 +269,26 @@ func TestListEmailsMapsConnectorError(t *testing.T) {
 	}
 }
 
+func TestListLabelsAndProfile(t *testing.T) {
+	service := NewService(&mockConnector{
+		listLabels: func(ctx context.Context, userID string) ([]gmailconnector.Label, error) {
+			return []gmailconnector.Label{{ID: "INBOX", Name: "Inbox"}}, nil
+		},
+		getProfile: func(ctx context.Context, userID string) (gmailconnector.Profile, error) {
+			return gmailconnector.Profile{EmailAddress: "me@example.com", MessagesTotal: 10, ThreadsTotal: 5, HistoryID: 123}, nil
+		},
+	})
+
+	labels, errShape := service.ListLabels(context.Background(), ListLabelsInput{})
+	if errShape != nil || len(labels.Labels) != 1 || labels.Labels[0].ID != "INBOX" {
+		t.Fatalf("ListLabels() = %#v, %#v", labels, errShape)
+	}
+	profile, errShape := service.GetProfile(context.Background(), GetProfileInput{})
+	if errShape != nil || profile.Profile.EmailAddress != "me@example.com" {
+		t.Fatalf("GetProfile() = %#v, %#v", profile, errShape)
+	}
+}
+
 func TestMapErrorFallback(t *testing.T) {
 	errShape := MapError(errors.New("boom"))
 	if errShape.Code != "INTERNAL_ERROR" {
@@ -237,6 +321,45 @@ func TestListThreadsBuildsQuery(t *testing.T) {
 	}
 }
 
+func TestDraftManagementService(t *testing.T) {
+	service := NewService(&mockConnector{
+		listDrafts: func(ctx context.Context, userID string, maxResults int64, pageToken string) (gmailconnector.ListDraftsOutput, error) {
+			if maxResults != 5 || pageToken != "next" {
+				t.Fatalf("unexpected list draft args: %d %q", maxResults, pageToken)
+			}
+			return gmailconnector.ListDraftsOutput{Drafts: []gmailconnector.DraftSummary{{ID: "draft-1"}}, NextPageToken: "next-2"}, nil
+		},
+		getDraft: func(ctx context.Context, userID string, draftID string) (gmailconnector.DraftDetail, error) {
+			return gmailconnector.DraftDetail{
+				DraftSummary: gmailconnector.DraftSummary{ID: draftID},
+				Message: gmailconnector.MessageDetail{
+					MessageSummary: gmailconnector.MessageSummary{ID: "msg-1"},
+					BodyPlain:      "draft body",
+				},
+			}, nil
+		},
+		deleteDraft: func(ctx context.Context, userID string, draftID string) error {
+			if draftID != "draft-1" {
+				t.Fatalf("unexpected draft id: %q", draftID)
+			}
+			return nil
+		},
+	})
+
+	listed, errShape := service.ListDrafts(context.Background(), ListDraftsInput{MaxResults: 5, PageToken: "next"})
+	if errShape != nil || listed.NextPageToken != "next-2" {
+		t.Fatalf("ListDrafts() = %#v, %#v", listed, errShape)
+	}
+	got, errShape := service.GetDraft(context.Background(), GetDraftInput{DraftID: "draft-1", Full: true})
+	if errShape != nil || got.Draft.ID != "draft-1" || got.Display.Text != "draft body" {
+		t.Fatalf("GetDraft() = %#v, %#v", got, errShape)
+	}
+	deleted, errShape := service.DeleteDraft(context.Background(), DeleteDraftInput{DraftID: "draft-1"})
+	if errShape != nil || deleted.DraftID != "draft-1" {
+		t.Fatalf("DeleteDraft() = %#v, %#v", deleted, errShape)
+	}
+}
+
 func TestCreateDraftValidatesRecipientAndBody(t *testing.T) {
 	service := NewService(&mockConnector{})
 
@@ -248,6 +371,52 @@ func TestCreateDraftValidatesRecipientAndBody(t *testing.T) {
 	_, errShape = service.CreateDraft(context.Background(), DraftInput{To: []string{"a@example.com"}})
 	if errShape == nil || errShape.Code != "INVALID_INPUT" {
 		t.Fatalf("expected body validation error, got %#v", errShape)
+	}
+}
+
+func TestCreateDraftLoadsAttachments(t *testing.T) {
+	var captured gmailconnector.DraftMessageInput
+	service := NewService(&mockConnector{
+		createDraft: func(ctx context.Context, userID string, input gmailconnector.DraftMessageInput) (gmailconnector.DraftSummary, error) {
+			captured = input
+			return gmailconnector.DraftSummary{ID: "draft-1"}, nil
+		},
+	})
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.txt")
+	if err := os.WriteFile(path, []byte("attachment"), 0600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	output, errShape := service.CreateDraft(context.Background(), DraftInput{
+		To:          []string{"alice@example.com"},
+		TextBody:    "hello",
+		Attachments: []string{path},
+	})
+	if errShape != nil {
+		t.Fatalf("CreateDraft() errShape = %v", errShape)
+	}
+	if output.Draft.ID != "draft-1" || len(captured.Attachments) != 1 {
+		t.Fatalf("unexpected draft output/input: %#v %#v", output, captured)
+	}
+	if captured.Attachments[0].Filename != "report.txt" || !strings.HasPrefix(captured.Attachments[0].MimeType, "text/plain") {
+		t.Fatalf("unexpected attachment metadata: %#v", captured.Attachments[0])
+	}
+	if string(captured.Attachments[0].Data) != "attachment" {
+		t.Fatalf("unexpected attachment data: %q", captured.Attachments[0].Data)
+	}
+}
+
+func TestCreateDraftRejectsMissingAttachment(t *testing.T) {
+	service := NewService(&mockConnector{})
+
+	_, errShape := service.CreateDraft(context.Background(), DraftInput{
+		To:          []string{"alice@example.com"},
+		TextBody:    "hello",
+		Attachments: []string{filepath.Join(t.TempDir(), "missing.txt")},
+	})
+	if errShape == nil || errShape.Code != "INVALID_INPUT" {
+		t.Fatalf("expected missing attachment validation error, got %#v", errShape)
 	}
 }
 
@@ -352,6 +521,61 @@ func TestModifyMessageMapsActions(t *testing.T) {
 	}
 }
 
+func TestBatchModifyMessagesMapsActionsAndValidatesLimit(t *testing.T) {
+	var capturedIDs []string
+	var captured gmailconnector.ModifyMessageInput
+	service := NewService(&mockConnector{
+		batchModify: func(ctx context.Context, userID string, messageIDs []string, input gmailconnector.ModifyMessageInput) (gmailconnector.BatchModifyMessagesOutput, error) {
+			capturedIDs = messageIDs
+			captured = input
+			return gmailconnector.BatchModifyMessagesOutput{MessageIDs: messageIDs, RemoveLabelIDs: input.RemoveLabelIDs}, nil
+		},
+	})
+
+	output, errShape := service.BatchModifyMessages(context.Background(), BatchModifyMessagesInput{
+		MessageIDs: []string{"m1", "m2"},
+		Action:     "archive",
+	})
+	if errShape != nil {
+		t.Fatalf("BatchModifyMessages() errShape = %v", errShape)
+	}
+	if strings.Join(capturedIDs, ",") != "m1,m2" || len(captured.RemoveLabelIDs) != 1 || captured.RemoveLabelIDs[0] != "INBOX" {
+		t.Fatalf("unexpected batch modify input: %#v %#v", capturedIDs, captured)
+	}
+	if len(output.Result.MessageIDs) != 2 {
+		t.Fatalf("unexpected output: %#v", output)
+	}
+
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "m"
+	}
+	_, errShape = service.BatchModifyMessages(context.Background(), BatchModifyMessagesInput{MessageIDs: tooMany, Action: "archive"})
+	if errShape == nil || errShape.Code != "INVALID_INPUT" {
+		t.Fatalf("expected too many message ids validation error, got %#v", errShape)
+	}
+}
+
+func TestTrashAndUntrashMessage(t *testing.T) {
+	service := NewService(&mockConnector{
+		trashMessage: func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error) {
+			return gmailconnector.MessageSummary{ID: messageID, Subject: "Trashed"}, nil
+		},
+		untrashMessage: func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error) {
+			return gmailconnector.MessageSummary{ID: messageID, Subject: "Restored"}, nil
+		},
+	})
+
+	trashed, errShape := service.TrashMessage(context.Background(), TrashMessageInput{MessageID: "m1"})
+	if errShape != nil || trashed.Message.Subject != "Trashed" {
+		t.Fatalf("TrashMessage() = %#v, %#v", trashed, errShape)
+	}
+	restored, errShape := service.UntrashMessage(context.Background(), UntrashMessageInput{MessageID: "m1"})
+	if errShape != nil || restored.Message.Subject != "Restored" {
+		t.Fatalf("UntrashMessage() = %#v, %#v", restored, errShape)
+	}
+}
+
 func TestModifyMessageSchemaIncludesLabelIDsProperty(t *testing.T) {
 	schema := NewTool(ToolNameModifyMessage, nil).Parameters()
 	properties, ok := schema["properties"].(map[string]any)
@@ -428,6 +652,14 @@ func TestGmailToolRiskMetadataAndRegistration(t *testing.T) {
 		t.Fatalf("list threads metadata mismatch: %s %s", list.Capability(), list.RiskLevel())
 	}
 
+	labels, ok := registry.GetTool(ToolNameListLabels)
+	if !ok {
+		t.Fatal("expected list labels tool")
+	}
+	if labels.Capability() != tools.CapabilityReadOnly || labels.RiskLevel() != tools.RiskLevelSafeRead {
+		t.Fatalf("list labels metadata mismatch: %s %s", labels.Capability(), labels.RiskLevel())
+	}
+
 	draft, ok := registry.GetTool(ToolNameCreateDraft)
 	if !ok {
 		t.Fatal("expected create draft tool")
@@ -442,5 +674,37 @@ func TestGmailToolRiskMetadataAndRegistration(t *testing.T) {
 	}
 	if download.Capability() != tools.CapabilityMutating || download.RiskLevel() != tools.RiskLevelLocalWrite {
 		t.Fatalf("download metadata mismatch: %s %s", download.Capability(), download.RiskLevel())
+	}
+
+	deleteDraft, ok := registry.GetTool(ToolNameDeleteDraft)
+	if !ok {
+		t.Fatal("expected delete draft tool")
+	}
+	if deleteDraft.Capability() != tools.CapabilityMutating || deleteDraft.RiskLevel() != tools.RiskLevelDestructive {
+		t.Fatalf("delete draft metadata mismatch: %s %s", deleteDraft.Capability(), deleteDraft.RiskLevel())
+	}
+
+	batch, ok := registry.GetTool(ToolNameBatchModifyMessages)
+	if !ok {
+		t.Fatal("expected batch modify tool")
+	}
+	if batch.Capability() != tools.CapabilityMutating || batch.RiskLevel() != tools.RiskLevelExternalWrite {
+		t.Fatalf("batch modify metadata mismatch: %s %s", batch.Capability(), batch.RiskLevel())
+	}
+
+	trash, ok := registry.GetTool(ToolNameTrashMessage)
+	if !ok {
+		t.Fatal("expected trash message tool")
+	}
+	if trash.Capability() != tools.CapabilityMutating || trash.RiskLevel() != tools.RiskLevelDestructive {
+		t.Fatalf("trash metadata mismatch: %s %s", trash.Capability(), trash.RiskLevel())
+	}
+
+	untrash, ok := registry.GetTool(ToolNameUntrashMessage)
+	if !ok {
+		t.Fatal("expected untrash message tool")
+	}
+	if untrash.Capability() != tools.CapabilityMutating || untrash.RiskLevel() != tools.RiskLevelExternalWrite {
+		t.Fatalf("untrash metadata mismatch: %s %s", untrash.Capability(), untrash.RiskLevel())
 	}
 }

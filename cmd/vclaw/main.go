@@ -272,9 +272,13 @@ func printUsage() {
   vclaw telegram run
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
-  vclaw google gmail <list|get|list-threads|get-thread|create-draft|update-draft|send-draft|reply-draft|forward-draft|download-attachments|modify-message>
+  vclaw google gmail <labels|profile|list|get|list-threads|get-thread|list-drafts|get-draft|create-draft|update-draft|send-draft|delete-draft|reply-draft|forward-draft|download-attachments|modify-message|batch-modify|trash-message|untrash-message>
   vclaw google people <search-directory>
-  vclaw google chat <list-spaces|list-members|find-spaces-by-members|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>`)
+  vclaw google chat <list-spaces|list-members|find-spaces-by-members|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>
+
+Agent runtime env:
+  VCLAW_WEB_TOOLS_MODE=auto|required|off
+  TAVILY_API_KEY=...`)
 }
 
 func printGoogleUsage() {
@@ -298,6 +302,12 @@ func printGoogleUsage() {
 
 func printGoogleGmailUsage() {
 	fmt.Println(`Google Gmail commands:
+  vclaw google gmail labels
+      List Gmail labels.
+
+  vclaw google gmail profile
+      Show the authenticated Gmail profile.
+
   vclaw google gmail list [-query "from:abc@example.com"] [-from abc@example.com] [-subject "weekly report"] [-after 2026-06-01] [-before 2026-06-30] [-labels INBOX,UNREAD] [-max-results 10] [-page-token token]
       List emails with optional Gmail search and filters.
 
@@ -310,24 +320,42 @@ func printGoogleGmailUsage() {
   vclaw google gmail get-thread -id <thread-id> [-render text|raw-html] [-full]
       Read one Gmail thread.
 
-  vclaw google gmail create-draft -to a@example.com [-cc b@example.com] -subject "Hello" -text "Body" [-html "<p>Body</p>"]
+  vclaw google gmail list-drafts [-max-results 10] [-page-token token]
+      List Gmail drafts.
+
+  vclaw google gmail get-draft -id <draft-id> [-render text|raw-html] [-full]
+      Read one Gmail draft.
+
+  vclaw google gmail create-draft -to a@example.com [-cc b@example.com] -subject "Hello" -text "Body" [-html "<p>Body</p>"] [-attachments file1,file2]
       Create a Gmail draft.
 
-  vclaw google gmail update-draft -id <draft-id> -to a@example.com -subject "Hello" -text "Body"
+  vclaw google gmail update-draft -id <draft-id> -to a@example.com -subject "Hello" -text "Body" [-attachments file1,file2]
       Update a Gmail draft.
 
   vclaw google gmail send-draft -id <draft-id>
       Send an existing Gmail draft.
 
-  vclaw google gmail reply-draft -id <message-id> -to a@example.com -text "Reply body"
+  vclaw google gmail delete-draft -id <draft-id>
+      Delete an existing Gmail draft.
+
+  vclaw google gmail reply-draft -id <message-id> -to a@example.com -text "Reply body" [-attachments file1,file2]
       Create a reply draft. Use -thread without -id to draft in a known thread.
 
-  vclaw google gmail forward-draft -id <message-id> -to a@example.com -text "Forward note"
+  vclaw google gmail forward-draft -id <message-id> -to a@example.com -text "Forward note" [-attachments file1,file2]
       Create a forward draft without forwarding original attachments.
 
   vclaw google gmail download-attachments -id <message-id> -output-dir <dir> [-attachment-ids att1,att2]
       Download Gmail attachments to a local directory.
 
   vclaw google gmail modify-message -id <message-id> -action markRead|markUnread|star|unstar|archive|moveToInbox|addLabels|removeLabels [-labels LABEL1,LABEL2]
-      Modify Gmail message labels.`)
+      Modify Gmail message labels.
+
+  vclaw google gmail batch-modify -ids msg1,msg2 -action markRead|markUnread|star|unstar|archive|moveToInbox|addLabels|removeLabels [-labels LABEL1,LABEL2]
+      Modify Gmail labels for multiple messages.
+
+  vclaw google gmail trash-message -id <message-id>
+      Move one Gmail message to trash.
+
+  vclaw google gmail untrash-message -id <message-id>
+      Restore one Gmail message from trash.`)
 }

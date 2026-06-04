@@ -434,21 +434,32 @@ Rules:
 |---|---|---|---|
 | `gmail.listEmails` | Integration | `safe_read` | No |
 | `gmail.getEmail` | Integration | `safe_read` | No |
+| `gmail.listLabels` | Integration | `safe_read` | No |
+| `gmail.getProfile` | Integration | `safe_read` | No |
 | `gmail.listThreads` | Integration | `safe_read` | No |
 | `gmail.getThread` | Integration | `safe_read` | No |
+| `gmail.listDrafts` | Integration | `safe_read` | No |
+| `gmail.getDraft` | Integration | `safe_read` | No |
 | `gmail.createDraft` | Integration | `external_write` | Yes |
 | `gmail.updateDraft` | Integration | `external_write` | Yes |
 | `gmail.sendDraft` | Integration | `external_write` | Yes |
+| `gmail.deleteDraft` | Integration | `destructive` | Yes |
 | `gmail.replyDraft` | Integration | `external_write` | Yes |
 | `gmail.forwardDraft` | Integration | `external_write` | Yes |
 | `gmail.downloadAttachments` | Integration | `local_write` | Yes |
 | `gmail.modifyMessage` | Integration | `external_write` | Yes |
+| `gmail.batchModifyMessages` | Integration | `external_write` | Yes |
+| `gmail.trashMessage` | Integration | `destructive` | Yes |
+| `gmail.untrashMessage` | Integration | `external_write` | Yes |
 
 > `gmail.getEmail` trả dữ liệu raw từ connector (headers/body/attachments).  
 > Render text để hiển thị (ví dụ fallback từ HTML sang text) thuộc tool layer, không thuộc connector raw API boundary.
 
 > Draft/reply/forward tools create or send Gmail drafts and must pass the approval boundary before agent-triggered execution.
 > `gmail.downloadAttachments` writes local files and is treated as `local_write`; `gmail.modifyMessage` supports read/unread, star/unstar, archive, moveToInbox, addLabels, and removeLabels.
+> Draft creation/update/reply/forward may include local file attachments via `attachments`; local file reading happens in the Gmail tool layer before creating the external draft.
+> `gmail.batchModifyMessages` applies the same modify actions to 1-50 messages. `gmail.deleteDraft` and `gmail.trashMessage` are destructive and require approval; `gmail.untrashMessage` is an external write and also requires approval.
+> These additions use the existing G1 Gmail scopes: `gmail.readonly`, `gmail.compose`, `gmail.send`, and `gmail.modify`; no new OAuth scope is required.
 
 ### Calendar
 
@@ -480,6 +491,18 @@ Rules:
 | `people.searchDirectory` | Integration | `safe_read` | No |
 
 > `people.searchDirectory` only reads Google Workspace directory profiles to resolve names/emails before matching Google Chat members.
+
+### Web
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `web.search` | Integration | `safe_read` | No |
+| `web.fetch` | Integration | `safe_read` | No |
+
+> `web.search` searches the public web through the configured web provider and returns concise result snippets with URLs.  
+> `web.fetch` extracts readable content from one public `http` or `https` URL and truncates long page content before returning it to the agent.
+> Tavily is the current implementation provider, but the public tool contract remains provider-neutral.
+> These tools are read-only, but user prompts and tool descriptions should avoid sending private or sensitive data to the external web provider unless the user explicitly asks for it.
 
 ### Sandbox
 

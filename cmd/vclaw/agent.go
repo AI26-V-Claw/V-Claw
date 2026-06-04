@@ -26,6 +26,7 @@ func runAgent(ctx context.Context, args []string) error {
 	channel := fs.String("channel", "dev-cli", "channel name")
 	maxIterations := fs.Int("max-iterations", agent.DefaultMaxIterations, "maximum agent iterations")
 	googleToolsMode := fs.String("google-tools", envOrDefault("VCLAW_GOOGLE_TOOLS_MODE", googleToolsAuto), "Google Workspace tool mode: auto, required, or off")
+	webToolsMode := fs.String("web-tools", envOrDefault("VCLAW_WEB_TOOLS_MODE", webToolsAuto), "Web search/fetch tool mode: auto, required, or off")
 	credentialsPath := fs.String("credentials", defaultCredentialsPath, "Google OAuth desktop client credentials JSON")
 	googleTokenPath := fs.String("google-token", defaultTokenPath, "Google OAuth token cache path")
 	jsonOutput := fs.Bool("json", false, "print the full AgentResponse JSON")
@@ -40,6 +41,7 @@ func runAgent(ctx context.Context, args []string) error {
 	bundle, err := newAgentRuntime(ctx, agentRuntimeOptions{
 		MaxIterations:   *maxIterations,
 		GoogleToolsMode: *googleToolsMode,
+		WebToolsMode:    *webToolsMode,
 		CredentialsPath: *credentialsPath,
 		GoogleTokenPath: *googleTokenPath,
 	})
@@ -73,6 +75,7 @@ func runAgentChat(ctx context.Context, args []string) error {
 	channel := fs.String("channel", "dev-cli", "channel name")
 	maxIterations := fs.Int("max-iterations", agent.DefaultMaxIterations, "maximum agent iterations")
 	googleToolsMode := fs.String("google-tools", envOrDefault("VCLAW_GOOGLE_TOOLS_MODE", googleToolsAuto), "Google Workspace tool mode: auto, required, or off")
+	webToolsMode := fs.String("web-tools", envOrDefault("VCLAW_WEB_TOOLS_MODE", webToolsAuto), "Web search/fetch tool mode: auto, required, or off")
 	credentialsPath := fs.String("credentials", defaultCredentialsPath, "Google OAuth desktop client credentials JSON")
 	googleTokenPath := fs.String("google-token", defaultTokenPath, "Google OAuth token cache path")
 	jsonOutput := fs.Bool("json", false, "print each full AgentResponse JSON")
@@ -84,6 +87,7 @@ func runAgentChat(ctx context.Context, args []string) error {
 	bundle, err := newAgentRuntime(ctx, agentRuntimeOptions{
 		MaxIterations:   *maxIterations,
 		GoogleToolsMode: *googleToolsMode,
+		WebToolsMode:    *webToolsMode,
 		CredentialsPath: *credentialsPath,
 		GoogleTokenPath: *googleTokenPath,
 	})
