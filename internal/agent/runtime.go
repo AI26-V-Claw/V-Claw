@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
+	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/contracts"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
@@ -21,27 +23,49 @@ const (
 )
 
 type RuntimeConfig struct {
-	Provider      providers.Provider
-	Registry      *tools.ToolRegistry
-	Policy        policies.ToolPolicy
-	SessionStore  sessions.Store
-	Logger        *slog.Logger
-	MaxIterations int
-	ToolTimeout   time.Duration
-	Model         string
-	Now           func() time.Time
+	Provider         providers.Provider
+	Registry         *tools.ToolRegistry
+	IntentClassifier IntentClassifier
+	TaskPlanner      TaskPlanner
+	Policy           policies.ToolPolicy
+	SessionStore     sessions.Store
+	Logger           *slog.Logger
+	MaxIterations    int
+	ToolTimeout      time.Duration
+	Model            string
+	Now              func() time.Time
+}
+
+type IntentClassifier interface {
+	Classify(ctx context.Context, userInput string) (*agentintent.ClassificationOutput, error)
+}
+
+type MemoryAwareIntentClassifier interface {
+	ClassifyWithMemoryIsolation(ctx context.Context, userInput string, recentHistory []string) (*agentintent.ClassificationOutput, error)
 }
 
 type Runtime struct {
-	provider      providers.Provider
-	registry      *tools.ToolRegistry
-	policy        policies.ToolPolicy
-	sessionStore  sessions.Store
-	logger        *slog.Logger
-	maxIterations int
-	toolTimeout   time.Duration
-	model         string
-	now           func() time.Time
+	provider         providers.Provider
+	registry         *tools.ToolRegistry
+	intentClassifier IntentClassifier
+	taskPlanner      TaskPlanner
+	policy           policies.ToolPolicy
+	sessionStore     sessions.Store
+	logger           *slog.Logger
+	approvalMu       sync.Mutex
+	pendingApprovals map[string]pendingApproval
+	pendingBySession map[string]string
+	maxIterations    int
+	toolTimeout      time.Duration
+	model            string
+	now              func() time.Time
+}
+
+type pendingApproval struct {
+	message    contracts.UserMessage
+	request    contracts.ApprovalRequest
+	toolCall   providers.ToolCall
+	definition tools.ToolDefinition
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
@@ -66,15 +90,19 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		now = time.Now
 	}
 	return &Runtime{
-		provider:      config.Provider,
-		registry:      config.Registry,
-		policy:        config.Policy,
-		sessionStore:  sessionStore,
-		logger:        logger,
-		maxIterations: maxIterations,
-		toolTimeout:   toolTimeout,
-		model:         config.Model,
-		now:           now,
+		provider:         config.Provider,
+		registry:         config.Registry,
+		intentClassifier: config.IntentClassifier,
+		taskPlanner:      config.TaskPlanner,
+		policy:           config.Policy,
+		sessionStore:     sessionStore,
+		logger:           logger,
+		pendingApprovals: make(map[string]pendingApproval),
+		pendingBySession: make(map[string]string),
+		maxIterations:    maxIterations,
+		toolTimeout:      toolTimeout,
+		model:            config.Model,
+		now:              now,
 	}
 }
 
@@ -112,6 +140,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		base.Message = base.Error.Message
 		return base, nil
 	}
+	history := recentHistoryForPrompt(transcript, 8)
 
 	userMessage := providers.Message{Role: providers.MessageRoleUser, Content: message.Text}
 	transcript = append(transcript, userMessage)
@@ -121,11 +150,41 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		return base, nil
 	}
 
+	classification, errShape := r.classifyIntent(ctx, message, history)
+	if errShape != nil {
+		base.Error = errShape
+		base.Message = errShape.Message
+		return base, nil
+	}
+	if clarification := r.clarificationResponse(message, classification); clarification != nil {
+		if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.Message); errShape != nil {
+			clarification.Error = errShape
+			clarification.Message = errShape.Message
+			clarification.Status = contracts.AgentStatusFailed
+		}
+		return *clarification, nil
+	}
+
+	planResult, errShape := r.planTask(ctx, message, classification, history)
+	if errShape != nil {
+		base.Error = errShape
+		base.Message = base.Error.Message
+		return base, nil
+	}
+	if clarification := r.planningClarificationResponse(message, classification, planResult); clarification != nil {
+		if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.Message); errShape != nil {
+			clarification.Error = errShape
+			clarification.Message = errShape.Message
+			clarification.Status = contracts.AgentStatusFailed
+		}
+		return *clarification, nil
+	}
+
 	toolResults := []contracts.ToolResult{}
 	for iteration := 1; iteration <= r.maxIterations; iteration++ {
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := withRuntimeSystemPrompt(transcript)
+		providerMessages := r.withRuntimeSystemPrompt(transcript, classification, planResult)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
@@ -160,14 +219,21 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
+			r.logger.Info("agent completed without tool calls",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"iteration", iteration,
+				"content_preview", logPreview(assistantMessage.Content, 180),
+			)
 			emitProgress(ctx, ProgressEvent{Stage: ProgressStageFinalizing, Message: "Agent is finalizing the response"})
 			return contracts.AgentResponse{
 				RequestID:   message.RequestID,
 				SessionID:   message.SessionID,
 				Status:      contracts.AgentStatusCompleted,
 				Message:     assistantMessage.Content,
-				Data:        r.traceData(),
+				Data:        r.traceData(classification, planResult),
 				ToolResults: toolResults,
+				Plan:        responsePlan(planResult),
 			}, nil
 		}
 
@@ -178,8 +244,19 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			}
 
 			decision := r.policy.DecideToolCall(providerToolCall.ID, definition, found, r.now())
+			r.logger.Info("agent tool call proposed",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"iteration", iteration,
+				"tool_call_id", providerToolCall.ID,
+				"tool_name", providerToolCall.Name,
+				"decision", decision.Decision,
+				"risk_level", decision.RiskLevel,
+				"arguments", logToolArguments(providerToolCall.Name, providerToolCall.Arguments),
+			)
 			switch decision.Decision {
 			case contracts.RiskDecisionAllow:
+				providerToolCall = normalizeProviderToolCall(r.now(), providerToolCall, message.Text)
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
 				contractResult := contractToolResult(result)
 				toolResults = append(toolResults, contractResult)
@@ -204,6 +281,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 
 			case contracts.RiskDecisionRequiresApproval:
 				approval := r.approvalRequest(message, providerToolCall, decision)
+				r.storePendingApproval(pendingApproval{
+					message:    message,
+					request:    approval,
+					toolCall:   providerToolCall,
+					definition: definition,
+				})
 				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,
@@ -225,8 +308,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 					Message:         approval.Summary,
 					ApprovalID:      approval.ApprovalID,
 					ApprovalRequest: &approval,
-					Data:            r.traceData(),
+					Data:            r.traceData(classification, planResult),
 					ToolResults:     toolResults,
+					Plan:            responsePlan(planResult),
 					Error: &contracts.ErrorShape{
 						Code:      contracts.ErrorActionRequiresApproval,
 						Message:   approval.Summary,
@@ -272,8 +356,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		SessionID:   message.SessionID,
 		Status:      contracts.AgentStatusFailed,
 		Message:     "agent exceeded max iterations",
-		Data:        r.traceData(),
+		Data:        r.traceData(classification, planResult),
 		ToolResults: toolResults,
+		Plan:        responsePlan(planResult),
 		Error: &contracts.ErrorShape{
 			Code:      contracts.ErrorMaxIterationsExceeded,
 			Message:   "agent exceeded max iterations",
@@ -283,24 +368,154 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	}, nil
 }
 
-func withRuntimeSystemPrompt(transcript []providers.Message) []providers.Message {
-	messages := make([]providers.Message, 0, len(transcript)+1)
+func (r *Runtime) HasPendingApproval(sessionID string) bool {
+	r.approvalMu.Lock()
+	defer r.approvalMu.Unlock()
+	approvalID := r.pendingBySession[strings.TrimSpace(sessionID)]
+	if approvalID == "" {
+		return false
+	}
+	_, ok := r.pendingApprovals[approvalID]
+	return ok
+}
+
+func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decision contracts.ApprovalDecision) (contracts.AgentResponse, error) {
+	pending, ok := r.takePendingApproval(sessionID, decision.ApprovalID)
+	if !ok {
+		return contracts.AgentResponse{
+			RequestID: decision.RequestID,
+			SessionID: sessionID,
+			Status:    contracts.AgentStatusFailed,
+			Message:   "Không tìm thấy yêu cầu xác nhận đang chờ.",
+			Error: &contracts.ErrorShape{
+				Code:      contracts.ErrorApprovalNotFound,
+				Message:   "pending approval not found",
+				Source:    contracts.ErrorSourceAgent,
+				Retryable: false,
+			},
+		}, nil
+	}
+
+	if pending.request.ExpiresAt.Before(r.now()) {
+		return contracts.AgentResponse{
+			RequestID: pending.message.RequestID,
+			SessionID: pending.message.SessionID,
+			Status:    contracts.AgentStatusFailed,
+			Message:   "Yêu cầu xác nhận đã hết hạn. Vui lòng gửi lại yêu cầu.",
+			Error: &contracts.ErrorShape{
+				Code:      contracts.ErrorApprovalExpired,
+				Message:   "approval expired",
+				Source:    contracts.ErrorSourceAgent,
+				Retryable: false,
+			},
+		}, nil
+	}
+
+	switch decision.Decision {
+	case contracts.ApprovalDecisionApproved:
+		result := r.executeAllowedTool(ctx, pending.toolCall, pending.definition)
+		contractResult := contractToolResult(result)
+		response := contracts.AgentResponse{
+			RequestID:   pending.message.RequestID,
+			SessionID:   pending.message.SessionID,
+			Status:      contracts.AgentStatusCompleted,
+			Message:     approvalExecutionMessage(result),
+			Data:        r.traceData(nil, nil),
+			ToolResults: []contracts.ToolResult{contractResult},
+		}
+		if !result.Success {
+			response.Status = contracts.AgentStatusFailed
+			response.Error = toolErrorShape(result)
+			response.Message = response.Error.Message
+		}
+		return response, nil
+	case contracts.ApprovalDecisionRejected:
+		comment := strings.TrimSpace(decision.Comment)
+		if comment != "" {
+			return contracts.AgentResponse{
+				RequestID: pending.message.RequestID,
+				SessionID: pending.message.SessionID,
+				Status:    contracts.AgentStatusNeedClarification,
+				Message:   "Đã hủy thao tác đang chờ. Bạn muốn chỉnh lại như thế nào?\n\nGhi chú của bạn: " + comment,
+				Data:      r.traceData(nil, nil),
+			}, nil
+		}
+		return contracts.AgentResponse{
+			RequestID: pending.message.RequestID,
+			SessionID: pending.message.SessionID,
+			Status:    contracts.AgentStatusBlocked,
+			Message:   "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
+			Data:      r.traceData(nil, nil),
+			Error: &contracts.ErrorShape{
+				Code:      contracts.ErrorActionBlockedByPolicy,
+				Message:   "approval rejected",
+				Source:    contracts.ErrorSourcePolicy,
+				Retryable: false,
+			},
+		}, nil
+	default:
+		return contracts.AgentResponse{
+			RequestID: pending.message.RequestID,
+			SessionID: pending.message.SessionID,
+			Status:    contracts.AgentStatusFailed,
+			Message:   "Quyết định xác nhận không hợp lệ.",
+			Error: &contracts.ErrorShape{
+				Code:      contracts.ErrorInvalidInput,
+				Message:   "approval decision must be approved or rejected",
+				Source:    contracts.ErrorSourceAgent,
+				Retryable: false,
+			},
+		}, nil
+	}
+}
+
+func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, classification *agentintent.ClassificationOutput, planResult *TaskPlanResult) []providers.Message {
+	messages := make([]providers.Message, 0, len(transcript)+3)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
-		Content: runtimeSystemPrompt(),
+		Content: runtimeSystemPrompt(r.now()),
 	})
+	if prompt := intentContextPrompt(classification); prompt != "" {
+		messages = append(messages, providers.Message{
+			Role:    providers.MessageRoleSystem,
+			Content: prompt,
+		})
+	}
+	if prompt := planContextPrompt(planResult); prompt != "" {
+		messages = append(messages, providers.Message{
+			Role:    providers.MessageRoleSystem,
+			Content: prompt,
+		})
+	}
 	messages = append(messages, cloneProviderMessages(transcript)...)
 	return messages
 }
 
-func runtimeSystemPrompt() string {
-	return strings.TrimSpace(`You are V-Claw, an agent connected to real tools through a strict contract.
+func runtimeSystemPrompt(now time.Time) string {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return strings.TrimSpace(fmt.Sprintf(`You are V-Claw, an agent connected to real tools through a strict contract.
 Reply in the user's language.
 Use available tools when the user asks for information that a tool can retrieve or compute.
 Never claim that an external action was completed unless a tool result confirms it.
 For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
 For missing required details, ask one concise clarification question instead of inventing values.
 Keep final answers concise and include the useful result, not internal implementation details.
+
+Current date and time: %s.
+When users ask about relative dates or ranges, convert them to concrete ISO-8601 tool arguments before calling tools.
+For calendar.listEvents:
+- "today" / "hôm nay" means local start of today through local start of tomorrow.
+- "this week" / "tuần này" means Monday 00:00 through next Monday 00:00 in the current local timezone.
+- "next week" / "tuần sau" means next Monday 00:00 through the following Monday 00:00.
+- For a date range, set timeMin to the beginning of the range and timeMax to the exclusive end of the range.
+- Do not put date words like "today", "this week", "hôm nay", or "tuần này" into query. Use query only for event title, description, location, or attendee keywords.
+For calendar.createEvent and calendar.updateEvent:
+- Attendees must be valid email addresses.
+- If the user provides a person name instead of an email address, call people.searchDirectory first and use the resolved Workspace email.
+- Do not pass display names like "Bao" or "Tung" into attendees.
+- If no matching email can be resolved, ask one concise clarification question for the attendee email.
 
 Format final answers for chat channels:
 - Start with one short summary line.
@@ -309,12 +524,191 @@ Format final answers for chat channels:
 - Do not dump raw JSON, raw tool outputs, internal tool names, or opaque IDs unless the user explicitly asks.
 - Use plain text only. Do not use Markdown bold, italic, inline code, headings, or syntax markers like **, __, backticks, or #.
 - Avoid Markdown tables because Telegram renders them poorly in plain text.
-- If no relevant result is found, say that plainly and suggest the next useful query.`)
+- If no relevant result is found, say that plainly and suggest the next useful query.`, now.Format(time.RFC3339)))
 }
 
-func (r *Runtime) traceData() map[string]any {
+func (r *Runtime) classifyIntent(ctx context.Context, message contracts.UserMessage, recentHistory []string) (*agentintent.ClassificationOutput, *contracts.ErrorShape) {
+	if r.intentClassifier == nil {
+		return nil, nil
+	}
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassifying, Message: "Intent classification started"})
+	var classification *agentintent.ClassificationOutput
+	var err error
+	if memoryAware, ok := r.intentClassifier.(MemoryAwareIntentClassifier); ok && len(recentHistory) > 0 {
+		classification, err = memoryAware.ClassifyWithMemoryIsolation(ctx, message.Text, recentHistory)
+	} else {
+		classification, err = r.intentClassifier.Classify(ctx, message.Text)
+	}
+	if err != nil {
+		retryable := providers.IsRetryableError(err)
+		code := contracts.ErrorProviderError
+		if retryable {
+			code = contracts.ErrorProviderUnavailable
+		}
+		return nil, &contracts.ErrorShape{
+			Code:      code,
+			Message:   "intent classification failed: " + err.Error(),
+			Source:    contracts.ErrorSourceProvider,
+			Retryable: retryable,
+		}
+	}
+	if classification == nil || classification.Intent == nil {
+		return nil, internalError("intent classifier returned empty result", contracts.ErrorSourceAgent)
+	}
+	r.logger.Info("intent classified",
+		"request_id", message.RequestID,
+		"session_id", message.SessionID,
+		"intent_type", classification.Intent.Type,
+		"confidence", classification.Intent.Confidence,
+		"needs_clarification", classification.NeedsClarification,
+	)
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassified, Message: "Intent classification completed"})
+	return classification, nil
+}
+
+func (r *Runtime) clarificationResponse(message contracts.UserMessage, classification *agentintent.ClassificationOutput) *contracts.AgentResponse {
+	if classification == nil || !classification.NeedsClarification {
+		return nil
+	}
+	clarification := strings.TrimSpace(classification.ClarificationMessage)
+	if clarification == "" {
+		clarification = "Bạn có thể nói rõ hơn bạn muốn tôi làm gì không?"
+	}
+	return &contracts.AgentResponse{
+		RequestID: message.RequestID,
+		SessionID: message.SessionID,
+		Status:    contracts.AgentStatusNeedClarification,
+		Message:   clarification,
+		Data:      r.traceData(classification, nil),
+	}
+}
+
+func intentContextPrompt(classification *agentintent.ClassificationOutput) string {
+	if classification == nil || classification.Intent == nil {
+		return ""
+	}
+	intentResult := classification.Intent
+	toolNames := make([]string, 0, len(intentResult.ToolCalls))
+	for _, toolCall := range intentResult.ToolCalls {
+		if strings.TrimSpace(toolCall.Name) != "" {
+			toolNames = append(toolNames, toolCall.Name)
+		}
+	}
+	return strings.TrimSpace(fmt.Sprintf(`Intent classifier result for the current user message:
+- intent_type: %s
+- confidence: %.2f
+- needs_confirm: %t
+- missing_params: %s
+- proposed_tools: %s
+- reasoning_vi: %s
+
+Use this only as routing/safety context. Do not expose it directly to the user. If the intent indicates a write, destructive, local file, or code execution action, keep following the tool approval policy.`,
+		intentResult.Type,
+		intentResult.Confidence,
+		intentResult.NeedsConfirm,
+		strings.Join(intentResult.MissingParams, ", "),
+		strings.Join(toolNames, ", "),
+		strings.TrimSpace(intentResult.Reasoning),
+	))
+}
+
+func (r *Runtime) planTask(ctx context.Context, message contracts.UserMessage, classification *agentintent.ClassificationOutput, recentHistory []string) (*TaskPlanResult, *contracts.ErrorShape) {
+	if r.taskPlanner == nil {
+		return nil, nil
+	}
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStagePlanning, Message: "Task planning started"})
+	toolDefs := []tools.ToolDefinition{}
+	if r.registry != nil {
+		toolDefs = r.registry.ListTools()
+	}
+	planResult, err := r.taskPlanner.Plan(ctx, TaskPlanningInput{
+		Message:        message,
+		Classification: classification,
+		Tools:          toolDefs,
+		RecentHistory:  recentHistory,
+		Now:            r.now(),
+	})
+	if err != nil {
+		retryable := providers.IsRetryableError(err)
+		code := contracts.ErrorProviderError
+		if retryable {
+			code = contracts.ErrorProviderUnavailable
+		}
+		return nil, &contracts.ErrorShape{
+			Code:      code,
+			Message:   "task planning failed: " + err.Error(),
+			Source:    contracts.ErrorSourceProvider,
+			Retryable: retryable,
+		}
+	}
+	if planResult == nil {
+		planResult = &TaskPlanResult{}
+	}
+	r.logger.Info("task planned",
+		"request_id", message.RequestID,
+		"session_id", message.SessionID,
+		"steps", len(planResult.Plan.Steps),
+		"needs_clarification", planResult.NeedsClarification,
+	)
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStagePlanned, Message: "Task planning completed"})
+	return planResult, nil
+}
+
+func (r *Runtime) planningClarificationResponse(message contracts.UserMessage, classification *agentintent.ClassificationOutput, planResult *TaskPlanResult) *contracts.AgentResponse {
+	if planResult == nil || !planResult.NeedsClarification {
+		return nil
+	}
+	clarification := strings.TrimSpace(planResult.ClarificationMessage)
+	if clarification == "" {
+		clarification = "Bạn có thể bổ sung thêm thông tin để tôi lập kế hoạch chính xác hơn không?"
+	}
+	return &contracts.AgentResponse{
+		RequestID: message.RequestID,
+		SessionID: message.SessionID,
+		Status:    contracts.AgentStatusNeedClarification,
+		Message:   clarification,
+		Data:      r.traceData(classification, planResult),
+		Plan:      responsePlan(planResult),
+	}
+}
+
+func planContextPrompt(planResult *TaskPlanResult) string {
+	if planResult == nil || len(planResult.Plan.Steps) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(planResult.Plan.Steps))
+	for _, step := range planResult.Plan.Steps {
+		lines = append(lines, fmt.Sprintf("- %s: %s (%s)", step.ID, step.Description, step.Status))
+	}
+	return strings.TrimSpace(fmt.Sprintf(`Task planner result for the current user message:
+%s
+
+Use this as execution guidance only. The tool policy and approval boundary remain mandatory. Do not expose this plan unless the user asks for the internal plan.`, strings.Join(lines, "\n")))
+}
+
+func responsePlan(planResult *TaskPlanResult) *contracts.Plan {
+	if planResult == nil || len(planResult.Plan.Steps) == 0 {
+		return nil
+	}
+	plan := planResult.Plan
+	return &plan
+}
+
+func (r *Runtime) traceData(classification *agentintent.ClassificationOutput, planResult *TaskPlanResult) map[string]any {
 	data := map[string]any{
 		"model": r.model,
+	}
+	if classification != nil && classification.Intent != nil {
+		data["intent"] = map[string]any{
+			"type":                 classification.Intent.Type,
+			"confidence":           classification.Intent.Confidence,
+			"needsClarification":   classification.NeedsClarification,
+			"clarificationMessage": classification.ClarificationMessage,
+			"toolCalls":            classification.Intent.ToolCalls,
+		}
+	}
+	if planResult != nil && len(planResult.Plan.Steps) > 0 {
+		data["plan"] = planResult.Plan
 	}
 	if r.registry != nil {
 		definitions := r.registry.ListTools()
@@ -327,6 +721,51 @@ func (r *Runtime) traceData() map[string]any {
 		data["toolsExposed"] = toolNames
 	}
 	return data
+}
+
+func (r *Runtime) appendAssistantTranscript(ctx context.Context, sessionID string, content string) *contracts.ErrorShape {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	if err := r.sessionStore.AppendMessage(ctx, sessionID, providers.Message{
+		Role:    providers.MessageRoleAssistant,
+		Content: content,
+	}); err != nil {
+		return internalError("append assistant message: "+err.Error(), contracts.ErrorSourceSession)
+	}
+	return nil
+}
+
+func recentHistoryForPrompt(transcript []providers.Message, maxMessages int) []string {
+	if maxMessages <= 0 {
+		maxMessages = 8
+	}
+	history := make([]string, 0, maxMessages)
+	for i := len(transcript) - 1; i >= 0 && len(history) < maxMessages; i-- {
+		message := transcript[i]
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		role := ""
+		switch message.Role {
+		case providers.MessageRoleUser:
+			role = "user"
+		case providers.MessageRoleAssistant:
+			if len(message.ToolCalls) > 0 {
+				continue
+			}
+			role = "assistant"
+		default:
+			continue
+		}
+		history = append(history, role+": "+truncateToolContentForLLM(content))
+	}
+	for left, right := 0, len(history)-1; left < right; left, right = left+1, right-1 {
+		history[left], history[right] = history[right], history[left]
+	}
+	return history
 }
 
 func (r *Runtime) appendToolObservation(ctx context.Context, sessionID string, _ []providers.Message, message providers.Message) *contracts.ErrorShape {
@@ -383,6 +822,11 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	if !ok {
 		return tools.ToolNotFoundResult(providerToolCallToToolCall(toolCall))
 	}
+	r.logger.Info("tool execution started",
+		"tool_call_id", toolCall.ID,
+		"tool_name", toolCall.Name,
+		"arguments", logToolArguments(toolCall.Name, toolCall.Arguments),
+	)
 	emitProgress(ctx, ProgressEvent{
 		Stage:      ProgressStageToolStarted,
 		ToolName:   toolCall.Name,
@@ -408,6 +852,13 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 		if !result.Success {
 			stage = ProgressStageToolFailed
 		}
+		r.logger.Info("tool execution completed",
+			"tool_call_id", toolCall.ID,
+			"tool_name", toolCall.Name,
+			"success", result.Success,
+			"error_code", toolErrorCode(result),
+			"content_preview", logPreview(result.ContentForLLM, 260),
+		)
 		emitProgress(ctx, ProgressEvent{
 			Stage:      stage,
 			ToolName:   toolCall.Name,
@@ -436,6 +887,149 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	}
 }
 
+func logToolArguments(toolName string, args map[string]any) any {
+	if args == nil {
+		return map[string]any{}
+	}
+	if toolName == "calendar.listEvents" {
+		return map[string]any{
+			"timeMin": stringLogArg(args, "timeMin"),
+			"timeMax": stringLogArg(args, "timeMax"),
+			"query":   stringLogArg(args, "query"),
+		}
+	}
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	return map[string]any{"keys": keys}
+}
+
+func stringLogArg(args map[string]any, key string) string {
+	value, ok := args[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
+func toolErrorCode(result tools.ToolResult) string {
+	if result.Error == nil {
+		return ""
+	}
+	return result.Error.Code
+}
+
+func logPreview(text string, limit int) string {
+	trimmed := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if limit > 0 && len(runes) > limit {
+		return string(runes[:limit]) + "..."
+	}
+	return trimmed
+}
+
+func normalizeProviderToolCall(now time.Time, toolCall providers.ToolCall, userText string) providers.ToolCall {
+	if toolCall.Name != "calendar.listEvents" {
+		return toolCall
+	}
+	normalizedArgs := normalizeCalendarListEventsArgs(now, toolCall.Arguments, userText)
+	if normalizedArgs == nil {
+		return toolCall
+	}
+	toolCall.Arguments = normalizedArgs
+	return toolCall
+}
+
+func normalizeCalendarListEventsArgs(now time.Time, args map[string]any, userText string) map[string]any {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	lower := strings.ToLower(strings.TrimSpace(userText))
+	if lower == "" {
+		return nil
+	}
+
+	var start, end time.Time
+	switch {
+	case containsAnyText(lower, "tuần sau", "tuan sau", "next week"):
+		thisWeek := startOfWeekMonday(now)
+		start = thisWeek.AddDate(0, 0, 7)
+		end = start.AddDate(0, 0, 7)
+	case containsAnyText(lower, "tuần này", "tuan nay", "this week", "trong tuần", "trong tuan"):
+		start = startOfWeekMonday(now)
+		end = start.AddDate(0, 0, 7)
+	case containsAnyText(lower, "tháng tới", "thang toi", "tháng sau", "thang sau", "next month"):
+		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		start = thisMonth.AddDate(0, 1, 0)
+		end = start.AddDate(0, 1, 0)
+	case containsAnyText(lower, "tháng này", "thang nay", "this month"):
+		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		end = start.AddDate(0, 1, 0)
+	case containsAnyText(lower, "ngày mai", "ngay mai", "tomorrow"):
+		start = startOfDay(now).AddDate(0, 0, 1)
+		end = start.AddDate(0, 0, 1)
+	case containsAnyText(lower, "hôm nay", "hom nay", "today"):
+		start = startOfDay(now)
+		end = start.AddDate(0, 0, 1)
+	default:
+		return nil
+	}
+
+	normalized := cloneArguments(args)
+	if normalized == nil {
+		normalized = map[string]any{}
+	}
+	normalized["timeMin"] = start.Format(time.RFC3339)
+	normalized["timeMax"] = end.Format(time.RFC3339)
+	if query, ok := normalized["query"].(string); ok {
+		normalized["query"] = normalizeRelativeCalendarQuery(query, userText)
+	}
+	return normalized
+}
+
+func normalizeRelativeCalendarQuery(query string, userText string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return ""
+	}
+	lowerQuery := strings.ToLower(trimmed)
+	lowerText := strings.ToLower(strings.TrimSpace(userText))
+	if lowerQuery == lowerText {
+		return ""
+	}
+	if containsAnyText(lowerQuery, "tuần này", "tuan nay", "tuần sau", "tuan sau", "tháng này", "thang nay", "tháng tới", "thang toi", "hôm nay", "hom nay", "today", "this week", "next week", "this month", "next month") &&
+		containsAnyText(lowerQuery, "lịch", "lich", "calendar", "sự kiện", "su kien", "event") {
+		return ""
+	}
+	return trimmed
+}
+
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func startOfWeekMonday(t time.Time) time.Time {
+	dayStart := startOfDay(t)
+	weekday := int(dayStart.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	return dayStart.AddDate(0, 0, -(weekday - 1))
+}
+
+func containsAnyText(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision) contracts.ApprovalRequest {
 	now := r.now()
 	contractCall := contracts.ToolCall{
@@ -445,7 +1039,7 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		ToolName:   toolCall.Name,
 		Input:      cloneArguments(toolCall.Arguments),
 	}
-	summary := fmt.Sprintf("Approval required before running %s.", toolCall.Name)
+	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
 	return contracts.ApprovalRequest{
 		ApprovalID: "appr_" + safeID(toolCall.ID),
 		RequestID:  message.RequestID,
@@ -459,6 +1053,80 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		CreatedAt:  now,
 		ExpiresAt:  now.Add(approvalTTL),
 	}
+}
+
+func (r *Runtime) storePendingApproval(pending pendingApproval) {
+	r.approvalMu.Lock()
+	defer r.approvalMu.Unlock()
+	approvalID := strings.TrimSpace(pending.request.ApprovalID)
+	sessionID := strings.TrimSpace(pending.message.SessionID)
+	if approvalID == "" || sessionID == "" {
+		return
+	}
+	if oldID := r.pendingBySession[sessionID]; oldID != "" {
+		delete(r.pendingApprovals, oldID)
+	}
+	r.pendingApprovals[approvalID] = pending
+	r.pendingBySession[sessionID] = approvalID
+}
+
+func (r *Runtime) takePendingApproval(sessionID string, approvalID string) (pendingApproval, bool) {
+	r.approvalMu.Lock()
+	defer r.approvalMu.Unlock()
+	sessionID = strings.TrimSpace(sessionID)
+	approvalID = strings.TrimSpace(approvalID)
+	if approvalID == "" {
+		approvalID = r.pendingBySession[sessionID]
+	}
+	if approvalID == "" {
+		return pendingApproval{}, false
+	}
+	pending, ok := r.pendingApprovals[approvalID]
+	if !ok {
+		return pendingApproval{}, false
+	}
+	delete(r.pendingApprovals, approvalID)
+	if sessionID == "" {
+		sessionID = pending.message.SessionID
+	}
+	if r.pendingBySession[sessionID] == approvalID {
+		delete(r.pendingBySession, sessionID)
+	}
+	return pending, true
+}
+
+func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
+	switch toolName {
+	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft":
+		return "Tôi cần bạn xác nhận trước khi tạo hoặc sửa Gmail draft."
+	case "gmail.sendDraft":
+		return "Tôi cần bạn xác nhận trước khi gửi email."
+	case "calendar.createEvent":
+		return "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar."
+	case "calendar.updateEvent":
+		return "Tôi cần bạn xác nhận trước khi sửa sự kiện Calendar."
+	case "calendar.deleteEvent":
+		return "Tôi cần bạn xác nhận trước khi xóa sự kiện Calendar."
+	case "chat.sendMessage":
+		return "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat."
+	case "sandbox.runPython", "sandbox.runShell":
+		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
+	default:
+		return fmt.Sprintf("Tôi cần bạn xác nhận trước khi chạy %s vì risk là %s.", toolName, riskLevel)
+	}
+}
+
+func approvalExecutionMessage(result tools.ToolResult) string {
+	if strings.TrimSpace(result.ContentForUser) != "" {
+		return result.ContentForUser
+	}
+	if result.Success {
+		return "Đã thực hiện thao tác sau khi bạn xác nhận."
+	}
+	if result.Error != nil && strings.TrimSpace(result.Error.Message) != "" {
+		return result.Error.Message
+	}
+	return "Tool không hoàn tất."
 }
 
 func providerToolCallToToolCall(call providers.ToolCall) tools.ToolCall {

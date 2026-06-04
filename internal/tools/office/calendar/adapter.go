@@ -18,7 +18,7 @@ type ListEventsTool struct {
 func (t *ListEventsTool) Name() string { return ToolNameListEvents }
 
 func (t *ListEventsTool) Description() string {
-	return "List events from Google Calendar within a time range."
+	return "List events from Google Calendar within a concrete time range. Convert natural ranges like today, this week, or next week into timeMin/timeMax before calling this tool."
 }
 
 func (t *ListEventsTool) Parameters() tools.ToolSchema {
@@ -27,15 +27,15 @@ func (t *ListEventsTool) Parameters() tools.ToolSchema {
 		"properties": map[string]any{
 			"timeMin": map[string]any{
 				"type":        "string",
-				"description": "Start of time range in ISO-8601 format, e.g. 2026-05-29T09:00:00+07:00",
+				"description": "Start of time range in ISO-8601 format. For this week, use Monday 00:00 in the user's local timezone.",
 			},
 			"timeMax": map[string]any{
 				"type":        "string",
-				"description": "End of time range in ISO-8601 format, e.g. 2026-05-30T09:00:00+07:00",
+				"description": "Exclusive end of time range in ISO-8601 format. For this week, use next Monday 00:00 in the user's local timezone.",
 			},
 			"query": map[string]any{
 				"type":        "string",
-				"description": "Optional free-text search query to filter events by title or description",
+				"description": "Optional free-text search query for event title, description, location, or attendee keywords. Do not include date/range words like today, this week, hôm nay, or tuần này.",
 			},
 		},
 		"required":             []string{"timeMin", "timeMax"},

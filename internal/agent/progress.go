@@ -6,6 +6,10 @@ type ProgressStage string
 
 const (
 	ProgressStageStarted       ProgressStage = "started"
+	ProgressStageClassifying   ProgressStage = "intent_classifying"
+	ProgressStageClassified    ProgressStage = "intent_classified"
+	ProgressStagePlanning      ProgressStage = "task_planning"
+	ProgressStagePlanned       ProgressStage = "task_planned"
 	ProgressStageThinking      ProgressStage = "thinking"
 	ProgressStageToolStarted   ProgressStage = "tool_started"
 	ProgressStageToolCompleted ProgressStage = "tool_completed"

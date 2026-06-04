@@ -28,3 +28,11 @@ v_claw_architect_claude.pdf
 # sandbox
 .sandbox-workspace/
 sandbox_smoke.go
+
+/vclaw
+/vclaw.exe
+tests/safety/
+examples/
+configs/SOUL.md
+configs/intent_classifier_prompt.md
+.codeboarding/

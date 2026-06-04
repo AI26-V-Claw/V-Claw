@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"vclaw/internal/agent"
+	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/audit"
 	"vclaw/internal/connectors/google"
 	gcalconnector "vclaw/internal/connectors/google/calendar"
@@ -80,13 +81,24 @@ func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRun
 		return agentRuntimeBundle{}, err
 	}
 
+	intentClassifier, err := newIntentClassifier(openAI)
+	if err != nil {
+		return agentRuntimeBundle{}, fmt.Errorf("create intent classifier: %w", err)
+	}
+	sessionStore, err := sessions.NewStoreFromEnv()
+	if err != nil {
+		return agentRuntimeBundle{}, fmt.Errorf("create session store: %w", err)
+	}
+
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
-		Provider:      openAI,
-		Registry:      registry,
-		SessionStore:  sessions.NewInMemoryStore(),
-		MaxIterations: options.MaxIterations,
-		Model:         model,
-		Logger:        options.Logger,
+		Provider:         openAI,
+		Registry:         registry,
+		IntentClassifier: intentClassifier,
+		TaskPlanner:      agent.NewLLMTaskPlanner(openAI, model),
+		SessionStore:     sessionStore,
+		MaxIterations:    options.MaxIterations,
+		Model:            model,
+		Logger:           options.Logger,
 	})
 	return agentRuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
 }
@@ -127,6 +139,28 @@ func newSandboxToolConfig() (sandboxtools.Config, error) {
 		Runner:              gated,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
+}
+
+func newIntentClassifier(provider providers.Provider) (agent.IntentClassifier, error) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VCLAW_INTENT_CLASSIFIER_MODE")))
+	if mode == "" {
+		mode = agentintent.ClassifierModeFallback
+	}
+	heuristic := agentintent.NewHeuristicRunner(agentintent.DefaultConfig)
+	switch mode {
+	case agentintent.ClassifierModeHeuristic:
+		return heuristic, nil
+	case agentintent.ClassifierModeLLM:
+		return agentintent.NewLLMClassifier(provider, agentintent.DefaultConfig)
+	case agentintent.ClassifierModeFallback:
+		llm, err := agentintent.NewLLMClassifier(provider, agentintent.DefaultConfig)
+		if err != nil {
+			return nil, err
+		}
+		return agentintent.NewFallbackClassifier(llm, heuristic), nil
+	default:
+		return nil, fmt.Errorf("intent classifier mode must be one of: fallback, llm, heuristic")
+	}
 }
 
 func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, options agentRuntimeOptions) error {

@@ -50,7 +50,7 @@ func (c *OpenAICompatibleClient) Complete(ctx context.Context, system string, me
 	payload := map[string]any{
 		"model": c.model,
 		"messages": buildOpenAIMessages(system, messages),
-		"temperature": 0.7,
+		"temperature": 0.2,
 	}
 
 	body, err := json.Marshal(payload)
