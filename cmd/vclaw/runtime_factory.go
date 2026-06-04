@@ -17,8 +17,11 @@ import (
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/connectors/tavily"
+	"vclaw/internal/policies"
 	"vclaw/internal/providers"
+	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
+	"vclaw/internal/safety"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 	caltools "vclaw/internal/tools/office/calendar"
@@ -131,12 +134,18 @@ func newSandboxToolConfig() (sandboxtools.Config, error) {
 	}
 
 	image := strings.TrimSpace(os.Getenv("VCLAW_SANDBOX_IMAGE"))
-	runner := sandboxruntime.NewDockerRunner(sandboxruntime.DockerRunnerConfig{
+	dockerRunner := sandboxruntime.NewDockerRunner(sandboxruntime.DockerRunnerConfig{
 		Image: image,
 		Guard: guard,
 	})
+	gatedRunner := sandboxgate.NewGatedRunner(sandboxgate.Config{
+		Checker:          policies.DefaultChecker,
+		Detector:         safety.DefaultScanner,
+		Runner:           dockerRunner,
+		SkipApprovalGate: true, // agent ToolPolicy HITL handles approval; gate enforces block only
+	})
 	return sandboxtools.Config{
-		Runner:              runner,
+		Runner:              gatedRunner,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
 }

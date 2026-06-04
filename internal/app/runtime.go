@@ -15,8 +15,11 @@ import (
 	gchat "vclaw/internal/connectors/google/chat"
 	ggmail "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
+	"vclaw/internal/policies"
 	"vclaw/internal/providers"
+	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
+	"vclaw/internal/safety"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
@@ -192,12 +195,18 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 	if err != nil {
 		return sandboxtool.Config{}, err
 	}
-	runner := sandboxruntime.NewDockerRunner(sandboxruntime.DockerRunnerConfig{
+	dockerRunner := sandboxruntime.NewDockerRunner(sandboxruntime.DockerRunnerConfig{
 		Image: strings.TrimSpace(config.SandboxImage),
 		Guard: guard,
 	})
+	gatedRunner := sandboxgate.NewGatedRunner(sandboxgate.Config{
+		Checker:          policies.DefaultChecker,
+		Detector:         safety.DefaultScanner,
+		Runner:           dockerRunner,
+		SkipApprovalGate: true, // agent ToolPolicy HITL handles approval; gate enforces block only
+	})
 	return sandboxtool.Config{
-		Runner:              runner,
+		Runner:              gatedRunner,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
 }

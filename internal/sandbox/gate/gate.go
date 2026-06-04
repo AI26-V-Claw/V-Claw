@@ -123,6 +123,18 @@ type Config struct {
 	// Runner is the underlying executor that dispatches jobs to Docker.
 	// Required.
 	Runner runtime.Runner
+
+	// SkipApprovalGate, when true, allows requests classified as
+	// requires_approval to proceed to execution without returning
+	// ErrNeedsApproval. Block decisions are still enforced unconditionally.
+	//
+	// Set this to true when the caller (e.g. the agent's ToolPolicy HITL
+	// flow) has already obtained user approval before invoking the runner.
+	// In that case the gate acts as a content-based block guard only.
+	//
+	// Leave false (default) for the toolrouter path where the gate itself
+	// owns the HITL proposal flow (Sprint 2+).
+	SkipApprovalGate bool
 }
 
 // ─── GatedRunner ──────────────────────────────────────────────────────────────
@@ -134,10 +146,11 @@ type Config struct {
 // wherever a Runner is accepted. Callers should use GatedRunner instead of
 // DockerRunner directly.
 type GatedRunner struct {
-	checker  policies.Checker
-	detector safety.Detector
-	logger   audit.AuditEventLogger
-	runner   runtime.Runner
+	checker          policies.Checker
+	detector         safety.Detector
+	logger           audit.AuditEventLogger
+	runner           runtime.Runner
+	skipApprovalGate bool
 }
 
 // NewGatedRunner creates a GatedRunner from the given Config.
@@ -157,10 +170,11 @@ func NewGatedRunner(cfg Config) *GatedRunner {
 		logger = &audit.NopLogger{}
 	}
 	return &GatedRunner{
-		checker:  cfg.Checker,
-		detector: cfg.Detector,
-		logger:   logger,
-		runner:   cfg.Runner,
+		checker:          cfg.Checker,
+		detector:         cfg.Detector,
+		logger:           logger,
+		runner:           cfg.Runner,
+		skipApprovalGate: cfg.SkipApprovalGate,
 	}
 }
 
@@ -211,6 +225,11 @@ func (g *GatedRunner) RunPython(ctx context.Context, req *runtime.RunPythonReque
 		return nil, &ErrBlocked{RequestID: req.RequestID, PolicyResult: policyResult}
 
 	case policies.DecisionRequiresApproval:
+		if g.skipApprovalGate {
+			// Approval was already granted by the caller (e.g. agent ToolPolicy
+			// HITL). Proceed to execution; block decisions still apply above.
+			break
+		}
 		summaryVI := safety.SummariseVI(threats)
 		reasonVI := strings.Join(policyResult.Reasons, "; ")
 		_ = g.logger.Log(audit.NewHITLProposalEvent(base,
@@ -267,6 +286,11 @@ func (g *GatedRunner) RunShell(ctx context.Context, req *runtime.RunShellRequest
 		return nil, &ErrBlocked{RequestID: req.RequestID, PolicyResult: policyResult}
 
 	case policies.DecisionRequiresApproval:
+		if g.skipApprovalGate {
+			// Approval was already granted by the caller (e.g. agent ToolPolicy
+			// HITL). Proceed to execution; block decisions still apply above.
+			break
+		}
 		summaryVI := safety.SummariseVI(threats)
 		reasonVI := strings.Join(policyResult.Reasons, "; ")
 		_ = g.logger.Log(audit.NewHITLProposalEvent(base,
