@@ -66,6 +66,11 @@ func TestLLMClassifierUsesXMLSystemPrompt(t *testing.T) {
 		"tiếng Việt",
 		"gmail.listEmails",
 		"calendar.createEvent",
+		"KHÔNG được trả UNKNOWN",
+		"Missing required parameters is not the same as ambiguous intent",
+		"gmail.createDraft",
+		"chat.sendMessage",
+		"Viết cho tôi một email gửi tới baolnc@vclaw.site",
 	} {
 		if !strings.Contains(provider.request.SystemPrompt, want) {
 			t.Fatalf("expected system prompt to contain %q, got:\n%s", want, provider.request.SystemPrompt)
@@ -105,6 +110,7 @@ func TestLLMClassifierMemoryPromptAllowsActiveClarificationContext(t *testing.T)
 		"current user message directly answers it",
 		"keep needs_confirm=true",
 		"negative answer to an optional clarification question",
+		"missing parameters or short follow-up answers must not become UNKNOWN",
 		"recent_history",
 		"thoi gian hop la 1 tieng",
 	} {

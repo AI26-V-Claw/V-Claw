@@ -27,14 +27,20 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 
 	msg.Text = strings.TrimSpace(msg.Text)
 	if command, ok := parseApprovalCommand(msg.Text, m.runtime.HasPendingApproval(msg.SessionID)); ok {
-		response, err := m.runtime.ResolveApproval(ctx, msg.SessionID, contracts.ApprovalDecision{
-			ApprovalID: command.approvalID,
-			RequestID:  msg.RequestID,
-			Decision:   command.decision,
-			DecidedBy:  "owner",
-			DecidedAt:  time.Now().UTC(),
-			Comment:    command.comment,
-		})
+		var response contracts.AgentResponse
+		var err error
+		if command.revise {
+			response, err = m.runtime.ReviseApproval(ctx, msg.SessionID, msg.RequestID, command.approvalID, command.comment)
+		} else {
+			response, err = m.runtime.ResolveApproval(ctx, msg.SessionID, contracts.ApprovalDecision{
+				ApprovalID: command.approvalID,
+				RequestID:  msg.RequestID,
+				Decision:   command.decision,
+				DecidedBy:  "owner",
+				DecidedAt:  time.Now().UTC(),
+				Comment:    command.comment,
+			})
+		}
 		if err != nil {
 			return contracts.AgentResponse{}, err
 		}
@@ -64,7 +70,7 @@ func renderAgentResponse(response contracts.AgentResponse) string {
 		return limitOutboundText(renderApprovalRequest(*response.ApprovalRequest))
 	}
 	if strings.TrimSpace(response.Message) != "" {
-		return limitOutboundText(formatOutboundText(response.Message))
+		return limitOutboundText(renderAssistantMessage(response.Message, response.ToolResults))
 	}
 	if response.Error != nil {
 		return limitOutboundText(renderError(response.Error))
@@ -126,6 +132,9 @@ func renderError(errorShape *contracts.ErrorShape) string {
 
 func renderToolFallback(toolName string, content string) string {
 	content = strings.TrimSpace(content)
+	if rendered := renderMachinePayload(toolName, content); rendered != "" {
+		return rendered
+	}
 	if content == "" {
 		return ""
 	}
@@ -183,6 +192,7 @@ type approvalCommand struct {
 	decision   contracts.ApprovalDecisionStatus
 	approvalID string
 	comment    string
+	revise     bool
 }
 
 func parseApprovalCommand(text string, hasPending bool) (approvalCommand, bool) {
@@ -203,9 +213,12 @@ func parseApprovalCommand(text string, hasPending bool) (approvalCommand, bool) 
 	case "/reject", "reject", "rejected":
 		return approvalCommand{decision: contracts.ApprovalDecisionRejected, approvalID: secondField(parts)}, true
 	case "/revise", "revise", "sửa", "sua", "chỉnh", "chinh":
+		if !hasPending {
+			return approvalCommand{}, false
+		}
 		return approvalCommand{
-			decision: contracts.ApprovalDecisionRejected,
-			comment:  strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0])),
+			revise:  true,
+			comment: strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0])),
 		}, true
 	}
 

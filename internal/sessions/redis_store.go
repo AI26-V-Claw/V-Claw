@@ -112,7 +112,40 @@ func (s *RedisStore) AppendMessage(ctx context.Context, sessionID string, messag
 }
 
 func (s *RedisStore) ClearSession(ctx context.Context, sessionID string) error {
-	_, err := s.execute(ctx, []string{"DEL", s.key(sessionID)})
+	_, err := s.execute(ctx, []string{"DEL", s.key(sessionID)}, []string{"DEL", s.memoryKey(sessionID)})
+	return err
+}
+
+func (s *RedisStore) LoadMemory(ctx context.Context, sessionID string) (SessionMemory, error) {
+	reply, err := s.execute(ctx, []string{"GET", s.memoryKey(sessionID)})
+	if err != nil {
+		return SessionMemory{}, err
+	}
+	if reply == nil {
+		return SessionMemory{}, nil
+	}
+	raw, ok := reply.([]byte)
+	if !ok {
+		return SessionMemory{}, fmt.Errorf("redis memory item has type %T", reply)
+	}
+	var memory SessionMemory
+	if err := json.Unmarshal(raw, &memory); err != nil {
+		return SessionMemory{}, fmt.Errorf("decode session memory: %w", err)
+	}
+	return cloneMemory(memory), nil
+}
+
+func (s *RedisStore) SaveMemory(ctx context.Context, sessionID string, memory SessionMemory) error {
+	raw, err := json.Marshal(cloneMemory(memory))
+	if err != nil {
+		return fmt.Errorf("encode session memory: %w", err)
+	}
+	command := []string{"SET", s.memoryKey(sessionID), string(raw)}
+	commands := [][]string{command}
+	if s.ttl > 0 {
+		commands = append(commands, []string{"EXPIRE", s.memoryKey(sessionID), strconv.Itoa(int(s.ttl.Seconds()))})
+	}
+	_, err = s.execute(ctx, commands...)
 	return err
 }
 
@@ -122,6 +155,14 @@ func (s *RedisStore) key(sessionID string) string {
 		sessionID = "default"
 	}
 	return s.keyPrefix + sessionID
+}
+
+func (s *RedisStore) memoryKey(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	return s.keyPrefix + "memory:" + sessionID
 }
 
 func (s *RedisStore) execute(ctx context.Context, commands ...[]string) (any, error) {

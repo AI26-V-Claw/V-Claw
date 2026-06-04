@@ -32,6 +32,11 @@ Start with these documents:
 6. [Active Modules & Ownership](ACTIVE_MODULES.md) — current implementation scope and frozen areas.
 7. [Project Structure](PROJECT_STRUCTURE.md) — repository layout and module responsibilities.
 
+Additional setup guides:
+
+- [Google Workspace Setup](configs/google/README.md) - Google Cloud OAuth, credentials, auth, and Google API smoke tests.
+- [Telegram/Slack Channel Setup](internal/channels/README.md) - Telegram bot, Slack Socket Mode, HITL approval, and channel runtime commands.
+
 When documents and code differ, treat `docs/03-contracts.md` and `ACTIVE_MODULES.md` as the intended design baseline for new work, then update code or docs explicitly as part of the task.
 
 ## Repository layout
@@ -51,6 +56,46 @@ At a high level:
 Any action with side effects should pass through one safety/approval boundary before execution. This includes sending email or chat messages, creating or changing calendar events, modifying local files, or running Python/shell commands.
 
 Read-only operations may be allowed directly when policy permits them. Destructive, external-write, local-write, or code-execution actions must be reviewed through the approved HITL flow once that flow is implemented.
+
+## Local setup
+
+Copy the example environment file before running local commands:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+### Redis session memory
+
+Redis is optional, but recommended for Telegram/Slack development so recent conversation turns survive bot restarts. Start a local Redis container:
+
+```powershell
+docker run --name vclaw-redis -p 6379:6379 -v vclaw-redis-data:/data -d redis:7 redis-server --appendonly yes
+```
+
+If the container already exists, start it again with:
+
+```powershell
+docker start vclaw-redis
+```
+
+Verify Redis is reachable:
+
+```powershell
+docker exec vclaw-redis redis-cli ping
+```
+
+Use these values in `.env`:
+
+```env
+VCLAW_SESSION_STORE=redis
+VCLAW_REDIS_URL=redis://localhost:6379/0
+VCLAW_REDIS_KEY_PREFIX=vclaw:session:
+VCLAW_SESSION_MAX_MESSAGES=40
+VCLAW_SESSION_TTL_SECONDS=86400
+```
+
+Google Workspace setup lives in [configs/google/README.md](configs/google/README.md). Telegram and Slack setup lives in [internal/channels/README.md](internal/channels/README.md).
 
 ## Development note
 
