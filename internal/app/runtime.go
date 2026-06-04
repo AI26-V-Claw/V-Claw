@@ -4,20 +4,28 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/audit"
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
 	ggmail "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
+	"vclaw/internal/policies"
 	"vclaw/internal/providers"
+	"vclaw/internal/safety"
+	"vclaw/internal/sandbox/gate"
+	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
 	gmailtool "vclaw/internal/tools/office/gmail"
+	sandboxtool "vclaw/internal/tools/system/sandbox"
 )
 
 type AgentRuntimeConfig struct {
@@ -31,6 +39,10 @@ type AgentRuntimeConfig struct {
 	EnableGoogleTools     bool
 	GoogleCredentialsPath string
 	GoogleTokenPath       string
+	EnableSandboxTools    bool
+	SandboxWorkspaceDir   string
+	SandboxImage          string
+	SandboxRunner         sandboxruntime.Runner
 }
 
 func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Runtime, error) {
@@ -76,6 +88,15 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	if err := tools.RegisterBuiltInTools(registry); err != nil {
 		return nil, err
 	}
+	if config.EnableSandboxTools {
+		sandboxConfig, err := newSandboxToolConfig(config)
+		if err != nil {
+			return nil, fmt.Errorf("configure sandbox tools: %w", err)
+		}
+		if err := sandboxtool.RegisterToolsWithConfig(registry, sandboxConfig); err != nil {
+			return nil, fmt.Errorf("register sandbox tools: %w", err)
+		}
+	}
 	if !config.EnableGoogleTools {
 		return registry, nil
 	}
@@ -108,4 +129,48 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	}
 
 	return registry, nil
+}
+
+func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error) {
+	if config.SandboxRunner != nil {
+		workspaceDir := strings.TrimSpace(config.SandboxWorkspaceDir)
+		return sandboxtool.Config{
+			Runner:              config.SandboxRunner,
+			DefaultWorkspaceDir: workspaceDir,
+		}, nil
+	}
+
+	workspaceDir := strings.TrimSpace(config.SandboxWorkspaceDir)
+	if workspaceDir == "" {
+		workspaceDir = ".sandbox-workspace"
+	}
+	if !filepath.IsAbs(workspaceDir) {
+		abs, err := filepath.Abs(workspaceDir)
+		if err != nil {
+			return sandboxtool.Config{}, fmt.Errorf("resolve sandbox workspace: %w", err)
+		}
+		workspaceDir = abs
+	}
+	if err := os.MkdirAll(workspaceDir, 0750); err != nil {
+		return sandboxtool.Config{}, fmt.Errorf("create sandbox workspace: %w", err)
+	}
+
+	guard, err := sandboxruntime.NewWorkspaceGuard(workspaceDir)
+	if err != nil {
+		return sandboxtool.Config{}, err
+	}
+	runner := sandboxruntime.NewDockerRunner(sandboxruntime.DockerRunnerConfig{
+		Image: strings.TrimSpace(config.SandboxImage),
+		Guard: guard,
+	})
+	gated := gate.NewGatedRunner(gate.Config{
+		Checker:  policies.DefaultChecker,
+		Detector: safety.DefaultScanner,
+		Logger:   &audit.NopLogger{},
+		Runner:   runner,
+	})
+	return sandboxtool.Config{
+		Runner:              gated,
+		DefaultWorkspaceDir: guard.Root(),
+	}, nil
 }

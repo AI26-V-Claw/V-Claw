@@ -88,15 +88,24 @@ var Registry = map[string]ToolDefinition{
 	},
 	"sandbox.runPython": {
 		Name: "sandbox.runPython", Category: CategoryExecution,
-		Description: "Run Python code in sandbox",
+		Description: "Run Python code or a workspace-relative Python script in sandbox",
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 120000,
-		Parameters: []ParamDef{{Name: "code", Type: "string", Required: true, Description: "Python code to run"}},
+		Parameters: []ParamDef{
+			{Name: "code", Type: "string", Required: false, Description: "Python code to run"},
+			{Name: "script_path", Type: "path", Required: false, Description: "Workspace-relative Python script path"},
+			{Name: "workingDir", Type: "path", Required: false, Description: "Sandbox workspace directory"},
+			{Name: "timeout_seconds", Type: "int", Required: false, Description: "Execution timeout in seconds"},
+		},
 	},
 	"sandbox.runShell": {
 		Name: "sandbox.runShell", Category: CategoryExecution,
 		Description: "Run shell command in sandbox",
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 120000,
-		Parameters: []ParamDef{{Name: "command", Type: "string", Required: true, Description: "Shell command to run"}, {Name: "cwd", Type: "path", Required: false, Description: "Working directory"}},
+		Parameters: []ParamDef{
+			{Name: "command", Type: "string", Required: true, Description: "Shell command to run"},
+			{Name: "workingDir", Type: "path", Required: false, Description: "Sandbox workspace directory"},
+			{Name: "timeout_seconds", Type: "int", Required: false, Description: "Execution timeout in seconds"},
+		},
 	},
 	"gmail.createDraft": {
 		Name: "gmail.createDraft", Category: CategoryCommunication,
