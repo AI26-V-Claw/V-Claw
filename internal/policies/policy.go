@@ -46,25 +46,26 @@ const (
 	// Decision: allow.
 	RiskSafeRead RiskLevel = "safe_read"
 
-	// RiskSafeWrite — creates new files in workspace; e.g. write report,
-	// create directory. Decision: allow (or light confirm depending on config).
-	RiskSafeWrite RiskLevel = "safe_write"
+	// RiskSafeCompute — compute-only work without external or local side effects.
+	RiskSafeCompute RiskLevel = "safe_compute"
 
-	// RiskNeedsApproval — mutates or deletes existing data; e.g. delete file,
-	// overwrite file, bulk rename. Decision: requires_approval.
-	RiskNeedsApproval RiskLevel = "needs_approval"
+	// RiskSensitiveRead — reads private or sensitive data, including secrets,
+	// tokens, private keys, or credentials.
+	RiskSensitiveRead RiskLevel = "sensitive_read"
 
-	// RiskHighRisk — deep system commands or actions outside sandbox scope;
-	// e.g. shutdown, service control, chmod. Decision: block.
-	RiskHighRisk RiskLevel = "high_risk"
+	// RiskExternalWrite — sends or changes data outside the local runtime.
+	RiskExternalWrite RiskLevel = "external_write"
 
-	// RiskExternalNetwork — sends or receives data over the network;
-	// e.g. curl, wget, upload. Decision: requires_approval or block.
-	RiskExternalNetwork RiskLevel = "external_network"
+	// RiskLocalWrite — creates new files in workspace; e.g. write report,
+	// create directory.
+	RiskLocalWrite RiskLevel = "local_write"
 
-	// RiskCredentialAccess — attempts to read secrets, tokens, private keys;
-	// e.g. .env, id_rsa, credentials.json. Decision: block.
-	RiskCredentialAccess RiskLevel = "credential_access"
+	// RiskCodeExecution — executes Python, shell, or another code payload.
+	RiskCodeExecution RiskLevel = "code_execution"
+
+	// RiskDestructive — deletes, overwrites, or deeply changes existing data or
+	// system state; e.g. rm, shutdown, service control, chmod.
+	RiskDestructive RiskLevel = "destructive"
 )
 
 // ─── Tool Names ───────────────────────────────────────────────────────────────

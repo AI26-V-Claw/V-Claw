@@ -22,25 +22,23 @@ const (
 	// RiskSafeRead - read-only operations, e.g. list files, read CSV.
 	RiskSafeRead RiskLevel = "safe_read"
 
-	// RiskSafeWrite - creates new files in workspace, e.g. write report.
-	// May require a light confirmation depending on config.
-	RiskSafeWrite RiskLevel = "safe_write"
+	// RiskSafeCompute - compute-only work without external or local side effects.
+	RiskSafeCompute RiskLevel = "safe_compute"
 
-	// RiskNeedsApproval - modifies or deletes existing data.
-	// Mandatory HITL before execution.
-	RiskNeedsApproval RiskLevel = "needs_approval"
+	// RiskSensitiveRead - reads private or sensitive data.
+	RiskSensitiveRead RiskLevel = "sensitive_read"
 
-	// RiskHighRisk - deep system commands or actions outside sandbox scope.
-	// Always blocked or requires strict HITL.
-	RiskHighRisk RiskLevel = "high_risk"
+	// RiskExternalWrite - sends or changes data outside the local runtime.
+	RiskExternalWrite RiskLevel = "external_write"
 
-	// RiskExternalNetwork - sends or receives data over the network.
-	// Requires HITL and full audit.
-	RiskExternalNetwork RiskLevel = "external_network"
+	// RiskLocalWrite - creates or changes local files in workspace.
+	RiskLocalWrite RiskLevel = "local_write"
 
-	// RiskCredentialAccess - attempts to read tokens, keys, or passwords.
-	// Blocked by default.
-	RiskCredentialAccess RiskLevel = "credential_access"
+	// RiskCodeExecution - executes Python, shell, or another code payload.
+	RiskCodeExecution RiskLevel = "code_execution"
+
+	// RiskDestructive - deletes, overwrites, or deeply changes data or system state.
+	RiskDestructive RiskLevel = "destructive"
 )
 
 // ─── Job Status ───────────────────────────────────────────────────────────────

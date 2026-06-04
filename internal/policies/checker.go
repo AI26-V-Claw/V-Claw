@@ -25,10 +25,10 @@ type RuleBasedChecker struct {
 
 // RuleBasedConfig allows callers to tune the checker behaviour.
 type RuleBasedConfig struct {
-	// SafeWriteRequiresConfirm, when true, changes the decision for
-	// safe_write from allow to requires_approval. Useful in conservative
+	// LocalWriteRequiresConfirm, when true, changes the decision for
+	// local_write from allow to requires_approval. Useful in conservative
 	// environments where every write should be reviewed.
-	SafeWriteRequiresConfirm bool
+	LocalWriteRequiresConfirm bool
 }
 
 // NewRuleBasedChecker creates a RuleBasedChecker with the given config.
@@ -100,7 +100,7 @@ func (c *RuleBasedChecker) checkPython(req Request) Result {
 	return requireApprovalForCodeExecution(Result{
 		RequestID: req.RequestID,
 		Decision:  DecisionAllow,
-		RiskLevel: RiskSafeWrite,
+		RiskLevel: RiskLocalWrite,
 		Reasons:   []string{"Code Python không chứa pattern nguy hiểm. Được phép chạy trong sandbox."},
 	})
 }
@@ -112,7 +112,7 @@ func (c *RuleBasedChecker) checkFileOps(req Request) Result {
 		return Result{
 			RequestID: req.RequestID,
 			Decision:  DecisionBlock,
-			RiskLevel: RiskHighRisk,
+			RiskLevel: RiskDestructive,
 			Reasons:   []string{"file_ops: loại thao tác (file_op) bị thiếu hoặc rỗng."},
 		}
 	}
@@ -122,7 +122,7 @@ func (c *RuleBasedChecker) checkFileOps(req Request) Result {
 		return Result{
 			RequestID: req.RequestID,
 			Decision:  DecisionBlock,
-			RiskLevel: RiskHighRisk,
+			RiskLevel: RiskDestructive,
 			Reasons:   []string{fmt.Sprintf("file_ops: loại thao tác không hợp lệ: %q.", op)},
 		}
 	}
@@ -135,7 +135,7 @@ func (c *RuleBasedChecker) unknown(req Request) Result {
 	return Result{
 		RequestID: req.RequestID,
 		Decision:  DecisionBlock,
-		RiskLevel: RiskHighRisk,
+		RiskLevel: RiskDestructive,
 		Reasons:   []string{fmt.Sprintf("Tool không được nhận dạng: %q. Bị chặn.", req.Tool)},
 	}
 }
@@ -143,11 +143,11 @@ func (c *RuleBasedChecker) unknown(req Request) Result {
 // ─── Rule application ─────────────────────────────────────────────────────────
 
 // applyRule converts a MatrixEntry into a Result, honouring the
-// SafeWriteRequiresConfirm config override.
+// LocalWriteRequiresConfirm config override.
 func (c *RuleBasedChecker) applyRule(requestID string, rule MatrixEntry) Result {
 	decision := rule.Decision
-	// Config override: safe_write -> requires_approval.
-	if c.cfg.SafeWriteRequiresConfirm && rule.RiskLevel == RiskSafeWrite && decision == DecisionAllow {
+	// Config override: local_write -> requires_approval.
+	if c.cfg.LocalWriteRequiresConfirm && rule.RiskLevel == RiskLocalWrite && decision == DecisionAllow {
 		decision = DecisionRequiresApproval
 	}
 	return Result{
