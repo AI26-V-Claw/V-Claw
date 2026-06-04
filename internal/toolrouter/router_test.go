@@ -73,9 +73,9 @@ func req(tool, workspaceDir string) toolrouter.ToolRequest {
 	}
 }
 
-// ─── sandbox.runPython: success ──────────────────────────────────────────────────────
+// ─── sandbox.runPython: requires approval ───────────────────────────────────────────
 
-func TestRouter_RunPython_SafeCode_Success(t *testing.T) {
+func TestRouter_RunPython_SafeCode_NeedsApproval(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
@@ -83,21 +83,24 @@ func TestRouter_RunPython_SafeCode_Success(t *testing.T) {
 	r.Input.Code = "print('hello')"
 	resp := router.Dispatch(context.Background(), r)
 
-	if resp.Status != "success" {
-		t.Errorf("expected status 'success', got %q (err: %s)", resp.Status, resp.ErrorMessage)
+	if resp.Status != "pending_approval" {
+		t.Errorf("expected status 'pending_approval', got %q (err: %s)", resp.Status, resp.ErrorMessage)
 	}
-	if resp.JobID == "" {
-		t.Error("JobID must be set on successful execution")
+	if resp.JobID != "" {
+		t.Error("JobID must not be set before approval")
 	}
-	if resp.PolicyDecision != "allow" {
-		t.Errorf("expected policy_decision 'allow', got %q", resp.PolicyDecision)
+	if resp.PolicyDecision != "requires_approval" {
+		t.Errorf("expected policy_decision 'requires_approval', got %q", resp.PolicyDecision)
 	}
-	if stub.calls != 1 {
-		t.Errorf("expected runner called once, got %d", stub.calls)
+	if resp.ApprovalID == "" {
+		t.Error("approval_id must be set for pending approval")
+	}
+	if stub.calls != 0 {
+		t.Errorf("runner must not be called before approval, got %d", stub.calls)
 	}
 }
 
-func TestRouter_RunPython_Stdout(t *testing.T) {
+func TestRouter_RunPython_HeldBeforeStdout(t *testing.T) {
 	stub := &stubRunner{result: &runtime.JobResult{
 		JobID:     "job-stdout",
 		Status:    runtime.JobSuccess,
@@ -111,8 +114,14 @@ func TestRouter_RunPython_Stdout(t *testing.T) {
 	r.Input.Code = "print(42)"
 	resp := router.Dispatch(context.Background(), r)
 
-	if resp.Stdout != "42\n" {
-		t.Errorf("Stdout mismatch: got %q", resp.Stdout)
+	if resp.Status != "pending_approval" {
+		t.Fatalf("expected pending_approval before execution, got %q", resp.Status)
+	}
+	if resp.Stdout != "" {
+		t.Errorf("stdout must be empty before approval, got %q", resp.Stdout)
+	}
+	if stub.calls != 0 {
+		t.Errorf("runner must not be called before approval, got %d", stub.calls)
 	}
 }
 
@@ -189,9 +198,9 @@ func TestRouter_RunPython_NeedsApproval_DeleteFile(t *testing.T) {
 	}
 }
 
-// ─── sandbox.runShell: success ───────────────────────────────────────────────────────
+// ─── sandbox.runShell: requires approval ────────────────────────────────────────────
 
-func TestRouter_RunShell_SafeCommand_Success(t *testing.T) {
+func TestRouter_RunShell_SafeCommand_NeedsApproval(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
@@ -199,15 +208,15 @@ func TestRouter_RunShell_SafeCommand_Success(t *testing.T) {
 	r.Input.Command = "ls -la /workspace"
 	resp := router.Dispatch(context.Background(), r)
 
-	if resp.Status != "success" {
-		t.Errorf("expected 'success', got %q (err: %s)", resp.Status, resp.ErrorMessage)
+	if resp.Status != "pending_approval" {
+		t.Errorf("expected 'pending_approval', got %q (err: %s)", resp.Status, resp.ErrorMessage)
 	}
-	if stub.calls != 1 {
-		t.Errorf("expected runner called once, got %d", stub.calls)
+	if stub.calls != 0 {
+		t.Errorf("runner must not be called before approval, got %d", stub.calls)
 	}
 }
 
-func TestRouter_RunShell_SafeCommand_Head(t *testing.T) {
+func TestRouter_RunShell_SafeCommand_HeadNeedsApproval(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
@@ -215,8 +224,11 @@ func TestRouter_RunShell_SafeCommand_Head(t *testing.T) {
 	r.Input.Command = "head -10 /workspace/data.csv"
 	resp := router.Dispatch(context.Background(), r)
 
-	if resp.Status != "success" {
-		t.Errorf("expected 'success', got %q", resp.Status)
+	if resp.Status != "pending_approval" {
+		t.Errorf("expected 'pending_approval', got %q", resp.Status)
+	}
+	if stub.calls != 0 {
+		t.Errorf("runner must not be called before approval, got %d", stub.calls)
 	}
 }
 
@@ -412,7 +424,7 @@ func TestRouter_ToolName_CaseInsensitive(t *testing.T) {
 	r.Input.Command = "ls /workspace"
 	resp := router.Dispatch(context.Background(), r)
 
-	if resp.Status != "success" {
-		t.Errorf("tool name should be case-insensitive, got status=%q", resp.Status)
+	if resp.Status != "pending_approval" {
+		t.Errorf("tool name should be case-insensitive and still require approval, got status=%q", resp.Status)
 	}
 }

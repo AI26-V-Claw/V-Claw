@@ -37,7 +37,6 @@ func NewRuleBasedChecker(cfg RuleBasedConfig) *RuleBasedChecker {
 }
 
 // DefaultChecker is a ready-to-use RuleBasedChecker with default config.
-// Suitable for most environments; safe_write decisions are allowed directly.
 var DefaultChecker = NewRuleBasedChecker(RuleBasedConfig{})
 
 // ─── Checker interface ────────────────────────────────────────────────────────
@@ -65,17 +64,18 @@ func (c *RuleBasedChecker) checkShell(req Request) Result {
 
 	for _, rule := range shellRules {
 		if strings.Contains(cmd, strings.ToLower(rule.Pattern)) {
-			return c.applyRule(req.RequestID, rule)
+			return requireApprovalForCodeExecution(c.applyRule(req.RequestID, rule))
 		}
 	}
 
-	// No rule matched → default for shell: safe_read / allow.
-	return Result{
+	// No rule matched -> keep the classification, but sandbox.runShell is still
+	// code execution and must wait for approval before dispatch.
+	return requireApprovalForCodeExecution(Result{
 		RequestID: req.RequestID,
 		Decision:  DecisionAllow,
 		RiskLevel: RiskSafeRead,
 		Reasons:   []string{"Lệnh không khớp với bất kỳ rule nào. Mặc định cho phép (safe_read)."},
-	}
+	})
 }
 
 // checkPython classifies a sandbox.runPython request.
@@ -90,18 +90,19 @@ func (c *RuleBasedChecker) checkPython(req Request) Result {
 
 	for _, rule := range pythonRules {
 		if strings.Contains(lower, strings.ToLower(rule.Pattern)) {
-			return c.applyRule(req.RequestID, rule)
+			return requireApprovalForCodeExecution(c.applyRule(req.RequestID, rule))
 		}
 	}
 
-	// No rule matched → default for Python: safe_write / allow.
+	// No rule matched -> keep the classification, but sandbox.runPython is still
+	// code execution and must wait for approval before dispatch.
 	// Python code always creates a temporary script file in the workspace.
-	return Result{
+	return requireApprovalForCodeExecution(Result{
 		RequestID: req.RequestID,
 		Decision:  DecisionAllow,
 		RiskLevel: RiskSafeWrite,
 		Reasons:   []string{"Code Python không chứa pattern nguy hiểm. Được phép chạy trong sandbox."},
-	}
+	})
 }
 
 // checkFileOps classifies a file_ops request by operation type.
@@ -155,6 +156,15 @@ func (c *RuleBasedChecker) applyRule(requestID string, rule MatrixEntry) Result 
 		RiskLevel: rule.RiskLevel,
 		Reasons:   []string{rule.ReasonVI},
 	}
+}
+
+func requireApprovalForCodeExecution(result Result) Result {
+	if result.Decision != DecisionAllow {
+		return result
+	}
+	result.Decision = DecisionRequiresApproval
+	result.Reasons = append(result.Reasons, "sandbox.runPython/sandbox.runShell là code_execution theo contract và phải được phê duyệt trước khi thực thi.")
+	return result
 }
 
 // ─── Helper: Explain ──────────────────────────────────────────────────────────

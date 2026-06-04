@@ -50,54 +50,54 @@ func assertDecision(t *testing.T, got Result, wantDecision Decision, wantRisk Ri
 
 func TestShell_SafeRead_Ls(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("r1", "ls /workspace"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 func TestShell_SafeRead_Cat(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("r2", "cat /workspace/data.csv"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 func TestShell_SafeRead_Grep(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("r3", "grep -r 'keyword' /workspace"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 func TestShell_SafeRead_WcLines(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("r4", "wc -l /workspace/input.txt"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 func TestShell_SafeRead_Pwd(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("r5", "pwd"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 func TestShell_SafeRead_Echo(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("r6", "echo hello"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 func TestShell_SafeRead_HeadFile(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("r7", "head -20 /workspace/report.csv"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 // ─── sandbox.runShell: safe_write ────────────────────────────────────────────────────
 
 func TestShell_SafeWrite_Mkdir(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("w1", "mkdir /workspace/output"))
-	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeWrite)
 }
 
 func TestShell_SafeWrite_Touch(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("w2", "touch /workspace/new.txt"))
-	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeWrite)
 }
 
 func TestShell_SafeWrite_RunPython(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("w3", "python3 /workspace/script.py"))
-	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeWrite)
 }
 
 // ─── sandbox.runShell: requires_approval ─────────────────────────────────────────────
@@ -202,39 +202,39 @@ func TestShell_Block_ShadowFile(t *testing.T) {
 
 func TestPython_SafeRead_Print(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p1", `print("hello")`))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 func TestPython_SafeRead_ImportCsv(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p2", "import csv\nwith open('data.csv') as f: pass"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 func TestPython_SafeRead_ImportJson(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p3", "import json; data = json.loads('{}')"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeRead)
 }
 
 // ─── sandbox.runPython: safe_write / allow ──────────────────────────────────────────
 
 func TestPython_SafeWrite_Pandas(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p4", "import pandas as pd\ndf = pd.read_excel('data.xlsx')"))
-	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeWrite)
 }
 
 func TestPython_SafeWrite_Openpyxl(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p5", "import openpyxl\nwb = openpyxl.load_workbook('file.xlsx')"))
-	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeWrite)
 }
 
 func TestPython_SafeWrite_Docx(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p6", "from docx import Document\ndoc = Document()"))
-	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeWrite)
 }
 
 func TestPython_SafeWrite_OpenFile(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p7", "with open('output.txt', 'w') as f: f.write('hello')"))
-	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
+	assertDecision(t, r, DecisionRequiresApproval, RiskSafeWrite)
 }
 
 // ─── sandbox.runPython: requires_approval ───────────────────────────────────────────

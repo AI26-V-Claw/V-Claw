@@ -89,35 +89,30 @@ func shellReq(id, cmd string) *runtime.RunShellRequest {
 	}
 }
 
-// ─── RunPython: allow ─────────────────────────────────────────────────────────
+// ─── RunPython: requires approval ─────────────────────────────────────────────
 
-func TestGate_RunPython_Allow_SafeCode(t *testing.T) {
+func TestGate_RunPython_NeedsApproval_SafeCode(t *testing.T) {
 	stub := &stubRunner{}
 	logger := audit.NewMemoryLogger()
 	g := newGate(stub, logger)
 
-	result, err := g.RunPython(context.Background(), pythonReq("req_py_01",
+	_, err := g.RunPython(context.Background(), pythonReq("req_py_01",
 		"import pandas as pd\ndf = pd.read_csv('/workspace/data.csv')\nprint(df.shape)"))
 
-	if err != nil {
-		t.Fatalf("expected no error for safe code, got: %v", err)
+	if !gate.IsNeedsApproval(err) {
+		t.Fatalf("safe code execution must need approval, got: %v", err)
 	}
-	if result == nil {
-		t.Fatal("expected a result, got nil")
-	}
-	if stub.calls != 1 {
-		t.Errorf("expected runner called once, got %d", stub.calls)
+	if stub.calls != 0 {
+		t.Errorf("runner must not be called before approval, got %d", stub.calls)
 	}
 
-	// Audit: tool_request + policy_decision + execution_start + execution_result
-	if logger.Count() < 4 {
-		t.Errorf("expected at least 4 audit events, got %d", logger.Count())
+	if logger.Count() < 3 {
+		t.Errorf("expected at least 3 audit events, got %d", logger.Count())
 	}
 
-	// Should have an execution_result event
 	results, _ := logger.Query(audit.Filter{EventType: audit.EventExecutionResult})
-	if len(results) != 1 {
-		t.Errorf("expected 1 execution_result event, got %d", len(results))
+	if len(results) != 0 {
+		t.Errorf("must not log execution_result before approval, got %d", len(results))
 	}
 }
 
@@ -218,36 +213,33 @@ func TestGate_RunPython_NeedsApproval_DeleteFile(t *testing.T) {
 	}
 }
 
-// ─── RunShell: allow ──────────────────────────────────────────────────────────
+// ─── RunShell: requires approval ──────────────────────────────────────────────
 
-func TestGate_RunShell_Allow_ListFiles(t *testing.T) {
+func TestGate_RunShell_NeedsApproval_ListFiles(t *testing.T) {
 	stub := &stubRunner{}
 	logger := audit.NewMemoryLogger()
 	g := newGate(stub, logger)
 
-	result, err := g.RunShell(context.Background(), shellReq("req_sh_01", "ls -la /workspace"))
+	_, err := g.RunShell(context.Background(), shellReq("req_sh_01", "ls -la /workspace"))
 
-	if err != nil {
-		t.Fatalf("expected no error for ls, got: %v", err)
+	if !gate.IsNeedsApproval(err) {
+		t.Fatalf("shell code execution must need approval, got: %v", err)
 	}
-	if result == nil {
-		t.Fatal("expected a result, got nil")
-	}
-	if stub.calls != 1 {
-		t.Errorf("expected runner called once, got %d", stub.calls)
+	if stub.calls != 0 {
+		t.Errorf("runner must not be called before approval, got %d", stub.calls)
 	}
 }
 
-func TestGate_RunShell_Allow_HeadFile(t *testing.T) {
+func TestGate_RunShell_NeedsApproval_HeadFile(t *testing.T) {
 	stub := &stubRunner{}
 	g := newGate(stub, audit.NewMemoryLogger())
 
 	_, err := g.RunShell(context.Background(), shellReq("req_sh_02", "head -20 /workspace/report.csv"))
-	if err != nil {
-		t.Fatalf("head command should be allowed, got: %v", err)
+	if !gate.IsNeedsApproval(err) {
+		t.Fatalf("head command should need approval, got: %v", err)
 	}
-	if stub.calls != 1 {
-		t.Errorf("runner should be called once, got %d", stub.calls)
+	if stub.calls != 0 {
+		t.Errorf("runner must not be called before approval, got %d", stub.calls)
 	}
 }
 
@@ -330,7 +322,7 @@ func TestGate_RunShell_NeedsApproval_Curl(t *testing.T) {
 
 // ─── Audit log completeness ───────────────────────────────────────────────────
 
-func TestGate_Audit_AllowedRequest_HasFourEvents(t *testing.T) {
+func TestGate_Audit_CodeExecutionRequest_HasHITLProposal(t *testing.T) {
 	stub := &stubRunner{}
 	logger := audit.NewMemoryLogger()
 	g := newGate(stub, logger)
@@ -338,9 +330,8 @@ func TestGate_Audit_AllowedRequest_HasFourEvents(t *testing.T) {
 	_, _ = g.RunShell(context.Background(), shellReq("req_audit_01", "ls /workspace"))
 
 	events, _ := logger.Query(audit.Filter{RequestID: "req_audit_01"})
-	// Expected: tool_request, policy_decision, execution_start, execution_result
-	if len(events) < 4 {
-		t.Errorf("allowed request should produce ≥4 audit events, got %d", len(events))
+	if len(events) < 3 {
+		t.Errorf("held code execution request should produce at least 3 audit events, got %d", len(events))
 	}
 
 	hasType := func(et audit.EventType) bool {
@@ -354,11 +345,15 @@ func TestGate_Audit_AllowedRequest_HasFourEvents(t *testing.T) {
 	for _, et := range []audit.EventType{
 		audit.EventToolRequest,
 		audit.EventPolicyDecision,
-		audit.EventExecutionStart,
-		audit.EventExecutionResult,
+		audit.EventHITLProposal,
 	} {
 		if !hasType(et) {
 			t.Errorf("missing audit event type %q", et)
+		}
+	}
+	for _, et := range []audit.EventType{audit.EventExecutionStart, audit.EventExecutionResult} {
+		if hasType(et) {
+			t.Errorf("must not log audit event type %q before approval", et)
 		}
 	}
 }
@@ -415,7 +410,7 @@ func TestGate_Audit_NeedsApprovalRequest_HasHITLProposal(t *testing.T) {
 
 // ─── Runner error passthrough ─────────────────────────────────────────────────
 
-func TestGate_RunShell_RunnerError_IsForwarded(t *testing.T) {
+func TestGate_RunShell_DefaultPolicyHoldsBeforeRunnerError(t *testing.T) {
 	runnerErr := errors.New("docker daemon is not running")
 	stub := &stubRunner{err: runnerErr}
 	logger := audit.NewMemoryLogger()
@@ -423,14 +418,16 @@ func TestGate_RunShell_RunnerError_IsForwarded(t *testing.T) {
 
 	_, err := g.RunShell(context.Background(), shellReq("req_re_01", "ls /workspace"))
 	if err == nil {
-		t.Fatal("expected runner error to be forwarded, got nil")
+		t.Fatal("expected approval error, got nil")
 	}
-	if !errors.Is(err, runnerErr) {
-		t.Errorf("expected original runner error, got: %v", err)
+	if errors.Is(err, runnerErr) {
+		t.Errorf("runner error must not surface before approval, got: %v", err)
 	}
-	// Must not be classified as blocked or requires_approval
-	if gate.IsBlocked(err) || gate.IsNeedsApproval(err) {
-		t.Error("runner error should not be ErrBlocked or ErrNeedsApproval")
+	if !gate.IsNeedsApproval(err) {
+		t.Errorf("expected ErrNeedsApproval before runner dispatch, got: %v", err)
+	}
+	if stub.calls != 0 {
+		t.Errorf("runner must not be called before approval, got %d", stub.calls)
 	}
 }
 
@@ -496,8 +493,8 @@ func TestGate_NilLogger_DoesNotPanic(t *testing.T) {
 	})
 
 	_, err := g.RunShell(context.Background(), shellReq("req_nop_01", "ls /workspace"))
-	if err != nil {
-		t.Fatalf("nil logger should not cause panic or error, got: %v", err)
+	if !gate.IsNeedsApproval(err) {
+		t.Fatalf("nil logger should not cause panic and shell execution should need approval, got: %v", err)
 	}
 }
 

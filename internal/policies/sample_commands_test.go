@@ -98,56 +98,56 @@ func TestPolicy_DocFile_Shell(t *testing.T) {
 		{
 			name:           "list workspace",
 			req:            shellReq("r-sh-01", "ls -la /workspace"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
 		{
 			name:           "cat CSV",
 			req:            shellReq("r-sh-02", "cat /workspace/data.csv"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
 		{
 			name:           "grep keyword in report",
 			req:            shellReq("r-sh-03", "grep -i 'doanh thu' /workspace/report.txt"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
 		{
 			name:           "head first 30 lines",
 			req:            shellReq("r-sh-04", "head -30 /workspace/input/orders.csv"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
 		{
 			name:           "wc line count",
 			req:            shellReq("r-sh-05", "wc -l /workspace/log.txt"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
 		{
 			name:           "stat file info",
 			req:            shellReq("r-sh-06", "stat /workspace/output/report.docx"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
 		{
 			name:           "find list txt files",
 			req:            shellReq("r-sh-07", "find /workspace -name '*.txt' -type f"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
 		{
 			name:           "diff two files",
 			req:            shellReq("r-sh-08", "diff /workspace/a.csv /workspace/b.csv"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
@@ -164,7 +164,7 @@ import pandas as pd
 df = pd.read_csv('/workspace/data.csv')
 print(df.head())
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -177,7 +177,7 @@ ws = wb.active
 for row in ws.iter_rows(values_only=True):
     print(row)
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -189,7 +189,7 @@ doc = Document('/workspace/contract.docx')
 for para in doc.paragraphs:
     print(para.text)
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -200,7 +200,7 @@ with open('/workspace/notes.txt', 'r', encoding='utf-8') as f:
     content = f.read()
 print(content[:500])
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -235,28 +235,28 @@ func TestPolicy_TaoFile_Shell(t *testing.T) {
 		{
 			name:           "mkdir output",
 			req:            shellReq("w-sh-01", "mkdir -p /workspace/output"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
 		{
 			name:           "touch new file",
 			req:            shellReq("w-sh-02", "touch /workspace/output/result.txt"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
 		{
 			name:           "cp copy file",
 			req:            shellReq("w-sh-03", "cp /workspace/input/template.xlsx /workspace/output/report.xlsx"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
 		{
 			name:           "python run script that creates output",
 			req:            shellReq("w-sh-04", "python3 /workspace/process.py"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -275,7 +275,7 @@ result = df.groupby('category')['amount'].sum().reset_index()
 result.to_csv('/workspace/output/summary.csv', index=False)
 print('Done:', len(result), 'rows')
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -289,7 +289,7 @@ ws.append(['Name', 'Score'])
 ws.append(['Alice', 95])
 wb.save('/workspace/output/scores.xlsx')
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -302,7 +302,7 @@ doc.add_heading('Báo Cáo', 0)
 doc.add_paragraph('Kết quả phân tích dữ liệu tháng 6.')
 doc.save('/workspace/output/report.docx')
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -314,7 +314,7 @@ data = {'total': 1234, 'items': ['a', 'b', 'c']}
 with open('/workspace/output/result.json', 'w') as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -680,7 +680,7 @@ func TestPolicy_AgentWorkflow_OfficeTask(t *testing.T) {
 		{
 			name:           "list workspace before start",
 			req:            shellReq("wf-01", "ls -la /workspace/input"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
@@ -693,7 +693,7 @@ df = pd.read_excel('/workspace/input/sales_q2.xlsx')
 print(df.dtypes)
 print(df.shape)
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -706,7 +706,7 @@ df = pd.read_excel('/workspace/input/sales_q2.xlsx')
 summary = df.groupby('region')['revenue'].agg(['sum', 'mean', 'count'])
 summary.to_excel('/workspace/output/regional_summary.xlsx')
 `),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeWrite,
 			noThreatExpect: true,
 		},
@@ -726,7 +726,7 @@ for f in glob.glob('/workspace/output/*.tmp'):
 		{
 			name:           "verify output file exists",
 			req:            shellReq("wf-05", "ls -lh /workspace/output/regional_summary.xlsx"),
-			wantDecision:   DecisionAllow,
+			wantDecision:   DecisionRequiresApproval,
 			wantRisk:       RiskSafeRead,
 			noThreatExpect: true,
 		},
