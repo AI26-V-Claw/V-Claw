@@ -48,15 +48,11 @@ func (RunPythonTool) Parameters() tools.ToolSchema {
 	return tools.ToolSchema{
 		"type": "object",
 		"properties": map[string]any{
-			"code":            map[string]any{"type": "string"},
-			"script_path":     map[string]any{"type": "string"},
+			"code":            map[string]any{"type": "string", "description": "Inline Python code to run. Provide exactly one of code or script_path."},
+			"script_path":     map[string]any{"type": "string", "description": "Workspace-relative Python script path to run. Provide exactly one of code or script_path."},
 			"workingDir":      map[string]any{"type": "string"},
 			"workspace_dir":   map[string]any{"type": "string"},
 			"timeout_seconds": map[string]any{"type": "integer"},
-		},
-		"oneOf": []any{
-			map[string]any{"required": []string{"code"}},
-			map[string]any{"required": []string{"script_path"}},
 		},
 		"additionalProperties": false,
 	}

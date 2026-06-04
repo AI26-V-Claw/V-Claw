@@ -64,6 +64,28 @@ func TestRegisterToolsMetadataRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestRunPythonToolParametersAreOpenAICompatible(t *testing.T) {
+	schema := NewRunPythonTool(Config{}).Parameters()
+
+	if got := schema["type"]; got != "object" {
+		t.Fatalf("expected object schema, got %#v", got)
+	}
+	for _, unsupported := range []string{"oneOf", "anyOf", "allOf", "enum", "not"} {
+		if _, ok := schema[unsupported]; ok {
+			t.Fatalf("schema must not expose top-level %q: %#v", unsupported, schema)
+		}
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties map, got %#v", schema["properties"])
+	}
+	for _, name := range []string{"code", "script_path"} {
+		if _, ok := properties[name]; !ok {
+			t.Fatalf("expected %q property in schema: %#v", name, properties)
+		}
+	}
+}
+
 func TestRunPythonToolExecutesConfiguredRunner(t *testing.T) {
 	runner := &fakeRunner{}
 	tool := NewRunPythonTool(Config{
