@@ -1,4 +1,24 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vclaw-postgres
+    environment:
+      POSTGRES_DB: ${VCLAW_POSTGRES_DB:-vclaw}
+      POSTGRES_USER: ${VCLAW_POSTGRES_USER:-vclaw}
+      POSTGRES_PASSWORD: ${VCLAW_POSTGRES_PASSWORD:-vclaw}
+      TZ: ${VCLAW_DATABASE_TIMEZONE:-Asia/Ho_Chi_Minh}
+      PGTZ: ${VCLAW_DATABASE_TIMEZONE:-Asia/Ho_Chi_Minh}
+    ports:
+      - "5432:5432"
+    volumes:
+      - vclaw_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   vclaw:
     build:
       context: .
@@ -9,6 +29,13 @@ services:
       VCLAW_HTTP_ADDR: ":8080"
       VCLAW_APPROVAL_MODE: "telegram"
       VCLAW_TELEGRAM_ENABLED: "false"
+      DATABASE_URL: postgres://${VCLAW_POSTGRES_USER}:${VCLAW_POSTGRES_PASSWORD}@postgres:5432/${VCLAW_POSTGRES_DB}?sslmode=disable
     ports:
       - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  vclaw_postgres_data:
