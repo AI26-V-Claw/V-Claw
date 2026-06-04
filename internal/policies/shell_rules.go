@@ -16,9 +16,14 @@ package policies
 // │ Network tools            │ external_write     │ block            │
 // │ Destructive file ops     │ destructive       │ requires_approval│
 // │ Overwrite redirect (>)   │ destructive       │ requires_approval│
-// │ Create / new file ops    │ local_write           │ allow            │
-// │ Read-only ops            │ safe_read            │ allow            │
+// │ Create / new file ops    │ local_write       │ requires_approval*│
+// │ Read-only ops            │ safe_read         │ requires_approval*│
 // └──────────────────────────┴─────────────────────┴──────────────────┘
+//
+// * Some low-risk entries are represented as DecisionAllow in this matrix so
+// their risk can be classified precisely. RuleBasedChecker then applies the
+// sandbox contract invariant: sandbox.runShell is code_execution and must be
+// approved before execution.
 var shellRules = []MatrixEntry{
 	// Windows service control and registry commands (always block).
 	{"sc.exe", RiskDestructive, DecisionBlock,
@@ -181,73 +186,73 @@ var shellRules = []MatrixEntry{
 
 	// Append is safer than overwrite but still modifies existing files.
 	{" >> ", RiskLocalWrite, DecisionAllow,
-		"Lệnh append vào file bằng redirect (>>). Được phép."},
+		"Lệnh append vào file bằng redirect (>>). Phân loại local_write; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 
 	// mv can overwrite destination if it already exists.
 	{"mv ", RiskDestructive, DecisionRequiresApproval,
 		"Lệnh di chuyển/đổi tên file (có thể ghi đè đích). Cần xác nhận của người dùng."},
 
-	// ── Safe write (create new, no mutation of existing) ─────────────────
+	// ── Local write (create new, no mutation of existing) ────────────────
 
 	{"mkdir", RiskLocalWrite, DecisionAllow,
-		"Tạo thư mục mới trong workspace. Được phép."},
+		"Tạo thư mục mới trong workspace. Phân loại local_write; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"touch", RiskLocalWrite, DecisionAllow,
-		"Tạo file mới (touch). Được phép."},
+		"Tạo file mới (touch). Phân loại local_write; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"cp ", RiskLocalWrite, DecisionAllow,
-		"Sao chép file. Được phép (cần HITL nếu ghi đè đích)."},
+		"Sao chép file. Phân loại local_write; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"tee ", RiskLocalWrite, DecisionAllow,
-		"Ghi output ra file mới (tee). Được phép."},
+		"Ghi output ra file mới (tee). Phân loại local_write; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"python ", RiskLocalWrite, DecisionAllow,
-		"Chạy Python script. Được phép (sandbox cô lập)."},
+		"Chạy Python script. Phân loại local_write/code execution; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"python3 ", RiskLocalWrite, DecisionAllow,
-		"Chạy Python3 script. Được phép (sandbox cô lập)."},
+		"Chạy Python3 script. Phân loại local_write/code execution; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 
-	// ── Safe read (read-only operations) ──────────────────────────────────
+	// ── Read-only operations ──────────────────────────────────────────────
 
 	{"ls", RiskSafeRead, DecisionAllow,
-		"Liệt kê file trong workspace. Được phép."},
+		"Liệt kê file trong workspace. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"dir", RiskSafeRead, DecisionAllow,
-		"Liệt kê file trong workspace. Được phép."},
+		"Liệt kê file trong workspace. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"cat ", RiskSafeRead, DecisionAllow,
-		"Đọc nội dung file. Được phép."},
+		"Đọc nội dung file. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"head ", RiskSafeRead, DecisionAllow,
-		"Đọc đầu file. Được phép."},
+		"Đọc đầu file. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"tail ", RiskSafeRead, DecisionAllow,
-		"Đọc cuối file. Được phép."},
+		"Đọc cuối file. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"grep ", RiskSafeRead, DecisionAllow,
-		"Tìm kiếm trong file. Được phép."},
+		"Tìm kiếm trong file. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"wc ", RiskSafeRead, DecisionAllow,
-		"Đếm dòng/từ/byte file. Được phép."},
+		"Đếm dòng/từ/byte file. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"find ", RiskSafeRead, DecisionAllow,
-		"Tìm kiếm file trong workspace. Được phép."},
+		"Tìm kiếm file trong workspace. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"stat ", RiskSafeRead, DecisionAllow,
-		"Xem metadata file. Được phép."},
+		"Xem metadata file. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"file ", RiskSafeRead, DecisionAllow,
-		"Xác định loại file. Được phép."},
+		"Xác định loại file. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"echo ", RiskSafeRead, DecisionAllow,
-		"In text ra stdout. Được phép."},
+		"In text ra stdout. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"pwd", RiskSafeRead, DecisionAllow,
-		"Xem thư mục hiện tại. Được phép."},
+		"Xem thư mục hiện tại. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"whoami", RiskSafeRead, DecisionAllow,
-		"Xem user hiện tại. Được phép."},
+		"Xem user hiện tại. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"date", RiskSafeRead, DecisionAllow,
-		"Xem ngày giờ hệ thống. Được phép."},
+		"Xem ngày giờ hệ thống. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"diff ", RiskSafeRead, DecisionAllow,
-		"So sánh nội dung file. Được phép."},
+		"So sánh nội dung file. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"sort ", RiskSafeRead, DecisionAllow,
-		"Sắp xếp output. Được phép."},
+		"Sắp xếp output. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"uniq ", RiskSafeRead, DecisionAllow,
-		"Loại bỏ dòng trùng. Được phép."},
+		"Loại bỏ dòng trùng. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"cut ", RiskSafeRead, DecisionAllow,
-		"Cắt cột trong text. Được phép."},
+		"Cắt cột trong text. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"awk ", RiskSafeRead, DecisionAllow,
-		"Xử lý text với awk. Được phép."},
+		"Xử lý text với awk. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"sed ", RiskSafeRead, DecisionAllow,
-		"Xử lý text với sed. Được phép."},
+		"Xử lý text với sed. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"tr ", RiskSafeRead, DecisionAllow,
-		"Thay thế ký tự. Được phép."},
+		"Thay thế ký tự. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"xargs", RiskSafeRead, DecisionAllow,
-		"Chuyển output sang argument. Được phép."},
+		"Chuyển output sang argument. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	{"jq ", RiskSafeRead, DecisionAllow,
-		"Xử lý JSON. Được phép."},
+		"Xử lý JSON. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 }

@@ -20,9 +20,14 @@ package policies
 // │ Network imports/calls    │ external_write      │ block            │
 // │ Dynamic execution        │ destructive        │ requires_approval│
 // │ File delete / overwrite  │ destructive        │ requires_approval│
-// │ File create / write      │ local_write            │ allow            │
-// │ Read-only / stdlib       │ safe_read             │ allow            │
+// │ File create / write      │ local_write        │ requires_approval*│
+// │ Read-only / stdlib       │ safe_read          │ requires_approval*│
 // └──────────────────────────┴──────────────────────┴──────────────────┘
+//
+// * Some low-risk entries are represented as DecisionAllow in this matrix so
+// their risk can be classified precisely. RuleBasedChecker then applies the
+// sandbox contract invariant: sandbox.runPython is code_execution and must be
+// approved before execution.
 var pythonRules = []MatrixEntry{
 
 	// ── Credential access (always block) ──────────────────────────────────
@@ -136,70 +141,70 @@ var pythonRules = []MatrixEntry{
 	{".replace(", RiskDestructive, DecisionRequiresApproval,
 		"Code replace file (pathlib.Path.replace, có thể ghi đè). Cần xác nhận."},
 
-	// ── Safe write (create new files) ─────────────────────────────────────
+	// ── Local write / read-capable helpers ────────────────────────────────
 
 	{"import csv", RiskSafeRead, DecisionAllow,
-		"Code dung csv module de doc du lieu. Duoc phep."},
+		"Code dùng csv module để đọc dữ liệu. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"open(", RiskLocalWrite, DecisionAllow,
-		"Code mở file để đọc/ghi. Được phép trong workspace."},
+		"Code mở file để đọc/ghi. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"os.makedirs(", RiskLocalWrite, DecisionAllow,
-		"Code tạo thư mục. Được phép trong workspace."},
+		"Code tạo thư mục. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"os.mkdir(", RiskLocalWrite, DecisionAllow,
-		"Code tạo thư mục. Được phép trong workspace."},
+		"Code tạo thư mục. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"shutil.copy(", RiskLocalWrite, DecisionAllow,
-		"Code sao chép file (shutil.copy). Được phép trong workspace."},
+		"Code sao chép file (shutil.copy). Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 
 	// ── Office libraries (local_write) ─────────────────────────────────────
 
 	{"import pandas", RiskLocalWrite, DecisionAllow,
-		"Code dùng pandas để xử lý dữ liệu. Được phép."},
+		"Code dùng pandas để xử lý dữ liệu. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import openpyxl", RiskLocalWrite, DecisionAllow,
-		"Code dùng openpyxl để đọc/ghi Excel. Được phép."},
+		"Code dùng openpyxl để đọc/ghi Excel. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import docx", RiskLocalWrite, DecisionAllow,
-		"Code dùng python-docx để tạo Word. Được phép."},
+		"Code dùng python-docx để tạo Word. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"from docx", RiskLocalWrite, DecisionAllow,
-		"Code dùng python-docx để tạo Word. Được phép."},
+		"Code dùng python-docx để tạo Word. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import xlrd", RiskLocalWrite, DecisionAllow,
-		"Code dùng xlrd để đọc Excel cũ. Được phép."},
+		"Code dùng xlrd để đọc Excel cũ. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import yaml", RiskSafeRead, DecisionAllow,
-		"Code dùng PyYAML để đọc config. Được phép."},
+		"Code dùng PyYAML để đọc config. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import csv", RiskSafeRead, DecisionAllow,
-		"Code dùng csv module. Được phép."},
+		"Code dùng csv module. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import json", RiskSafeRead, DecisionAllow,
-		"Code dùng json module. Được phép."},
+		"Code dùng json module. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 
-	// ── Safe read / stdlib (allow) ────────────────────────────────────────
+	// ── Read-only / stdlib classification ────────────────────────────────
 
 	{"import os", RiskSafeRead, DecisionAllow,
-		"Code import os (filesystem operations). Được phép trong workspace."},
+		"Code import os (filesystem operations). Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import sys", RiskSafeRead, DecisionAllow,
-		"Code import sys. Được phép."},
+		"Code import sys. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import re", RiskSafeRead, DecisionAllow,
-		"Code import re (regex). Được phép."},
+		"Code import re (regex). Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import math", RiskSafeRead, DecisionAllow,
-		"Code import math. Được phép."},
+		"Code import math. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import datetime", RiskSafeRead, DecisionAllow,
-		"Code import datetime. Được phép."},
+		"Code import datetime. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import time", RiskSafeRead, DecisionAllow,
-		"Code import time. Được phép."},
+		"Code import time. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import collections", RiskSafeRead, DecisionAllow,
-		"Code import collections. Được phép."},
+		"Code import collections. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import itertools", RiskSafeRead, DecisionAllow,
-		"Code import itertools. Được phép."},
+		"Code import itertools. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import functools", RiskSafeRead, DecisionAllow,
-		"Code import functools. Được phép."},
+		"Code import functools. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import hashlib", RiskSafeRead, DecisionAllow,
-		"Code import hashlib (hashing). Được phép."},
+		"Code import hashlib (hashing). Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import pathlib", RiskSafeRead, DecisionAllow,
-		"Code import pathlib (filesystem). Được phép."},
+		"Code import pathlib (filesystem). Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import glob", RiskSafeRead, DecisionAllow,
-		"Code import glob. Được phép."},
+		"Code import glob. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import shutil", RiskSafeRead, DecisionAllow,
-		"Code import shutil (file operations). Được phép với giám sát."},
+		"Code import shutil (file operations). Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import numpy", RiskSafeRead, DecisionAllow,
-		"Code dùng numpy. Được phép."},
+		"Code dùng numpy. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"import chardet", RiskSafeRead, DecisionAllow,
-		"Code dùng chardet (encoding detection). Được phép."},
+		"Code dùng chardet (encoding detection). Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	{"print(", RiskSafeRead, DecisionAllow,
-		"Code print. Được phép."},
+		"Code print. Phân loại safe_read; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 }

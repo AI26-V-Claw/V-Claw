@@ -3,10 +3,13 @@
 // The sandbox.runShell tool allows the AI agent to execute shell commands inside an
 // isolated Docker sandbox. Commands are classified by the Policy Checker:
 //
-//   - safe_read: listed files, cat non-sensitive files → allow directly.
-//   - safe_write: create new files, mkdir → allow or light confirm.
-//   - requires_approval: delete, overwrite, bulk rename -> mandatory HITL.
-//   - high_risk: shutdown, service control, chmod deep → block or strict HITL.
+//   - safe_read: list files, cat non-sensitive files.
+//   - local_write: create new files, mkdir.
+//   - destructive: delete, overwrite, bulk rename.
+//   - blocked: shutdown, service control, credential access.
+//
+// Even low-risk sandbox.runShell classifications still require approval before
+// execution because the tool itself is code_execution in docs/03-contracts.md.
 //
 // Pipeline:
 //

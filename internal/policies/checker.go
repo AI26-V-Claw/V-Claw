@@ -26,8 +26,8 @@ type RuleBasedChecker struct {
 // RuleBasedConfig allows callers to tune the checker behaviour.
 type RuleBasedConfig struct {
 	// LocalWriteRequiresConfirm, when true, changes the decision for
-	// local_write from allow to requires_approval. Useful in conservative
-	// environments where every write should be reviewed.
+	// local_write rules from DecisionAllow to DecisionRequiresApproval before
+	// the sandbox-wide approval invariant is applied.
 	LocalWriteRequiresConfirm bool
 }
 
@@ -72,7 +72,7 @@ func (c *RuleBasedChecker) checkShell(req Request) Result {
 		RequestID: req.RequestID,
 		Decision:  DecisionAllow,
 		RiskLevel: RiskSafeRead,
-		Reasons:   []string{"Lệnh không khớp với bất kỳ rule nào. Mặc định cho phép (safe_read)."},
+		Reasons:   []string{"Lệnh không khớp với bất kỳ rule nào. Phân loại safe_read; sandbox.runShell vẫn cần phê duyệt trước khi thực thi."},
 	})
 }
 
@@ -99,7 +99,7 @@ func (c *RuleBasedChecker) checkPython(req Request) Result {
 		RequestID: req.RequestID,
 		Decision:  DecisionAllow,
 		RiskLevel: RiskLocalWrite,
-		Reasons:   []string{"Code Python không chứa pattern nguy hiểm. Được phép chạy trong sandbox."},
+		Reasons:   []string{"Code Python không chứa pattern nguy hiểm. Phân loại local_write; sandbox.runPython vẫn cần phê duyệt trước khi thực thi."},
 	})
 }
 

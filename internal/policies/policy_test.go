@@ -189,7 +189,7 @@ func TestShell_Block_ShadowFile(t *testing.T) {
 	assertDecision(t, r, DecisionBlock, RiskSensitiveRead)
 }
 
-// ─── sandbox.runPython: safe_read / allow ───────────────────────────────────────────
+// ─── sandbox.runPython: safe_read / requires approval ───────────────────────────────
 
 func TestPython_SafeRead_Print(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p1", `print("hello")`))
