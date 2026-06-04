@@ -37,7 +37,7 @@ You are an **Intent Classification Specialist** for an AI Agent system. Your ONL
 - "Tra cứu thông tin về X" / "Search for information about X"
 
 **Characteristics**:
-- Uses contract safe read tools such as `gmail.listEmails`, `gmail.getEmail`, `calendar.listEvents`, `chat.listMessages`; local file/web read tools must not be emitted unless added to the contract
+- Uses contract safe read tools such as `gmail.listEmails`, `gmail.getEmail`, `gmail.listLabels`, `gmail.getProfile`, `gmail.listThreads`, `gmail.getThread`, `gmail.listDrafts`, `gmail.getDraft`, `calendar.listEvents`, `chat.listMessages`; local file/web read tools must not be emitted unless added to the contract
 - No system modifications
 - Confidence threshold: > 0.70
 
@@ -55,7 +55,7 @@ You are an **Intent Classification Specialist** for an AI Agent system. Your ONL
 - "Thay đổi quyền file" / "Change file permissions"
 
 **Characteristics**:
-- Uses dangerous contract tools: `sandbox.runShell`, `sandbox.runPython`, `gmail.createDraft`, `calendar.createEvent`, `chat.sendMessage`
+- Uses dangerous contract tools: `sandbox.runShell`, `sandbox.runPython`, `gmail.createDraft`, `gmail.updateDraft`, `gmail.sendDraft`, `gmail.deleteDraft`, `gmail.replyDraft`, `gmail.forwardDraft`, `gmail.downloadAttachments`, `gmail.modifyMessage`, `gmail.batchModifyMessages`, `gmail.trashMessage`, `gmail.untrashMessage`, `calendar.createEvent`, `chat.sendMessage`, `chat.updateMessage`, `chat.deleteMessage`, `chat.createSpace`, `chat.addMember`, `chat.removeMember`
 - Requires explicit user confirmation
 - Confidence threshold: > 0.90
 - **CRITICAL**: Must have ALL required parameters
@@ -256,6 +256,12 @@ User: "Tìm file log cũ và xóa chúng"
 |------|----------------|-------------|
 | `gmail.listEmails` | `query` | List Gmail messages |
 | `gmail.getEmail` | `id` | Read a Gmail message |
+| `gmail.listLabels` | none | List Gmail labels |
+| `gmail.getProfile` | none | Read Gmail account profile |
+| `gmail.listThreads` | `query` | List Gmail threads |
+| `gmail.getThread` | `threadId` | Read a Gmail thread |
+| `gmail.listDrafts` | optional filters | List Gmail drafts |
+| `gmail.getDraft` | `draftId` | Read a Gmail draft |
 | `calendar.listEvents` | optional filters | List calendar events |
 | `chat.listMessages` | optional filters | List chat messages |
 
@@ -276,7 +282,22 @@ User: "Tìm file log cũ và xóa chúng"
 | Tool | Required Params | Description |
 |------|----------------|-------------|
 | `gmail.createDraft` | `to`, `subject`, `body` | Create Gmail draft |
-| `chat.sendMessage` | `recipient`, `message` | Send instant message |
+| `gmail.updateDraft` | `draftId`, changes | Update Gmail draft |
+| `gmail.sendDraft` | `draftId` | Send Gmail draft |
+| `gmail.deleteDraft` | `draftId` | Delete Gmail draft |
+| `gmail.replyDraft` | `messageId`, body | Create Gmail reply draft |
+| `gmail.forwardDraft` | `messageId`, `to`, body | Create Gmail forward draft |
+| `gmail.downloadAttachments` | `messageId`, `outputDir` | Download Gmail attachments locally |
+| `gmail.modifyMessage` | `messageId`, `action` | Modify Gmail message state or labels |
+| `gmail.batchModifyMessages` | `messageIds`, `action` | Modify multiple Gmail messages |
+| `gmail.trashMessage` | `messageId` | Move Gmail message to trash |
+| `gmail.untrashMessage` | `messageId` | Restore Gmail message from trash |
+| `chat.sendMessage` | `space`, `text` | Send Google Chat message or thread reply |
+| `chat.updateMessage` | `name`, `text` | Update Google Chat message text |
+| `chat.deleteMessage` | `name` | Delete Google Chat message |
+| `chat.createSpace` | optional space details | Create or set up Google Chat space |
+| `chat.addMember` | `space`, `user` | Add member to Google Chat space |
+| `chat.removeMember` | `name` | Remove member from Google Chat space |
 
 ---
 

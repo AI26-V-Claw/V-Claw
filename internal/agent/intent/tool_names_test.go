@@ -10,6 +10,23 @@ func TestNormalizeToolName(t *testing.T) {
 		// Gmail
 		{"send_email", "gmail.createDraft"},
 		{"list_emails", "gmail.listEmails"},
+		{"list_labels", "gmail.listLabels"},
+		{"get_profile", "gmail.getProfile"},
+		{"list_threads", "gmail.listThreads"},
+		{"get_thread", "gmail.getThread"},
+		{"list_drafts", "gmail.listDrafts"},
+		{"get_draft", "gmail.getDraft"},
+		{"create_draft", "gmail.createDraft"},
+		{"update_draft", "gmail.updateDraft"},
+		{"send_draft", "gmail.sendDraft"},
+		{"delete_draft", "gmail.deleteDraft"},
+		{"reply_draft", "gmail.replyDraft"},
+		{"forward_draft", "gmail.forwardDraft"},
+		{"download_attachments", "gmail.downloadAttachments"},
+		{"modify_message", "gmail.modifyMessage"},
+		{"batch_modify_messages", "gmail.batchModifyMessages"},
+		{"trash_message", "gmail.trashMessage"},
+		{"untrash_message", "gmail.untrashMessage"},
 		{"gmail.createDraft", "gmail.createDraft"}, // already compliant
 
 		// Calendar
@@ -26,8 +43,19 @@ func TestNormalizeToolName(t *testing.T) {
 		{"delete_file", "sandbox.runShell"},
 
 		// Chat
+		{"list_spaces", "chat.listSpaces"},
+		{"list_members", "chat.listMembers"},
+		{"find_spaces_by_members", "chat.findSpacesByMembers"},
 		{"send_message", "chat.sendMessage"},
+		{"update_message", "chat.updateMessage"},
+		{"delete_message", "chat.deleteMessage"},
+		{"create_space", "chat.createSpace"},
+		{"add_member", "chat.addMember"},
+		{"remove_member", "chat.removeMember"},
 		{"chat.sendMessage", "chat.sendMessage"}, // already compliant
+
+		// People
+		{"search_directory", "people.searchDirectory"},
 
 		// Unknown (no alias)
 		{"unknown_tool", "unknown_tool"},

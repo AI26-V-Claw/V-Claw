@@ -125,7 +125,7 @@ go run ./cmd/vclaw google chat help
 go run ./cmd/vclaw google gmail help
 ```
 
-Mutating Chat commands are for manual CLI testing. Agent-triggered `chat.sendMessage` remains an `external_write` tool and must pass the approval boundary before execution.
+Mutating Chat commands are available for manual CLI testing. Agent-triggered Chat write/destructive tools such as `chat.sendMessage`, `chat.updateMessage`, `chat.deleteMessage`, `chat.createSpace`, `chat.addMember`, and `chat.removeMember` must pass the approval boundary before execution.
 Mutating Gmail commands are also for manual CLI testing. Agent-triggered Gmail draft, send, attachment download, modify, batch modify, delete draft, trash, and untrash tools must pass the approval boundary before execution.
 
 ## Re-Auth When Scopes Change

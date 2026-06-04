@@ -109,11 +109,15 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	if update.Message == nil {
 		return true, nil
 	}
+	messageText := strings.TrimSpace(update.Message.Text)
+	if messageText == "" {
+		messageText = strings.TrimSpace(update.Message.Caption)
+	}
 	inbound := contracts.UserMessage{
 		RequestID: fmt.Sprintf("telegram_update_%d", update.UpdateID),
 		SessionID: fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID),
 		Channel:   "telegram",
-		Text:      update.Message.Text,
+		Text:      messageText,
 		Locale:    "",
 		Timestamp: time.Now().UTC(),
 		Metadata: map[string]any{
@@ -123,15 +127,40 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		},
 	}
 
-	if strings.TrimSpace(update.Message.Text) == "" {
-		if b.handler != nil {
-			b.handler.RecordIgnored(inbound, "ignored_non_text")
-		}
-		return true, nil
-	}
 	if update.Message.From == nil || update.Message.From.ID != b.allowedUserID {
 		if b.handler != nil {
 			b.handler.RecordIgnored(inbound, "ignored_unauthorized")
+		}
+		return true, nil
+	}
+	attachments, err := b.downloadMessageAttachments(ctx, update.Message)
+	if err != nil {
+		if b.handler != nil {
+			b.handler.FinalizeAudit(inbound, err)
+		}
+		return false, err
+	}
+	if len(attachments) > 0 {
+		paths := make([]string, 0, len(attachments))
+		metadata := make([]map[string]any, 0, len(attachments))
+		for _, attachment := range attachments {
+			paths = append(paths, attachment.Path)
+			metadata = append(metadata, map[string]any{
+				"path":     attachment.Path,
+				"filename": attachment.Filename,
+				"mimeType": attachment.MimeType,
+				"source":   "telegram",
+			})
+		}
+		inbound.Metadata["attachmentPaths"] = paths
+		inbound.Metadata["attachments"] = metadata
+		if strings.TrimSpace(inbound.Text) == "" {
+			inbound.Text = "User sent an attachment."
+		}
+	}
+	if strings.TrimSpace(inbound.Text) == "" {
+		if b.handler != nil {
+			b.handler.RecordIgnored(inbound, "ignored_non_text")
 		}
 		return true, nil
 	}
@@ -417,6 +446,155 @@ func (b *Bot) answerCallbackQuery(ctx context.Context, callbackID string, text s
 	return nil
 }
 
+type downloadedTelegramAttachment struct {
+	Path     string
+	Filename string
+	MimeType string
+}
+
+func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramMessage) ([]downloadedTelegramAttachment, error) {
+	if message == nil {
+		return nil, nil
+	}
+	candidates := telegramAttachmentCandidates(message)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	outputDir := filepath.Join(b.dataDir, "telegram_attachments", safeTelegramID(strconv.FormatInt(message.Chat.ID, 10)), strconv.Itoa(message.MessageID))
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return nil, err
+	}
+	downloaded := make([]downloadedTelegramAttachment, 0, len(candidates))
+	for index, candidate := range candidates {
+		filePath, err := b.getFilePath(ctx, candidate.FileID)
+		if err != nil {
+			return nil, err
+		}
+		filename := safeLocalFilename(candidate.Filename)
+		if filename == "" {
+			filename = fmt.Sprintf("attachment_%d%s", index+1, candidate.Extension)
+		}
+		if filepath.Ext(filename) == "" && candidate.Extension != "" {
+			filename += candidate.Extension
+		}
+		localPath := filepath.Join(outputDir, filename)
+		if err := b.downloadTelegramFile(ctx, filePath, localPath); err != nil {
+			return nil, err
+		}
+		downloaded = append(downloaded, downloadedTelegramAttachment{
+			Path:     localPath,
+			Filename: filename,
+			MimeType: candidate.MimeType,
+		})
+	}
+	return downloaded, nil
+}
+
+type telegramAttachmentCandidate struct {
+	FileID    string
+	Filename  string
+	MimeType  string
+	Extension string
+}
+
+func telegramAttachmentCandidates(message *telegramMessage) []telegramAttachmentCandidate {
+	candidates := []telegramAttachmentCandidate{}
+	if message.Document != nil && strings.TrimSpace(message.Document.FileID) != "" {
+		candidates = append(candidates, telegramAttachmentCandidate{
+			FileID:    message.Document.FileID,
+			Filename:  message.Document.FileName,
+			MimeType:  message.Document.MimeType,
+			Extension: filepath.Ext(message.Document.FileName),
+		})
+	}
+	if len(message.Photo) > 0 {
+		photo := largestTelegramPhoto(message.Photo)
+		if strings.TrimSpace(photo.FileID) != "" {
+			candidates = append(candidates, telegramAttachmentCandidate{
+				FileID:    photo.FileID,
+				Filename:  "photo_" + safeTelegramID(photo.FileUniqueID) + ".jpg",
+				MimeType:  "image/jpeg",
+				Extension: ".jpg",
+			})
+		}
+	}
+	return candidates
+}
+
+func largestTelegramPhoto(photos []telegramPhotoSize) telegramPhotoSize {
+	best := telegramPhotoSize{}
+	bestArea := 0
+	for _, photo := range photos {
+		area := photo.Width * photo.Height
+		if area > bestArea {
+			best = photo
+			bestArea = area
+		}
+	}
+	return best
+}
+
+func (b *Bot) getFilePath(ctx context.Context, fileID string) (string, error) {
+	var response struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			FilePath string `json:"file_path"`
+		} `json:"result"`
+	}
+	payload := map[string]any{"file_id": fileID}
+	_, err := b.doJSON(ctx, http.MethodPost, "/getFile", payload, &response)
+	if err != nil {
+		return "", err
+	}
+	if !response.OK || strings.TrimSpace(response.Result.FilePath) == "" {
+		return "", fmt.Errorf("telegram getFile returned no file path")
+	}
+	return response.Result.FilePath, nil
+}
+
+func (b *Bot) downloadTelegramFile(ctx context.Context, filePath string, outputPath string) error {
+	fileURL := fmt.Sprintf("%s/file/bot%s/%s", b.apiBase, b.token, strings.TrimLeft(filePath, "/"))
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return err
+	}
+	response, err := b.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("telegram file download failed: %s", redactTelegramToken(err.Error(), b.token))
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		body, _ := io.ReadAll(response.Body)
+		return fmt.Errorf("telegram file download status %d: %s", response.StatusCode, strings.TrimSpace(redactTelegramToken(string(body), b.token)))
+	}
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := io.Copy(file, response.Body); err != nil {
+		return err
+	}
+	return nil
+}
+
+func safeLocalFilename(value string) string {
+	filename := filepath.Base(strings.TrimSpace(value))
+	if filename == "." || filename == string(filepath.Separator) || filename == "" {
+		return ""
+	}
+	filename = strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, filename)
+	if strings.Trim(filename, "._ ") == "" {
+		return ""
+	}
+	return filename
+}
+
 func (b *Bot) readOffset() int64 {
 	bytes, err := os.ReadFile(b.offsetPath)
 	if err != nil {
@@ -603,14 +781,33 @@ type telegramSentMessage struct {
 }
 
 type telegramMessage struct {
-	MessageID int           `json:"message_id"`
-	From      *telegramUser `json:"from,omitempty"`
-	Chat      telegramChat  `json:"chat"`
-	Text      string        `json:"text,omitempty"`
+	MessageID int                 `json:"message_id"`
+	From      *telegramUser       `json:"from,omitempty"`
+	Chat      telegramChat        `json:"chat"`
+	Text      string              `json:"text,omitempty"`
+	Caption   string              `json:"caption,omitempty"`
+	Document  *telegramDocument   `json:"document,omitempty"`
+	Photo     []telegramPhotoSize `json:"photo,omitempty"`
 }
 
 type telegramChat struct {
 	ID int64 `json:"id"`
+}
+
+type telegramDocument struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	FileName     string `json:"file_name,omitempty"`
+	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+type telegramPhotoSize struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
 }
 
 type telegramCallbackQuery struct {
