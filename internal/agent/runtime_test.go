@@ -1229,6 +1229,9 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	if !strings.Contains(prompt, "this week") || !strings.Contains(prompt, "next Monday") {
 		t.Fatalf("expected calendar range guidance in prompt, got: %s", prompt)
 	}
+	if !strings.Contains(prompt, "gmail.listEmails") || !strings.Contains(prompt, "date-only YYYY-MM-DD") || !strings.Contains(prompt, "never RFC3339") {
+		t.Fatalf("expected Gmail date-only guidance in prompt, got: %s", prompt)
+	}
 	if !strings.Contains(prompt, "people.searchDirectory") || !strings.Contains(prompt, "Attendees must be valid email addresses") {
 		t.Fatalf("expected attendee resolution guidance in prompt, got: %s", prompt)
 	}
@@ -1266,6 +1269,76 @@ func TestNormalizeCalendarListEventsNextMonth(t *testing.T) {
 	}
 	if normalized.Arguments["timeMax"] != "2026-08-01T00:00:00+07:00" {
 		t.Fatalf("unexpected timeMax: %#v", normalized.Arguments["timeMax"])
+	}
+}
+
+func TestNormalizeGmailListEmailsTodayUsesDateOnlyRange(t *testing.T) {
+	now := time.Date(2026, 6, 4, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	userText := "kiem tra xem h\u00f4m nay email cua toi co nhung gi"
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"after":  "today",
+			"before": "today",
+			"query":  "kiem tra h\u00f4m nay email cua toi co nhung gi",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, userText)
+
+	if normalized.Arguments["after"] != "2026-06-04" {
+		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
+	}
+	if normalized.Arguments["before"] != "2026-06-05" {
+		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
+	}
+	if normalized.Arguments["query"] != "" {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+}
+
+func TestNormalizeGmailListThreadsTodayUsesDateOnlyRange(t *testing.T) {
+	now := time.Date(2026, 6, 4, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "gmail.listThreads",
+		Arguments: map[string]any{
+			"query": "today email",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "check today email threads")
+
+	if normalized.Arguments["after"] != "2026-06-04" {
+		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
+	}
+	if normalized.Arguments["before"] != "2026-06-05" {
+		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
+	}
+	if normalized.Arguments["query"] != "" {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+}
+
+func TestNormalizeGmailListEmailsKeepsNonRelativeArgs(t *testing.T) {
+	now := time.Date(2026, 6, 4, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"after": "2026-06-01",
+			"query": "from:alice@example.com",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "email from alice")
+
+	if normalized.Arguments["after"] != "2026-06-01" {
+		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
+	}
+	if normalized.Arguments["query"] != "from:alice@example.com" {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+	if _, ok := normalized.Arguments["before"]; ok {
+		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
 	}
 }
 

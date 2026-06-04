@@ -149,11 +149,79 @@ Optional Google API checks:
 
 ```powershell
 go run ./cmd/vclaw google people search-directory -query "Bao"
+go run ./cmd/vclaw google people search-directory -query "tung@yourdomain.com" -max-results 5
 go run ./cmd/vclaw google chat list-spaces
 go run ./cmd/vclaw google chat list-members -space spaces/AAAA...
 go run ./cmd/vclaw google chat list-messages -space spaces/AAAA...
 go run ./cmd/vclaw google gmail list -max-results 10
 go run ./cmd/vclaw google gmail list-threads -max-results 10
+```
+
+Use the `Candidate Chat users` values from the output to compare with `google chat list-members`. You can also pass a candidate `users/...` value directly to `google chat find-spaces-by-members` before listing messages.
+
+## Gmail manual test commands
+
+List labels and show the signed-in account profile:
+
+```powershell
+go run ./cmd/vclaw google gmail labels
+go run ./cmd/vclaw google gmail profile
+```
+
+List messages and threads:
+
+```powershell
+go run ./cmd/vclaw google gmail list -query "is:unread" -max-results 10
+go run ./cmd/vclaw google gmail list-threads -query "from:alice@example.com" -max-results 10
+```
+
+Read one message or thread:
+
+```powershell
+go run ./cmd/vclaw google gmail get -id MESSAGE_ID -full
+go run ./cmd/vclaw google gmail get-thread -id THREAD_ID -full
+```
+
+List, read, create, update, send, and delete drafts:
+
+```powershell
+go run ./cmd/vclaw google gmail list-drafts
+go run ./cmd/vclaw google gmail get-draft -id DRAFT_ID -full
+go run ./cmd/vclaw google gmail create-draft -to alice@example.com -subject "Hello" -text "Draft body" -attachments "C:\tmp\report.pdf"
+go run ./cmd/vclaw google gmail update-draft -id DRAFT_ID -to alice@example.com -subject "Hello" -text "Updated body" -attachments "C:\tmp\report.pdf,C:\tmp\notes.txt"
+go run ./cmd/vclaw google gmail send-draft -id DRAFT_ID
+go run ./cmd/vclaw google gmail delete-draft -id DRAFT_ID
+```
+
+Create reply or forward drafts:
+
+```powershell
+go run ./cmd/vclaw google gmail reply-draft -id MESSAGE_ID -to alice@example.com -text "Reply body" -attachments "C:\tmp\reply-context.pdf"
+go run ./cmd/vclaw google gmail forward-draft -id MESSAGE_ID -to alice@example.com -text "Forward note" -attachments "C:\tmp\extra.pdf"
+```
+
+Download attachments, modify labels, and move messages to or from trash:
+
+```powershell
+go run ./cmd/vclaw google gmail download-attachments -id MESSAGE_ID -output-dir C:\tmp\vclaw-gmail
+go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action markRead
+go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action archive
+go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action addLabels -labels LABEL_ID
+go run ./cmd/vclaw google gmail batch-modify -ids MESSAGE_ID_1,MESSAGE_ID_2 -action markRead
+go run ./cmd/vclaw google gmail trash-message -id MESSAGE_ID
+go run ./cmd/vclaw google gmail untrash-message -id MESSAGE_ID
+```
+
+Draft attachments are local file paths. V-Claw supports up to 10 files per draft operation and up to 20 MiB total raw attachment data in the current MVP.
+
+## Google Chat manual test commands
+
+List spaces that the signed-in user can access:
+
+```powershell
+go run ./cmd/vclaw google chat list-spaces
+go run ./cmd/vclaw google chat list-members -space spaces/AAAA...
+go run ./cmd/vclaw google chat list-messages -space spaces/AAAA...
 ```
 
 Command-specific help:
@@ -186,8 +254,8 @@ https://www.googleapis.com/auth/directory.readonly
 
 Scope usage:
 
-- `gmail.readonly`: message/thread reads and attachment metadata.
-- `gmail.compose`, `gmail.send`, `gmail.modify`: draft creation/update/send, attachment download, and message label changes.
+- `gmail.readonly`: message/thread/draft reads, labels, profile, and attachment metadata.
+- `gmail.compose`, `gmail.send`, `gmail.modify`: draft creation/update/send/delete, local file attachments in drafts, attachment download, message label changes, batch modify, trash, and untrash.
 - `calendar.readonly`: listing Calendar events.
 - `calendar.events`: creating, updating, and deleting Calendar events after HITL approval.
 - Chat scopes: listing spaces/messages, sending text replies/attachments, updating/deleting messages, creating spaces, and adding/removing members.

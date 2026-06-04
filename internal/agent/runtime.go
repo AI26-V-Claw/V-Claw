@@ -819,13 +819,21 @@ For missing required details, ask one concise clarification question instead of 
 Keep final answers concise and include the useful result, not internal implementation details.
 
 Current date and time: %s.
-When users ask about relative dates or ranges, convert them to concrete ISO-8601 tool arguments before calling tools.
+When users ask about relative dates or ranges, convert them to concrete tool arguments before calling tools.
 For calendar.listEvents:
 - "today" / "hôm nay" means local start of today through local start of tomorrow.
 - "this week" / "tuần này" means Monday 00:00 through next Monday 00:00 in the current local timezone.
 - "next week" / "tuần sau" means next Monday 00:00 through the following Monday 00:00.
 - For a date range, set timeMin to the beginning of the range and timeMax to the exclusive end of the range.
 - Do not put date words like "today", "this week", "hôm nay", or "tuần này" into query. Use query only for event title, description, location, or attendee keywords.
+For gmail.listEmails and gmail.listThreads:
+- Use after and before as date-only YYYY-MM-DD values, not RFC3339 datetimes.
+- "today" / "hôm nay" means after is today's local date and before is tomorrow's local date.
+- Do not put date words like "today", "this week", "hôm nay", or "tuần này" into query. Use query only for sender, subject, body, or Gmail search terms.
+Gmail date rules, restated in ASCII:
+- gmail.listEmails and gmail.listThreads after/before must be date-only YYYY-MM-DD, never RFC3339 datetime strings.
+- "today" / "hom nay" means after=today local date and before=tomorrow local date.
+- Keep relative date words out of Gmail query; query is only for sender, subject, body, labels, or Gmail search terms.
 For calendar.createEvent and calendar.updateEvent:
 - Attendees must be valid email addresses.
 - If the user provides a person name instead of an email address, call people.searchDirectory first and use the resolved Workspace email.
@@ -2444,25 +2452,6 @@ func hasReferenceCueText(text string) bool {
 	)
 }
 
-func foldVietnameseSearchText(text string) string {
-	replacer := strings.NewReplacer(
-		"\u00e0", "a", "\u00e1", "a", "\u1ea1", "a", "\u1ea3", "a", "\u00e3", "a",
-		"\u00e2", "a", "\u1ea7", "a", "\u1ea5", "a", "\u1ead", "a", "\u1ea9", "a", "\u1eab", "a",
-		"\u0103", "a", "\u1eb1", "a", "\u1eaf", "a", "\u1eb7", "a", "\u1eb3", "a", "\u1eb5", "a",
-		"\u00e8", "e", "\u00e9", "e", "\u1eb9", "e", "\u1ebb", "e", "\u1ebd", "e",
-		"\u00ea", "e", "\u1ec1", "e", "\u1ebf", "e", "\u1ec7", "e", "\u1ec3", "e", "\u1ec5", "e",
-		"\u00ec", "i", "\u00ed", "i", "\u1ecb", "i", "\u1ec9", "i", "\u0129", "i",
-		"\u00f2", "o", "\u00f3", "o", "\u1ecd", "o", "\u1ecf", "o", "\u00f5", "o",
-		"\u00f4", "o", "\u1ed3", "o", "\u1ed1", "o", "\u1ed9", "o", "\u1ed5", "o", "\u1ed7", "o",
-		"\u01a1", "o", "\u1edd", "o", "\u1edb", "o", "\u1ee3", "o", "\u1edf", "o", "\u1ee1", "o",
-		"\u00f9", "u", "\u00fa", "u", "\u1ee5", "u", "\u1ee7", "u", "\u0169", "u",
-		"\u01b0", "u", "\u1eeb", "u", "\u1ee9", "u", "\u1ef1", "u", "\u1eed", "u", "\u1eef", "u",
-		"\u1ef3", "y", "\u00fd", "y", "\u1ef5", "y", "\u1ef7", "y", "\u1ef9", "y",
-		"\u0111", "d",
-	)
-	return replacer.Replace(text)
-}
-
 func isResultReferenceFollowUp(resolution *reference.Resolution, text string) bool {
 	if !isUsableReference(resolution) {
 		return false
@@ -2757,10 +2746,15 @@ func logPreview(text string, limit int) string {
 }
 
 func normalizeProviderToolCall(now time.Time, toolCall providers.ToolCall, userText string) providers.ToolCall {
-	if toolCall.Name != "calendar.listEvents" {
+	var normalizedArgs map[string]any
+	switch toolCall.Name {
+	case "calendar.listEvents":
+		normalizedArgs = normalizeCalendarListEventsArgs(now, toolCall.Arguments, userText)
+	case "gmail.listEmails", "gmail.listThreads":
+		normalizedArgs = normalizeGmailListArgs(now, toolCall.Arguments, userText)
+	default:
 		return toolCall
 	}
-	normalizedArgs := normalizeCalendarListEventsArgs(now, toolCall.Arguments, userText)
 	if normalizedArgs == nil {
 		return toolCall
 	}
@@ -2769,6 +2763,161 @@ func normalizeProviderToolCall(now time.Time, toolCall providers.ToolCall, userT
 }
 
 func normalizeCalendarListEventsArgs(now time.Time, args map[string]any, userText string) map[string]any {
+	start, end, ok := providerRelativeDateRange(now, userText)
+	if !ok {
+		return nil
+	}
+
+	normalized := cloneArguments(args)
+	if normalized == nil {
+		normalized = map[string]any{}
+	}
+	normalized["timeMin"] = start.Format(time.RFC3339)
+	normalized["timeMax"] = end.Format(time.RFC3339)
+	if query, ok := normalized["query"].(string); ok {
+		normalized["query"] = normalizeRelativeProviderQuery(query, userText, calendarQueryIntentTerms())
+	}
+	return normalized
+}
+
+func normalizeGmailListArgs(now time.Time, args map[string]any, userText string) map[string]any {
+	start, end, ok := providerRelativeDateRange(now, userText)
+	if !ok {
+		return nil
+	}
+
+	normalized := cloneArguments(args)
+	if normalized == nil {
+		normalized = map[string]any{}
+	}
+	normalized["after"] = start.Format("2006-01-02")
+	normalized["before"] = end.Format("2006-01-02")
+	if query, ok := normalized["query"].(string); ok {
+		normalized["query"] = normalizeRelativeProviderQuery(query, userText, gmailQueryIntentTerms())
+	}
+	return normalized
+}
+
+func providerRelativeDateRange(now time.Time, userText string) (time.Time, time.Time, bool) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	text := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if text == "" {
+		return time.Time{}, time.Time{}, false
+	}
+
+	switch {
+	case containsAnyText(text, "tuan sau", "next week"):
+		start := startOfWeekMonday(now).AddDate(0, 0, 7)
+		return start, start.AddDate(0, 0, 7), true
+	case containsAnyText(text, "tuan nay", "this week", "trong tuan"):
+		start := startOfWeekMonday(now)
+		return start, start.AddDate(0, 0, 7), true
+	case containsAnyText(text, "thang toi", "thang sau", "next month"):
+		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		start := thisMonth.AddDate(0, 1, 0)
+		return start, start.AddDate(0, 1, 0), true
+	case containsAnyText(text, "thang nay", "this month"):
+		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		return start, start.AddDate(0, 1, 0), true
+	case containsAnyText(text, "ngay mai", "tomorrow"):
+		start := startOfDay(now).AddDate(0, 0, 1)
+		return start, start.AddDate(0, 0, 1), true
+	case containsAnyText(text, "hom nay", "today"):
+		start := startOfDay(now)
+		return start, start.AddDate(0, 0, 1), true
+	default:
+		return time.Time{}, time.Time{}, false
+	}
+}
+
+func normalizeRelativeProviderQuery(query string, userText string, intentTerms []string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return ""
+	}
+	queryText := foldVietnameseSearchText(strings.ToLower(trimmed))
+	userText = foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if queryText == userText {
+		return ""
+	}
+	if containsAnyText(queryText, relativeQueryTerms()...) && containsAnyText(queryText, intentTerms...) {
+		return ""
+	}
+	return trimmed
+}
+
+func relativeQueryTerms() []string {
+	return []string{
+		"tuan nay", "tuan sau", "thang nay", "thang toi", "thang sau",
+		"ngay mai", "hom nay", "today", "tomorrow", "this week", "next week",
+		"this month", "next month",
+	}
+}
+
+func calendarQueryIntentTerms() []string {
+	return []string{"lich", "calendar", "su kien", "event"}
+}
+
+func gmailQueryIntentTerms() []string {
+	return []string{"email", "mail", "gmail", "thu", "hop thu"}
+}
+
+func foldVietnameseSearchText(text string) string {
+	replacer := strings.NewReplacer(
+		"\u00e0", "a", "\u00e1", "a", "\u1ea1", "a", "\u1ea3", "a", "\u00e3", "a",
+		"\u00e2", "a", "\u1ea7", "a", "\u1ea5", "a", "\u1ead", "a", "\u1ea9", "a", "\u1eab", "a",
+		"\u0103", "a", "\u1eb1", "a", "\u1eaf", "a", "\u1eb7", "a", "\u1eb3", "a", "\u1eb5", "a",
+		"\u00e8", "e", "\u00e9", "e", "\u1eb9", "e", "\u1ebb", "e", "\u1ebd", "e",
+		"\u00ea", "e", "\u1ec1", "e", "\u1ebf", "e", "\u1ec7", "e", "\u1ec3", "e", "\u1ec5", "e",
+		"\u00ec", "i", "\u00ed", "i", "\u1ecb", "i", "\u1ec9", "i", "\u0129", "i",
+		"\u00f2", "o", "\u00f3", "o", "\u1ecd", "o", "\u1ecf", "o", "\u00f5", "o",
+		"\u00f4", "o", "\u1ed3", "o", "\u1ed1", "o", "\u1ed9", "o", "\u1ed5", "o", "\u1ed7", "o",
+		"\u01a1", "o", "\u1edd", "o", "\u1edb", "o", "\u1ee3", "o", "\u1edf", "o", "\u1ee1", "o",
+		"\u00f9", "u", "\u00fa", "u", "\u1ee5", "u", "\u1ee7", "u", "\u0169", "u",
+		"\u01b0", "u", "\u1eeb", "u", "\u1ee9", "u", "\u1ef1", "u", "\u1eed", "u", "\u1eef", "u",
+		"\u1ef3", "y", "\u00fd", "y", "\u1ef5", "y", "\u1ef7", "y", "\u1ef9", "y",
+		"\u0111", "d",
+	)
+	return replacer.Replace(text)
+}
+
+func relativeDateRange(now time.Time, userText string) (time.Time, time.Time, bool) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	lower := strings.ToLower(strings.TrimSpace(userText))
+	if lower == "" {
+		return time.Time{}, time.Time{}, false
+	}
+
+	switch {
+	case containsAnyText(lower, "tuần sau", "tuan sau", "next week"):
+		start := startOfWeekMonday(now).AddDate(0, 0, 7)
+		return start, start.AddDate(0, 0, 7), true
+	case containsAnyText(lower, "tuần này", "tuan nay", "this week", "trong tuần", "trong tuan"):
+		start := startOfWeekMonday(now)
+		return start, start.AddDate(0, 0, 7), true
+	case containsAnyText(lower, "tháng tới", "thang toi", "tháng sau", "thang sau", "next month"):
+		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		start := thisMonth.AddDate(0, 1, 0)
+		return start, start.AddDate(0, 1, 0), true
+	case containsAnyText(lower, "tháng này", "thang nay", "this month"):
+		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		return start, start.AddDate(0, 1, 0), true
+	case containsAnyText(lower, "ngày mai", "ngay mai", "tomorrow"):
+		start := startOfDay(now).AddDate(0, 0, 1)
+		return start, start.AddDate(0, 0, 1), true
+	case containsAnyText(lower, "hôm nay", "hom nay", "today"):
+		start := startOfDay(now)
+		return start, start.AddDate(0, 0, 1), true
+	default:
+		return time.Time{}, time.Time{}, false
+	}
+}
+
+func normalizeCalendarListEventsArgsLegacy(now time.Time, args map[string]any, userText string) map[string]any {
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -2827,6 +2976,23 @@ func normalizeRelativeCalendarQuery(query string, userText string) string {
 	}
 	if containsAnyText(lowerQuery, "tuần này", "tuan nay", "tuần sau", "tuan sau", "tháng này", "thang nay", "tháng tới", "thang toi", "hôm nay", "hom nay", "today", "this week", "next week", "this month", "next month") &&
 		containsAnyText(lowerQuery, "lịch", "lich", "calendar", "sự kiện", "su kien", "event") {
+		return ""
+	}
+	return trimmed
+}
+
+func normalizeRelativeGmailQuery(query string, userText string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return ""
+	}
+	lowerQuery := strings.ToLower(trimmed)
+	lowerText := strings.ToLower(strings.TrimSpace(userText))
+	if lowerQuery == lowerText {
+		return ""
+	}
+	if containsAnyText(lowerQuery, "tuần này", "tuan nay", "tuần sau", "tuan sau", "tháng này", "thang nay", "tháng tới", "thang toi", "hôm nay", "hom nay", "today", "this week", "next week", "this month", "next month") &&
+		containsAnyText(lowerQuery, "email", "mail", "gmail", "thư", "thu", "hộp thư", "hop thu") {
 		return ""
 	}
 	return trimmed

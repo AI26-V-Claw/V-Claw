@@ -261,6 +261,119 @@ func TestCreateUpdateAndSendDraft(t *testing.T) {
 	}
 }
 
+func TestDraftWithAttachmentBuildsMultipartMixed(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodPost || req.URL.Path != "/gmail/v1/users/me/drafts" {
+				t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			}
+			raw := decodedDraftRaw(t, req)
+			for _, want := range []string{
+				"Content-Type: multipart/mixed;",
+				"Content-Disposition: attachment; filename=\"report.txt\"",
+				"Content-Transfer-Encoding: base64",
+				base64.StdEncoding.EncodeToString([]byte("attachment bytes")),
+			} {
+				if !strings.Contains(raw, want) {
+					t.Fatalf("raw draft missing %q: %s", want, raw)
+				}
+			}
+			return jsonResponse(http.StatusOK, `{"id":"draft-attach","message":{"id":"msg-draft"}}`), nil
+		}),
+	}
+
+	_, err := CreateDraft(context.Background(), client, "me", DraftMessageInput{
+		To:       []string{"a@example.com"},
+		Subject:  "Draft",
+		TextBody: "Hello draft",
+		Attachments: []DraftAttachmentInput{{
+			Filename: "report.txt",
+			MimeType: "text/plain",
+			Data:     []byte("attachment bytes"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+}
+
+func TestLabelsProfileDraftsAndMessageState(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Method == http.MethodGet && req.URL.Path == "/gmail/v1/users/me/labels":
+				return jsonResponse(http.StatusOK, `{"labels":[{"id":"INBOX","name":"Inbox"},{"id":"Label_1","name":"Project"}]}`), nil
+			case req.Method == http.MethodGet && req.URL.Path == "/gmail/v1/users/me/profile":
+				return jsonResponse(http.StatusOK, `{"emailAddress":"me@example.com","messagesTotal":12,"threadsTotal":7,"historyId":"123"}`), nil
+			case req.Method == http.MethodGet && req.URL.Path == "/gmail/v1/users/me/drafts":
+				if req.URL.Query().Get("maxResults") != "5" {
+					t.Fatalf("unexpected draft query: %s", req.URL.RawQuery)
+				}
+				return jsonResponse(http.StatusOK, `{"drafts":[{"id":"draft-1","message":{"id":"msg-1","threadId":"thread-1"}}],"nextPageToken":"next-draft"}`), nil
+			case req.Method == http.MethodGet && req.URL.Path == "/gmail/v1/users/me/drafts/draft-1":
+				if req.URL.Query().Get("format") != "full" {
+					t.Fatalf("unexpected get draft query: %s", req.URL.RawQuery)
+				}
+				return jsonResponse(http.StatusOK, `{"id":"draft-1","message":{"id":"msg-1","threadId":"thread-1","payload":{"headers":[{"name":"Subject","value":"Draft subject"}]}}}`), nil
+			case req.Method == http.MethodDelete && req.URL.Path == "/gmail/v1/users/me/drafts/draft-1":
+				return jsonResponse(http.StatusOK, `{}`), nil
+			case req.Method == http.MethodPost && req.URL.Path == "/gmail/v1/users/me/messages/batchModify":
+				var body struct {
+					Ids            []string `json:"ids"`
+					AddLabelIds    []string `json:"addLabelIds"`
+					RemoveLabelIds []string `json:"removeLabelIds"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatalf("decode batch body: %v", err)
+				}
+				if strings.Join(body.Ids, ",") != "m1,m2" || len(body.RemoveLabelIds) != 1 || body.RemoveLabelIds[0] != "UNREAD" {
+					t.Fatalf("unexpected batch body: %#v", body)
+				}
+				return jsonResponse(http.StatusOK, `{}`), nil
+			case req.Method == http.MethodPost && req.URL.Path == "/gmail/v1/users/me/messages/m1/trash":
+				return jsonResponse(http.StatusOK, `{"id":"m1","threadId":"t1","labelIds":["TRASH"],"payload":{"headers":[{"name":"Subject","value":"Trashed"}]}}`), nil
+			case req.Method == http.MethodPost && req.URL.Path == "/gmail/v1/users/me/messages/m1/untrash":
+				return jsonResponse(http.StatusOK, `{"id":"m1","threadId":"t1","labelIds":["INBOX"],"payload":{"headers":[{"name":"Subject","value":"Restored"}]}}`), nil
+			default:
+				t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+				return nil, nil
+			}
+		}),
+	}
+
+	labels, err := ListLabels(context.Background(), client, "me")
+	if err != nil || len(labels) != 2 || labels[1].Name != "Project" {
+		t.Fatalf("ListLabels() = %#v, %v", labels, err)
+	}
+	profile, err := GetProfile(context.Background(), client, "me")
+	if err != nil || profile.EmailAddress != "me@example.com" || profile.HistoryID != 123 {
+		t.Fatalf("GetProfile() = %#v, %v", profile, err)
+	}
+	drafts, err := ListDrafts(context.Background(), client, "me", 5, "")
+	if err != nil || drafts.NextPageToken != "next-draft" || len(drafts.Drafts) != 1 {
+		t.Fatalf("ListDrafts() = %#v, %v", drafts, err)
+	}
+	draft, err := GetDraft(context.Background(), client, "me", "draft-1")
+	if err != nil || draft.ID != "draft-1" || draft.Message.Subject != "Draft subject" {
+		t.Fatalf("GetDraft() = %#v, %v", draft, err)
+	}
+	if err := DeleteDraft(context.Background(), client, "me", "draft-1"); err != nil {
+		t.Fatalf("DeleteDraft() error = %v", err)
+	}
+	batch, err := BatchModifyMessages(context.Background(), client, "me", []string{"m1", "m2"}, ModifyMessageInput{RemoveLabelIDs: []string{"UNREAD"}})
+	if err != nil || len(batch.MessageIDs) != 2 {
+		t.Fatalf("BatchModifyMessages() = %#v, %v", batch, err)
+	}
+	trashed, err := TrashMessage(context.Background(), client, "me", "m1")
+	if err != nil || trashed.Subject != "Trashed" {
+		t.Fatalf("TrashMessage() = %#v, %v", trashed, err)
+	}
+	restored, err := UntrashMessage(context.Background(), client, "me", "m1")
+	if err != nil || restored.Subject != "Restored" {
+		t.Fatalf("UntrashMessage() = %#v, %v", restored, err)
+	}
+}
+
 func TestDownloadAttachmentAndModifyMessage(t *testing.T) {
 	encoded := base64.RawURLEncoding.EncodeToString([]byte("attachment bytes"))
 	client := &http.Client{
@@ -306,6 +419,14 @@ func TestDownloadAttachmentAndModifyMessage(t *testing.T) {
 
 func assertDraftRawContains(t *testing.T, req *http.Request, want string) {
 	t.Helper()
+	decoded := decodedDraftRaw(t, req)
+	if !strings.Contains(decoded, want) {
+		t.Fatalf("raw draft missing %q: %s", want, decoded)
+	}
+}
+
+func decodedDraftRaw(t *testing.T, req *http.Request) string {
+	t.Helper()
 	var body struct {
 		Message struct {
 			Raw string `json:"raw"`
@@ -318,7 +439,5 @@ func assertDraftRawContains(t *testing.T, req *http.Request, want string) {
 	if err != nil {
 		t.Fatalf("decode raw message: %v", err)
 	}
-	if !strings.Contains(string(decoded), want) {
-		t.Fatalf("raw draft missing %q: %s", want, decoded)
-	}
+	return string(decoded)
 }

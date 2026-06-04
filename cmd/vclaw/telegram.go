@@ -39,6 +39,7 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	dataDir := fs.String("data-dir", envOrDefault("DATA_DIR", "./data"), "runtime data directory")
 	maxIterations := fs.Int("max-iterations", agent.DefaultMaxIterations, "maximum agent iterations")
 	googleToolsMode := fs.String("google-tools", envOrDefault("VCLAW_GOOGLE_TOOLS_MODE", googleToolsAuto), "Google Workspace tool mode: auto, required, or off")
+	webToolsMode := fs.String("web-tools", envOrDefault("VCLAW_WEB_TOOLS_MODE", webToolsAuto), "Web search/fetch tool mode: auto, required, or off")
 	credentialsPath := fs.String("credentials", defaultCredentialsPath, "Google OAuth desktop client credentials JSON")
 	googleTokenPath := fs.String("google-token", defaultTokenPath, "Google OAuth token cache path")
 	if err := fs.Parse(args); err != nil {
@@ -55,6 +56,7 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	bundle, err := newAgentRuntime(ctx, agentRuntimeOptions{
 		MaxIterations:   *maxIterations,
 		GoogleToolsMode: *googleToolsMode,
+		WebToolsMode:    *webToolsMode,
 		CredentialsPath: *credentialsPath,
 		GoogleTokenPath: *googleTokenPath,
 		Logger:          logger,
@@ -66,7 +68,7 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("starting vclaw telegram runtime", "model", bundle.Model, "google_tools", *googleToolsMode)
+	logger.Info("starting vclaw telegram runtime", "model", bundle.Model, "google_tools", *googleToolsMode, "web_tools", *webToolsMode)
 	bot := telegram.New(*botToken, *allowedUserID, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime), logger)
 	if err := bot.Run(runCtx); err != nil && err != context.Canceled {
 		return fmt.Errorf("telegram bot stopped: %w", err)
@@ -118,7 +120,7 @@ func firstCSV(value string) string {
 
 func printTelegramUsage() {
 	fmt.Println(`Usage:
-  vclaw telegram run [--google-tools auto|required|off]
+  vclaw telegram run [--google-tools auto|required|off] [--web-tools auto|required|off]
 
 Environment:
   OPENAI_API_KEY               Required for the real AI provider.
