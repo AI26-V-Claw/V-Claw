@@ -7,8 +7,8 @@ services:
       - .env
     environment:
       VCLAW_HTTP_ADDR: ":8080"
-      VCLAW_TELEGRAM_ENABLED: "false"
       VCLAW_APPROVAL_MODE: "telegram"
+      VCLAW_TELEGRAM_ENABLED: "false"
     ports:
       - "8080:8080"
     restart: unless-stopped
