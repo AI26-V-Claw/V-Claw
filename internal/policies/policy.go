@@ -76,7 +76,6 @@ type ToolName string
 const (
 	ToolRunPython ToolName = "sandbox.runPython"
 	ToolRunShell  ToolName = "sandbox.runShell"
-	ToolFileOps   ToolName = "file_ops"
 )
 
 // ─── Policy Request ───────────────────────────────────────────────────────────
@@ -99,7 +98,6 @@ type Request struct {
 	// Input holds the tool-specific payload for classification.
 	// For sandbox.runShell: set Command.
 	// For sandbox.runPython: set Code and/or ScriptPath.
-	// For file_ops:   set FilePath and FileOp.
 	Input RequestInput
 
 	// Meta carries user intent and source metadata for audit purposes.
@@ -116,13 +114,6 @@ type RequestInput struct {
 
 	// ScriptPath is the relative path to a .py file for sandbox.runPython requests.
 	ScriptPath string
-
-	// FilePath is the target path for file_ops requests.
-	FilePath string
-
-	// FileOp is the operation type for file_ops: "read", "write", "delete",
-	// "copy", "move", "list".
-	FileOp string
 }
 
 // RequestMeta carries contextual metadata used in audit logs.

@@ -24,15 +24,6 @@ func pythonReq(id, code string) Request {
 	}
 }
 
-func fileOpsReq(id, op, path string) Request {
-	return Request{
-		RequestID: id,
-		SessionID: "sess_test",
-		Tool:      ToolFileOps,
-		Input:     RequestInput{FileOp: op, FilePath: path},
-	}
-}
-
 func assertDecision(t *testing.T, got Result, wantDecision Decision, wantRisk RiskLevel) {
 	t.Helper()
 	if got.Decision != wantDecision {
@@ -308,48 +299,6 @@ func TestPython_Block_CredentialsJson(t *testing.T) {
 func TestPython_Block_IdRsa(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("pc3", "key = open('id_rsa').read()"))
 	assertDecision(t, r, DecisionBlock, RiskSensitiveRead)
-}
-
-// ─── file_ops ─────────────────────────────────────────────────────────────────
-
-func TestFileOps_Read(t *testing.T) {
-	r := DefaultChecker.Check(fileOpsReq("f1", "read", "data.csv"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
-}
-
-func TestFileOps_List(t *testing.T) {
-	r := DefaultChecker.Check(fileOpsReq("f2", "list", "/workspace"))
-	assertDecision(t, r, DecisionAllow, RiskSafeRead)
-}
-
-func TestFileOps_Write(t *testing.T) {
-	r := DefaultChecker.Check(fileOpsReq("f3", "write", "output/report.docx"))
-	assertDecision(t, r, DecisionAllow, RiskLocalWrite)
-}
-
-func TestFileOps_Copy(t *testing.T) {
-	r := DefaultChecker.Check(fileOpsReq("f4", "copy", "input.xlsx"))
-	assertDecision(t, r, DecisionAllow, RiskLocalWrite)
-}
-
-func TestFileOps_Delete(t *testing.T) {
-	r := DefaultChecker.Check(fileOpsReq("f5", "delete", "temp.txt"))
-	assertDecision(t, r, DecisionRequiresApproval, RiskDestructive)
-}
-
-func TestFileOps_Move(t *testing.T) {
-	r := DefaultChecker.Check(fileOpsReq("f6", "move", "old.txt"))
-	assertDecision(t, r, DecisionRequiresApproval, RiskDestructive)
-}
-
-func TestFileOps_UnknownOp(t *testing.T) {
-	r := DefaultChecker.Check(fileOpsReq("f7", "format", "disk"))
-	assertDecision(t, r, DecisionBlock, RiskDestructive)
-}
-
-func TestFileOps_EmptyOp(t *testing.T) {
-	r := DefaultChecker.Check(fileOpsReq("f8", "", ""))
-	assertDecision(t, r, DecisionBlock, RiskDestructive)
 }
 
 // ─── Unknown tool ─────────────────────────────────────────────────────────────

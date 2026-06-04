@@ -11,11 +11,10 @@ package policies
 //
 //  1. Đọc file   — list, cat, grep, head, wc, …
 //  2. Tạo/ghi file — touch, mkdir, cp, python ghi output, …
-//  3. Xóa file   — rm, rmdir, shutil.rmtree, file_ops delete, …
+//  3. Xóa file   — rm, rmdir, shutil.rmtree, …
 //  4. Command hệ thống — shutdown, service, sudo, registry, credential, …
 //
-// Mỗi nhóm bao gồm cả sandbox.runShell, sandbox.runPython, và file_ops để bao phủ
-// ba tool types hiện có.
+// Mỗi nhóm bao gồm sandbox.runShell và sandbox.runPython theo contract hiện có.
 
 import (
 	"fmt"
@@ -65,10 +64,6 @@ func runPolicyCases(t *testing.T, cases []policyCase) {
 					text = tc.req.Input.ScriptPath
 				}
 				reports = safety.DefaultScanner.ScanPython(text)
-			case ToolFileOps:
-				// file_ops threat scanning uses the path (if present) + op name.
-				combined := tc.req.Input.FileOp + " " + tc.req.Input.FilePath
-				reports = safety.DefaultScanner.ScanShell(combined)
 			}
 
 			if tc.noThreatExpect && len(reports) > 0 {
@@ -208,26 +203,6 @@ print(content[:500])
 	runPolicyCases(t, cases)
 }
 
-func TestPolicy_DocFile_FileOps(t *testing.T) {
-	cases := []policyCase{
-		{
-			name:           "file_ops list",
-			req:            fileOpsReq("r-fo-01", "list", "/workspace"),
-			wantDecision:   DecisionAllow,
-			wantRisk:       RiskSafeRead,
-			noThreatExpect: true,
-		},
-		{
-			name:           "file_ops read",
-			req:            fileOpsReq("r-fo-02", "read", "/workspace/data.csv"),
-			wantDecision:   DecisionAllow,
-			wantRisk:       RiskSafeRead,
-			noThreatExpect: true,
-		},
-	}
-	runPolicyCases(t, cases)
-}
-
 // ─── 2. Tạo / ghi file ───────────────────────────────────────────────────────
 
 func TestPolicy_TaoFile_Shell(t *testing.T) {
@@ -322,26 +297,6 @@ with open('/workspace/output/result.json', 'w') as f:
 	runPolicyCases(t, cases)
 }
 
-func TestPolicy_TaoFile_FileOps(t *testing.T) {
-	cases := []policyCase{
-		{
-			name:           "file_ops write",
-			req:            fileOpsReq("w-fo-01", "write", "/workspace/output/summary.txt"),
-			wantDecision:   DecisionAllow,
-			wantRisk:       RiskLocalWrite,
-			noThreatExpect: true,
-		},
-		{
-			name:           "file_ops copy",
-			req:            fileOpsReq("w-fo-02", "copy", "/workspace/input/template.xlsx"),
-			wantDecision:   DecisionAllow,
-			wantRisk:       RiskLocalWrite,
-			noThreatExpect: true,
-		},
-	}
-	runPolicyCases(t, cases)
-}
-
 // ─── 3. Xóa file ─────────────────────────────────────────────────────────────
 
 func TestPolicy_XoaFile_Shell(t *testing.T) {
@@ -428,24 +383,6 @@ for f in glob.glob('/workspace/output/*.tmp'):
 			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskDestructive,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
-		},
-	}
-	runPolicyCases(t, cases)
-}
-
-func TestPolicy_XoaFile_FileOps(t *testing.T) {
-	cases := []policyCase{
-		{
-			name:         "file_ops delete",
-			req:          fileOpsReq("d-fo-01", "delete", "/workspace/output/old_data.csv"),
-			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskDestructive,
-		},
-		{
-			name:         "file_ops move",
-			req:          fileOpsReq("d-fo-02", "move", "/workspace/draft.txt"),
-			wantDecision: DecisionRequiresApproval,
-			wantRisk:     RiskDestructive,
 		},
 	}
 	runPolicyCases(t, cases)
@@ -756,7 +693,6 @@ func TestPolicy_ConservativeMode_LocalWrite(t *testing.T) {
 		{"mkdir in conservative mode", shellReq("c-01", "mkdir /workspace/output")},
 		{"touch in conservative mode", shellReq("c-02", "touch /workspace/new.txt")},
 		{"python3 script in conservative mode", shellReq("c-03", "python3 /workspace/analyze.py")},
-		{"file_ops write in conservative mode", fileOpsReq("c-04", "write", "/workspace/output.csv")},
 	}
 
 	for _, tc := range conservativeCases {

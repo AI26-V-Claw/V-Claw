@@ -49,8 +49,6 @@ func (c *RuleBasedChecker) Check(req Request) Result {
 		return c.checkShell(req)
 	case ToolRunPython:
 		return c.checkPython(req)
-	case ToolFileOps:
-		return c.checkFileOps(req)
 	default:
 		return c.unknown(req)
 	}
@@ -103,31 +101,6 @@ func (c *RuleBasedChecker) checkPython(req Request) Result {
 		RiskLevel: RiskLocalWrite,
 		Reasons:   []string{"Code Python không chứa pattern nguy hiểm. Được phép chạy trong sandbox."},
 	})
-}
-
-// checkFileOps classifies a file_ops request by operation type.
-func (c *RuleBasedChecker) checkFileOps(req Request) Result {
-	op := strings.ToLower(strings.TrimSpace(req.Input.FileOp))
-	if op == "" {
-		return Result{
-			RequestID: req.RequestID,
-			Decision:  DecisionBlock,
-			RiskLevel: RiskDestructive,
-			Reasons:   []string{"file_ops: loại thao tác (file_op) bị thiếu hoặc rỗng."},
-		}
-	}
-
-	entry, ok := fileOpsRules[op]
-	if !ok {
-		return Result{
-			RequestID: req.RequestID,
-			Decision:  DecisionBlock,
-			RiskLevel: RiskDestructive,
-			Reasons:   []string{fmt.Sprintf("file_ops: loại thao tác không hợp lệ: %q.", op)},
-		}
-	}
-
-	return c.applyRule(req.RequestID, entry)
 }
 
 // unknown handles an unrecognised tool name.

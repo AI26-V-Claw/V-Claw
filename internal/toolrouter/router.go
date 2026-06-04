@@ -9,10 +9,9 @@
 //	ToolRouter.Dispatch(ctx, req)
 //	    │
 //	    ├── "sandbox.runPython" → python.RunPython(ctx, input, gatedRunner)
-//	    ├── "sandbox.runShell"  → shell.RunShell(ctx, input, gatedRunner)
-//	    └── "file_ops"   → (Sprint 2)
-//	                │
-//	                ▼  GatedRunner enforces: Policy → Safety → Audit → Docker
+//	    └── "sandbox.runShell"  → shell.RunShell(ctx, input, gatedRunner)
+//	                              │
+//	                              ▼  GatedRunner enforces: Policy → Safety → Audit → Docker
 //	           ToolResponse
 //	               ├── status: "success"          (executed OK)
 //	               ├── status: "failed"            (non-zero exit)
@@ -20,8 +19,7 @@
 //	               ├── status: "blocked"           (policy block)
 //	               └── status: "pending_approval"  (needs HITL — Sprint 2)
 //
-// The router matches the V-Claw API contract from section 10 of the
-// sandbox-scrum-plan.md.
+// The router supports the sandbox tool names defined in docs/03-contracts.md.
 package toolrouter
 
 import (

@@ -316,7 +316,7 @@ func TestRouter_UnknownTool_ReturnsError(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("file_ops", "/tmp/ws") // not yet supported
+	r := req("unknown_tool", "/tmp/ws")
 	r.Input.Command = "list"
 	resp := router.Dispatch(context.Background(), r)
 
