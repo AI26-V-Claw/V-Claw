@@ -93,6 +93,7 @@ func runAgentChat(ctx context.Context, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "V-Claw interactive chat (model: %s, session: %s)\n", bundle.Model, *sessionID)
 	fmt.Fprintln(os.Stderr, "Type /exit to quit, /new to start a new session.")
+	messenger := agent.NewRuntimeMessenger(bundle.Runtime)
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Fprint(os.Stderr, "\nYou> ")
@@ -112,7 +113,7 @@ func runAgentChat(ctx context.Context, args []string) error {
 			continue
 		}
 
-		response, err := bundle.Runtime.Run(ctx, contracts.UserMessage{
+		response, err := messenger.HandleMessage(ctx, contracts.UserMessage{
 			RequestID: "req_" + time.Now().UTC().Format("20060102T150405.000000000"),
 			SessionID: *sessionID,
 			Channel:   *channel,
