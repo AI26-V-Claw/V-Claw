@@ -1691,6 +1691,117 @@ func TestRuntimeWriteRequestCanUseExplicitMeetingReferenceFromMemory(t *testing.
 	}
 }
 
+func TestRuntimeWriteRequestCanUseRecentGmailDraftReferenceFromMemory(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Can gui draft vua tao bang gmail.sendDraft."},
+	}}}
+	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
+		Intent: &agentintent.Result{
+			Type:       agentintent.TypeUnknown,
+			Confidence: 0.3,
+		},
+		NeedsClarification:   true,
+		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
+	}}
+	store := sessions.NewInMemoryStore()
+	ctx := context.Background()
+	if err := store.SaveMemory(ctx, "sess_001", sessions.SessionMemory{
+		LastActionResults: []sessions.ActionResult{{
+			ToolName:  "gmail.createDraft",
+			Content:   `{"Draft":{"ID":"draft_1","MessageID":"msg_1","ThreadID":"thread_1"}}`,
+			CreatedAt: runtimeTestMessage().Timestamp,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:         provider,
+		Registry:         tools.NewToolRegistry(),
+		IntentClassifier: classifier,
+		SessionStore:     store,
+	})
+	message := runtimeTestMessage()
+	message.Text = "hay gui mail ban draft vua tao di"
+
+	response, err := runtime.Run(ctx, message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed provider response, got %#v", response)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("expected provider call, got %d", len(provider.calls))
+	}
+	joined := providerMessagesContent(provider.calls[0].Messages)
+	if !strings.Contains(joined, "Reference resolver result") ||
+		!strings.Contains(joined, "gmail_email") ||
+		!strings.Contains(joined, "draft_1") ||
+		!strings.Contains(joined, "draftId") {
+		t.Fatalf("expected provider to receive recent gmail draft reference context, got %#v", provider.calls[0].Messages)
+	}
+	if strings.Contains(joined, "calendar_event") {
+		t.Fatalf("draft follow-up must not be routed as calendar reference, got %#v", provider.calls[0].Messages)
+	}
+}
+
+func TestRuntimeDraftReferenceIgnoresOtherRecentGmailResults(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Can gui draft bang gmail.sendDraft."},
+	}}}
+	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
+		Intent: &agentintent.Result{
+			Type:       agentintent.TypeUnknown,
+			Confidence: 0.3,
+		},
+		NeedsClarification:   true,
+		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
+	}}
+	store := sessions.NewInMemoryStore()
+	ctx := context.Background()
+	if err := store.SaveMemory(ctx, "sess_001", sessions.SessionMemory{
+		LastActionResults: []sessions.ActionResult{
+			{
+				ToolName:  "gmail.listEmails",
+				Content:   `{"Messages":[{"ID":"msg_list","Subject":"Old"}]}`,
+				CreatedAt: runtimeTestMessage().Timestamp.Add(-time.Minute),
+			},
+			{
+				ToolName:  "gmail.createDraft",
+				Content:   `{"Draft":{"ID":"draft_latest","MessageID":"msg_wrong","ThreadID":"thread_wrong"}}`,
+				CreatedAt: runtimeTestMessage().Timestamp,
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:         provider,
+		Registry:         tools.NewToolRegistry(),
+		IntentClassifier: classifier,
+		SessionStore:     store,
+	})
+	message := runtimeTestMessage()
+	message.Text = "ban nhap ban vua tao do"
+
+	response, err := runtime.Run(ctx, message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed provider response, got %#v", response)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("expected provider call, got %d", len(provider.calls))
+	}
+	joined := providerMessagesContent(provider.calls[0].Messages)
+	if !strings.Contains(joined, "gmail_email") ||
+		!strings.Contains(joined, "draft_latest") ||
+		strings.Contains(joined, "Bạn muốn gửi bản nháp") {
+		t.Fatalf("expected resolved draft reference without clarification, got %#v", provider.calls[0].Messages)
+	}
+}
+
 func TestRuntimeContextualTemporalFollowUpUsesRecentHistory(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Hom qua ban khong co lich nao."},
@@ -2104,6 +2215,47 @@ func TestRuntimeStoresSkippedObservationsForRemainingToolCalls(t *testing.T) {
 	}
 	if transcript[2].ToolCallID != "call_write" || transcript[3].ToolCallID != "call_time" {
 		t.Fatalf("missing tool observations for all tool calls: %#v", transcript)
+	}
+}
+
+func TestSanitizeProviderTranscriptForToolProtocolDropsOrphanToolMessages(t *testing.T) {
+	transcript := []providers.Message{
+		{Role: providers.MessageRoleUser, Content: "old request"},
+		{Role: providers.MessageRoleTool, ToolCallID: "missing_call", Content: "orphan result"},
+		{Role: providers.MessageRoleAssistant, Content: "done"},
+		{Role: providers.MessageRoleUser, Content: "new request"},
+	}
+
+	sanitized := sanitizeProviderTranscriptForToolProtocol(transcript)
+
+	for _, message := range sanitized {
+		if message.Role == providers.MessageRoleTool {
+			t.Fatalf("orphan tool message should not be sent to provider: %#v", sanitized)
+		}
+	}
+	if !transcriptContains(sanitized, "old request") || !transcriptContains(sanitized, "new request") {
+		t.Fatalf("expected normal conversation messages to remain, got %#v", sanitized)
+	}
+}
+
+func TestSanitizeProviderTranscriptForToolProtocolPreservesAnsweredToolCalls(t *testing.T) {
+	transcript := []providers.Message{
+		{Role: providers.MessageRoleUser, Content: "calculate"},
+		{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_1", Name: "calculator"}}},
+		{Role: providers.MessageRoleTool, ToolCallID: "call_1", Content: "2"},
+		{Role: providers.MessageRoleAssistant, Content: "result is 2"},
+	}
+
+	sanitized := sanitizeProviderTranscriptForToolProtocol(transcript)
+
+	if len(sanitized) != len(transcript) {
+		t.Fatalf("expected valid tool sequence to remain, got %#v", sanitized)
+	}
+	if sanitized[1].Role != providers.MessageRoleAssistant || len(sanitized[1].ToolCalls) != 1 {
+		t.Fatalf("expected assistant tool call to remain, got %#v", sanitized[1])
+	}
+	if sanitized[2].Role != providers.MessageRoleTool || sanitized[2].ToolCallID != "call_1" {
+		t.Fatalf("expected matching tool message to remain, got %#v", sanitized[2])
 	}
 }
 

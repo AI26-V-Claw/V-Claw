@@ -1333,8 +1333,23 @@ func stringArg(args map[string]any, name string) string {
 	if args == nil {
 		return ""
 	}
-	value, _ := args[name].(string)
-	return value
+	switch value := args[name].(type) {
+	case string:
+		return value
+	case []string:
+		for _, item := range value {
+			if text := strings.TrimSpace(item); text != "" {
+				return text
+			}
+		}
+	case []any:
+		for _, item := range value {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func boolArg(args map[string]any, name string) bool {

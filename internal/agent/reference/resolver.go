@@ -69,11 +69,14 @@ func (r *HeuristicResolver) Resolve(_ context.Context, input Input) (*Resolution
 		return noReference(), nil
 	}
 
-	if containsAny(text, "lich nay", "su kien nay", "event nay", "lich vua roi", "vua tao", "cuoc hop tren", "cuoc hop o tren", "cuoc hop vua liet ke", "cuoc hop vua roi", "meeting above", "meeting vua roi") {
-		return resolveFromActionResults(input, TypeCalendarEvent, "calendar.", "calendar event"), nil
+	if hasDraftReferenceCue(text) {
+		return resolveDraftFromActionResults(input), nil
 	}
-	if containsAny(text, "email này", "email nay", "mail này", "mail nay", "email vừa rồi", "email vua roi", "mail vừa rồi", "mail vua roi", "bản nháp này", "ban nhap nay", "bản nháp đó", "ban nhap do", "bản nháp vừa rồi", "ban nhap vua roi", "draft này", "draft nay", "draft vừa rồi", "draft vua roi") {
+	if containsAny(text, "email này", "email nay", "mail này", "mail nay", "email vừa rồi", "email vua roi", "mail vừa rồi", "mail vua roi") {
 		return resolveFromActionResults(input, TypeGmailEmail, "gmail.", "gmail email"), nil
+	}
+	if containsAny(text, "lich nay", "su kien nay", "event nay", "lich vua roi", "cuoc hop tren", "cuoc hop o tren", "cuoc hop vua liet ke", "cuoc hop vua roi", "meeting above", "meeting vua roi") {
+		return resolveFromActionResults(input, TypeCalendarEvent, "calendar.", "calendar event"), nil
 	}
 	if containsAny(text, "space này", "space nay", "nhóm chat này", "nhom chat nay", "chat này", "chat nay") {
 		return resolveFromActionResults(input, TypeChatSpace, "chat.", "chat space"), nil
@@ -136,6 +139,15 @@ func (r *FallbackResolver) Resolve(ctx context.Context, input Input) (*Resolutio
 		if primaryErr == nil {
 			primaryResolution = normalizeResolution(primaryResolution)
 			if usableResolution(primaryResolution) {
+				if r.fallback != nil {
+					fallbackResolution, fallbackErr := r.fallback.Resolve(ctx, input)
+					if fallbackErr == nil {
+						fallbackResolution = normalizeResolution(fallbackResolution)
+						if shouldPreferStrongLexicalFallback(input.CurrentMessage, primaryResolution, fallbackResolution) {
+							return fallbackResolution, nil
+						}
+					}
+				}
 				return primaryResolution, nil
 			}
 		}
@@ -175,7 +187,8 @@ func BuildSystemPrompt() string {
 
   <rules>
     <rule>Chỉ resolve tham chiếu, không lập kế hoạch, không gọi tool, không xác nhận hành động đã hoàn tất.</rule>
-    <rule>Nhận diện các cụm như "lịch này", "cuộc họp trên", "cuộc họp vừa liệt kê", "email vừa rồi", "tin nhắn này", "chủ đề đó", "nội dung mình vừa nói".</rule>
+    <rule>Nhận diện các cụm như "lịch này", "cuộc họp trên", "cuộc họp vừa liệt kê", "email vừa rồi", "bản nháp vừa tạo", "draft vừa rồi", "tin nhắn này", "chủ đề đó", "nội dung mình vừa nói".</rule>
+    <rule>Nếu tin nhắn nhắc "draft" hoặc "bản nháp", reference_type phải là gmail_email, không phải calendar_event, kể cả khi có cụm "vừa tạo".</rule>
     <rule>Nếu tham chiếu trỏ rõ tới last_action_result hoặc recent_history, trả confidence cao.</rule>
     <rule>Nếu có nhiều đối tượng phù hợp hoặc thiếu ngữ cảnh, đặt needsClarification=true và hỏi một câu tiếng Việt ngắn.</rule>
     <rule>Không dùng memory để tự lấy tham số cho write/destructive action. Memory chỉ giúp hiểu user đang nói tới đối tượng nào.</rule>
@@ -289,6 +302,91 @@ func resolveFromActionResults(input Input, refType Type, toolPrefix string, labe
 	}
 }
 
+func resolveDraftFromActionResults(input Input) *Resolution {
+	matches := make([]sessions.ActionResult, 0, 2)
+	for i := len(input.Memory.LastActionResults) - 1; i >= 0; i-- {
+		result := input.Memory.LastActionResults[i]
+		if isDraftActionResult(result) && strings.TrimSpace(result.Content) != "" {
+			matches = append(matches, result)
+			if len(matches) >= 2 {
+				break
+			}
+		}
+	}
+	if len(matches) == 1 {
+		return actionResultResolution(TypeGmailEmail, matches[0])
+	}
+	if len(matches) > 1 && hasLatestDraftReferenceCue(input.CurrentMessage) {
+		return actionResultResolution(TypeGmailEmail, matches[0])
+	}
+	if len(matches) > 1 {
+		return &Resolution{
+			HasReference:          true,
+			ReferenceType:         TypeGmailEmail,
+			Source:                SourceLastActionResult,
+			Confidence:            0.45,
+			NeedsClarification:    true,
+			ClarificationQuestion: "Bạn muốn gửi bản nháp Gmail nào gần đây?",
+			Reasoning:             "Có nhiều bản nháp Gmail gần đây nên cần hỏi lại.",
+		}
+	}
+
+	historyContext := newestHistoryContaining(input.RecentHistory, "draft", "ban nhap", "gmail.createdraft")
+	if historyContext != "" {
+		return &Resolution{
+			HasReference:    true,
+			ReferenceType:   TypeGmailEmail,
+			Source:          SourceRecentHistory,
+			Confidence:      0.72,
+			ResolvedContext: map[string]any{"text": historyContext},
+			Reasoning:       "Tin nhắn nhắc bản nháp và recent_history có ngữ cảnh Gmail draft.",
+		}
+	}
+
+	return &Resolution{
+		HasReference:          true,
+		ReferenceType:         TypeGmailEmail,
+		Source:                SourceNone,
+		Confidence:            0.35,
+		NeedsClarification:    true,
+		ClarificationQuestion: "Bạn muốn gửi bản nháp Gmail nào gần đây?",
+		Reasoning:             "Tin nhắn nhắc bản nháp nhưng không tìm thấy draft gần đây.",
+	}
+}
+
+func isDraftActionResult(result sessions.ActionResult) bool {
+	toolName := strings.ToLower(strings.TrimSpace(result.ToolName))
+	content := strings.ToLower(strings.TrimSpace(result.Content))
+	return strings.Contains(toolName, "draft") ||
+		strings.Contains(content, `"draft"`) ||
+		strings.Contains(content, "draft id") ||
+		strings.Contains(foldVietnameseSearchText(content), "ban nhap")
+}
+
+func hasLatestDraftReferenceCue(text string) bool {
+	lower := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(text)))
+	if lower == "" {
+		return false
+	}
+	if !strings.Contains(lower, "draft") && !strings.Contains(lower, "ban nhap") {
+		return false
+	}
+	return containsAny(lower,
+		"nay",
+		"do",
+		"vua tao",
+		"vua roi",
+		"vua tao ra",
+		"da tao",
+		"ban tao",
+		"ban da tao",
+		"ban vua tao",
+		"o tren",
+		"gan nhat",
+		"moi nhat",
+	)
+}
+
 func resolveConversationTopic(input Input) *Resolution {
 	contextText := strings.TrimSpace(input.Memory.Summary)
 	source := SourceMemorySummary
@@ -323,8 +421,12 @@ func actionResultResolution(refType Type, result sessions.ActionResult) *Resolut
 		"content":   result.Content,
 		"createdAt": result.CreatedAt.Format(time.RFC3339),
 	}
-	if id := extractLikelyID(result.Content); id != "" {
+	if id := extractActionResultID(refType, result); id != "" {
 		context["id"] = id
+		if refType == TypeGmailEmail && strings.Contains(strings.ToLower(result.ToolName), "draft") {
+			context["draftId"] = id
+			context["actionHint"] = "If the user asks to send this existing draft, use gmail.sendDraft with draftId. Do not use MessageID or ThreadID as draftId. Do not ask for to, subject, or body again unless the user wants to edit the draft."
+		}
 	}
 	return &Resolution{
 		HasReference:    true,
@@ -376,6 +478,46 @@ func usableResolution(resolution *Resolution) bool {
 		resolution.ReferenceType != TypeNone &&
 		!resolution.NeedsClarification &&
 		resolution.Confidence >= 0.6
+}
+
+func shouldPreferStrongLexicalFallback(text string, primary *Resolution, fallback *Resolution) bool {
+	if !usableResolution(primary) || !usableResolution(fallback) {
+		return false
+	}
+	if primary.ReferenceType == fallback.ReferenceType {
+		return false
+	}
+	return hasStrongReferenceCueForType(text, fallback.ReferenceType)
+}
+
+func hasStrongReferenceCueForType(text string, refType Type) bool {
+	lower := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(text)))
+	if lower == "" {
+		return false
+	}
+	switch refType {
+	case TypeGmailEmail:
+		return containsAny(lower, "draft", "ban nhap", "email", "mail", "gmail")
+	case TypeCalendarEvent:
+		return containsAny(lower, "lich", "calendar", "su kien", "event", "cuoc hop", "meeting")
+	case TypeChatSpace, TypeChatMessage:
+		return containsAny(lower, "chat", "space", "nhom chat", "tin nhan", "message")
+	case TypeConversationTopic:
+		return containsAny(lower, "chu de", "noi dung", "note", "ghi chu", "tom tat")
+	default:
+		return false
+	}
+}
+
+func hasDraftReferenceCue(text string) bool {
+	lower := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(text)))
+	if lower == "" || !containsAny(lower, "draft", "ban nhap") {
+		return false
+	}
+	return containsAny(lower,
+		"nay", "do", "vua roi", "vua tao", "da tao", "ban tao", "ban da tao", "ban vua tao",
+		"gui", "send", "email", "mail",
+	)
 }
 
 func formatActionResults(results []sessions.ActionResult) string {
@@ -471,6 +613,80 @@ func foldVietnameseSearchText(text string) string {
 }
 
 var likelyIDPattern = regexp.MustCompile(`(?i)"?(id|eventId|messageId|threadId)"?\s*[:=]\s*"?([A-Za-z0-9_.:/-]+)"?`)
+var draftIDPattern = regexp.MustCompile(`(?i)\bdraft\s*id\b\s*[:=]\s*"?([A-Za-z0-9_.:/-]+)"?`)
+
+func extractActionResultID(refType Type, result sessions.ActionResult) string {
+	if refType == TypeGmailEmail && strings.Contains(strings.ToLower(result.ToolName), "draft") {
+		if id := extractDraftID(result.Content); id != "" {
+			return id
+		}
+	}
+	return extractLikelyID(result.Content)
+}
+
+func extractDraftID(text string) string {
+	if id := extractJSONDraftID(text); id != "" {
+		return id
+	}
+	match := draftIDPattern.FindStringSubmatch(text)
+	if len(match) >= 2 {
+		return strings.Trim(match[1], `"'`)
+	}
+	return ""
+}
+
+func extractJSONDraftID(text string) string {
+	jsonText := extractJSONObject(text)
+	if jsonText == "" || !strings.HasPrefix(strings.TrimSpace(jsonText), "{") {
+		return ""
+	}
+	var value any
+	if err := json.Unmarshal([]byte(jsonText), &value); err != nil {
+		return ""
+	}
+	return findJSONDraftID(value)
+}
+
+func findJSONDraftID(value any) string {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if draft, ok := lookupJSONField(object, "Draft"); ok {
+		if id := jsonStringField(draft, "ID", "id", "draftId", "DraftID"); id != "" {
+			return id
+		}
+	}
+	if id := jsonStringField(object, "draftId", "DraftID"); id != "" {
+		return id
+	}
+	return ""
+}
+
+func lookupJSONField(object map[string]any, name string) (any, bool) {
+	for key, value := range object {
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func jsonStringField(value any, names ...string) string {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	for _, name := range names {
+		if value, ok := lookupJSONField(object, name); ok {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text != "" && text != "<nil>" {
+				return text
+			}
+		}
+	}
+	return ""
+}
 
 func extractLikelyID(text string) string {
 	match := likelyIDPattern.FindStringSubmatch(text)
