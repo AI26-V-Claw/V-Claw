@@ -497,8 +497,11 @@ func (e *telegramProgressEditor) Update(ctx context.Context, text string) error 
 	if text == "" || text == e.lastText {
 		return nil
 	}
+	if err := e.bot.editMessageText(ctx, e.chatID, e.messageID, text); err != nil {
+		return err
+	}
 	e.lastText = text
-	return e.bot.editMessageText(ctx, e.chatID, e.messageID, text)
+	return nil
 }
 
 func (e *telegramProgressEditor) UpdateWithReplyMarkup(ctx context.Context, text string, replyMarkup any) error {
@@ -506,22 +509,15 @@ func (e *telegramProgressEditor) UpdateWithReplyMarkup(ctx context.Context, text
 	if text == "" {
 		return nil
 	}
+	if err := e.bot.editMessageTextWithReplyMarkup(ctx, e.chatID, e.messageID, text, replyMarkup); err != nil {
+		return err
+	}
 	e.lastText = text
-	return e.bot.editMessageTextWithReplyMarkup(ctx, e.chatID, e.messageID, text, replyMarkup)
+	return nil
 }
 
 func telegramProgressText(event agent.ProgressEvent) string {
 	switch event.Stage {
-	case agent.ProgressStageClassifying:
-		return "Đang phân loại yêu cầu..."
-	case agent.ProgressStageClassified:
-		return "Đã phân loại yêu cầu, đang lập kế hoạch..."
-	case agent.ProgressStagePlanning:
-		return "Đang lập kế hoạch tool cần thực hiện..."
-	case agent.ProgressStagePlanned:
-		return "Đã lập kế hoạch, đang phân tích bước tiếp theo..."
-	case agent.ProgressStageThinking:
-		return "Đang phân tích yêu cầu..."
 	case agent.ProgressStageToolStarted:
 		switch event.ToolName {
 		case "people.searchDirectory":
@@ -541,8 +537,6 @@ func telegramProgressText(event agent.ProgressEvent) string {
 		default:
 			return "Đang chạy tool " + event.ToolName + "..."
 		}
-	case agent.ProgressStageFinalizing:
-		return "Đang tổng hợp câu trả lời..."
 	default:
 		return ""
 	}

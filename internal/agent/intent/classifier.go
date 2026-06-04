@@ -153,6 +153,21 @@ func detectIntentType(input string) IntentType {
 	if isExplicitShellRequest(lower) {
 		return TypeDangerousAction
 	}
+	if hasCalendarDomain(lower) && hasWriteVerb(lower) {
+		return TypeDangerousAction
+	}
+	if hasMailDomain(lower) && containsAny(lower, "có ai gửi", "co ai gui") {
+		return TypeReadInfo
+	}
+	if hasCompositePattern(lower) {
+		return TypeComposite
+	}
+	if containsAny(lower, "tìm", "xóa") && containsAny(lower, "rồi", "và", "sau đó") {
+		return TypeComposite
+	}
+	if hasSendVerb(lower) || hasWriteVerb(lower) || (hasDangerousVerb(lower) && !containsAny(lower, "liệt kê", "liet ke", "list", "danh sách", "đang chạy", "dang chay")) {
+		return TypeDangerousAction
+	}
 
 	// ── READ_INFO patterns that look like dangerous but are actually safe ──
 	// "Có ai gửi mail cho tôi chưa?" is checking inbox, not sending.
@@ -213,14 +228,6 @@ func detectIntentType(input string) IntentType {
 		if hasReadDomain(lower) {
 			return TypeReadInfo
 		}
-	}
-
-	if hasCompositePattern(lower) {
-		return TypeComposite
-	}
-
-	if containsAny(lower, "tìm", "xóa") && containsAny(lower, "rồi", "và", "sau đó") {
-		return TypeComposite
 	}
 
 	if hasDangerousVerb(lower) || hasWriteVerb(lower) || hasSendVerb(lower) {
@@ -368,9 +375,6 @@ func extractToolCalls(input string, t IntentType) []ToolCallInfo {
 }
 
 func extractReadToolCalls(lower, original string) []ToolCallInfo {
-	if hasCalendarDomain(lower) && containsAny(lower, "xÃ³a", "xoÃ¡", "delete", "remove") {
-	}
-
 	if hasMailDomain(lower) {
 		return []ToolCallInfo{{
 			Name: "gmail.listEmails", Category: "SAFE_READ",
@@ -462,7 +466,7 @@ func hasSendVerb(lower string) bool {
 }
 
 func hasWriteVerb(lower string) bool {
-	return containsAny(lower, "tạo", "ghi", "sửa", "update", "update", "draft", "điền")
+	return containsAny(lower, "tạo", "ghi", "sửa", "update", "draft", "điền", "đặt", "lên lịch", "create", "write", "rename", "di chuyển", "move", "deploy", "restart", "khởi động", "install", "cài đặt")
 }
 
 func hasDangerousVerb(lower string) bool {
@@ -501,8 +505,14 @@ func isExplicitShellRequest(lower string) bool {
 }
 
 func routeByObjectAndVerb(lower, original string) (string, string, map[string]interface{}, bool) {
-	if hasCalendarDomain(lower) && containsAny(lower, "xÃ³a", "xoÃ¡", "delete", "remove") {
+	if hasCalendarDomain(lower) && containsAny(lower, "xóa", "xoá", "delete", "remove") {
 		return "calendar.deleteEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
+	}
+	if hasCalendarDomain(lower) && containsAny(lower, "tạo", "create", "đặt", "lên lịch") {
+		return "calendar.createEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
+	}
+	if hasCalendarDomain(lower) && containsAny(lower, "sửa", "update", "cập nhật") {
+		return "calendar.updateEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
 	}
 
 	if hasQuestionMarker(lower) && hasReadDomain(lower) {

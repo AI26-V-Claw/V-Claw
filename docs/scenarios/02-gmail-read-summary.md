@@ -20,7 +20,8 @@ sequenceDiagram
     participant Channel as Message Channel
     participant Adapter as Channel Adapter
     participant Agent as Agent Core
-    participant Safety as Safety Layer
+    participant TurnRouter as Turn Router
+    participant Policy as Tool Policy
     participant Router as Tool Router
     participant GmailTool as Gmail Tool
     participant GmailConnector as Gmail Connector
@@ -32,8 +33,12 @@ sequenceDiagram
     Channel->>Adapter: Deliver message
     Adapter->>Agent: UserMessage
 
-    Agent->>Safety: Classify intent + risk
-    Safety-->>Agent: intent=gmail.summary, risk=safe_read, decision=allow
+    Agent->>TurnRouter: Route turn for tool exposure only
+    TurnRouter-->>Agent: tool_enabled
+    Agent->>LLM: Decide whether a Gmail tool is needed
+    LLM-->>Agent: ToolCall gmail.listEmails(query=today)
+    Agent->>Policy: Check gmail.listEmails
+    Policy-->>Agent: RiskDecision(safe_read, allow)
 
     Agent->>Router: ToolCall gmail.listEmails(query=today)
     Router->>GmailTool: Execute gmail.listEmails

@@ -39,6 +39,13 @@ type stubTaskPlanner struct {
 	lastInput TaskPlanningInput
 }
 
+type stubTurnRouter struct {
+	route     TurnRoute
+	err       error
+	calls     int
+	lastInput TurnRouteInput
+}
+
 func (c *stubIntentClassifier) Classify(context.Context, string) (*agentintent.ClassificationOutput, error) {
 	c.calls++
 	return c.output, c.err
@@ -54,6 +61,26 @@ func (p *stubTaskPlanner) Plan(_ context.Context, input TaskPlanningInput) (*Tas
 	p.calls++
 	p.lastInput = input
 	return p.result, p.err
+}
+
+func (r *stubTurnRouter) RouteTurn(_ context.Context, input TurnRouteInput) (TurnRoute, error) {
+	r.calls++
+	r.lastInput = input
+	if r.err != nil {
+		return TurnRoute{}, r.err
+	}
+	if r.route.Mode == "" {
+		r.route.Mode = TurnModeToolEnabled
+	}
+	return r.route, nil
+}
+
+func testToolEnabledRouter() TurnRouter {
+	return &stubTurnRouter{route: TurnRoute{Mode: TurnModeToolEnabled, Reason: "test"}}
+}
+
+func testNoToolRouter() TurnRouter {
+	return &stubTurnRouter{route: TurnRoute{Mode: TurnModeNoTool, Reason: "test"}}
 }
 
 func (blockingRuntimeTool) Name() string                 { return "test.blocking" }
@@ -119,8 +146,9 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}}}
 	registry := tools.NewToolRegistry()
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
+		Provider:   provider,
+		Registry:   registry,
+		TurnRouter: testNoToolRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -138,9 +166,9 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}
 }
 
-func TestRuntimeReturnsClarificationFromIntentClassifierBeforeProviderChat(t *testing.T) {
+func TestRuntimeBypassesIntentClarificationForSafeChat(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
-		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "should not be called"},
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Tôi là V-Claw."},
 	}}}
 	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
 		Intent: &agentintent.Result{
@@ -155,27 +183,31 @@ func TestRuntimeReturnsClarificationFromIntentClassifierBeforeProviderChat(t *te
 		Provider:         provider,
 		Registry:         tools.NewToolRegistry(),
 		IntentClassifier: classifier,
+		TurnRouter:       testNoToolRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
 	if err != nil {
 		t.Fatalf("run runtime: %v", err)
 	}
-	if response.Status != contracts.AgentStatusNeedClarification {
-		t.Fatalf("expected need_clarification, got %#v", response)
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed, got %#v", response)
 	}
-	if response.Message != "Bạn muốn tôi tra cứu thông tin gì?" {
-		t.Fatalf("unexpected clarification message: %q", response.Message)
+	if response.Message != "Tôi là V-Claw." {
+		t.Fatalf("unexpected message: %q", response.Message)
 	}
-	if classifier.calls != 1 {
-		t.Fatalf("expected classifier to be called once, got %d", classifier.calls)
+	if classifier.calls != 0 {
+		t.Fatalf("intent classifier should be bypassed, got %d calls", classifier.calls)
 	}
-	if len(provider.calls) != 0 {
-		t.Fatalf("provider chat should not be called before clarification, got %d calls", len(provider.calls))
+	if len(provider.calls) != 1 {
+		t.Fatalf("provider chat should be called once, got %d calls", len(provider.calls))
+	}
+	if len(provider.calls[0].Tools) != 0 || provider.calls[0].ToolChoice != "none" {
+		t.Fatalf("safe chat must run no-tool, got tools=%#v choice=%q", provider.calls[0].Tools, provider.calls[0].ToolChoice)
 	}
 }
 
-func TestRuntimeAddsTaskPlanBeforeProviderChat(t *testing.T) {
+func TestRuntimeBypassesTaskPlannerBeforeProviderChat(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "done"},
 	}}}
@@ -188,6 +220,7 @@ func TestRuntimeAddsTaskPlanBeforeProviderChat(t *testing.T) {
 		Provider:    provider,
 		Registry:    tools.NewToolRegistry(),
 		TaskPlanner: planner,
+		TurnRouter:  testNoToolRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -197,30 +230,35 @@ func TestRuntimeAddsTaskPlanBeforeProviderChat(t *testing.T) {
 	if response.Status != contracts.AgentStatusCompleted {
 		t.Fatalf("expected completed, got %#v", response)
 	}
-	if planner.calls != 1 {
-		t.Fatalf("expected planner call, got %d", planner.calls)
+	if planner.calls != 0 {
+		t.Fatalf("task planner should be bypassed by default, got %d calls", planner.calls)
 	}
-	if response.Plan == nil || len(response.Plan.Steps) != 1 {
-		t.Fatalf("expected response plan, got %#v", response.Plan)
+	if response.Plan != nil {
+		t.Fatalf("default runtime should not attach legacy planner output, got %#v", response.Plan)
 	}
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected one provider call, got %d", len(provider.calls))
 	}
-	foundPlanPrompt := false
 	for _, msg := range provider.calls[0].Messages {
 		if msg.Role == providers.MessageRoleSystem && strings.Contains(msg.Content, "Task planner result") {
-			foundPlanPrompt = true
-			break
+			t.Fatalf("planner context should not be injected by default, got %#v", provider.calls[0].Messages)
 		}
-	}
-	if !foundPlanPrompt {
-		t.Fatalf("expected task planner context prompt, got %#v", provider.calls[0].Messages)
 	}
 }
 
-func TestRuntimeReturnsClarificationFromTaskPlannerBeforeProviderChat(t *testing.T) {
+func TestRuntimeReturnsClarificationFromClarifyTool(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
-		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "should not be called"},
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call_clarify",
+				Name: clarifyToolName,
+				Arguments: map[string]any{
+					"question":       "Bạn muốn gửi email cho ai?",
+					"missing_fields": []any{"recipient"},
+				},
+			}},
+		},
 	}}}
 	planner := &stubTaskPlanner{result: &TaskPlanResult{
 		NeedsClarification:   true,
@@ -230,6 +268,7 @@ func TestRuntimeReturnsClarificationFromTaskPlannerBeforeProviderChat(t *testing
 		Provider:    provider,
 		Registry:    tools.NewToolRegistry(),
 		TaskPlanner: planner,
+		TurnRouter:  testToolEnabledRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -242,12 +281,15 @@ func TestRuntimeReturnsClarificationFromTaskPlannerBeforeProviderChat(t *testing
 	if response.Message != "Bạn muốn gửi email cho ai?" {
 		t.Fatalf("unexpected clarification message: %q", response.Message)
 	}
-	if len(provider.calls) != 0 {
-		t.Fatalf("provider chat should not be called before planning clarification, got %d calls", len(provider.calls))
+	if planner.calls != 0 {
+		t.Fatalf("planner should be bypassed; clarify must come from clarify tool, got %d planner calls", planner.calls)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("expected one provider call, got %d calls", len(provider.calls))
 	}
 }
 
-func TestRuntimePassesRecentSessionHistoryToClassifierAndPlanner(t *testing.T) {
+func TestRuntimePassesRecentSessionHistoryToTurnRouter(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "ok"},
 	}}}
@@ -258,6 +300,7 @@ func TestRuntimePassesRecentSessionHistoryToClassifierAndPlanner(t *testing.T) {
 		},
 	}}
 	planner := &stubTaskPlanner{result: &TaskPlanResult{}}
+	router := &stubTurnRouter{route: TurnRoute{Mode: TurnModeToolEnabled, Reason: "test"}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -278,6 +321,7 @@ func TestRuntimePassesRecentSessionHistoryToClassifierAndPlanner(t *testing.T) {
 		IntentClassifier: classifier,
 		TaskPlanner:      planner,
 		SessionStore:     store,
+		TurnRouter:       router,
 	})
 	message := runtimeTestMessage()
 	message.Text = "11am"
@@ -289,34 +333,32 @@ func TestRuntimePassesRecentSessionHistoryToClassifierAndPlanner(t *testing.T) {
 	if response.Status != contracts.AgentStatusCompleted {
 		t.Fatalf("expected completed, got %#v", response)
 	}
-	if classifier.historyCalls != 1 {
-		t.Fatalf("expected memory-aware classifier call, got %d", classifier.historyCalls)
+	if classifier.historyCalls != 0 || planner.calls != 0 {
+		t.Fatalf("classifier/planner should be bypassed, classifier=%d planner=%d", classifier.historyCalls, planner.calls)
 	}
-	joinedHistory := strings.Join(classifier.lastHistory, "\n")
+	joinedHistory := strings.Join(router.lastInput.RecentHistory, "\n")
 	if !strings.Contains(joinedHistory, "10am") || !strings.Contains(joinedHistory, "meeting end") {
-		t.Fatalf("expected prior request and clarification in classifier history, got %#v", classifier.lastHistory)
-	}
-	plannerHistory := strings.Join(planner.lastInput.RecentHistory, "\n")
-	if !strings.Contains(plannerHistory, "10am") || !strings.Contains(plannerHistory, "meeting end") {
-		t.Fatalf("expected prior request and clarification in planner history, got %#v", planner.lastInput.RecentHistory)
+		t.Fatalf("expected prior request and clarification in router history, got %#v", router.lastInput.RecentHistory)
 	}
 }
 
 func TestRuntimeStoresClarificationInSessionTranscript(t *testing.T) {
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.3,
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_clarify",
+				Name:      clarifyToolName,
+				Arguments: map[string]any{"question": "Please clarify the request."},
+			}},
 		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Please clarify the request.",
-	}}
+	}}}
 	store := sessions.NewInMemoryStore()
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         &fakeProvider{},
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
+		TurnRouter:   testToolEnabledRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -330,11 +372,14 @@ func TestRuntimeStoresClarificationInSessionTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load transcript: %v", err)
 	}
-	if len(transcript) != 2 {
-		t.Fatalf("expected user and assistant clarification in transcript, got %#v", transcript)
+	if len(transcript) != 3 {
+		t.Fatalf("expected user, assistant clarify call, and tool observation in transcript, got %#v", transcript)
 	}
-	if transcript[1].Role != providers.MessageRoleAssistant || transcript[1].Content != "Please clarify the request." {
-		t.Fatalf("expected assistant clarification stored, got %#v", transcript[1])
+	if transcript[1].Role != providers.MessageRoleAssistant || len(transcript[1].ToolCalls) != 1 {
+		t.Fatalf("expected assistant clarify tool call stored, got %#v", transcript[1])
+	}
+	if transcript[2].Role != providers.MessageRoleTool || !strings.Contains(transcript[2].Content, "Please clarify the request.") {
+		t.Fatalf("expected clarify tool observation stored, got %#v", transcript[2])
 	}
 }
 
@@ -482,6 +527,7 @@ func TestRuntimeExecutesReadOnlyToolAndContinuesToFinalAnswer(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
+		TurnRouter:   testToolEnabledRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -498,14 +544,17 @@ func TestRuntimeExecutesReadOnlyToolAndContinuesToFinalAnswer(t *testing.T) {
 		t.Fatalf("expected 2 provider calls, got %d", len(provider.calls))
 	}
 	secondMessages := provider.calls[1].Messages
-	if len(secondMessages) != 4 {
-		t.Fatalf("expected system, user, assistant tool call, tool result; got %#v", secondMessages)
+	if len(secondMessages) != 5 {
+		t.Fatalf("expected system, router context, user, assistant tool call, tool result; got %#v", secondMessages)
 	}
 	if secondMessages[0].Role != providers.MessageRoleSystem {
 		t.Fatalf("expected system prompt first, got %#v", secondMessages[0])
 	}
-	if secondMessages[3].Role != providers.MessageRoleTool || secondMessages[3].ToolCallID != "call_time" {
-		t.Fatalf("unexpected tool observation message: %#v", secondMessages[3])
+	if secondMessages[1].Role != providers.MessageRoleSystem || !strings.Contains(secondMessages[1].Content, "not an intent label") {
+		t.Fatalf("expected router context prompt second, got %#v", secondMessages[1])
+	}
+	if secondMessages[4].Role != providers.MessageRoleTool || secondMessages[4].ToolCallID != "call_time" {
+		t.Fatalf("unexpected tool observation message: %#v", secondMessages[4])
 	}
 }
 
@@ -524,7 +573,7 @@ func TestRuntimeEmitsProgressForToolExecution(t *testing.T) {
 	if err := registry.Register(tools.NewCurrentTimeToolWithClock(fixedTestTime)); err != nil {
 		t.Fatalf("register current time: %v", err)
 	}
-	runtime := NewRuntime(RuntimeConfig{Provider: provider, Registry: registry})
+	runtime := NewRuntime(RuntimeConfig{Provider: provider, Registry: registry, TurnRouter: testToolEnabledRouter()})
 
 	events := []ProgressEvent{}
 	ctx := WithProgressSink(context.Background(), func(_ context.Context, event ProgressEvent) {
@@ -572,9 +621,10 @@ func TestRuntimeReturnsApprovalRequiredForSideEffectTool(t *testing.T) {
 		t.Fatalf("register dangerous tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider:   provider,
+		Registry:   registry,
+		TurnRouter: testToolEnabledRouter(),
+		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -612,9 +662,10 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 		t.Fatalf("register dangerous tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider:   provider,
+		Registry:   registry,
+		TurnRouter: testToolEnabledRouter(),
+		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -662,9 +713,10 @@ func TestRuntimeRejectsPendingApprovalWithoutExecutingTool(t *testing.T) {
 		t.Fatalf("register dangerous tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider:   provider,
+		Registry:   registry,
+		TurnRouter: testToolEnabledRouter(),
+		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -702,9 +754,10 @@ func TestRuntimeRevisionCommentReturnsClarificationWithoutExecutingTool(t *testi
 		t.Fatalf("register dangerous tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider:   provider,
+		Registry:   registry,
+		TurnRouter: testToolEnabledRouter(),
+		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -754,6 +807,7 @@ func TestRuntimeStoresToolObservationForApprovalRequiredTool(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
+		TurnRouter:   testToolEnabledRouter(),
 		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
@@ -800,6 +854,7 @@ func TestRuntimeStoresSkippedObservationsForRemainingToolCalls(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
+		TurnRouter:   testToolEnabledRouter(),
 		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
@@ -826,8 +881,9 @@ func TestRuntimeStoresSkippedObservationsForRemainingToolCalls(t *testing.T) {
 func TestRuntimeProviderErrorReturnsFailedErrorShape(t *testing.T) {
 	provider := &fakeProvider{err: fmt.Errorf("network down")}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: tools.NewToolRegistry(),
+		Provider:   provider,
+		Registry:   tools.NewToolRegistry(),
+		TurnRouter: testToolEnabledRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -845,8 +901,9 @@ func TestRuntimeProviderErrorReturnsFailedErrorShape(t *testing.T) {
 func TestRuntimeRetryableProviderErrorReturnsUnavailableShape(t *testing.T) {
 	provider := &fakeProvider{err: providers.NewRetryableError(fmt.Errorf("connection reset"))}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: tools.NewToolRegistry(),
+		Provider:   provider,
+		Registry:   tools.NewToolRegistry(),
+		TurnRouter: testToolEnabledRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -877,8 +934,9 @@ func TestRuntimeToolErrorReturnsFailedErrorShape(t *testing.T) {
 		t.Fatalf("register calculator: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
+		Provider:   provider,
+		Registry:   registry,
+		TurnRouter: testToolEnabledRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -907,6 +965,7 @@ func TestRuntimeToolTimeoutReturnsFailedErrorShape(t *testing.T) {
 	runtime := NewRuntime(RuntimeConfig{
 		Provider:    provider,
 		Registry:    registry,
+		TurnRouter:  testToolEnabledRouter(),
 		ToolTimeout: time.Millisecond,
 	})
 
@@ -934,6 +993,7 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 	runtime := NewRuntime(RuntimeConfig{
 		Provider:      provider,
 		Registry:      registry,
+		TurnRouter:    testToolEnabledRouter(),
 		MaxIterations: 2,
 	})
 

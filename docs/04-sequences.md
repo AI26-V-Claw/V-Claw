@@ -35,7 +35,7 @@ Không tạo sequence diagram riêng cho mọi connector, mọi use case, hoặc
 Khi review implementation, dùng mỗi scenario như checklist:
 
 1. Input từ channel có được chuẩn hóa đúng contract không?
-2. Agent có phân loại intent và hỏi lại khi thiếu thông tin không?
+2. Agent có định tuyến đúng `no_tool` / `tool_enabled` và chỉ hỏi lại khi thiếu thông tin bắt buộc không?
 3. Tool name, risk level, error code có khớp `03-contracts.md` không?
 4. Side-effect action có dừng trước `ApprovalRequest` không?
 5. Tool có chỉ execute sau `ApprovalDecision=approved` không?
