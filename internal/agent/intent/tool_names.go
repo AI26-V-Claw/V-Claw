@@ -6,10 +6,27 @@ import "strings"
 // Contract tool names use <domain>.<action> as defined in docs/03-contracts.md.
 var toolNameAliases = map[string]string{
 	// Gmail tools
-	"list_emails":  "gmail.listEmails",
-	"get_email":    "gmail.getEmail",
-	"send_email":   "gmail.createDraft",
-	"search_email": "gmail.listEmails",
+	"list_emails":           "gmail.listEmails",
+	"get_email":             "gmail.getEmail",
+	"send_email":            "gmail.createDraft",
+	"search_email":          "gmail.listEmails",
+	"list_labels":           "gmail.listLabels",
+	"get_profile":           "gmail.getProfile",
+	"list_threads":          "gmail.listThreads",
+	"get_thread":            "gmail.getThread",
+	"list_drafts":           "gmail.listDrafts",
+	"get_draft":             "gmail.getDraft",
+	"create_draft":          "gmail.createDraft",
+	"update_draft":          "gmail.updateDraft",
+	"send_draft":            "gmail.sendDraft",
+	"delete_draft":          "gmail.deleteDraft",
+	"reply_draft":           "gmail.replyDraft",
+	"forward_draft":         "gmail.forwardDraft",
+	"download_attachments":  "gmail.downloadAttachments",
+	"modify_message":        "gmail.modifyMessage",
+	"batch_modify_messages": "gmail.batchModifyMessages",
+	"trash_message":         "gmail.trashMessage",
+	"untrash_message":       "gmail.untrashMessage",
 
 	// Calendar tools
 	"get_calendar":   "calendar.listEvents",
@@ -20,8 +37,25 @@ var toolNameAliases = map[string]string{
 	"check_calendar": "calendar.listEvents",
 
 	// Chat tools
-	"list_messages": "chat.listMessages",
-	"send_message":  "chat.sendMessage",
+	"list_spaces":            "chat.listSpaces",
+	"list_members":           "chat.listMembers",
+	"find_spaces_by_members": "chat.findSpacesByMembers",
+	"list_messages":          "chat.listMessages",
+	"send_message":           "chat.sendMessage",
+	"update_message":         "chat.updateMessage",
+	"delete_message":         "chat.deleteMessage",
+	"create_space":           "chat.createSpace",
+	"add_member":             "chat.addMember",
+	"remove_member":          "chat.removeMember",
+
+	// People tools
+	"search_directory": "people.searchDirectory",
+
+	// Web tools
+	"web_search": "web.search",
+	"web_fetch":  "web.fetch",
+	"search_web": "web.search",
+	"fetch_url":  "web.fetch",
 
 	// Local/system operations must cross the sandbox contract boundary.
 	"exec":                 "sandbox.runShell",

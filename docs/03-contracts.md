@@ -468,10 +468,18 @@ Rules:
 | `chat.findSpacesByMembers` | Integration | `safe_read` | No |
 | `chat.listMessages` | Integration | `safe_read` | No |
 | `chat.sendMessage` | Integration | `external_write` | Yes |
+| `chat.updateMessage` | Integration | `external_write` | Yes |
+| `chat.deleteMessage` | Integration | `destructive` | Yes |
+| `chat.createSpace` | Integration | `external_write` | Yes |
+| `chat.addMember` | Integration | `external_write` | Yes |
+| `chat.removeMember` | Integration | `destructive` | Yes |
 
 > `chat.sendMessage` bao gồm cả gửi tin nhắn mới và trả lời trong một thread/message cụ thể.  
 > Nếu là reply, input có thể kèm `threadId` hoặc `replyToMessageId`. Không tách `chat.replyMessage` nếu chưa có nhu cầu riêng.
 > `chat.findSpacesByMembers` chỉ đọc danh sách spaces/members để tìm space chứa các `users/...` đã resolve từ People API trước khi gọi `chat.listMessages`.
+
+> `chat.sendMessage` can include `attachments` as local file paths; the Chat tool uploads files only after approval is granted.
+> `chat.updateMessage`, `chat.deleteMessage`, `chat.createSpace`, `chat.addMember`, and `chat.removeMember` are side-effect tools and must pass approval before execution. `chat.createSpace` and `chat.addMember` only invite emails from configured Workspace domains.
 
 ### People
 

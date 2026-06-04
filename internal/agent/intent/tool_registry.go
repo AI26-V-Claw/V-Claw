@@ -56,6 +56,18 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "id", Type: "string", Required: false, Description: "Email ID"}},
 	},
+	"gmail.listLabels": {
+		Name: "gmail.listLabels", Category: CategorySafeRead,
+		Description: "List Gmail labels",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{},
+	},
+	"gmail.getProfile": {
+		Name: "gmail.getProfile", Category: CategorySafeRead,
+		Description: "Read the Gmail account profile",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{},
+	},
 	"gmail.listThreads": {
 		Name: "gmail.listThreads", Category: CategorySafeRead,
 		Description: "List Gmail threads",
@@ -67,6 +79,18 @@ var Registry = map[string]ToolDefinition{
 		Description: "Get a Gmail thread",
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "id", Type: "string", Required: false, Description: "Gmail thread ID"}},
+	},
+	"gmail.listDrafts": {
+		Name: "gmail.listDrafts", Category: CategorySafeRead,
+		Description: "List Gmail drafts",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "maxResults", Type: "int", Required: false, Description: "Maximum drafts to list"}},
+	},
+	"gmail.getDraft": {
+		Name: "gmail.getDraft", Category: CategorySafeRead,
+		Description: "Read a Gmail draft",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "draftId", Type: "string", Required: true, Description: "Draft ID"}},
 	},
 	"calendar.listEvents": {
 		Name: "calendar.listEvents", Category: CategorySafeRead,
@@ -103,6 +127,18 @@ var Registry = map[string]ToolDefinition{
 		Description: "Search Google Workspace directory profiles",
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "query", Type: "string", Required: true, Description: "Name or email to search"}},
+	},
+	"web.search": {
+		Name: "web.search", Category: CategorySafeRead,
+		Description: "Search the public web through the configured web provider",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "query", Type: "string", Required: true, Description: "Public web search query"}},
+	},
+	"web.fetch": {
+		Name: "web.fetch", Category: CategorySafeRead,
+		Description: "Fetch readable content from a public HTTP or HTTPS URL",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "url", Type: "string", Required: true, Description: "Public URL to fetch"}},
 	},
 	"calendar.createEvent": {
 		Name: "calendar.createEvent", Category: CategoryDangerousWrite,
@@ -152,6 +188,13 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Draft ID"}},
 	},
+	"gmail.deleteDraft": {
+		Name: "gmail.deleteDraft", Category: CategoryDangerousWrite,
+		Description:      "Delete an existing Gmail draft",
+		DefaultRiskLevel: contracts.RiskLevelDestructive,
+		Dangerous:        true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "draftId", Type: "string", Required: true, Description: "Draft ID"}},
+	},
 	"gmail.replyDraft": {
 		Name: "gmail.replyDraft", Category: CategoryCommunication,
 		Description: "Create a Gmail reply draft",
@@ -177,11 +220,62 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Message ID"}, {Name: "action", Type: "string", Required: true, Description: "markRead, markUnread, archive, star, unstar, addLabels, removeLabels"}},
 	},
+	"gmail.batchModifyMessages": {
+		Name: "gmail.batchModifyMessages", Category: CategoryDangerousWrite,
+		Description: "Modify Gmail labels or state for multiple messages",
+		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "messageIds", Type: "string", Required: true, Description: "Message IDs"}, {Name: "action", Type: "string", Required: true, Description: "markRead, markUnread, archive, star, unstar, addLabels, removeLabels"}},
+	},
+	"gmail.trashMessage": {
+		Name: "gmail.trashMessage", Category: CategoryDangerousWrite,
+		Description:      "Move a Gmail message to trash",
+		DefaultRiskLevel: contracts.RiskLevelDestructive,
+		Dangerous:        true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "messageId", Type: "string", Required: true, Description: "Message ID"}},
+	},
+	"gmail.untrashMessage": {
+		Name: "gmail.untrashMessage", Category: CategoryDangerousWrite,
+		Description: "Restore a Gmail message from trash",
+		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "messageId", Type: "string", Required: true, Description: "Message ID"}},
+	},
 	"chat.sendMessage": {
 		Name: "chat.sendMessage", Category: CategoryCommunication,
 		Description: "Send a chat message",
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "recipient", Type: "string", Required: true, Description: "Recipient user or space"}, {Name: "message", Type: "string", Required: true, Description: "Message content"}},
+	},
+	"chat.updateMessage": {
+		Name: "chat.updateMessage", Category: CategoryCommunication,
+		Description: "Update a Google Chat message",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "name", Type: "string", Required: true, Description: "Message resource name"}, {Name: "text", Type: "string", Required: true, Description: "Updated message text"}},
+	},
+	"chat.deleteMessage": {
+		Name: "chat.deleteMessage", Category: CategoryDangerousWrite,
+		Description:      "Delete a Google Chat message",
+		DefaultRiskLevel: contracts.RiskLevelDestructive,
+		Dangerous:        true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "name", Type: "string", Required: true, Description: "Message resource name"}},
+	},
+	"chat.createSpace": {
+		Name: "chat.createSpace", Category: CategoryCommunication,
+		Description: "Create or set up a Google Chat space",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "spaceType", Type: "string", Required: false, Description: "SPACE, GROUP_CHAT, or DIRECT_MESSAGE"}, {Name: "memberUsers", Type: "string", Required: false, Description: "Workspace member emails"}},
+	},
+	"chat.addMember": {
+		Name: "chat.addMember", Category: CategoryCommunication,
+		Description: "Add a member to a Google Chat space",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "space", Type: "string", Required: true, Description: "Chat space resource name"}, {Name: "user", Type: "email", Required: true, Description: "Workspace user email"}},
+	},
+	"chat.removeMember": {
+		Name: "chat.removeMember", Category: CategoryDangerousWrite,
+		Description:      "Remove a member from a Google Chat space",
+		DefaultRiskLevel: contracts.RiskLevelDestructive,
+		Dangerous:        true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "name", Type: "string", Required: true, Description: "Membership resource name"}},
 	},
 }
 
@@ -227,7 +321,7 @@ func riskLevelForCategory(category ToolCategory, name string) contracts.RiskLeve
 	case CategoryExecution:
 		return contracts.RiskLevelCodeExecution
 	case CategoryDangerousWrite, CategoryCommunication:
-		if name == "calendar.deleteEvent" {
+		if name == "calendar.deleteEvent" || name == "gmail.deleteDraft" || name == "gmail.trashMessage" || name == "chat.deleteMessage" || name == "chat.removeMember" {
 			return contracts.RiskLevelDestructive
 		}
 		return contracts.RiskLevelExternalWrite

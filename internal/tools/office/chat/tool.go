@@ -3,7 +3,11 @@ package chat
 import (
 	"context"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	chatconnector "vclaw/internal/connectors/google/chat"
@@ -18,11 +22,18 @@ const (
 	ToolNameFindSpacesByMembers = "chat.findSpacesByMembers"
 	ToolNameListMessages        = "chat.listMessages"
 	ToolNameSendMessage         = "chat.sendMessage"
+	ToolNameUpdateMessage       = "chat.updateMessage"
+	ToolNameDeleteMessage       = "chat.deleteMessage"
+	ToolNameCreateSpace         = "chat.createSpace"
+	ToolNameAddMember           = "chat.addMember"
+	ToolNameRemoveMember        = "chat.removeMember"
 )
 
 const (
 	defaultMaxResults = int64(10)
 	maxAllowedResults = int64(50)
+	maxAttachments    = 5
+	maxAttachmentRaw  = int64(20 * 1024 * 1024)
 )
 
 type ToolRegistryEntry struct {
@@ -65,8 +76,43 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameSendMessage,
 		Owner:            "integration",
-		Description:      "Send a Google Chat message, including a new message or thread reply.",
+		Description:      "Send a Google Chat message, including a new message, thread reply, and optional file attachments.",
 		DefaultRiskLevel: "external_write",
+		RequiresApproval: true,
+	},
+	{
+		Name:             ToolNameUpdateMessage,
+		Owner:            "integration",
+		Description:      "Update the text of a Google Chat message.",
+		DefaultRiskLevel: "external_write",
+		RequiresApproval: true,
+	},
+	{
+		Name:             ToolNameDeleteMessage,
+		Owner:            "integration",
+		Description:      "Delete a Google Chat message.",
+		DefaultRiskLevel: "destructive",
+		RequiresApproval: true,
+	},
+	{
+		Name:             ToolNameCreateSpace,
+		Owner:            "integration",
+		Description:      "Create or set up a Google Chat space, group chat, or direct message.",
+		DefaultRiskLevel: "external_write",
+		RequiresApproval: true,
+	},
+	{
+		Name:             ToolNameAddMember,
+		Owner:            "integration",
+		Description:      "Add a member to a Google Chat space.",
+		DefaultRiskLevel: "external_write",
+		RequiresApproval: true,
+	},
+	{
+		Name:             ToolNameRemoveMember,
+		Owner:            "integration",
+		Description:      "Remove a member from a Google Chat space.",
+		DefaultRiskLevel: "destructive",
 		RequiresApproval: true,
 	},
 }
@@ -82,14 +128,28 @@ type Connector interface {
 	ListMembers(ctx context.Context, parent string, pageSize int64, pageToken string) (chatconnector.ListMembersOutput, error)
 	ListMessages(ctx context.Context, parent string, pageSize int64, pageToken string, showDeleted bool) (chatconnector.ListMessagesOutput, error)
 	CreateTextMessage(ctx context.Context, parent string, text string, options chatconnector.MessageCreateOptions) (chatconnector.Message, error)
+	UpdateTextMessage(ctx context.Context, name string, text string) (chatconnector.Message, error)
+	DeleteMessage(ctx context.Context, name string, force bool) error
+	CreateSpace(ctx context.Context, input chatconnector.CreateSpaceInput) (chatconnector.Space, error)
+	AddMember(ctx context.Context, parent string, user string) (chatconnector.Membership, error)
+	RemoveMember(ctx context.Context, name string) error
+	UploadAttachment(ctx context.Context, parent string, filename string, mediaType string, reader io.Reader) (string, error)
 }
 
 type Service struct {
-	connector Connector
+	connector        Connector
+	workspaceDomains []string
 }
 
 func NewService(connector Connector) *Service {
-	return &Service{connector: connector}
+	return &Service{
+		connector:        connector,
+		workspaceDomains: splitCSV(os.Getenv("VCLAW_GOOGLE_WORKSPACE_DOMAINS")),
+	}
+}
+
+func NewServiceWithWorkspaceDomains(connector Connector, domains []string) *Service {
+	return &Service{connector: connector, workspaceDomains: cleanStrings(domains)}
 }
 
 type ListMessagesInput struct {
@@ -150,6 +210,7 @@ type SendMessageInput struct {
 	MessageReplyOption string
 	MessageID          string
 	RequestID          string
+	Attachments        []string
 	CardTitle          string
 	CardSubtitle       string
 	CardText           string
@@ -157,6 +218,52 @@ type SendMessageInput struct {
 
 type SendMessageOutput struct {
 	Message chatconnector.Message
+}
+
+type UpdateMessageInput struct {
+	Name string
+	Text string
+}
+
+type UpdateMessageOutput struct {
+	Message chatconnector.Message
+}
+
+type DeleteMessageInput struct {
+	Name  string
+	Force bool
+}
+
+type DeleteMessageOutput struct {
+	Name string
+}
+
+type CreateSpaceInput struct {
+	DisplayName string
+	SpaceType   string
+	MemberUsers []string
+	RequestID   string
+}
+
+type CreateSpaceOutput struct {
+	Space chatconnector.Space
+}
+
+type AddMemberInput struct {
+	Space string
+	User  string
+}
+
+type AddMemberOutput struct {
+	Membership chatconnector.Membership
+}
+
+type RemoveMemberInput struct {
+	Name string
+}
+
+type RemoveMemberOutput struct {
+	Name string
 }
 
 func (s *Service) ListSpaces(ctx context.Context, input ListSpacesInput) (ListSpacesOutput, *ErrorShape) {
@@ -283,8 +390,8 @@ func (s *Service) SendMessage(ctx context.Context, input SendMessageInput) (Send
 	if strings.TrimSpace(input.CardTitle) != "" || strings.TrimSpace(input.CardText) != "" || strings.TrimSpace(input.CardSubtitle) != "" {
 		return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "Google Chat card messages are not supported by the current user OAuth flow; send a text message instead"}
 	}
-	if strings.TrimSpace(input.Text) == "" {
-		return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "text is required"}
+	if strings.TrimSpace(input.Text) == "" && len(cleanStrings(input.Attachments)) == 0 {
+		return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "text or attachments is required"}
 	}
 
 	options := chatconnector.MessageCreateOptions{
@@ -294,12 +401,157 @@ func (s *Service) SendMessage(ctx context.Context, input SendMessageInput) (Send
 		MessageID:          input.MessageID,
 		RequestID:          input.RequestID,
 	}
+	uploadRefs, errShape := s.uploadAttachments(ctx, space, input.Attachments)
+	if errShape != nil {
+		return SendMessageOutput{}, errShape
+	}
+	options.AttachmentUploadRefs = uploadRefs
 
 	message, err := s.connector.CreateTextMessage(ctx, space, input.Text, options)
 	if err != nil {
 		return SendMessageOutput{}, MapError(err)
 	}
 	return SendMessageOutput{Message: message}, nil
+}
+
+func (s *Service) UpdateMessage(ctx context.Context, input UpdateMessageInput) (UpdateMessageOutput, *ErrorShape) {
+	if s == nil || s.connector == nil {
+		return UpdateMessageOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "chat connector is not configured"}
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return UpdateMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "name is required"}
+	}
+	if strings.TrimSpace(input.Text) == "" {
+		return UpdateMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "text is required"}
+	}
+	message, err := s.connector.UpdateTextMessage(ctx, input.Name, input.Text)
+	if err != nil {
+		return UpdateMessageOutput{}, MapError(err)
+	}
+	return UpdateMessageOutput{Message: message}, nil
+}
+
+func (s *Service) DeleteMessage(ctx context.Context, input DeleteMessageInput) (DeleteMessageOutput, *ErrorShape) {
+	if s == nil || s.connector == nil {
+		return DeleteMessageOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "chat connector is not configured"}
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return DeleteMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "name is required"}
+	}
+	if err := s.connector.DeleteMessage(ctx, input.Name, input.Force); err != nil {
+		return DeleteMessageOutput{}, MapError(err)
+	}
+	return DeleteMessageOutput{Name: input.Name}, nil
+}
+
+func (s *Service) CreateSpace(ctx context.Context, input CreateSpaceInput) (CreateSpaceOutput, *ErrorShape) {
+	if s == nil || s.connector == nil {
+		return CreateSpaceOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "chat connector is not configured"}
+	}
+	spaceType := strings.ToUpper(strings.TrimSpace(input.SpaceType))
+	if spaceType == "" {
+		spaceType = "SPACE"
+	}
+	if spaceType != "SPACE" && spaceType != "GROUP_CHAT" && spaceType != "DIRECT_MESSAGE" {
+		return CreateSpaceOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "spaceType must be SPACE, GROUP_CHAT, or DIRECT_MESSAGE"}
+	}
+	memberUsers := cleanStrings(input.MemberUsers)
+	if errShape := validateCreateSpaceMembers(spaceType, memberUsers); errShape != nil {
+		return CreateSpaceOutput{}, errShape
+	}
+	if errShape := s.validateWorkspaceMemberEmails(memberUsers); errShape != nil {
+		return CreateSpaceOutput{}, errShape
+	}
+
+	space, err := s.connector.CreateSpace(ctx, chatconnector.CreateSpaceInput{
+		DisplayName: strings.TrimSpace(input.DisplayName),
+		SpaceType:   spaceType,
+		MemberUsers: memberUsers,
+		RequestID:   strings.TrimSpace(input.RequestID),
+	})
+	if err != nil {
+		return CreateSpaceOutput{}, MapError(err)
+	}
+	return CreateSpaceOutput{Space: space}, nil
+}
+
+func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (AddMemberOutput, *ErrorShape) {
+	if s == nil || s.connector == nil {
+		return AddMemberOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "chat connector is not configured"}
+	}
+	space := normalizeSpaceName(input.Space)
+	if space == "" {
+		return AddMemberOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "space must contain a resource name like spaces/AAAA"}
+	}
+	user := strings.TrimSpace(input.User)
+	if user == "" {
+		return AddMemberOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "user is required"}
+	}
+	if errShape := s.validateWorkspaceMemberEmails([]string{user}); errShape != nil {
+		return AddMemberOutput{}, errShape
+	}
+	membership, err := s.connector.AddMember(ctx, space, user)
+	if err != nil {
+		return AddMemberOutput{}, MapError(err)
+	}
+	return AddMemberOutput{Membership: membership}, nil
+}
+
+func (s *Service) RemoveMember(ctx context.Context, input RemoveMemberInput) (RemoveMemberOutput, *ErrorShape) {
+	if s == nil || s.connector == nil {
+		return RemoveMemberOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "chat connector is not configured"}
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return RemoveMemberOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "name is required"}
+	}
+	if err := s.connector.RemoveMember(ctx, input.Name); err != nil {
+		return RemoveMemberOutput{}, MapError(err)
+	}
+	return RemoveMemberOutput{Name: input.Name}, nil
+}
+
+func (s *Service) uploadAttachments(ctx context.Context, space string, paths []string) ([]string, *ErrorShape) {
+	cleaned := cleanStrings(paths)
+	if len(cleaned) == 0 {
+		return nil, nil
+	}
+	if len(cleaned) > maxAttachments {
+		return nil, &ErrorShape{Code: "INVALID_INPUT", Message: fmt.Sprintf("attachments must contain at most %d files", maxAttachments)}
+	}
+	totalSize := int64(0)
+	refs := make([]string, 0, len(cleaned))
+	for _, path := range cleaned {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, &ErrorShape{Code: "INVALID_INPUT", Message: "attachment not found: " + path}
+		}
+		if info.IsDir() {
+			return nil, &ErrorShape{Code: "INVALID_INPUT", Message: "attachment must be a file: " + path}
+		}
+		totalSize += info.Size()
+		if totalSize > maxAttachmentRaw {
+			return nil, &ErrorShape{Code: "INVALID_INPUT", Message: fmt.Sprintf("total attachment size must be at most %d bytes", maxAttachmentRaw)}
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, &ErrorShape{Code: "FILE_ACCESS_DENIED", Message: "read attachment: " + err.Error()}
+		}
+		filename := safeAttachmentFilename(path)
+		mediaType := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
+		if strings.TrimSpace(mediaType) == "" {
+			mediaType = "application/octet-stream"
+		}
+		token, uploadErr := s.connector.UploadAttachment(ctx, space, filename, mediaType, file)
+		closeErr := file.Close()
+		if uploadErr != nil {
+			return nil, MapError(uploadErr)
+		}
+		if closeErr != nil {
+			return nil, &ErrorShape{Code: "INTERNAL_ERROR", Message: "close attachment: " + closeErr.Error()}
+		}
+		refs = append(refs, token)
+	}
+	return refs, nil
 }
 
 func normalizeMaxResults(value int64) (int64, *ErrorShape) {
@@ -328,7 +580,7 @@ func (ListSpacesTool) Name() string {
 }
 
 func (ListSpacesTool) Description() string {
-	return "List Google Chat spaces available to the authenticated user. Use this before chat.listMembers when the user names people instead of a space id."
+	return "List Google Chat spaces available to the authenticated user. Use this to resolve a user-provided group/space display name, for example VClaw, before calling chat.sendMessage, chat.listMessages, or chat.listMembers with a spaces/... resource."
 }
 
 func (ListSpacesTool) Parameters() tools.ToolSchema {
@@ -588,7 +840,7 @@ func (SendMessageTool) Name() string {
 }
 
 func (SendMessageTool) Description() string {
-	return "Send a Google Chat text message. This external write requires approval."
+	return "Send a Google Chat text message or attachment. The space input must be a spaces/... resource name; if the user names a person, group, or display name such as VClaw, first resolve it with chat.listSpaces or people.searchDirectory plus chat.findSpacesByMembers before calling this tool. This external write requires approval."
 }
 
 func (SendMessageTool) Parameters() tools.ToolSchema {
@@ -602,8 +854,9 @@ func (SendMessageTool) Parameters() tools.ToolSchema {
 			"messageReplyOption": map[string]any{"type": "string"},
 			"messageId":          map[string]any{"type": "string"},
 			"requestId":          map[string]any{"type": "string"},
+			"attachments":        arrayStringSchema(),
 		},
-		"required":             []string{"space", "text"},
+		"required":             []string{"space"},
 		"additionalProperties": false,
 	}
 }
@@ -625,6 +878,7 @@ func (t SendMessageTool) Execute(ctx context.Context, call tools.ToolCall) tools
 		MessageReplyOption: stringArg(call.Arguments, "messageReplyOption"),
 		MessageID:          stringArg(call.Arguments, "messageId"),
 		RequestID:          stringArg(call.Arguments, "requestId"),
+		Attachments:        stringSliceArg(call.Arguments, "attachments"),
 		CardTitle:          stringArg(call.Arguments, "cardTitle"),
 		CardSubtitle:       stringArg(call.Arguments, "cardSubtitle"),
 		CardText:           stringArg(call.Arguments, "cardText"),
@@ -634,13 +888,229 @@ func (t SendMessageTool) Execute(ctx context.Context, call tools.ToolCall) tools
 	}
 
 	content := "Sent Google Chat message: " + output.Message.Name
+	userContent := "Đã gửi tin nhắn Google Chat."
+	if len(stringSliceArg(call.Arguments, "attachments")) > 0 {
+		userContent = "Đã gửi tin nhắn kèm file lên Google Chat."
+		if strings.TrimSpace(stringArg(call.Arguments, "text")) == "" {
+			userContent = "Đã gửi file lên Google Chat."
+		}
+	}
 	return tools.ToolResult{
 		ToolCallID:     call.ID,
 		ToolName:       call.Name,
 		Success:        true,
 		ContentForLLM:  content,
-		ContentForUser: content,
+		ContentForUser: userContent,
 	}
+}
+
+type UpdateMessageTool struct {
+	service *Service
+}
+
+func NewUpdateMessageTool(service *Service) UpdateMessageTool {
+	return UpdateMessageTool{service: service}
+}
+
+func (UpdateMessageTool) Name() string { return ToolNameUpdateMessage }
+
+func (UpdateMessageTool) Description() string {
+	return "Update the text of a Google Chat message. This external write requires approval."
+}
+
+func (UpdateMessageTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+			"text": map[string]any{"type": "string"},
+		},
+		"required":             []string{"name", "text"},
+		"additionalProperties": false,
+	}
+}
+
+func (UpdateMessageTool) Capability() tools.Capability { return tools.CapabilityMutating }
+
+func (UpdateMessageTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelExternalWrite }
+
+func (t UpdateMessageTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	output, errShape := t.service.UpdateMessage(ctx, UpdateMessageInput{
+		Name: stringArg(call.Arguments, "name"),
+		Text: stringArg(call.Arguments, "text"),
+	})
+	if errShape != nil {
+		return toolErrorResult(call, errShape)
+	}
+	content := "Updated Google Chat message: " + output.Message.Name
+	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
+}
+
+type DeleteMessageTool struct {
+	service *Service
+}
+
+func NewDeleteMessageTool(service *Service) DeleteMessageTool {
+	return DeleteMessageTool{service: service}
+}
+
+func (DeleteMessageTool) Name() string { return ToolNameDeleteMessage }
+
+func (DeleteMessageTool) Description() string {
+	return "Delete a Google Chat message. This destructive action requires approval."
+}
+
+func (DeleteMessageTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"name":  map[string]any{"type": "string"},
+			"force": map[string]any{"type": "boolean"},
+		},
+		"required":             []string{"name"},
+		"additionalProperties": false,
+	}
+}
+
+func (DeleteMessageTool) Capability() tools.Capability { return tools.CapabilityMutating }
+
+func (DeleteMessageTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelDestructive }
+
+func (t DeleteMessageTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	output, errShape := t.service.DeleteMessage(ctx, DeleteMessageInput{
+		Name:  stringArg(call.Arguments, "name"),
+		Force: boolArg(call.Arguments, "force"),
+	})
+	if errShape != nil {
+		return toolErrorResult(call, errShape)
+	}
+	content := "Deleted Google Chat message: " + output.Name
+	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
+}
+
+type CreateSpaceTool struct {
+	service *Service
+}
+
+func NewCreateSpaceTool(service *Service) CreateSpaceTool {
+	return CreateSpaceTool{service: service}
+}
+
+func (CreateSpaceTool) Name() string { return ToolNameCreateSpace }
+
+func (CreateSpaceTool) Description() string {
+	return "Create or set up a Google Chat space, group chat, or direct message. This external write requires approval."
+}
+
+func (CreateSpaceTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"displayName": map[string]any{"type": "string"},
+			"spaceType":   map[string]any{"type": "string", "enum": []string{"SPACE", "GROUP_CHAT", "DIRECT_MESSAGE"}},
+			"memberUsers": arrayStringSchema(),
+			"requestId":   map[string]any{"type": "string"},
+		},
+		"additionalProperties": false,
+	}
+}
+
+func (CreateSpaceTool) Capability() tools.Capability { return tools.CapabilityMutating }
+
+func (CreateSpaceTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelExternalWrite }
+
+func (t CreateSpaceTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	output, errShape := t.service.CreateSpace(ctx, CreateSpaceInput{
+		DisplayName: stringArg(call.Arguments, "displayName"),
+		SpaceType:   stringArg(call.Arguments, "spaceType"),
+		MemberUsers: stringSliceArg(call.Arguments, "memberUsers"),
+		RequestID:   stringArg(call.Arguments, "requestId"),
+	})
+	if errShape != nil {
+		return toolErrorResult(call, errShape)
+	}
+	content := fmt.Sprintf("Created Google Chat space: %s | %s | %s", output.Space.Name, output.Space.DisplayName, output.Space.SpaceType)
+	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
+}
+
+type AddMemberTool struct {
+	service *Service
+}
+
+func NewAddMemberTool(service *Service) AddMemberTool {
+	return AddMemberTool{service: service}
+}
+
+func (AddMemberTool) Name() string { return ToolNameAddMember }
+
+func (AddMemberTool) Description() string {
+	return "Add a human member to a Google Chat space. This external write requires approval."
+}
+
+func (AddMemberTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"space": map[string]any{"type": "string"},
+			"user":  map[string]any{"type": "string"},
+		},
+		"required":             []string{"space", "user"},
+		"additionalProperties": false,
+	}
+}
+
+func (AddMemberTool) Capability() tools.Capability { return tools.CapabilityMutating }
+
+func (AddMemberTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelExternalWrite }
+
+func (t AddMemberTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	output, errShape := t.service.AddMember(ctx, AddMemberInput{
+		Space: stringArg(call.Arguments, "space"),
+		User:  stringArg(call.Arguments, "user"),
+	})
+	if errShape != nil {
+		return toolErrorResult(call, errShape)
+	}
+	content := "Added Google Chat member: " + output.Membership.Name
+	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
+}
+
+type RemoveMemberTool struct {
+	service *Service
+}
+
+func NewRemoveMemberTool(service *Service) RemoveMemberTool {
+	return RemoveMemberTool{service: service}
+}
+
+func (RemoveMemberTool) Name() string { return ToolNameRemoveMember }
+
+func (RemoveMemberTool) Description() string {
+	return "Remove a member from a Google Chat space. This destructive action requires approval."
+}
+
+func (RemoveMemberTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+		},
+		"required":             []string{"name"},
+		"additionalProperties": false,
+	}
+}
+
+func (RemoveMemberTool) Capability() tools.Capability { return tools.CapabilityMutating }
+
+func (RemoveMemberTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelDestructive }
+
+func (t RemoveMemberTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	output, errShape := t.service.RemoveMember(ctx, RemoveMemberInput{Name: stringArg(call.Arguments, "name")})
+	if errShape != nil {
+		return toolErrorResult(call, errShape)
+	}
+	content := "Removed Google Chat member: " + output.Name
+	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
@@ -650,12 +1120,136 @@ func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 		NewFindSpacesByMembersTool(service),
 		NewListMessagesTool(service),
 		NewSendMessageTool(service),
+		NewUpdateMessageTool(service),
+		NewDeleteMessageTool(service),
+		NewCreateSpaceTool(service),
+		NewAddMemberTool(service),
+		NewRemoveMemberTool(service),
 	} {
 		if err := registry.RegisterWithEntry(tool, tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func arrayStringSchema() map[string]any {
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+}
+
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	return cleanStrings(parts)
+}
+
+func cleanStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func safeAttachmentFilename(path string) string {
+	filename := filepath.Base(strings.TrimSpace(path))
+	if filename == "." || filename == string(filepath.Separator) || filename == "" {
+		return "attachment.dat"
+	}
+	filename = strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, filename)
+	if strings.Trim(filename, "._ ") == "" {
+		return "attachment.dat"
+	}
+	return filename
+}
+
+func validateCreateSpaceMembers(spaceType string, users []string) *ErrorShape {
+	if strings.EqualFold(spaceType, "GROUP_CHAT") {
+		uniqueMembers := map[string]struct{}{}
+		for _, user := range users {
+			value := strings.ToLower(strings.TrimSpace(user))
+			if value == "" {
+				continue
+			}
+			uniqueMembers[value] = struct{}{}
+		}
+		if len(uniqueMembers) < 2 {
+			return &ErrorShape{Code: "INVALID_INPUT", Message: "GROUP_CHAT requires at least 2 unique members; use DIRECT_MESSAGE for one other person"}
+		}
+	}
+	return nil
+}
+
+func (s *Service) validateWorkspaceMemberEmails(users []string) *ErrorShape {
+	users = cleanStrings(users)
+	if len(users) == 0 {
+		return nil
+	}
+	allowed := normalizedDomains(s.workspaceDomains)
+	if len(allowed) == 0 {
+		return &ErrorShape{Code: "INVALID_INPUT", Message: "workspace domain restriction requires VCLAW_GOOGLE_WORKSPACE_DOMAINS when adding Chat members"}
+	}
+	for _, user := range users {
+		email, errShape := memberEmailForDomainCheck(user)
+		if errShape != nil {
+			return errShape
+		}
+		domain := emailDomain(email)
+		if _, ok := allowed[domain]; !ok {
+			return &ErrorShape{Code: "ACTION_BLOCKED_BY_POLICY", Message: fmt.Sprintf("member %q is outside the allowed Workspace domains: %s", user, strings.Join(mapKeys(allowed), ","))}
+		}
+	}
+	return nil
+}
+
+func normalizedDomains(domains []string) map[string]struct{} {
+	allowed := map[string]struct{}{}
+	for _, domain := range domains {
+		value := strings.ToLower(strings.TrimSpace(domain))
+		value = strings.TrimPrefix(value, "@")
+		if value != "" {
+			allowed[value] = struct{}{}
+		}
+	}
+	return allowed
+}
+
+func memberEmailForDomainCheck(user string) (string, *ErrorShape) {
+	value := strings.TrimSpace(user)
+	value = strings.TrimPrefix(value, "users/")
+	if value == "" {
+		return "", &ErrorShape{Code: "INVALID_INPUT", Message: "member email is required"}
+	}
+	if !strings.Contains(value, "@") || strings.ContainsAny(value, " \t\r\n") || emailDomain(value) == "" {
+		return "", &ErrorShape{Code: "INVALID_INPUT", Message: fmt.Sprintf("member %q must be an email address so the Workspace domain can be verified", user)}
+	}
+	return strings.ToLower(value), nil
+}
+
+func emailDomain(email string) string {
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parts[1]))
+}
+
+func mapKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func emptyValue(value string, fallback string) string {

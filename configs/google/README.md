@@ -117,6 +117,17 @@ This token is personal, local-only, and ignored by git.
 
 During auth, V-Claw starts a temporary local callback server on `127.0.0.1`, so the browser should end on a small success page. If the callback cannot start, the CLI falls back to asking you to paste the redirected URL or authorization code.
 
+Additional command-specific help is available under:
+
+```powershell
+go run ./cmd/vclaw google people help
+go run ./cmd/vclaw google chat help
+go run ./cmd/vclaw google gmail help
+```
+
+Mutating Chat commands are available for manual CLI testing. Agent-triggered Chat write/destructive tools such as `chat.sendMessage`, `chat.updateMessage`, `chat.deleteMessage`, `chat.createSpace`, `chat.addMember`, and `chat.removeMember` must pass the approval boundary before execution.
+Mutating Gmail commands are also for manual CLI testing. Agent-triggered Gmail draft, send, attachment download, modify, batch modify, delete draft, trash, and untrash tools must pass the approval boundary before execution.
+
 ## Re-Auth When Scopes Change
 
 If OAuth scopes change, delete the old token and auth again:

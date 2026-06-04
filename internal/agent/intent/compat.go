@@ -72,11 +72,11 @@ func mapSystemOp(calls []ToolCallInfo) SystemOpType {
 	for _, call := range calls {
 		name := NormalizeToolName(call.Name)
 		switch {
-		case name == "gmail.createDraft" || name == "gmail.sendDraft" || name == "chat.sendMessage":
+		case name == "gmail.createDraft" || name == "gmail.sendDraft" || name == "gmail.replyDraft" || name == "gmail.forwardDraft" || name == "chat.sendMessage" || name == "chat.addMember":
 			return SystemOpSend
-		case name == "calendar.deleteEvent":
+		case name == "calendar.deleteEvent" || name == "gmail.deleteDraft" || name == "gmail.trashMessage" || name == "chat.deleteMessage" || name == "chat.removeMember":
 			return SystemOpDelete
-		case name == "calendar.createEvent" || name == "calendar.updateEvent":
+		case name == "calendar.createEvent" || name == "calendar.updateEvent" || name == "gmail.updateDraft" || name == "gmail.downloadAttachments" || name == "gmail.modifyMessage" || name == "gmail.batchModifyMessages" || name == "gmail.untrashMessage" || name == "chat.updateMessage" || name == "chat.createSpace":
 			return SystemOpWrite
 		case name == "sandbox.runShell" || name == "sandbox.runPython":
 			lower := strings.ToLower(toString(call.Parameters["command"]) + " " + toString(call.Parameters["code"]))

@@ -210,13 +210,14 @@ func ListMembers(ctx context.Context, client *http.Client, parent string, pageSi
 }
 
 func CreateTextMessage(ctx context.Context, client *http.Client, parent string, text string, options MessageCreateOptions) (Message, error) {
-	if strings.TrimSpace(text) == "" {
-		return Message{}, errors.New("text is required")
+	attachments := attachmentsFromUploadRefs(options.AttachmentUploadRefs)
+	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
+		return Message{}, errors.New("text or attachments is required")
 	}
 
 	message := &chatapi.Message{
 		Text:       text,
-		Attachment: attachmentsFromUploadRefs(options.AttachmentUploadRefs),
+		Attachment: attachments,
 	}
 	if strings.TrimSpace(options.ThreadName) != "" {
 		message.Thread = &chatapi.Thread{Name: options.ThreadName}

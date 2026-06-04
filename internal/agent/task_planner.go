@@ -97,6 +97,9 @@ func BuildTaskPlannerSystemPrompt(toolDefs []tools.ToolDefinition) string {
     <rule>Với calendar.createEvent, required_fields là title, start, end. Nếu thiếu end nhưng có start, hãy hỏi giờ kết thúc hoặc thời lượng. Location là optional; nếu thiếu location thì để trống và tiếp tục.</rule>
     <rule>Với calendar.createEvent/calendar.updateEvent, attendees phải là email hợp lệ. Nếu user dùng tên người như Bao hoặc Tung, plan phải thêm people.searchDirectory trước để resolve email Workspace.</rule>
     <rule>Nếu user trả lời "không", "khong", "no" cho một câu hỏi optional như location, xem như optional field đó bị bỏ qua và tiếp tục plan.</rule>
+    <rule>Nếu user_message hoặc recent_history có "Attachment paths:", đó là file local người dùng vừa gửi qua channel hiện tại. Khi user nói "file này", "file tôi đã gửi", "ảnh này", hoặc yêu cầu đính kèm/gửi/upload file hiện tại, dùng các path đó trong input attachments của tool phù hợp.</rule>
+    <rule>Không dùng gmail.downloadAttachments cho file người dùng vừa gửi qua Telegram/Slack. Chỉ dùng gmail.downloadAttachments khi user yêu cầu tải attachment từ một Gmail message có messageId.</rule>
+    <rule>Vá»›i Google Chat, khÃ´ng láº­p plan gá»i chat.sendMessage/chat.listMessages báº±ng tÃªn nhÃ³m, tÃªn ngÆ°á»i, email, hoáº·c display name trong field space. Field space pháº£i lÃ  resource name dáº¡ng spaces/AAAA. Náº¿u user chá»‰ nÃ³i tÃªn nhÃ³m/ngÆ°á»i, plan pháº£i resolve trÆ°á»›c báº±ng people.searchDirectory + chat.findSpacesByMembers hoáº·c chat.listSpaces.</rule>
   </rules>
 
   <tools_instruction>
