@@ -5,14 +5,14 @@
 // request by risk level and returns a decision:
 //
 //   - allow          → execute immediately
-//   - needs_approval → hold and surface a HITL proposal
+//   - requires_approval → hold and surface a HITL proposal
 //   - block          → reject, log, and never execute
 //
 // Architecture position:
 //
-//	Tool Request → [PolicyChecker] → allow/needs_approval/block
+//	Tool Request → [PolicyChecker] → allow/requires_approval/block
 //	                                       ↓
-//	                              HITL Gate (if needs_approval)
+//	                              HITL Gate (if requires_approval)
 //	                                       ↓
 //	                              Sandbox Executor
 package policies
@@ -26,9 +26,9 @@ const (
 	// DecisionAllow means the tool request may be executed immediately.
 	DecisionAllow Decision = "allow"
 
-	// DecisionNeedsApproval means the request must be held and presented to
+	// DecisionRequiresApproval means the request must be held and presented to
 	// the user for explicit approval before execution.
-	DecisionNeedsApproval Decision = "needs_approval"
+	DecisionRequiresApproval Decision = "requires_approval"
 
 	// DecisionBlock means the request is rejected and must never be executed.
 	DecisionBlock Decision = "block"
@@ -51,7 +51,7 @@ const (
 	RiskSafeWrite RiskLevel = "safe_write"
 
 	// RiskNeedsApproval — mutates or deletes existing data; e.g. delete file,
-	// overwrite file, bulk rename. Decision: needs_approval.
+	// overwrite file, bulk rename. Decision: requires_approval.
 	RiskNeedsApproval RiskLevel = "needs_approval"
 
 	// RiskHighRisk — deep system commands or actions outside sandbox scope;
@@ -59,7 +59,7 @@ const (
 	RiskHighRisk RiskLevel = "high_risk"
 
 	// RiskExternalNetwork — sends or receives data over the network;
-	// e.g. curl, wget, upload. Decision: needs_approval or block.
+	// e.g. curl, wget, upload. Decision: requires_approval or block.
 	RiskExternalNetwork RiskLevel = "external_network"
 
 	// RiskCredentialAccess — attempts to read secrets, tokens, private keys;
@@ -73,8 +73,8 @@ const (
 type ToolName string
 
 const (
-	ToolRunPython ToolName = "run_python"
-	ToolRunShell  ToolName = "run_shell"
+	ToolRunPython ToolName = "sandbox.runPython"
+	ToolRunShell  ToolName = "sandbox.runShell"
 	ToolFileOps   ToolName = "file_ops"
 )
 
@@ -96,8 +96,8 @@ type Request struct {
 	Tool ToolName
 
 	// Input holds the tool-specific payload for classification.
-	// For run_shell: set Command.
-	// For run_python: set Code and/or ScriptPath.
+	// For sandbox.runShell: set Command.
+	// For sandbox.runPython: set Code and/or ScriptPath.
 	// For file_ops:   set FilePath and FileOp.
 	Input RequestInput
 
@@ -107,13 +107,13 @@ type Request struct {
 
 // RequestInput holds the classifiable payload extracted from the tool call.
 type RequestInput struct {
-	// Command is the shell expression for run_shell requests.
+	// Command is the shell expression for sandbox.runShell requests.
 	Command string
 
-	// Code is the inline Python source for run_python requests.
+	// Code is the inline Python source for sandbox.runPython requests.
 	Code string
 
-	// ScriptPath is the relative path to a .py file for run_python requests.
+	// ScriptPath is the relative path to a .py file for sandbox.runPython requests.
 	ScriptPath string
 
 	// FilePath is the target path for file_ops requests.
@@ -141,7 +141,7 @@ type Result struct {
 	// RequestID echoes the originating request for correlation.
 	RequestID string
 
-	// Decision is the policy outcome: allow, needs_approval, or block.
+	// Decision is the policy outcome: allow, requires_approval, or block.
 	Decision Decision
 
 	// RiskLevel is the assessed danger level of the request.

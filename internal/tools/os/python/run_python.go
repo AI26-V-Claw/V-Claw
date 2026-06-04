@@ -1,6 +1,6 @@
-// Package python provides the run_python tool for the V-Claw agent.
+// Package python provides the sandbox.runPython tool for the V-Claw agent.
 //
-// The run_python tool allows the AI agent to execute Python code or script
+// The sandbox.runPython tool allows the AI agent to execute Python code or script
 // files inside an isolated Docker sandbox. All requests are validated and
 // classified by the Policy Checker before the sandbox runner is invoked.
 //
@@ -20,7 +20,7 @@ import (
 
 // ─── Tool Input / Output ─────────────────────────────────────────────────────
 
-// Input is the structured input accepted by the run_python tool.
+// Input is the structured input accepted by the sandbox.runPython tool.
 // This is what the Agent Planner sends to the Tool Router.
 type Input struct {
 	// RequestID is a caller-assigned unique ID for this tool invocation.
@@ -53,7 +53,7 @@ type Input struct {
 	UserIntent string `json:"user_intent,omitempty"`
 }
 
-// Output is the structured result returned by the run_python tool.
+// Output is the structured result returned by the sandbox.runPython tool.
 // It matches the Execution Result schema from the V-Claw API contract.
 type Output struct {
 	// RequestID echoes the originating request.
@@ -90,7 +90,7 @@ type Output struct {
 
 // ─── Tool Handler ─────────────────────────────────────────────────────────────
 
-// RunPython is the entry-point function for the run_python tool.
+// RunPython is the entry-point function for the sandbox.runPython tool.
 //
 // It validates the input, converts it to the canonical sandbox request type,
 // and delegates execution to the provided Runner. The caller is responsible
@@ -105,7 +105,7 @@ func RunPython(ctx context.Context, input Input, runner runtime.Runner) (Output,
 			RequestID:    input.RequestID,
 			Status:       string(runtime.JobBlocked),
 			ErrorMessage: err.Error(),
-		}, fmt.Errorf("run_python: invalid input: %w", err)
+		}, fmt.Errorf("sandbox.runPython: invalid input: %w", err)
 	}
 
 	req := toRuntimeRequest(input)
@@ -114,7 +114,7 @@ func RunPython(ctx context.Context, input Input, runner runtime.Runner) (Output,
 			RequestID:    input.RequestID,
 			Status:       string(runtime.JobBlocked),
 			ErrorMessage: err.Error(),
-		}, fmt.Errorf("run_python: request validation failed: %w", err)
+		}, fmt.Errorf("sandbox.runPython: request validation failed: %w", err)
 	}
 
 	result, err := runner.RunPython(ctx, req)
@@ -123,7 +123,7 @@ func RunPython(ctx context.Context, input Input, runner runtime.Runner) (Output,
 			RequestID:    input.RequestID,
 			Status:       string(runtime.JobFailed),
 			ErrorMessage: err.Error(),
-		}, fmt.Errorf("run_python: runner error: %w", err)
+		}, fmt.Errorf("sandbox.runPython: runner error: %w", err)
 	}
 
 	return toOutput(result), nil

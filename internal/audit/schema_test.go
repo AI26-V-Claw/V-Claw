@@ -106,7 +106,7 @@ func TestSummariseOutput_Truncation(t *testing.T) {
 // ─── Constructor helpers ──────────────────────────────────────────────────────
 
 func TestNewToolRequestEvent(t *testing.T) {
-	ev := audit.NewToolRequestEvent("req_1", "sess_1", "user_1", "run_shell", audit.ActionRunShell, "ls -la")
+	ev := audit.NewToolRequestEvent("req_1", "sess_1", "user_1", "sandbox.runShell", audit.ActionRunShell, "ls -la")
 	if ev.EventType != audit.EventToolRequest {
 		t.Errorf("expected EventToolRequest, got %s", ev.EventType)
 	}
@@ -134,7 +134,7 @@ func TestNewToolRequestEvent(t *testing.T) {
 }
 
 func TestNewPolicyEvent_Allow(t *testing.T) {
-	base := audit.NewToolRequestEvent("req_2", "sess_1", "user_1", "run_shell", audit.ActionRunShell, "cat file.txt")
+	base := audit.NewToolRequestEvent("req_2", "sess_1", "user_1", "sandbox.runShell", audit.ActionRunShell, "cat file.txt")
 	ev := audit.NewPolicyEvent(base, "safe_read", "allow", []string{"Đọc file an toàn"})
 
 	if ev.EventType != audit.EventPolicyDecision {
@@ -152,7 +152,7 @@ func TestNewPolicyEvent_Allow(t *testing.T) {
 }
 
 func TestNewPolicyEvent_Block(t *testing.T) {
-	base := audit.NewToolRequestEvent("req_3", "sess_1", "user_1", "run_shell", audit.ActionRunShell, "rm -rf /")
+	base := audit.NewToolRequestEvent("req_3", "sess_1", "user_1", "sandbox.runShell", audit.ActionRunShell, "rm -rf /")
 	ev := audit.NewPolicyEvent(base, "high_risk", "block", []string{"Xóa thư mục gốc"})
 
 	if ev.Status != audit.StatusBlocked {
@@ -160,17 +160,17 @@ func TestNewPolicyEvent_Block(t *testing.T) {
 	}
 }
 
-func TestNewPolicyEvent_NeedsApproval(t *testing.T) {
-	base := audit.NewToolRequestEvent("req_4", "sess_1", "user_1", "run_shell", audit.ActionFileDelete, "rm output/*.tmp")
-	ev := audit.NewPolicyEvent(base, "needs_approval", "needs_approval", []string{"Xóa file"})
+func TestNewPolicyEvent_RequiresApproval(t *testing.T) {
+	base := audit.NewToolRequestEvent("req_4", "sess_1", "user_1", "sandbox.runShell", audit.ActionFileDelete, "rm output/*.tmp")
+	ev := audit.NewPolicyEvent(base, "destructive", "requires_approval", []string{"Xóa file"})
 
 	if ev.Status != audit.StatusProposed {
-		t.Errorf("needs_approval should set status to proposed, got %s", ev.Status)
+		t.Errorf("requires_approval should set status to proposed, got %s", ev.Status)
 	}
 }
 
 func TestNewHITLEvents(t *testing.T) {
-	base := audit.NewToolRequestEvent("req_5", "sess_1", "user_1", "run_shell", audit.ActionFileDelete, "rm *.csv")
+	base := audit.NewToolRequestEvent("req_5", "sess_1", "user_1", "sandbox.runShell", audit.ActionFileDelete, "rm *.csv")
 
 	proposal := audit.NewHITLProposalEvent(base, "hitl_001", "Xóa file CSV", "Lệnh này sẽ xóa file", []string{"workspace/a.csv"})
 	if proposal.EventType != audit.EventHITLProposal {
@@ -195,7 +195,7 @@ func TestNewHITLEvents(t *testing.T) {
 }
 
 func TestNewBlockedEvent(t *testing.T) {
-	base := audit.NewToolRequestEvent("req_6", "sess_1", "user_1", "run_shell", audit.ActionSystemShutdown, "shutdown -h now")
+	base := audit.NewToolRequestEvent("req_6", "sess_1", "user_1", "sandbox.runShell", audit.ActionSystemShutdown, "shutdown -h now")
 	ev := audit.NewBlockedEvent(base, "high_risk", []string{"Tắt máy"})
 
 	if ev.EventType != audit.EventBlocked {
@@ -207,7 +207,7 @@ func TestNewBlockedEvent(t *testing.T) {
 }
 
 func TestNewExecutionEvents(t *testing.T) {
-	base := audit.NewToolRequestEvent("req_7", "sess_1", "user_1", "run_python", audit.ActionRunPython, "print('hello')")
+	base := audit.NewToolRequestEvent("req_7", "sess_1", "user_1", "sandbox.runPython", audit.ActionRunPython, "print('hello')")
 
 	start := audit.NewExecutionStartEvent(base, "job_001")
 	if start.EventType != audit.EventExecutionStart {
@@ -236,7 +236,7 @@ func TestNewExecutionEvents(t *testing.T) {
 }
 
 func TestExecutionResult_Timeout(t *testing.T) {
-	base := audit.NewToolRequestEvent("req_8", "sess_1", "user_1", "run_python", audit.ActionRunPython, "import time; time.sleep(9999)")
+	base := audit.NewToolRequestEvent("req_8", "sess_1", "user_1", "sandbox.runPython", audit.ActionRunPython, "import time; time.sleep(9999)")
 	ev := audit.NewExecutionResultEvent(base, "job_002", "timeout", -1, 30000, "", false)
 	if ev.Status != audit.StatusTimeout {
 		t.Errorf("timeout result should map to StatusTimeout, got %s", ev.Status)
@@ -244,7 +244,7 @@ func TestExecutionResult_Timeout(t *testing.T) {
 }
 
 func TestExecutionResult_Failed(t *testing.T) {
-	base := audit.NewToolRequestEvent("req_9", "sess_1", "user_1", "run_python", audit.ActionRunPython, "1/0")
+	base := audit.NewToolRequestEvent("req_9", "sess_1", "user_1", "sandbox.runPython", audit.ActionRunPython, "1/0")
 	ev := audit.NewExecutionResultEvent(base, "job_003", "failed", 1, 50, "ZeroDivisionError", false)
 	if ev.Status != audit.StatusFailed {
 		t.Errorf("failed result should map to StatusFailed, got %s", ev.Status)
@@ -257,7 +257,7 @@ func TestEventIDUniqueness(t *testing.T) {
 	seen := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
 		ev := audit.NewToolRequestEvent(
-			fmt.Sprintf("req_%d", i), "sess", "user", "run_shell", audit.ActionRunShell, "ls",
+			fmt.Sprintf("req_%d", i), "sess", "user", "sandbox.runShell", audit.ActionRunShell, "ls",
 		)
 		if seen[ev.EventID] {
 			t.Fatalf("duplicate EventID: %s (i=%d)", ev.EventID, i)
@@ -269,7 +269,7 @@ func TestEventIDUniqueness(t *testing.T) {
 // ─── JSON serialisation ───────────────────────────────────────────────────────
 
 func TestAuditEventJSON_RoundTrip(t *testing.T) {
-	original := audit.NewToolRequestEvent("req_j", "sess_j", "user_j", "run_shell", audit.ActionRunShell, "echo hello")
+	original := audit.NewToolRequestEvent("req_j", "sess_j", "user_j", "sandbox.runShell", audit.ActionRunShell, "echo hello")
 	original.AffectedPaths = []string{"workspace/foo.txt"}
 
 	data, err := json.Marshal(original)
@@ -297,7 +297,7 @@ func TestAuditEventJSON_RoundTrip(t *testing.T) {
 }
 
 func TestAuditEventJSON_FieldNames(t *testing.T) {
-	ev := audit.NewToolRequestEvent("req_fn", "s", "u", "run_shell", audit.ActionRunShell, "ls")
+	ev := audit.NewToolRequestEvent("req_fn", "s", "u", "sandbox.runShell", audit.ActionRunShell, "ls")
 	data, _ := json.Marshal(ev)
 	s := string(data)
 	for _, key := range []string{
@@ -317,10 +317,10 @@ func TestMemoryLogger_LogAndQuery(t *testing.T) {
 	logger := audit.NewMemoryLogger()
 
 	for i := 0; i < 5; i++ {
-		ev := audit.NewToolRequestEvent(fmt.Sprintf("req_%d", i), "sess_A", "user_1", "run_shell", audit.ActionRunShell, "ls")
+		ev := audit.NewToolRequestEvent(fmt.Sprintf("req_%d", i), "sess_A", "user_1", "sandbox.runShell", audit.ActionRunShell, "ls")
 		_ = logger.Log(ev)
 	}
-	ev6 := audit.NewToolRequestEvent("req_6", "sess_B", "user_2", "run_python", audit.ActionRunPython, "print(1)")
+	ev6 := audit.NewToolRequestEvent("req_6", "sess_B", "user_2", "sandbox.runPython", audit.ActionRunPython, "print(1)")
 	_ = logger.Log(ev6)
 
 	if logger.Count() != 6 {
@@ -354,7 +354,7 @@ func TestMemoryLogger_LogAndQuery(t *testing.T) {
 
 func TestMemoryLogger_FilterByStatus(t *testing.T) {
 	logger := audit.NewMemoryLogger()
-	base := audit.NewToolRequestEvent("req_s", "sess", "user", "run_shell", audit.ActionRunShell, "cmd")
+	base := audit.NewToolRequestEvent("req_s", "sess", "user", "sandbox.runShell", audit.ActionRunShell, "cmd")
 
 	_ = logger.Log(audit.NewBlockedEvent(base, "high_risk", []string{"Blocked"}))
 	_ = logger.Log(audit.NewHITLApprovedEvent(base, "hitl_x"))
@@ -374,7 +374,7 @@ func TestMemoryLogger_FilterByTimeRange(t *testing.T) {
 	logger := audit.NewMemoryLogger()
 	before := time.Now().UTC()
 
-	ev := audit.NewToolRequestEvent("req_t", "sess", "user", "run_shell", audit.ActionRunShell, "ls")
+	ev := audit.NewToolRequestEvent("req_t", "sess", "user", "sandbox.runShell", audit.ActionRunShell, "ls")
 	_ = logger.Log(ev)
 
 	after := time.Now().UTC()
@@ -392,7 +392,7 @@ func TestMemoryLogger_FilterByTimeRange(t *testing.T) {
 
 func TestMemoryLogger_Clear(t *testing.T) {
 	logger := audit.NewMemoryLogger()
-	ev := audit.NewToolRequestEvent("req_c", "sess", "user", "run_shell", audit.ActionRunShell, "ls")
+	ev := audit.NewToolRequestEvent("req_c", "sess", "user", "sandbox.runShell", audit.ActionRunShell, "ls")
 	_ = logger.Log(ev)
 
 	logger.Clear()
@@ -412,8 +412,8 @@ func TestFileLogger_WriteAndRead(t *testing.T) {
 		t.Fatalf("NewFileLogger failed: %v", err)
 	}
 
-	ev1 := audit.NewToolRequestEvent("req_f1", "sess_f", "user_f", "run_shell", audit.ActionRunShell, "ls")
-	ev2 := audit.NewToolRequestEvent("req_f2", "sess_f", "user_f", "run_python", audit.ActionRunPython, "print(1)")
+	ev1 := audit.NewToolRequestEvent("req_f1", "sess_f", "user_f", "sandbox.runShell", audit.ActionRunShell, "ls")
+	ev2 := audit.NewToolRequestEvent("req_f2", "sess_f", "user_f", "sandbox.runPython", audit.ActionRunPython, "print(1)")
 	ev3 := audit.NewBlockedEvent(ev1, "high_risk", []string{"test"})
 
 	_ = logger.Log(ev1)
@@ -463,13 +463,13 @@ func TestFileLogger_Append(t *testing.T) {
 
 	// Write 2 events, close.
 	l1, _ := audit.NewFileLogger(path)
-	_ = l1.Log(audit.NewToolRequestEvent("r1", "s", "u", "run_shell", audit.ActionRunShell, "ls"))
-	_ = l1.Log(audit.NewToolRequestEvent("r2", "s", "u", "run_shell", audit.ActionRunShell, "pwd"))
+	_ = l1.Log(audit.NewToolRequestEvent("r1", "s", "u", "sandbox.runShell", audit.ActionRunShell, "ls"))
+	_ = l1.Log(audit.NewToolRequestEvent("r2", "s", "u", "sandbox.runShell", audit.ActionRunShell, "pwd"))
 	_ = l1.Close()
 
 	// Open again and write 1 more.
 	l2, _ := audit.NewFileLogger(path)
-	_ = l2.Log(audit.NewToolRequestEvent("r3", "s", "u", "run_shell", audit.ActionRunShell, "date"))
+	_ = l2.Log(audit.NewToolRequestEvent("r3", "s", "u", "sandbox.runShell", audit.ActionRunShell, "date"))
 	_ = l2.Close()
 
 	data, _ := os.ReadFile(path)
@@ -486,7 +486,7 @@ func TestMultiLogger(t *testing.T) {
 	mem2 := audit.NewMemoryLogger()
 	multi := audit.NewMultiLogger(mem1, mem2)
 
-	ev := audit.NewToolRequestEvent("req_m", "sess_m", "user_m", "run_shell", audit.ActionRunShell, "ls")
+	ev := audit.NewToolRequestEvent("req_m", "sess_m", "user_m", "sandbox.runShell", audit.ActionRunShell, "ls")
 	if err := multi.Log(ev); err != nil {
 		t.Fatalf("MultiLogger.Log failed: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestMultiLogger(t *testing.T) {
 
 func TestNopLogger(t *testing.T) {
 	nop := &audit.NopLogger{}
-	ev := audit.NewToolRequestEvent("req_n", "s", "u", "run_shell", audit.ActionRunShell, "ls")
+	ev := audit.NewToolRequestEvent("req_n", "s", "u", "sandbox.runShell", audit.ActionRunShell, "ls")
 	if err := nop.Log(ev); err != nil {
 		t.Errorf("NopLogger.Log should not error: %v", err)
 	}

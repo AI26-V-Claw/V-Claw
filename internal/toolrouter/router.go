@@ -5,11 +5,11 @@
 //
 //	Agent Planner
 //	    │
-//	    ▼  ToolRequest{tool:"run_python", input:{code:"..."}}
+//	    ▼  ToolRequest{tool:"sandbox.runPython", input:{code:"..."}}
 //	ToolRouter.Dispatch(ctx, req)
 //	    │
-//	    ├── "run_python" → python.RunPython(ctx, input, gatedRunner)
-//	    ├── "run_shell"  → shell.RunShell(ctx, input, gatedRunner)
+//	    ├── "sandbox.runPython" → python.RunPython(ctx, input, gatedRunner)
+//	    ├── "sandbox.runShell"  → shell.RunShell(ctx, input, gatedRunner)
 //	    └── "file_ops"   → (Sprint 2)
 //	                │
 //	                ▼  GatedRunner enforces: Policy → Safety → Audit → Docker
@@ -52,12 +52,12 @@ type ToolRequest struct {
 	UserID string `json:"user_id"`
 
 	// Tool identifies which sandbox tool to invoke.
-	// Currently supported: "run_python", "run_shell".
+	// Currently supported: "sandbox.runPython", "sandbox.runShell".
 	Tool string `json:"tool"`
 
 	// Input holds the tool-specific payload.
-	// For run_shell  → set Command (and optionally WorkspaceDir, TimeoutSeconds).
-	// For run_python → set Code or ScriptPath (and optionally WorkspaceDir, TimeoutSeconds).
+	// For sandbox.runShell  → set Command (and optionally WorkspaceDir, TimeoutSeconds).
+	// For sandbox.runPython → set Code or ScriptPath (and optionally WorkspaceDir, TimeoutSeconds).
 	Input ToolInput `json:"input"`
 
 	// Context carries user-intent metadata used in audit logs and HITL proposals.
@@ -67,13 +67,13 @@ type ToolRequest struct {
 // ToolInput is the tool-specific payload embedded inside ToolRequest.
 // Fields are used selectively depending on the Tool field.
 type ToolInput struct {
-	// Command is the shell expression for run_shell.
+	// Command is the shell expression for sandbox.runShell.
 	Command string `json:"command,omitempty"`
 
-	// Code is inline Python source for run_python.
+	// Code is inline Python source for sandbox.runPython.
 	Code string `json:"code,omitempty"`
 
-	// ScriptPath is a workspace-relative path to a .py file for run_python.
+	// ScriptPath is a workspace-relative path to a .py file for sandbox.runPython.
 	ScriptPath string `json:"script_path,omitempty"`
 
 	// WorkspaceDir is the absolute host path to the session workspace.
@@ -132,7 +132,7 @@ type ToolResponse struct {
 	// OutputTruncated is true when stdout/stderr was cut by the size limit.
 	OutputTruncated bool `json:"output_truncated,omitempty"`
 
-	// PolicyDecision is the outcome of the policy check: allow, needs_approval, block.
+	// PolicyDecision is the outcome of the policy check: allow, requires_approval, block.
 	PolicyDecision string `json:"policy_decision,omitempty"`
 
 	// PolicyRiskLevel is the risk classification assigned by the checker.
@@ -193,16 +193,16 @@ func New(cfg Config) *ToolRouter {
 // statuses so the Agent Planner can inspect them uniformly.
 func (r *ToolRouter) Dispatch(ctx context.Context, req ToolRequest) ToolResponse {
 	switch strings.ToLower(strings.TrimSpace(req.Tool)) {
-	case "run_python":
+	case "sandbox.runpython":
 		return r.dispatchPython(ctx, req)
-	case "run_shell":
+	case "sandbox.runshell":
 		return r.dispatchShell(ctx, req)
 	default:
 		return ToolResponse{
 			RequestID:    req.RequestID,
 			Status:       "error",
 			Artifacts:    []string{},
-			ErrorMessage: fmt.Sprintf("unknown tool %q; supported: run_python, run_shell", req.Tool),
+			ErrorMessage: fmt.Sprintf("unknown tool %q; supported: sandbox.runPython, sandbox.runShell", req.Tool),
 		}
 	}
 }
@@ -268,7 +268,7 @@ func (r *ToolRouter) handleToolError(requestID, toolStatus string, err error) To
 			RequestID:         requestID,
 			Status:            "pending_approval",
 			Artifacts:         []string{},
-			PolicyDecision:    "needs_approval",
+			PolicyDecision:    "requires_approval",
 			PolicyRiskLevel:   string(needsApproval.PolicyResult.RiskLevel),
 			PolicyReasons:     needsApproval.PolicyResult.Reasons,
 			ApprovalID:        "hitl_" + requestID,
@@ -329,7 +329,7 @@ func ensureSlice(s []string) []string {
 }
 
 // buildApprovalSummaryVI generates a short Vietnamese summary for a
-// needs_approval response. Sprint 2 will replace this with a rich template.
+// requires_approval response. Sprint 2 will replace this with a rich template.
 func buildApprovalSummaryVI(na *gate.ErrNeedsApproval) string {
 	if len(na.PolicyResult.Reasons) > 0 {
 		return fmt.Sprintf("Yêu cầu cần phê duyệt: %s", strings.Join(na.PolicyResult.Reasons, "; "))

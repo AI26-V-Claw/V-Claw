@@ -26,7 +26,7 @@ type RuleBasedChecker struct {
 // RuleBasedConfig allows callers to tune the checker behaviour.
 type RuleBasedConfig struct {
 	// SafeWriteRequiresConfirm, when true, changes the decision for
-	// safe_write from allow to needs_approval. Useful in conservative
+	// safe_write from allow to requires_approval. Useful in conservative
 	// environments where every write should be reviewed.
 	SafeWriteRequiresConfirm bool
 }
@@ -59,7 +59,7 @@ func (c *RuleBasedChecker) Check(req Request) Result {
 
 // ─── Tool sub-checkers ────────────────────────────────────────────────────────
 
-// checkShell classifies a run_shell request.
+// checkShell classifies a sandbox.runShell request.
 func (c *RuleBasedChecker) checkShell(req Request) Result {
 	cmd := strings.ToLower(req.Input.Command)
 
@@ -78,7 +78,7 @@ func (c *RuleBasedChecker) checkShell(req Request) Result {
 	}
 }
 
-// checkPython classifies a run_python request.
+// checkPython classifies a sandbox.runPython request.
 // It scans both Code (inline) and ScriptPath for dangerous patterns.
 func (c *RuleBasedChecker) checkPython(req Request) Result {
 	// Build the text to analyse: inline code takes priority; fall back to path.
@@ -145,9 +145,9 @@ func (c *RuleBasedChecker) unknown(req Request) Result {
 // SafeWriteRequiresConfirm config override.
 func (c *RuleBasedChecker) applyRule(requestID string, rule MatrixEntry) Result {
 	decision := rule.Decision
-	// Config override: safe_write → needs_approval.
+	// Config override: safe_write -> requires_approval.
 	if c.cfg.SafeWriteRequiresConfirm && rule.RiskLevel == RiskSafeWrite && decision == DecisionAllow {
-		decision = DecisionNeedsApproval
+		decision = DecisionRequiresApproval
 	}
 	return Result{
 		RequestID: requestID,

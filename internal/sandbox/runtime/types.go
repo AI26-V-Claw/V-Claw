@@ -6,7 +6,7 @@
 //	Tool Request → Policy Checker → HITL Gate → Runner → Docker Sandbox → Audit Log
 //
 // The Runner interface is the boundary between the policy/approval layer and the
-// actual Docker execution backend. Callers (run_python, run_shell tools) must
+// actual Docker execution backend. Callers (sandbox.runPython, sandbox.runShell tools) must
 // not invoke the Runner directly; they go through the policy pipeline first.
 package runtime
 
@@ -85,7 +85,7 @@ type RequestMeta struct {
 
 // ─── Run Python ──────────────────────────────────────────────────────────────
 
-// RunPythonRequest is the input schema for the run_python tool.
+// RunPythonRequest is the input schema for the sandbox.runPython tool.
 //
 // Exactly one of Code or ScriptPath must be non-empty:
 //   - Code: inline Python source to execute.
@@ -121,7 +121,7 @@ type RunPythonRequest struct {
 
 // ─── Run Shell ───────────────────────────────────────────────────────────────
 
-// RunShellRequest is the input schema for the run_shell tool.
+// RunShellRequest is the input schema for the sandbox.runShell tool.
 //
 // Command is executed via `sh -c` inside the sandbox container.
 // The working directory inside the container is always /workspace.
@@ -189,10 +189,10 @@ type JobResult struct {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const (
-	// DefaultPythonTimeout is the default execution limit for run_python jobs.
+	// DefaultPythonTimeout is the default execution limit for sandbox.runPython jobs.
 	DefaultPythonTimeout = 30 * time.Second
 
-	// DefaultShellTimeout is the default execution limit for run_shell jobs.
+	// DefaultShellTimeout is the default execution limit for sandbox.runShell jobs.
 	DefaultShellTimeout = 10 * time.Second
 
 	// MaxOutputBytes is the maximum number of bytes kept from stdout or stderr

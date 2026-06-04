@@ -73,13 +73,13 @@ func req(tool, workspaceDir string) toolrouter.ToolRequest {
 	}
 }
 
-// ─── run_python: success ──────────────────────────────────────────────────────
+// ─── sandbox.runPython: success ──────────────────────────────────────────────────────
 
 func TestRouter_RunPython_SafeCode_Success(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_python", "/tmp/ws")
+	r := req("sandbox.runPython", "/tmp/ws")
 	r.Input.Code = "print('hello')"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -99,15 +99,15 @@ func TestRouter_RunPython_SafeCode_Success(t *testing.T) {
 
 func TestRouter_RunPython_Stdout(t *testing.T) {
 	stub := &stubRunner{result: &runtime.JobResult{
-		JobID:    "job-stdout",
-		Status:   runtime.JobSuccess,
-		ExitCode: 0,
-		Stdout:   "42\n",
+		JobID:     "job-stdout",
+		Status:    runtime.JobSuccess,
+		ExitCode:  0,
+		Stdout:    "42\n",
 		Artifacts: []string{},
 	}}
 	router := newRouter(stub)
 
-	r := req("run_python", "/tmp/ws")
+	r := req("sandbox.runPython", "/tmp/ws")
 	r.Input.Code = "print(42)"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -116,13 +116,13 @@ func TestRouter_RunPython_Stdout(t *testing.T) {
 	}
 }
 
-// ─── run_python: blocked ──────────────────────────────────────────────────────
+// ─── sandbox.runPython: blocked ──────────────────────────────────────────────────────
 
 func TestRouter_RunPython_BlockedByPolicy_Credential(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_python", "/tmp/ws")
+	r := req("sandbox.runPython", "/tmp/ws")
 	r.Input.Code = "open('/workspace/.env').read()"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -150,7 +150,7 @@ func TestRouter_RunPython_BlockedByPolicy_Shutdown(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_python", "/tmp/ws")
+	r := req("sandbox.runPython", "/tmp/ws")
 	r.Input.Code = "import os; os.system('shutdown -h now')"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -162,21 +162,21 @@ func TestRouter_RunPython_BlockedByPolicy_Shutdown(t *testing.T) {
 	}
 }
 
-// ─── run_python: needs_approval ───────────────────────────────────────────────
+// ─── sandbox.runPython: requires_approval ───────────────────────────────────────────────
 
 func TestRouter_RunPython_NeedsApproval_DeleteFile(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_python", "/tmp/ws")
+	r := req("sandbox.runPython", "/tmp/ws")
 	r.Input.Code = "import os; os.remove('/workspace/output/old.csv')"
 	resp := router.Dispatch(context.Background(), r)
 
 	if resp.Status != "pending_approval" {
 		t.Errorf("expected 'pending_approval', got %q", resp.Status)
 	}
-	if resp.PolicyDecision != "needs_approval" {
-		t.Errorf("expected policy_decision 'needs_approval', got %q", resp.PolicyDecision)
+	if resp.PolicyDecision != "requires_approval" {
+		t.Errorf("expected policy_decision 'requires_approval', got %q", resp.PolicyDecision)
 	}
 	if resp.ApprovalID == "" {
 		t.Error("approval_id must be set for pending_approval response")
@@ -185,17 +185,17 @@ func TestRouter_RunPython_NeedsApproval_DeleteFile(t *testing.T) {
 		t.Error("approval_summary_vi must be set for pending_approval response")
 	}
 	if stub.calls != 0 {
-		t.Error("runner must NOT be called when needs_approval")
+		t.Error("runner must NOT be called when requires_approval")
 	}
 }
 
-// ─── run_shell: success ───────────────────────────────────────────────────────
+// ─── sandbox.runShell: success ───────────────────────────────────────────────────────
 
 func TestRouter_RunShell_SafeCommand_Success(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	r.Input.Command = "ls -la /workspace"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -211,7 +211,7 @@ func TestRouter_RunShell_SafeCommand_Head(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	r.Input.Command = "head -10 /workspace/data.csv"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -220,13 +220,13 @@ func TestRouter_RunShell_SafeCommand_Head(t *testing.T) {
 	}
 }
 
-// ─── run_shell: blocked ───────────────────────────────────────────────────────
+// ─── sandbox.runShell: blocked ───────────────────────────────────────────────────────
 
 func TestRouter_RunShell_BlockedByPolicy_Shutdown(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	r.Input.Command = "shutdown -h now"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -242,7 +242,7 @@ func TestRouter_RunShell_BlockedByPolicy_Credential(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	r.Input.Command = "cat /root/.ssh/id_rsa"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -255,7 +255,7 @@ func TestRouter_RunShell_BlockedByPolicy_Sudo(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	r.Input.Command = "sudo rm -rf /"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -264,13 +264,13 @@ func TestRouter_RunShell_BlockedByPolicy_Sudo(t *testing.T) {
 	}
 }
 
-// ─── run_shell: needs_approval ────────────────────────────────────────────────
+// ─── sandbox.runShell: requires_approval ────────────────────────────────────────────────
 
 func TestRouter_RunShell_NeedsApproval_RmRf(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	r.Input.Command = "rm -rf /workspace/temp"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -280,7 +280,7 @@ func TestRouter_RunShell_NeedsApproval_RmRf(t *testing.T) {
 	if resp.ApprovalID == "" {
 		t.Error("approval_id must be set")
 	}
-	if !strings.Contains(resp.ApprovalID, "req_run_shell") {
+	if !strings.Contains(resp.ApprovalID, "req_sandbox.runShell") {
 		t.Errorf("approval_id should reference request ID, got %q", resp.ApprovalID)
 	}
 }
@@ -289,7 +289,7 @@ func TestRouter_RunShell_NeedsApproval_Curl(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	r.Input.Command = "curl https://api.example.com/data"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -325,7 +325,7 @@ func TestRouter_MissingCode_ReturnsError(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_python", "/tmp/ws")
+	r := req("sandbox.runPython", "/tmp/ws")
 	// Code and ScriptPath both empty → validation error
 	resp := router.Dispatch(context.Background(), r)
 
@@ -341,7 +341,7 @@ func TestRouter_MissingCommand_ReturnsError(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	// Command empty → validation error
 	resp := router.Dispatch(context.Background(), r)
 
@@ -360,11 +360,11 @@ func TestRouter_Response_AlwaysHasArtifactsSlice(t *testing.T) {
 	router := newRouter(stub)
 
 	cases := []toolrouter.ToolRequest{
-		{RequestID: "r1", SessionID: "s", Tool: "run_shell",
+		{RequestID: "r1", SessionID: "s", Tool: "sandbox.runShell",
 			Input: toolrouter.ToolInput{WorkspaceDir: "/tmp", Command: "ls"}},
-		{RequestID: "r2", SessionID: "s", Tool: "run_shell",
+		{RequestID: "r2", SessionID: "s", Tool: "sandbox.runShell",
 			Input: toolrouter.ToolInput{WorkspaceDir: "/tmp", Command: "shutdown"}},
-		{RequestID: "r3", SessionID: "s", Tool: "run_shell",
+		{RequestID: "r3", SessionID: "s", Tool: "sandbox.runShell",
 			Input: toolrouter.ToolInput{WorkspaceDir: "/tmp", Command: "rm /workspace/a.csv"}},
 		{RequestID: "r4", SessionID: "s", Tool: "unknown_tool"},
 	}
@@ -387,7 +387,7 @@ func TestRouter_BlockedResponse_NoExecutionFields(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("run_shell", "/tmp/ws")
+	r := req("sandbox.runShell", "/tmp/ws")
 	r.Input.Command = "shutdown -h now"
 	resp := router.Dispatch(context.Background(), r)
 
@@ -408,7 +408,7 @@ func TestRouter_ToolName_CaseInsensitive(t *testing.T) {
 	stub := &stubRunner{}
 	router := newRouter(stub)
 
-	r := req("RUN_SHELL", "/tmp/ws")
+	r := req("SANDBOX.RUNSHELL", "/tmp/ws")
 	r.Input.Command = "ls /workspace"
 	resp := router.Dispatch(context.Background(), r)
 

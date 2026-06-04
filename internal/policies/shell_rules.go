@@ -1,6 +1,6 @@
 package policies
 
-// shellRules is the ordered policy matrix for run_shell requests.
+// shellRules is the ordered policy matrix for sandbox.runShell requests.
 //
 // Matching is first-match: the checker iterates from the top and returns the
 // first entry whose Pattern is found in the normalised (lowercase) command.
@@ -14,8 +14,8 @@ package policies
 // │ Credential files         │ credential_access    │ block            │
 // │ System-deep commands     │ high_risk            │ block            │
 // │ Network tools            │ external_network     │ block            │
-// │ Destructive file ops     │ needs_approval       │ needs_approval   │
-// │ Overwrite redirect (>)   │ needs_approval       │ needs_approval   │
+// │ Destructive file ops     │ needs_approval       │ requires_approval│
+// │ Overwrite redirect (>)   │ needs_approval       │ requires_approval│
 // │ Create / new file ops    │ safe_write           │ allow            │
 // │ Read-only ops            │ safe_read            │ allow            │
 // └──────────────────────────┴─────────────────────┴──────────────────┘
@@ -128,19 +128,19 @@ var shellRules = []MatrixEntry{
 	{"pkill", RiskHighRisk, DecisionBlock,
 		"Lệnh kill process theo pattern. Bị chặn hoàn toàn."},
 
-	// ── External network (needs_approval - network=none trong sandbox) ───────
+	// ── External network (requires_approval - network=none trong sandbox) ───────
 
-	{"curl ", RiskExternalNetwork, DecisionNeedsApproval,
+	{"curl ", RiskExternalNetwork, DecisionRequiresApproval,
 		"Lệnh gửi HTTP request ra ngoài. Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."},
-	{"wget ", RiskExternalNetwork, DecisionNeedsApproval,
+	{"wget ", RiskExternalNetwork, DecisionRequiresApproval,
 		"Lệnh tải file từ mạng. Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."},
-	{"nc ", RiskExternalNetwork, DecisionNeedsApproval,
+	{"nc ", RiskExternalNetwork, DecisionRequiresApproval,
 		"Lệnh netcat (kết nối mạng). Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."},
-	{"netcat", RiskExternalNetwork, DecisionNeedsApproval,
+	{"netcat", RiskExternalNetwork, DecisionRequiresApproval,
 		"Lệnh netcat (kết nối mạng). Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."},
-	{"ssh ", RiskExternalNetwork, DecisionNeedsApproval,
+	{"ssh ", RiskExternalNetwork, DecisionRequiresApproval,
 		"Lệnh SSH ra ngoài. Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."},
-	{"scp ", RiskExternalNetwork, DecisionNeedsApproval,
+	{"scp ", RiskExternalNetwork, DecisionRequiresApproval,
 		"Lệnh copy qua SSH. Cần xác nhận của người dùng trước khi thực thi (sandbox hiện tắt mạng)."},
 	{"sftp ", RiskExternalNetwork, DecisionBlock,
 		"Lệnh SFTP. Sandbox không có mạng."},
@@ -157,26 +157,26 @@ var shellRules = []MatrixEntry{
 	{"telnet", RiskExternalNetwork, DecisionBlock,
 		"Lệnh telnet (kết nối mạng). Sandbox không có mạng."},
 
-	// ── Destructive file operations (needs_approval) ──────────────────────
+	// ── Destructive file operations (requires_approval) ──────────────────────
 
-	{"rm ", RiskNeedsApproval, DecisionNeedsApproval,
+	{"rm ", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh xóa file. Cần xác nhận của người dùng trước khi thực thi."},
-	{"rm\t", RiskNeedsApproval, DecisionNeedsApproval,
+	{"rm\t", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh xóa file. Cần xác nhận của người dùng trước khi thực thi."},
-	{"rmdir", RiskNeedsApproval, DecisionNeedsApproval,
+	{"rmdir", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh xóa thư mục. Cần xác nhận của người dùng trước khi thực thi."},
-	{"shred", RiskNeedsApproval, DecisionNeedsApproval,
+	{"shred", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh xóa file vĩnh viễn (shred). Cần xác nhận của người dùng."},
-	{"truncate", RiskNeedsApproval, DecisionNeedsApproval,
+	{"truncate", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh truncate (xóa nội dung file). Cần xác nhận của người dùng."},
-	{"chmod", RiskNeedsApproval, DecisionNeedsApproval,
+	{"chmod", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh thay đổi quyền file. Cần xác nhận của người dùng."},
-	{"chown", RiskNeedsApproval, DecisionNeedsApproval,
+	{"chown", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh thay đổi owner file. Cần xác nhận của người dùng."},
 
 	// Overwrite redirect: `cmd > existing_file` is handled via content analysis
 	// in the checker; this entry catches explicit overwrite patterns.
-	{" > ", RiskNeedsApproval, DecisionNeedsApproval,
+	{" > ", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh ghi đè file bằng redirect (>). Cần xác nhận của người dùng."},
 
 	// Append is safer than overwrite but still modifies existing files.
@@ -184,7 +184,7 @@ var shellRules = []MatrixEntry{
 		"Lệnh append vào file bằng redirect (>>). Được phép."},
 
 	// mv can overwrite destination if it already exists.
-	{"mv ", RiskNeedsApproval, DecisionNeedsApproval,
+	{"mv ", RiskNeedsApproval, DecisionRequiresApproval,
 		"Lệnh di chuyển/đổi tên file (có thể ghi đè đích). Cần xác nhận của người dùng."},
 
 	// ── Safe write (create new, no mutation of existing) ─────────────────
@@ -281,13 +281,13 @@ var fileOpsRules = map[string]MatrixEntry{
 	"move": {
 		Pattern:   "move",
 		RiskLevel: RiskNeedsApproval,
-		Decision:  DecisionNeedsApproval,
+		Decision:  DecisionRequiresApproval,
 		ReasonVI:  "Di chuyển file (có thể ghi đè đích). Cần xác nhận của người dùng.",
 	},
 	"delete": {
 		Pattern:   "delete",
 		RiskLevel: RiskNeedsApproval,
-		Decision:  DecisionNeedsApproval,
+		Decision:  DecisionRequiresApproval,
 		ReasonVI:  "Xóa file trong workspace. Cần xác nhận của người dùng.",
 	},
 }

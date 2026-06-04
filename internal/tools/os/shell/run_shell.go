@@ -1,11 +1,11 @@
-// Package shell provides the run_shell tool for the V-Claw agent.
+// Package shell provides the sandbox.runShell tool for the V-Claw agent.
 //
-// The run_shell tool allows the AI agent to execute shell commands inside an
+// The sandbox.runShell tool allows the AI agent to execute shell commands inside an
 // isolated Docker sandbox. Commands are classified by the Policy Checker:
 //
 //   - safe_read: listed files, cat non-sensitive files → allow directly.
 //   - safe_write: create new files, mkdir → allow or light confirm.
-//   - needs_approval: delete, overwrite, bulk rename → mandatory HITL.
+//   - requires_approval: delete, overwrite, bulk rename -> mandatory HITL.
 //   - high_risk: shutdown, service control, chmod deep → block or strict HITL.
 //
 // Pipeline:
@@ -24,7 +24,7 @@ import (
 
 // ─── Tool Input / Output ─────────────────────────────────────────────────────
 
-// Input is the structured input accepted by the run_shell tool.
+// Input is the structured input accepted by the sandbox.runShell tool.
 // This is what the Agent Planner sends to the Tool Router.
 type Input struct {
 	// RequestID is a caller-assigned unique ID for this tool invocation.
@@ -53,7 +53,7 @@ type Input struct {
 	UserIntent string `json:"user_intent,omitempty"`
 }
 
-// Output is the structured result returned by the run_shell tool.
+// Output is the structured result returned by the sandbox.runShell tool.
 // It matches the Execution Result schema from the V-Claw API contract.
 type Output struct {
 	// RequestID echoes the originating request.
@@ -90,7 +90,7 @@ type Output struct {
 
 // ─── Tool Handler ─────────────────────────────────────────────────────────────
 
-// RunShell is the entry-point function for the run_shell tool.
+// RunShell is the entry-point function for the sandbox.runShell tool.
 //
 // It validates the input, converts it to the canonical sandbox request type,
 // and delegates execution to the provided Runner. The caller is responsible
@@ -105,7 +105,7 @@ func RunShell(ctx context.Context, input Input, runner runtime.Runner) (Output, 
 			RequestID:    input.RequestID,
 			Status:       string(runtime.JobBlocked),
 			ErrorMessage: err.Error(),
-		}, fmt.Errorf("run_shell: invalid input: %w", err)
+		}, fmt.Errorf("sandbox.runShell: invalid input: %w", err)
 	}
 
 	req := toRuntimeRequest(input)
@@ -114,7 +114,7 @@ func RunShell(ctx context.Context, input Input, runner runtime.Runner) (Output, 
 			RequestID:    input.RequestID,
 			Status:       string(runtime.JobBlocked),
 			ErrorMessage: err.Error(),
-		}, fmt.Errorf("run_shell: request validation failed: %w", err)
+		}, fmt.Errorf("sandbox.runShell: request validation failed: %w", err)
 	}
 
 	result, err := runner.RunShell(ctx, req)
@@ -123,7 +123,7 @@ func RunShell(ctx context.Context, input Input, runner runtime.Runner) (Output, 
 			RequestID:    input.RequestID,
 			Status:       string(runtime.JobFailed),
 			ErrorMessage: err.Error(),
-		}, fmt.Errorf("run_shell: runner error: %w", err)
+		}, fmt.Errorf("sandbox.runShell: runner error: %w", err)
 	}
 
 	return toOutput(result), nil

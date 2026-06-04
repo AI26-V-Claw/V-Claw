@@ -1,6 +1,6 @@
 package policies
 
-// pythonRules is the ordered policy matrix for run_python requests.
+// pythonRules is the ordered policy matrix for sandbox.runPython requests.
 //
 // The checker scans the Python source code (or script path) for patterns that
 // indicate dangerous behaviour. Like shellRules, matching is first-match from
@@ -18,8 +18,8 @@ package policies
 // │ Credential file access   │ credential_access     │ block            │
 // │ System execution         │ high_risk             │ block            │
 // │ Network imports/calls    │ external_network      │ block            │
-// │ Dynamic execution        │ needs_approval        │ needs_approval   │
-// │ File delete / overwrite  │ needs_approval        │ needs_approval   │
+// │ Dynamic execution        │ needs_approval        │ requires_approval│
+// │ File delete / overwrite  │ needs_approval        │ requires_approval│
 // │ File create / write      │ safe_write            │ allow            │
 // │ Read-only / stdlib       │ safe_read             │ allow            │
 // └──────────────────────────┴──────────────────────┴──────────────────┘
@@ -102,38 +102,38 @@ var pythonRules = []MatrixEntry{
 	{"import http.client", RiskExternalNetwork, DecisionBlock,
 		"Code import http.client (HTTP). Sandbox không có mạng."},
 
-	// ── Dynamic execution (needs_approval) ────────────────────────────────
+	// ── Dynamic execution (requires_approval) ────────────────────────────────
 
-	{"eval(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"eval(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code dùng eval() (thực thi code động). Cần xác nhận của người dùng."},
-	{"exec(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"exec(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code dùng exec() (thực thi code động). Cần xác nhận của người dùng."},
-	{"compile(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"compile(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code dùng compile() (biên dịch code động). Cần xác nhận của người dùng."},
-	{"importlib", RiskNeedsApproval, DecisionNeedsApproval,
+	{"importlib", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code dùng importlib (import động). Cần xác nhận của người dùng."},
 
-	// ── File delete / overwrite (needs_approval) ──────────────────────────
+	// ── File delete / overwrite (requires_approval) ──────────────────────────
 
-	{"os.remove(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"os.remove(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code xóa file (os.remove). Cần xác nhận của người dùng."},
-	{"os.unlink(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"os.unlink(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code xóa file (os.unlink). Cần xác nhận của người dùng."},
-	{"shutil.rmtree(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"shutil.rmtree(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code xóa cả thư mục (shutil.rmtree). Cần xác nhận của người dùng."},
-	{"os.rmdir(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"os.rmdir(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code xóa thư mục (os.rmdir). Cần xác nhận của người dùng."},
-	{"shutil.move(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"shutil.move(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code di chuyển file (shutil.move, có thể ghi đè). Cần xác nhận."},
-	{"os.rename(", RiskNeedsApproval, DecisionNeedsApproval,
+	{"os.rename(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code đổi tên file (os.rename, có thể ghi đè). Cần xác nhận."},
-	{".unlink(", RiskNeedsApproval, DecisionNeedsApproval,
+	{".unlink(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code xóa file (pathlib.Path.unlink). Cần xác nhận của người dùng."},
-	{".rmdir(", RiskNeedsApproval, DecisionNeedsApproval,
+	{".rmdir(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code xóa thư mục (pathlib.Path.rmdir). Cần xác nhận của người dùng."},
-	{".rename(", RiskNeedsApproval, DecisionNeedsApproval,
+	{".rename(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code đổi tên/di chuyển file (pathlib.Path.rename, có thể ghi đè). Cần xác nhận."},
-	{".replace(", RiskNeedsApproval, DecisionNeedsApproval,
+	{".replace(", RiskNeedsApproval, DecisionRequiresApproval,
 		"Code replace file (pathlib.Path.replace, có thể ghi đè). Cần xác nhận."},
 
 	// ── Safe write (create new files) ─────────────────────────────────────

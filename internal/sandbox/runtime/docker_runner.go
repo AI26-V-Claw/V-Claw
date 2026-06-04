@@ -81,12 +81,12 @@ func (r *DockerRunner) RunPython(ctx context.Context, req *RunPythonRequest) (*J
 	// ── Workspace guard ──────────────────────────────────────────────────
 	if r.guard != nil {
 		if err := r.guard.ValidateWorkspaceDir(req.WorkspaceDir); err != nil {
-			return nil, fmt.Errorf("run_python: %w", err)
+			return nil, fmt.Errorf("sandbox.runPython: %w", err)
 		}
 	}
 	if strings.TrimSpace(req.ScriptPath) != "" {
 		if err := ValidateScriptPath(req.ScriptPath); err != nil {
-			return nil, fmt.Errorf("run_python: %w", err)
+			return nil, fmt.Errorf("sandbox.runPython: %w", err)
 		}
 	}
 
@@ -99,7 +99,7 @@ func (r *DockerRunner) RunPython(ctx context.Context, req *RunPythonRequest) (*J
 		fname := fmt.Sprintf("vclaw_job_%s.py", jobID)
 		hostPath := filepath.Join(req.WorkspaceDir, fname)
 		if err := os.WriteFile(hostPath, []byte(req.Code), 0644); err != nil {
-			return nil, fmt.Errorf("run_python: failed to write code to workspace: %w", err)
+			return nil, fmt.Errorf("sandbox.runPython: failed to write code to workspace: %w", err)
 		}
 		defer os.Remove(hostPath)
 		scriptFile = fname
@@ -121,11 +121,11 @@ func (r *DockerRunner) RunShell(ctx context.Context, req *RunShellRequest) (*Job
 	// ── Workspace guard ──────────────────────────────────────────────────
 	if r.guard != nil {
 		if err := r.guard.ValidateWorkspaceDir(req.WorkspaceDir); err != nil {
-			return nil, fmt.Errorf("run_shell: %w", err)
+			return nil, fmt.Errorf("sandbox.runShell: %w", err)
 		}
 	}
 	if err := ValidateShellCommand(req.Command); err != nil {
-		return nil, fmt.Errorf("run_shell: %w", err)
+		return nil, fmt.Errorf("sandbox.runShell: %w", err)
 	}
 
 	timeout := EffectiveShellTimeout(req)

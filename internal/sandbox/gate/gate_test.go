@@ -177,7 +177,7 @@ func TestGate_RunPython_Block_SystemShutdown(t *testing.T) {
 	}
 }
 
-// ─── RunPython: needs_approval ────────────────────────────────────────────────
+// ─── RunPython: requires_approval ─────────────────────────────────────────────
 
 func TestGate_RunPython_NeedsApproval_DeleteFile(t *testing.T) {
 	stub := &stubRunner{}
@@ -204,11 +204,11 @@ func TestGate_RunPython_NeedsApproval_DeleteFile(t *testing.T) {
 	if na.RequestID != "req_py_04" {
 		t.Errorf("RequestID mismatch: %s", na.RequestID)
 	}
-	if na.PolicyResult.Decision != policies.DecisionNeedsApproval {
-		t.Errorf("decision should be needs_approval, got %s", na.PolicyResult.Decision)
+	if na.PolicyResult.Decision != policies.DecisionRequiresApproval {
+		t.Errorf("decision should be requires_approval, got %s", na.PolicyResult.Decision)
 	}
 	if stub.calls != 0 {
-		t.Error("runner must NOT be called when needs_approval")
+		t.Error("runner must NOT be called when requires_approval")
 	}
 
 	// Audit: should have hitl_proposal
@@ -293,7 +293,7 @@ func TestGate_RunShell_Block_Sudo(t *testing.T) {
 	}
 }
 
-// ─── RunShell: needs_approval ─────────────────────────────────────────────────
+// ─── RunShell: requires_approval ──────────────────────────────────────────────
 
 func TestGate_RunShell_NeedsApproval_RmRf(t *testing.T) {
 	stub := &stubRunner{}
@@ -306,7 +306,7 @@ func TestGate_RunShell_NeedsApproval_RmRf(t *testing.T) {
 		t.Errorf("rm -rf should need approval, got err=%v", err)
 	}
 	if stub.calls != 0 {
-		t.Error("runner must not be called when needs_approval")
+		t.Error("runner must not be called when requires_approval")
 	}
 
 	hitl, _ := logger.Query(audit.Filter{EventType: audit.EventHITLProposal})
@@ -405,11 +405,11 @@ func TestGate_Audit_NeedsApprovalRequest_HasHITLProposal(t *testing.T) {
 			}
 		}
 		if ev.EventType == audit.EventExecutionResult {
-			t.Error("needs_approval request must not have execution_result event")
+			t.Error("requires_approval request must not have execution_result event")
 		}
 	}
 	if !hasHITL {
-		t.Error("needs_approval request must have a hitl_proposal event")
+		t.Error("requires_approval request must have a hitl_proposal event")
 	}
 }
 
@@ -428,7 +428,7 @@ func TestGate_RunShell_RunnerError_IsForwarded(t *testing.T) {
 	if !errors.Is(err, runnerErr) {
 		t.Errorf("expected original runner error, got: %v", err)
 	}
-	// Must not be classified as blocked or needs_approval
+	// Must not be classified as blocked or requires_approval
 	if gate.IsBlocked(err) || gate.IsNeedsApproval(err) {
 		t.Error("runner error should not be ErrBlocked or ErrNeedsApproval")
 	}

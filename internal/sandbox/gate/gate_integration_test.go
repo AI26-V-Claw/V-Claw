@@ -220,7 +220,7 @@ with open('.env') as f:
 	}
 }
 
-// ─── End-to-end: needs_approval path ─────────────────────────────────────────
+// ─── End-to-end: requires_approval path ─────────────────────────────────────────
 
 func TestGateIntegration_Shell_NeedsApproval_Rm(t *testing.T) {
 	wsDir := prepareWorkspace(t)
@@ -251,7 +251,7 @@ func TestGateIntegration_Shell_NeedsApproval_Rm(t *testing.T) {
 		t.Errorf("expected 1 hitl_proposal audit event, got %d", len(hitl))
 	}
 	if hitl[0].HITLSummaryVI == "" {
-		t.Error("hitl_summary_vi must be populated for needs_approval")
+		t.Error("hitl_summary_vi must be populated for requires_approval")
 	}
 }
 

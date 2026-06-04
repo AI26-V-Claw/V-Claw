@@ -8,7 +8,7 @@
 //	Policy Decision
 //	    │  EventPolicyDecision
 //	    ├─ allow ──────────────────────────────────────────────────┐
-//	    └─ needs_approval → EventHITLProposal                      │
+//	    └─ requires_approval → EventHITLProposal                   │
 //	                            │                                   │
 //	                 ┌──────────┴──────────┐                       │
 //	         EventHITLApproved    EventHITLRejected                │
@@ -45,7 +45,7 @@ const (
 	// EventPolicyDecision is logged when the PolicyChecker classifies the request.
 	EventPolicyDecision EventType = "policy_decision"
 
-	// EventHITLProposal is logged when a needs_approval request is held and
+	// EventHITLProposal is logged when a requires_approval request is held and
 	// a HITL proposal is sent to the user.
 	EventHITLProposal EventType = "hitl_proposal"
 
@@ -159,7 +159,7 @@ type AuditEvent struct {
 
 	// ── Tool / Action ──────────────────────────────────────────────────────
 
-	// Tool is the name of the tool being invoked (run_python, run_shell, …).
+	// Tool is the name of the tool being invoked (sandbox.runPython, sandbox.runShell, …).
 	Tool string `json:"tool"`
 
 	// ActionType classifies the operation at a semantic level.
@@ -170,7 +170,7 @@ type AuditEvent struct {
 	// RiskLevel is the risk classification assigned by the PolicyChecker.
 	RiskLevel string `json:"risk_level"`
 
-	// PolicyDecision is the PolicyChecker outcome: allow, needs_approval, block.
+	// PolicyDecision is the PolicyChecker outcome: allow, requires_approval, block.
 	PolicyDecision string `json:"policy_decision"`
 
 	// PolicyReasons is the list of Vietnamese explanations from the checker.
@@ -268,7 +268,7 @@ func NewPolicyEvent(base AuditEvent, riskLevel, decision string, reasons []strin
 	switch decision {
 	case "block":
 		ev.Status = StatusBlocked
-	case "needs_approval":
+	case "requires_approval":
 		ev.Status = StatusProposed
 	default:
 		ev.Status = StatusApproved

@@ -11,7 +11,7 @@ import (
 //
 // Implementations back this interface against the Docker sandbox image
 // (vclaw-sandbox:latest). The interface is intentionally narrow so that
-// callers (the run_python and run_shell tools) only interact with the
+// callers (the sandbox.runPython and sandbox.runShell tools) only interact with the
 // sandbox through well-typed request/result structs.
 //
 // Callers MUST NOT invoke Runner directly; every request must first
@@ -35,24 +35,24 @@ type Runner interface {
 // malformed requests are rejected without consuming Docker resources.
 func ValidateRunPythonRequest(req *RunPythonRequest) error {
 	if req == nil {
-		return errors.New("run_python: request must not be nil")
+		return errors.New("sandbox.runPython: request must not be nil")
 	}
 	if strings.TrimSpace(req.RequestID) == "" {
-		return errors.New("run_python: request_id is required")
+		return errors.New("sandbox.runPython: request_id is required")
 	}
 	if strings.TrimSpace(req.SessionID) == "" {
-		return errors.New("run_python: session_id is required")
+		return errors.New("sandbox.runPython: session_id is required")
 	}
 	if strings.TrimSpace(req.WorkspaceDir) == "" {
-		return errors.New("run_python: workspace_dir is required")
+		return errors.New("sandbox.runPython: workspace_dir is required")
 	}
 	codeEmpty := strings.TrimSpace(req.Code) == ""
 	scriptEmpty := strings.TrimSpace(req.ScriptPath) == ""
 	if codeEmpty && scriptEmpty {
-		return errors.New("run_python: exactly one of code or script_path must be set")
+		return errors.New("sandbox.runPython: exactly one of code or script_path must be set")
 	}
 	if !codeEmpty && !scriptEmpty {
-		return errors.New("run_python: code and script_path are mutually exclusive")
+		return errors.New("sandbox.runPython: code and script_path are mutually exclusive")
 	}
 	return nil
 }
@@ -61,19 +61,19 @@ func ValidateRunPythonRequest(req *RunPythonRequest) error {
 // before it reaches the Runner.
 func ValidateRunShellRequest(req *RunShellRequest) error {
 	if req == nil {
-		return errors.New("run_shell: request must not be nil")
+		return errors.New("sandbox.runShell: request must not be nil")
 	}
 	if strings.TrimSpace(req.RequestID) == "" {
-		return errors.New("run_shell: request_id is required")
+		return errors.New("sandbox.runShell: request_id is required")
 	}
 	if strings.TrimSpace(req.SessionID) == "" {
-		return errors.New("run_shell: session_id is required")
+		return errors.New("sandbox.runShell: session_id is required")
 	}
 	if strings.TrimSpace(req.WorkspaceDir) == "" {
-		return errors.New("run_shell: workspace_dir is required")
+		return errors.New("sandbox.runShell: workspace_dir is required")
 	}
 	if strings.TrimSpace(req.Command) == "" {
-		return errors.New("run_shell: command is required")
+		return errors.New("sandbox.runShell: command is required")
 	}
 	return nil
 }

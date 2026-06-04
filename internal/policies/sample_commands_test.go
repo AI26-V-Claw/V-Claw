@@ -14,7 +14,7 @@ package policies
 //  3. Xóa file   — rm, rmdir, shutil.rmtree, file_ops delete, …
 //  4. Command hệ thống — shutdown, service, sudo, registry, credential, …
 //
-// Mỗi nhóm bao gồm cả run_shell, run_python, và file_ops để bao phủ
+// Mỗi nhóm bao gồm cả sandbox.runShell, sandbox.runPython, và file_ops để bao phủ
 // ba tool types hiện có.
 
 import (
@@ -349,35 +349,35 @@ func TestPolicy_XoaFile_Shell(t *testing.T) {
 		{
 			name:         "rm single file",
 			req:          shellReq("d-sh-01", "rm /workspace/output/old_report.csv"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rm -rf temp dir",
 			req:          shellReq("d-sh-02", "rm -rf /workspace/temp"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rm wildcard csv",
 			req:          shellReq("d-sh-03", "rm /workspace/output/*.csv"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "rmdir empty folder",
 			req:          shellReq("d-sh-04", "rmdir /workspace/old_input"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
 		{
 			name:         "mv (rename = implicit delete old)",
 			req:          shellReq("d-sh-05", "mv /workspace/draft.docx /workspace/final.docx"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 		},
 	}
@@ -393,7 +393,7 @@ import os
 os.remove('/workspace/output/temp_file.csv')
 print('Deleted')
 `),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
@@ -403,7 +403,7 @@ print('Deleted')
 import shutil
 shutil.rmtree('/workspace/cache')
 `),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
@@ -414,7 +414,7 @@ from pathlib import Path
 p = Path('/workspace/output/old.xlsx')
 p.unlink()
 `),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
@@ -425,7 +425,7 @@ import glob, os
 for f in glob.glob('/workspace/output/*.tmp'):
     os.remove(f)
 `),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
@@ -438,13 +438,13 @@ func TestPolicy_XoaFile_FileOps(t *testing.T) {
 		{
 			name:         "file_ops delete",
 			req:          fileOpsReq("d-fo-01", "delete", "/workspace/output/old_data.csv"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 		},
 		{
 			name:         "file_ops move",
 			req:          fileOpsReq("d-fo-02", "move", "/workspace/draft.txt"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 		},
 	}
@@ -559,7 +559,7 @@ func TestPolicy_HeThong_PrivilegeEscalation(t *testing.T) {
 		{
 			name:         "chmod 777 sensitive",
 			req:          shellReq("sys-sh-10", "chmod 777 /etc/passwd"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 		},
 		{
@@ -633,14 +633,14 @@ func TestPolicy_HeThong_NetworkAccess(t *testing.T) {
 		{
 			name:         "curl external URL",
 			req:          shellReq("net-sh-01", "curl https://api.example.com/data"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskExternalNetwork,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
 		{
 			name:         "wget download file",
 			req:          shellReq("net-sh-02", "wget https://files.example.com/dataset.zip -O /workspace/data.zip"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskExternalNetwork,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
@@ -718,7 +718,7 @@ import glob, os
 for f in glob.glob('/workspace/output/*.tmp'):
     os.remove(f)
 `),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskNeedsApproval,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatFileDeletion},
 		},
@@ -734,7 +734,7 @@ for f in glob.glob('/workspace/output/*.tmp'):
 		{
 			name:         "unexpected network call - blocked",
 			req:          shellReq("wf-06", "curl https://external-api.com/upload -d @/workspace/output/regional_summary.xlsx"),
-			wantDecision: DecisionNeedsApproval,
+			wantDecision: DecisionRequiresApproval,
 			wantRisk:     RiskExternalNetwork,
 			wantThreats:  []safety.ThreatCategory{safety.ThreatNetworkAccess},
 		},
@@ -763,8 +763,8 @@ func TestPolicy_ConservativeMode_SafeWrite(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			r := conservative.Check(tc.req)
-			if r.Decision != DecisionNeedsApproval {
-				t.Errorf("conservative mode: expected needs_approval, got %q", r.Decision)
+			if r.Decision != DecisionRequiresApproval {
+				t.Errorf("conservative mode: expected requires_approval, got %q", r.Decision)
 			}
 			if r.RiskLevel != RiskSafeWrite {
 				t.Errorf("conservative mode: risk_level should still be safe_write, got %q", r.RiskLevel)
@@ -781,7 +781,7 @@ func TestPolicy_ExplainOutput_AllDecisions(t *testing.T) {
 		req  Request
 	}{
 		{"explain allow", shellReq("ex-01", "ls /workspace")},
-		{"explain needs_approval", shellReq("ex-02", "rm /workspace/old.csv")},
+		{"explain requires_approval", shellReq("ex-02", "rm /workspace/old.csv")},
 		{"explain block", shellReq("ex-03", "shutdown -h now")},
 		{"explain credential block", shellReq("ex-04", "cat .env")},
 	}

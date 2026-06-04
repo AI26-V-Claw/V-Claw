@@ -9,7 +9,7 @@
 //	    ▼
 //	PolicyChecker ─── block ────────────► ErrBlocked   (never executed, logged)
 //	    │
-//	    ├── needs_approval ──────────────► ErrNeedsApproval (logged, HITL in Sprint 2)
+//	    ├── requires_approval ───────────► ErrNeedsApproval (logged, HITL in Sprint 2)
 //	    │
 //	    └── allow
 //	            │
@@ -166,7 +166,7 @@ func NewGatedRunner(cfg Config) *GatedRunner {
 
 // ─── Runner interface ─────────────────────────────────────────────────────────
 
-// RunPython gates a run_python request through the policy layer before
+// RunPython gates a sandbox.runPython request through the policy layer before
 // dispatching it to the underlying runner.
 //
 // Returns ErrBlocked if the policy rejects the request.
@@ -211,7 +211,7 @@ func (g *GatedRunner) RunPython(ctx context.Context, req *runtime.RunPythonReque
 			string(policyResult.RiskLevel), policyResult.Reasons))
 		return nil, &ErrBlocked{RequestID: req.RequestID, PolicyResult: policyResult}
 
-	case policies.DecisionNeedsApproval:
+	case policies.DecisionRequiresApproval:
 		summaryVI := safety.SummariseVI(threats)
 		reasonVI := strings.Join(policyResult.Reasons, "; ")
 		_ = g.logger.Log(audit.NewHITLProposalEvent(base,
@@ -231,7 +231,7 @@ func (g *GatedRunner) RunPython(ctx context.Context, req *runtime.RunPythonReque
 	})
 }
 
-// RunShell gates a run_shell request through the policy layer before
+// RunShell gates a sandbox.runShell request through the policy layer before
 // dispatching it to the underlying runner.
 func (g *GatedRunner) RunShell(ctx context.Context, req *runtime.RunShellRequest) (*runtime.JobResult, error) {
 	// ── Build policy request ───────────────────────────────────────────────
@@ -268,7 +268,7 @@ func (g *GatedRunner) RunShell(ctx context.Context, req *runtime.RunShellRequest
 			string(policyResult.RiskLevel), policyResult.Reasons))
 		return nil, &ErrBlocked{RequestID: req.RequestID, PolicyResult: policyResult}
 
-	case policies.DecisionNeedsApproval:
+	case policies.DecisionRequiresApproval:
 		summaryVI := safety.SummariseVI(threats)
 		reasonVI := strings.Join(policyResult.Reasons, "; ")
 		_ = g.logger.Log(audit.NewHITLProposalEvent(base,
