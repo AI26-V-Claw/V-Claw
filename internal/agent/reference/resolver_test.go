@@ -130,6 +130,62 @@ func TestHeuristicResolverResolvesRecentGmailDraft(t *testing.T) {
 	if !result.HasReference || result.ReferenceType != TypeGmailEmail {
 		t.Fatalf("expected gmail draft reference, got %#v", result)
 	}
+	if result.ReferenceID != "draft_1" || result.ResolvedContext["draftId"] != "draft_1" {
+		t.Fatalf("expected draft id, got %#v", result)
+	}
+}
+
+func TestHeuristicResolverDoesNotUseMessageIDAsDraftID(t *testing.T) {
+	resolver := NewHeuristicResolver()
+	result, err := resolver.Resolve(context.Background(), Input{
+		CurrentMessage: "gui ban draft vua tao di",
+		Memory: sessions.SessionMemory{LastActionResults: []sessions.ActionResult{{
+			ToolName: "gmail.createDraft",
+			Content: strings.Join([]string{
+				"Đã tạo bản nháp email.",
+				"- Draft ID: draft_real",
+				"- Message ID: msg_wrong",
+				"- Thread ID: thread_wrong",
+			}, "\n"),
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasReference || result.ReferenceType != TypeGmailEmail {
+		t.Fatalf("expected gmail draft reference, got %#v", result)
+	}
+	if result.ReferenceID != "draft_real" || result.ResolvedContext["draftId"] != "draft_real" {
+		t.Fatalf("expected real draft id, got %#v", result)
+	}
+}
+
+func TestHeuristicResolverFindsSingleDraftAmongOtherGmailResults(t *testing.T) {
+	resolver := NewHeuristicResolver()
+	result, err := resolver.Resolve(context.Background(), Input{
+		CurrentMessage: "bản nháp bạn vừa tạo đó",
+		Memory: sessions.SessionMemory{LastActionResults: []sessions.ActionResult{
+			{
+				ToolName:  "gmail.listEmails",
+				Content:   `{"Messages":[{"ID":"msg_list","Subject":"Old"}]}`,
+				CreatedAt: time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC),
+			},
+			{
+				ToolName:  "gmail.createDraft",
+				Content:   `{"Draft":{"ID":"draft_latest","MessageID":"msg_wrong","ThreadID":"thread_wrong"}}`,
+				CreatedAt: time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasReference || result.ReferenceType != TypeGmailEmail || result.NeedsClarification {
+		t.Fatalf("expected single gmail draft reference, got %#v", result)
+	}
+	if result.ReferenceID != "draft_latest" || result.ResolvedContext["draftId"] != "draft_latest" {
+		t.Fatalf("expected latest draft id, got %#v", result)
+	}
 }
 
 func TestLLMResolverParsesJSONAndBuildsXMLPrompt(t *testing.T) {
@@ -202,5 +258,70 @@ func TestFallbackResolverUsesHeuristicWhenLLMNeedsClarification(t *testing.T) {
 	}
 	if result.NeedsClarification {
 		t.Fatalf("expected fallback to avoid clarification, got %#v", result)
+	}
+}
+
+func TestFallbackResolverPrefersDraftCueOverWrongLLMCalendarReference(t *testing.T) {
+	provider := &fakeProvider{text: `{
+		"hasReference": true,
+		"referenceType": "calendar_event",
+		"source": "last_action_result",
+		"confidence": 0.91,
+		"resolvedContext": {"id":"evt_1"},
+		"reasoning": "LLM mistakenly used vua tao as calendar."
+	}`}
+	resolver := NewFallbackResolver(
+		NewLLMResolver(provider, "test-model"),
+		NewHeuristicResolver(),
+	)
+	result, err := resolver.Resolve(context.Background(), Input{
+		CurrentMessage: "hay gui mail ban draft vua tao di",
+		Memory: sessions.SessionMemory{LastActionResults: []sessions.ActionResult{{
+			ToolName:  "gmail.createDraft",
+			Content:   `{"Draft":{"ID":"draft_1","MessageID":"msg_1"}}`,
+			CreatedAt: time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasReference || result.ReferenceType != TypeGmailEmail {
+		t.Fatalf("expected strong draft cue to resolve gmail draft, got %#v", result)
+	}
+	if result.ReferenceID != "draft_1" {
+		t.Fatalf("expected draft id, got %q", result.ReferenceID)
+	}
+	if result.ResolvedContext["draftId"] != "draft_1" {
+		t.Fatalf("expected draftId in resolved context, got %#v", result.ResolvedContext)
+	}
+}
+
+func TestHeuristicResolverUsesLatestDraftWhenUserSaysVuaTao(t *testing.T) {
+	result, err := NewHeuristicResolver().Resolve(context.Background(), Input{
+		CurrentMessage: "ban nhap ban vua tao ra",
+		Memory: sessions.SessionMemory{LastActionResults: []sessions.ActionResult{
+			{
+				ToolName:  "gmail.createDraft",
+				Content:   `{"Draft":{"ID":"older_draft","MessageID":"old_msg"}}`,
+				CreatedAt: time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC),
+			},
+			{
+				ToolName:  "gmail.createDraft",
+				Content:   `{"Draft":{"ID":"latest_draft","MessageID":"latest_msg"}}`,
+				CreatedAt: time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.NeedsClarification {
+		t.Fatalf("expected latest draft reference without clarification, got %#v", result)
+	}
+	if result.ReferenceID != "latest_draft" {
+		t.Fatalf("expected latest draft, got %q", result.ReferenceID)
+	}
+	if result.ResolvedContext["draftId"] != "latest_draft" {
+		t.Fatalf("expected latest draftId in context, got %#v", result.ResolvedContext)
 	}
 }

@@ -407,6 +407,34 @@ func TestCreateDraftLoadsAttachments(t *testing.T) {
 	}
 }
 
+func TestCreateDraftToolAcceptsSingleItemStringArrays(t *testing.T) {
+	var captured gmailconnector.DraftMessageInput
+	service := NewService(&mockConnector{
+		createDraft: func(ctx context.Context, userID string, input gmailconnector.DraftMessageInput) (gmailconnector.DraftSummary, error) {
+			captured = input
+			return gmailconnector.DraftSummary{ID: "draft-1"}, nil
+		},
+	})
+	tool := NewTool(ToolNameCreateDraft, service)
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "call_1",
+		Name: ToolNameCreateDraft,
+		Arguments: map[string]any{
+			"to":       []any{"alice@example.com"},
+			"subject":  []any{"Chúc mừng sinh nhật"},
+			"textBody": []any{"Chúc mừng sinh nhật bạn!"},
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected successful draft creation, got %#v", result)
+	}
+	if captured.Subject != "Chúc mừng sinh nhật" || captured.TextBody != "Chúc mừng sinh nhật bạn!" {
+		t.Fatalf("expected string arrays to normalize into draft fields, got %#v", captured)
+	}
+}
+
 func TestCreateDraftRejectsMissingAttachment(t *testing.T) {
 	service := NewService(&mockConnector{})
 

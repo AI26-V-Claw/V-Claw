@@ -800,7 +800,7 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, classi
 			Content: prompt,
 		})
 	}
-	messages = append(messages, cloneProviderMessages(transcript)...)
+	messages = append(messages, sanitizeProviderTranscriptForToolProtocol(transcript)...)
 	return messages
 }
 
@@ -2438,17 +2438,30 @@ func hasReferenceCueText(text string) bool {
 	if lower == "" {
 		return false
 	}
+	if hasDraftReferenceCueText(lower) {
+		return true
+	}
 	return containsAnyText(lower,
 		"lich nay", "lich vua roi",
 		"su kien nay", "event nay", "cuoc hop tren", "cuoc hop o tren", "cuoc hop vua liet ke", "cuoc hop vua roi", "meeting above", "meeting vua roi",
 		"email nay", "mail nay", "email vua roi", "mail vua roi",
-		"ban nhap nay", "ban nhap do", "ban nhap vua roi", "draft nay", "draft vua roi",
+		"ban nhap nay", "ban nhap do", "ban nhap vua roi", "ban nhap vua tao", "draft nay", "draft vua roi", "draft vua tao",
 		"chat nay", "space nay", "nhom chat nay",
 		"tin nhan nay", "message nay", "tin nhan vua roi",
 		"noi dung minh vua noi", "noi dung vua noi",
 		"chu de do", "chu de nay",
 		"note lai", "ghi chu lai", "tom tat",
 		"vua tao",
+	)
+}
+
+func hasDraftReferenceCueText(lower string) bool {
+	if lower == "" || !containsAnyText(lower, "draft", "ban nhap") {
+		return false
+	}
+	return containsAnyText(lower,
+		"nay", "do", "vua roi", "vua tao", "da tao", "ban tao", "ban da tao", "ban vua tao",
+		"gui", "send", "email", "mail",
 	)
 }
 
@@ -3264,6 +3277,61 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 		cloned[i].ToolCalls = cloneProviderToolCalls(message.ToolCalls)
 	}
 	return cloned
+}
+
+func sanitizeProviderTranscriptForToolProtocol(messages []providers.Message) []providers.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	sanitized := make([]providers.Message, 0, len(messages))
+	for i := 0; i < len(messages); {
+		message := messages[i]
+		if message.Role == providers.MessageRoleTool {
+			i++
+			continue
+		}
+		if message.Role != providers.MessageRoleAssistant || len(message.ToolCalls) == 0 {
+			sanitized = append(sanitized, cloneProviderMessages([]providers.Message{message})[0])
+			i++
+			continue
+		}
+
+		expected := make(map[string]bool, len(message.ToolCalls))
+		for _, toolCall := range message.ToolCalls {
+			toolCallID := strings.TrimSpace(toolCall.ID)
+			if toolCallID != "" {
+				expected[toolCallID] = false
+			}
+		}
+		j := i + 1
+		toolMessages := make([]providers.Message, 0, len(expected))
+		for j < len(messages) && messages[j].Role == providers.MessageRoleTool {
+			toolCallID := strings.TrimSpace(messages[j].ToolCallID)
+			if _, ok := expected[toolCallID]; ok && !expected[toolCallID] {
+				expected[toolCallID] = true
+				toolMessages = append(toolMessages, cloneProviderMessages([]providers.Message{messages[j]})[0])
+			}
+			j++
+		}
+		allToolCallsAnswered := len(expected) > 0
+		for _, answered := range expected {
+			if !answered {
+				allToolCallsAnswered = false
+				break
+			}
+		}
+		if allToolCallsAnswered {
+			sanitized = append(sanitized, cloneProviderMessages([]providers.Message{message})[0])
+			sanitized = append(sanitized, toolMessages...)
+		} else if strings.TrimSpace(message.Content) != "" {
+			fallback := message
+			fallback.ToolCalls = nil
+			fallback.ToolCallID = ""
+			sanitized = append(sanitized, cloneProviderMessages([]providers.Message{fallback})[0])
+		}
+		i = j
+	}
+	return sanitized
 }
 
 func transcriptWithLastUserContent(transcript []providers.Message, content string) []providers.Message {
