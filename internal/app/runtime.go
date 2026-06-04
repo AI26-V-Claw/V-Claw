@@ -10,16 +10,12 @@ import (
 
 	"vclaw/internal/agent"
 	agentintent "vclaw/internal/agent/intent"
-	"vclaw/internal/audit"
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
 	ggmail "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
-	"vclaw/internal/policies"
 	"vclaw/internal/providers"
-	"vclaw/internal/safety"
-	"vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
@@ -200,14 +196,8 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 		Image: strings.TrimSpace(config.SandboxImage),
 		Guard: guard,
 	})
-	gated := gate.NewGatedRunner(gate.Config{
-		Checker:  policies.DefaultChecker,
-		Detector: safety.DefaultScanner,
-		Logger:   &audit.NopLogger{},
-		Runner:   runner,
-	})
 	return sandboxtool.Config{
-		Runner:              gated,
+		Runner:              runner,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
 }
