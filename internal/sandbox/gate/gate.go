@@ -181,7 +181,6 @@ func (g *GatedRunner) RunPython(ctx context.Context, req *runtime.RunPythonReque
 	policyReq := policies.Request{
 		RequestID: req.RequestID,
 		SessionID: req.SessionID,
-		UserID:    req.UserID,
 		Tool:      policies.ToolRunPython,
 		Input:     policies.RequestInput{Code: text, ScriptPath: req.ScriptPath},
 		Meta:      policies.RequestMeta{UserIntent: req.Meta.UserIntent, Source: req.Meta.Source},
@@ -189,7 +188,7 @@ func (g *GatedRunner) RunPython(ctx context.Context, req *runtime.RunPythonReque
 
 	// ── Log tool request ──────────────────────────────────────────────────
 	base := audit.NewToolRequestEvent(
-		req.RequestID, req.SessionID, req.UserID,
+		req.RequestID, req.SessionID, "",
 		string(policies.ToolRunPython), audit.ActionRunPython,
 		text,
 	)
@@ -238,7 +237,6 @@ func (g *GatedRunner) RunShell(ctx context.Context, req *runtime.RunShellRequest
 	policyReq := policies.Request{
 		RequestID: req.RequestID,
 		SessionID: req.SessionID,
-		UserID:    req.UserID,
 		Tool:      policies.ToolRunShell,
 		Input:     policies.RequestInput{Command: req.Command},
 		Meta:      policies.RequestMeta{UserIntent: req.Meta.UserIntent, Source: req.Meta.Source},
@@ -246,7 +244,7 @@ func (g *GatedRunner) RunShell(ctx context.Context, req *runtime.RunShellRequest
 
 	// ── Log tool request ──────────────────────────────────────────────────
 	base := audit.NewToolRequestEvent(
-		req.RequestID, req.SessionID, req.UserID,
+		req.RequestID, req.SessionID, "",
 		string(policies.ToolRunShell), audit.ActionRunShell,
 		req.Command,
 	)

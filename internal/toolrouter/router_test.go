@@ -66,7 +66,6 @@ func req(tool, workspaceDir string) toolrouter.ToolRequest {
 	return toolrouter.ToolRequest{
 		RequestID: "req_" + tool,
 		SessionID: "sess_test",
-		UserID:    "user_test",
 		Tool:      tool,
 		Input:     toolrouter.ToolInput{WorkspaceDir: workspaceDir},
 		Context:   toolrouter.ToolContext{Source: "agent"},

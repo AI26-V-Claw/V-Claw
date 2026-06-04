@@ -76,7 +76,6 @@ func TestGateIntegration_Python_HelloWorld(t *testing.T) {
 	result, err := runner.RunPython(ctx, &runtime.RunPythonRequest{
 		RequestID:    "integ-py-01",
 		SessionID:    "integ-sess",
-		UserID:       "tester",
 		WorkspaceDir: wsDir,
 		Code:         "print('hello from gated sandbox')",
 	})
@@ -122,7 +121,6 @@ func TestGateIntegration_Shell_ListWorkspace(t *testing.T) {
 	result, err := runner.RunShell(ctx, &runtime.RunShellRequest{
 		RequestID:    "integ-sh-01",
 		SessionID:    "integ-sess",
-		UserID:       "tester",
 		WorkspaceDir: wsDir,
 		Command:      "ls -la /workspace && pwd",
 	})
@@ -144,7 +142,6 @@ func TestGateIntegration_Python_WriteOutput(t *testing.T) {
 	result, err := runner.RunPython(ctx, &runtime.RunPythonRequest{
 		RequestID:    "integ-py-02",
 		SessionID:    "integ-sess",
-		UserID:       "tester",
 		WorkspaceDir: wsDir,
 		Code: `
 with open('/workspace/output.txt', 'w') as f:
@@ -181,7 +178,6 @@ func TestGateIntegration_Shell_Block_Shutdown(t *testing.T) {
 	_, err := runner.RunShell(ctx, &runtime.RunShellRequest{
 		RequestID:    "integ-blk-01",
 		SessionID:    "integ-sess",
-		UserID:       "tester",
 		WorkspaceDir: wsDir,
 		Command:      "shutdown -h now",
 	})
@@ -207,7 +203,6 @@ func TestGateIntegration_Python_Block_Credential(t *testing.T) {
 	_, err := runner.RunPython(ctx, &runtime.RunPythonRequest{
 		RequestID:    "integ-blk-02",
 		SessionID:    "integ-sess",
-		UserID:       "tester",
 		WorkspaceDir: wsDir,
 		Code: `
 with open('.env') as f:
@@ -230,7 +225,6 @@ func TestGateIntegration_Shell_NeedsApproval_Rm(t *testing.T) {
 	_, err := runner.RunShell(ctx, &runtime.RunShellRequest{
 		RequestID:    "integ-na-01",
 		SessionID:    "integ-sess",
-		UserID:       "tester",
 		WorkspaceDir: wsDir,
 		Command:      "rm -rf /workspace/temp",
 	})
@@ -266,7 +260,6 @@ func TestGateIntegration_Python_Timeout(t *testing.T) {
 	result, err := runner.RunPython(ctx, &runtime.RunPythonRequest{
 		RequestID:    "integ-to-01",
 		SessionID:    "integ-sess",
-		UserID:       "tester",
 		WorkspaceDir: wsDir,
 		Code:         "import time; time.sleep(9999)",
 		Timeout:      3 * time.Second,

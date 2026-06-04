@@ -92,7 +92,6 @@ func TestRunPythonToolExecutesConfiguredRunner(t *testing.T) {
 		Runner:              runner,
 		DefaultWorkspaceDir: "/tmp/workspace",
 		DefaultSessionID:    "sess_test",
-		DefaultUserID:       "user_test",
 	})
 
 	result := tool.Execute(context.Background(), tools.ToolCall{

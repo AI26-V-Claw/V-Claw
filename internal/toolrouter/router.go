@@ -43,11 +43,8 @@ type ToolRequest struct {
 	// RequestID is a unique identifier assigned by the Agent Planner.
 	RequestID string `json:"request_id"`
 
-	// SessionID ties the request to the active user session.
+	// SessionID ties the request to the active session.
 	SessionID string `json:"session_id"`
-
-	// UserID is the authenticated user who triggered the request.
-	UserID string `json:"user_id"`
 
 	// Tool identifies which sandbox tool to invoke.
 	// Currently supported: "sandbox.runPython", "sandbox.runShell".
@@ -211,7 +208,6 @@ func (r *ToolRouter) dispatchPython(ctx context.Context, req ToolRequest) ToolRe
 	input := pytool.Input{
 		RequestID:      req.RequestID,
 		SessionID:      req.SessionID,
-		UserID:         req.UserID,
 		WorkspaceDir:   req.Input.WorkspaceDir,
 		Code:           req.Input.Code,
 		ScriptPath:     req.Input.ScriptPath,
@@ -230,7 +226,6 @@ func (r *ToolRouter) dispatchShell(ctx context.Context, req ToolRequest) ToolRes
 	input := shtool.Input{
 		RequestID:      req.RequestID,
 		SessionID:      req.SessionID,
-		UserID:         req.UserID,
 		WorkspaceDir:   req.Input.WorkspaceDir,
 		Command:        req.Input.Command,
 		TimeoutSeconds: req.Input.TimeoutSeconds,

@@ -86,11 +86,8 @@ type Request struct {
 	// RequestID is the unique identifier assigned by the tool router.
 	RequestID string
 
-	// SessionID ties the request to an active user session.
+	// SessionID ties the request to an active session.
 	SessionID string
-
-	// UserID is the authenticated user who triggered the request.
-	UserID string
 
 	// Tool identifies which sandbox tool is being invoked.
 	Tool ToolName

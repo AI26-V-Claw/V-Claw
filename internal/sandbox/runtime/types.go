@@ -92,11 +92,8 @@ type RunPythonRequest struct {
 	// RequestID is a unique identifier assigned by the tool router.
 	RequestID string
 
-	// SessionID ties the request to a user session.
+	// SessionID ties the request to the active session.
 	SessionID string
-
-	// UserID is the authenticated user who triggered the action.
-	UserID string
 
 	// WorkspaceDir is the absolute host path to the session-scoped workspace
 	// volume that will be bind-mounted as /workspace inside the container.
@@ -127,11 +124,8 @@ type RunShellRequest struct {
 	// RequestID is a unique identifier assigned by the tool router.
 	RequestID string
 
-	// SessionID ties the request to a user session.
+	// SessionID ties the request to the active session.
 	SessionID string
-
-	// UserID is the authenticated user who triggered the action.
-	UserID string
 
 	// WorkspaceDir is the absolute host path to the session-scoped workspace
 	// volume that will be bind-mounted as /workspace inside the container.

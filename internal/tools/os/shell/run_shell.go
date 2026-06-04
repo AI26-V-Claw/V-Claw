@@ -30,11 +30,8 @@ type Input struct {
 	// RequestID is a caller-assigned unique ID for this tool invocation.
 	RequestID string `json:"request_id"`
 
-	// SessionID ties the invocation to the active user session.
+	// SessionID ties the invocation to the active session.
 	SessionID string `json:"session_id"`
-
-	// UserID identifies the authenticated user.
-	UserID string `json:"user_id"`
 
 	// WorkspaceDir is the absolute host path to the session workspace that
 	// will be mounted as /workspace inside the sandbox.
@@ -154,7 +151,6 @@ func toRuntimeRequest(input Input) *runtime.RunShellRequest {
 	return &runtime.RunShellRequest{
 		RequestID:    input.RequestID,
 		SessionID:    input.SessionID,
-		UserID:       input.UserID,
 		WorkspaceDir: input.WorkspaceDir,
 		Command:      input.Command,
 		Timeout:      timeout,

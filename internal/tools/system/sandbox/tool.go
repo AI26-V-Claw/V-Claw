@@ -20,14 +20,12 @@ const (
 
 const (
 	defaultSessionID = "agent"
-	defaultUserID    = "agent"
 )
 
 type Config struct {
 	Runner              runtime.Runner
 	DefaultWorkspaceDir string
 	DefaultSessionID    string
-	DefaultUserID       string
 }
 
 type RunPythonTool struct {
@@ -70,7 +68,6 @@ func (t RunPythonTool) Execute(ctx context.Context, call tools.ToolCall) tools.T
 	input := pytool.Input{
 		RequestID:      requestID(call),
 		SessionID:      stringArgumentOr(call.Arguments, defaultIfEmpty(t.cfg.DefaultSessionID, defaultSessionID), "session_id", "sessionId"),
-		UserID:         stringArgumentOr(call.Arguments, defaultIfEmpty(t.cfg.DefaultUserID, defaultUserID), "user_id", "userId"),
 		WorkspaceDir:   workspaceDir(call.Arguments, t.cfg.DefaultWorkspaceDir),
 		Code:           stringArgument(call.Arguments, "code"),
 		ScriptPath:     stringArgument(call.Arguments, "script_path", "scriptPath"),
@@ -122,7 +119,6 @@ func (t RunShellTool) Execute(ctx context.Context, call tools.ToolCall) tools.To
 	input := shtool.Input{
 		RequestID:      requestID(call),
 		SessionID:      stringArgumentOr(call.Arguments, defaultIfEmpty(t.cfg.DefaultSessionID, defaultSessionID), "session_id", "sessionId"),
-		UserID:         stringArgumentOr(call.Arguments, defaultIfEmpty(t.cfg.DefaultUserID, defaultUserID), "user_id", "userId"),
 		WorkspaceDir:   workspaceDir(call.Arguments, t.cfg.DefaultWorkspaceDir),
 		Command:        stringArgument(call.Arguments, "command"),
 		TimeoutSeconds: intArgument(call.Arguments, "timeout_seconds", "timeoutSeconds"),
@@ -175,7 +171,6 @@ func sandboxNotConfigured(call tools.ToolCall) tools.ToolResult {
 
 func normalizeConfig(cfg Config) Config {
 	cfg.DefaultSessionID = defaultIfEmpty(cfg.DefaultSessionID, defaultSessionID)
-	cfg.DefaultUserID = defaultIfEmpty(cfg.DefaultUserID, defaultUserID)
 	return cfg
 }
 

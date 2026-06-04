@@ -73,7 +73,6 @@ func pythonReq(id, code string) *runtime.RunPythonRequest {
 	return &runtime.RunPythonRequest{
 		RequestID:    id,
 		SessionID:    "sess_test",
-		UserID:       "user_test",
 		WorkspaceDir: "/tmp/vclaw-test-ws",
 		Code:         code,
 	}
@@ -83,7 +82,6 @@ func shellReq(id, cmd string) *runtime.RunShellRequest {
 	return &runtime.RunShellRequest{
 		RequestID:    id,
 		SessionID:    "sess_test",
-		UserID:       "user_test",
 		WorkspaceDir: "/tmp/vclaw-test-ws",
 		Command:      cmd,
 	}
