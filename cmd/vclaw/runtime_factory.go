@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"vclaw/internal/agent"
@@ -16,7 +17,11 @@ import (
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/connectors/tavily"
+	"vclaw/internal/policies"
 	"vclaw/internal/providers"
+	"vclaw/internal/safety"
+	sandboxgate "vclaw/internal/sandbox/gate"
+	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 	caltools "vclaw/internal/tools/office/calendar"
@@ -71,7 +76,11 @@ func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRun
 	if err := tools.RegisterBuiltInTools(registry); err != nil {
 		return agentRuntimeBundle{}, err
 	}
-	if err := sandboxtools.RegisterTools(registry); err != nil {
+	sandboxConfig, err := newSandboxToolConfig()
+	if err != nil {
+		return agentRuntimeBundle{}, err
+	}
+	if err := sandboxtools.RegisterToolsWithConfig(registry, sandboxConfig); err != nil {
 		return agentRuntimeBundle{}, err
 	}
 	if err := registerWebTools(registry, options); err != nil {
@@ -101,6 +110,45 @@ func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRun
 		Logger:           options.Logger,
 	})
 	return agentRuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
+}
+
+func newSandboxToolConfig() (sandboxtools.Config, error) {
+	workspaceDir := strings.TrimSpace(os.Getenv("VCLAW_SANDBOX_WORKSPACE_DIR"))
+	if workspaceDir == "" {
+		workspaceDir = ".sandbox-workspace"
+	}
+	if !filepath.IsAbs(workspaceDir) {
+		abs, err := filepath.Abs(workspaceDir)
+		if err != nil {
+			return sandboxtools.Config{}, fmt.Errorf("resolve sandbox workspace: %w", err)
+		}
+		workspaceDir = abs
+	}
+	if err := os.MkdirAll(workspaceDir, 0750); err != nil {
+		return sandboxtools.Config{}, fmt.Errorf("create sandbox workspace: %w", err)
+	}
+
+	guard, err := sandboxruntime.NewWorkspaceGuard(workspaceDir)
+	if err != nil {
+		return sandboxtools.Config{}, err
+	}
+
+	image := strings.TrimSpace(os.Getenv("VCLAW_SANDBOX_IMAGE"))
+	dockerRunner := sandboxruntime.NewDockerRunner(sandboxruntime.DockerRunnerConfig{
+		Image: image,
+		Guard: guard,
+	})
+	gatedRunner := sandboxgate.NewGatedRunner(sandboxgate.Config{
+		Checker:          policies.DefaultChecker,
+		Detector:         safety.DefaultScanner,
+		Runner:           dockerRunner,
+		SkipApprovalGate: true, // agent ToolPolicy HITL handles approval; gate enforces block only
+	})
+	return sandboxtools.Config{
+		Runner:              gatedRunner,
+		Guard:               guard,
+		DefaultWorkspaceDir: guard.Root(),
+	}, nil
 }
 
 func registerWebTools(registry *tools.ToolRegistry, options agentRuntimeOptions) error {

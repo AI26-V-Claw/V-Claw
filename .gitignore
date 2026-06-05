@@ -8,6 +8,7 @@ configs/google/token.json
 .gocache/
 .gopath/
 bin/
+cmd/vclaw-dev/
 .appdata/
 
 # Evaluation results (generated artifacts)
@@ -23,9 +24,13 @@ logs/audit.jsonl
 AGENTS.md
 CLAUDE.md
 v_claw_architect_claude.pdf
+
+# sandbox
+.sandbox-workspace/
+sandbox_smoke.go
+
 /vclaw
 /vclaw.exe
-vclaw
 tests/safety/
 examples/
 configs/SOUL.md

@@ -1,0 +1,170 @@
+// Package policies implements the V-Claw policy layer.
+//
+// Every tool request from the Agent Planner must pass through the policy
+// checker before reaching the sandbox executor. The checker classifies the
+// request by risk level and returns a decision:
+//
+//   - allow          → execute immediately
+//   - requires_approval → hold and surface a HITL proposal
+//   - block          → reject, log, and never execute
+//
+// Architecture position:
+//
+//	Tool Request → [PolicyChecker] → allow/requires_approval/block
+//	                                       ↓
+//	                              HITL Gate (if requires_approval)
+//	                                       ↓
+//	                              Sandbox Executor
+package policies
+
+// ─── Decision ─────────────────────────────────────────────────────────────────
+
+// Decision is the outcome of a policy check.
+type Decision string
+
+const (
+	// DecisionAllow means the tool request may be executed immediately.
+	DecisionAllow Decision = "allow"
+
+	// DecisionRequiresApproval means the request must be held and presented to
+	// the user for explicit approval before execution.
+	DecisionRequiresApproval Decision = "requires_approval"
+
+	// DecisionBlock means the request is rejected and must never be executed.
+	DecisionBlock Decision = "block"
+)
+
+// ─── Risk Levels ─────────────────────────────────────────────────────────────
+
+// RiskLevel describes how dangerous the requested action is.
+// It is determined by the PolicyChecker independently of the final Decision
+// so that audit logs capture the risk assessment regardless of outcome.
+type RiskLevel string
+
+const (
+	// RiskSafeRead — read-only; e.g. list files, read CSV, view metadata.
+	// Decision: allow.
+	RiskSafeRead RiskLevel = "safe_read"
+
+	// RiskSafeCompute — compute-only work without external or local side effects.
+	RiskSafeCompute RiskLevel = "safe_compute"
+
+	// RiskSensitiveRead — reads private or sensitive data, including secrets,
+	// tokens, private keys, or credentials.
+	RiskSensitiveRead RiskLevel = "sensitive_read"
+
+	// RiskExternalWrite — sends or changes data outside the local runtime.
+	RiskExternalWrite RiskLevel = "external_write"
+
+	// RiskLocalWrite — creates new files in workspace; e.g. write report,
+	// create directory.
+	RiskLocalWrite RiskLevel = "local_write"
+
+	// RiskCodeExecution — executes Python, shell, or another code payload.
+	RiskCodeExecution RiskLevel = "code_execution"
+
+	// RiskDestructive — deletes, overwrites, or deeply changes existing data or
+	// system state; e.g. rm, shutdown, service control, chmod.
+	RiskDestructive RiskLevel = "destructive"
+)
+
+// ─── Tool Names ───────────────────────────────────────────────────────────────
+
+// ToolName identifies which tool the agent is requesting.
+type ToolName string
+
+const (
+	ToolRunPython ToolName = "sandbox.runPython"
+	ToolRunShell  ToolName = "sandbox.runShell"
+)
+
+// ─── Policy Request ───────────────────────────────────────────────────────────
+
+// Request is the input to the PolicyChecker.
+// It mirrors the Tool Request schema from the V-Claw API contract (section 10).
+type Request struct {
+	// RequestID is the unique identifier assigned by the tool router.
+	RequestID string
+
+	// SessionID ties the request to an active session.
+	SessionID string
+
+	// Tool identifies which sandbox tool is being invoked.
+	Tool ToolName
+
+	// Input holds the tool-specific payload for classification.
+	// For sandbox.runShell: set Command.
+	// For sandbox.runPython: set Code and/or ScriptPath.
+	Input RequestInput
+
+	// Meta carries user intent and source metadata for audit purposes.
+	Meta RequestMeta
+}
+
+// RequestInput holds the classifiable payload extracted from the tool call.
+type RequestInput struct {
+	// Command is the shell expression for sandbox.runShell requests.
+	Command string
+
+	// Code is the inline Python source for sandbox.runPython requests.
+	Code string
+
+	// ScriptPath is the relative path to a .py file for sandbox.runPython requests.
+	ScriptPath string
+}
+
+// RequestMeta carries contextual metadata used in audit logs.
+type RequestMeta struct {
+	// UserIntent is a short natural-language description of what was requested.
+	UserIntent string
+
+	// Source identifies who triggered the request: "agent" or "user_direct".
+	Source string
+}
+
+// ─── Policy Result ────────────────────────────────────────────────────────────
+
+// Result is the output of the PolicyChecker.
+// It matches the Policy Result schema from the V-Claw API contract (section 10).
+type Result struct {
+	// RequestID echoes the originating request for correlation.
+	RequestID string
+
+	// Decision is the policy outcome: allow, requires_approval, or block.
+	Decision Decision
+
+	// RiskLevel is the assessed danger level of the request.
+	RiskLevel RiskLevel
+
+	// Reasons is a list of human-readable Vietnamese explanations for the
+	// decision. Used in HITL proposals and audit logs.
+	Reasons []string
+}
+
+// ─── Checker interface ────────────────────────────────────────────────────────
+
+// Checker is the interface every policy engine must implement.
+// Callers invoke Check before dispatching any tool request.
+type Checker interface {
+	// Check classifies req and returns the policy decision.
+	// It never executes the request itself.
+	Check(req Request) Result
+}
+
+// ─── Policy matrix entry ──────────────────────────────────────────────────────
+
+// MatrixEntry maps a matched condition to its risk level, decision, and reason.
+// Used internally by RuleBasedChecker to build the policy matrix.
+type MatrixEntry struct {
+	// Pattern is the token or substring to match against the request input.
+	Pattern string
+
+	// RiskLevel is the risk classification when this entry matches.
+	RiskLevel RiskLevel
+
+	// Decision is the policy outcome when this entry matches.
+	Decision Decision
+
+	// ReasonVI is the Vietnamese explanation included in the Result.
+	ReasonVI string
+}
