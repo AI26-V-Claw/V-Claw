@@ -75,10 +75,11 @@ type Runtime struct {
 }
 
 type pendingApproval struct {
-	message    contracts.UserMessage
-	request    contracts.ApprovalRequest
-	toolCall   providers.ToolCall
-	definition tools.ToolDefinition
+	message            contracts.UserMessage
+	request            contracts.ApprovalRequest
+	toolCall           providers.ToolCall
+	definition         tools.ToolDefinition
+	remainingToolCalls []providers.ToolCall // tool calls skipped after this one; processed after approval
 }
 
 type pendingClarificationResolution struct {
@@ -117,7 +118,14 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	}
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
-		referenceResolver = reference.NewHeuristicResolver()
+		if config.Provider != nil {
+			referenceResolver = newHeuristicFirstResolver(
+				reference.NewHeuristicResolver(),
+				reference.NewLLMResolver(config.Provider, config.Model),
+			)
+		} else {
+			referenceResolver = reference.NewHeuristicResolver()
+		}
 	}
 	return &Runtime{
 		provider:          config.Provider,
@@ -288,6 +296,10 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		base.Error = errShape
 		base.Message = errShape.Message
 		return base, nil
+	}
+	if shouldForceToolEnabledForContextualDataFollowUp(route, message.Text, history, sessionMemory) {
+		route.Mode = TurnModeToolEnabled
+		route.Reason = strings.TrimSpace(route.Reason + "; contextual data follow-up requires tools")
 	}
 	if route.Mode == TurnModeBlockedPromptInjection {
 		blocked := "Tôi không thể hỗ trợ yêu cầu cố gắng thay đổi hoặc bỏ qua hướng dẫn hệ thống."
@@ -545,10 +557,11 @@ If required information is missing, ask one concise clarification question inste
 			case contracts.RiskDecisionRequiresApproval:
 				approval := r.approvalRequest(message, providerToolCall, decision)
 				r.storePendingApproval(pendingApproval{
-					message:    message,
-					request:    approval,
-					toolCall:   providerToolCall,
-					definition: definition,
+					message:            message,
+					request:            approval,
+					toolCall:           providerToolCall,
+					definition:         definition,
+					remainingToolCalls: cloneProviderToolCalls(assistantMessage.ToolCalls[index+1:]),
 				})
 				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
 					Role:       providers.MessageRoleTool,
@@ -702,6 +715,14 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			response.Status = contracts.AgentStatusFailed
 			response.Error = errShape
 			response.Message = errShape.Message
+		}
+		// If the approved tool succeeded and there are remaining skipped tools from the
+		// same turn, automatically continue so the user doesn't lose those tasks.
+		if result.Success && len(pending.remainingToolCalls) > 0 {
+			continuation := buildApprovalContinuationMessage(pending, result, r.now())
+			if continuationResp, err := r.Run(ctx, continuation); err == nil {
+				return continuationResp, nil
+			}
 		}
 		return response, nil
 	case contracts.ApprovalDecisionRejected:
@@ -879,6 +900,7 @@ Gmail date rules, restated in ASCII:
 - gmail.listEmails and gmail.listThreads after/before must be date-only YYYY-MM-DD, never RFC3339 datetime strings.
 - "today" / "hom nay" means after=today local date and before=tomorrow local date.
 - Keep relative date words out of Gmail query; query is only for sender, subject, body, labels, or Gmail search terms.
+- Sent mail rule: "mail/email toi da gui toi/cho <email>" means query "in:sent to:<email>" with labelIds ["SENT"].
 For calendar.createEvent and calendar.updateEvent:
 - Attendees must be valid email addresses.
 - If the user provides a person name instead of an email address, call people.searchDirectory first and use the resolved Workspace email.
@@ -910,6 +932,14 @@ Format final answers for chat channels:
 
 func (r *Runtime) resolveReference(ctx context.Context, message contracts.UserMessage, recentHistory []string, memory sessions.SessionMemory, activeClarification bool) (*reference.Resolution, *contracts.ErrorShape) {
 	if r.referenceResolver == nil || activeClarification {
+		return nil, nil
+	}
+	// Revision messages are structured internal requests built by buildRevisionRequest;
+	// they contain tool names and keywords that would falsely trigger reference resolution.
+	if isRevisionMessage(message) {
+		return nil, nil
+	}
+	if !hasReferenceCueText(message.Text) {
 		return nil, nil
 	}
 	resolution, err := r.referenceResolver.Resolve(ctx, reference.Input{
@@ -1090,6 +1120,34 @@ func toolChoiceForRoute(route *TurnRoute) string {
 		return "none"
 	}
 	return "auto"
+}
+
+func shouldForceToolEnabledForContextualDataFollowUp(route *TurnRoute, text string, history []string, memory sessions.SessionMemory) bool {
+	if route == nil || route.Mode != TurnModeNoTool {
+		return false
+	}
+	lower := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(text)))
+	if lower == "" {
+		return false
+	}
+	hasFollowUpCue := containsAnyText(lower,
+		"thi sao", "con",
+		"hom qua", "hom nay", "ngay mai",
+		"tuan nay", "tuan truoc", "tuan sau",
+		"thang nay", "thang truoc", "thang sau", "thang toi",
+	)
+	if !hasFollowUpCue {
+		return false
+	}
+	context := foldVietnameseSearchText(strings.ToLower(strings.Join(history, "\n") + "\n" + memory.Summary))
+	for _, result := range memory.LastActionResults {
+		context += "\n" + foldVietnameseSearchText(strings.ToLower(result.ToolName+" "+result.Content))
+	}
+	return containsAnyText(context,
+		"calendar", "lich", "calendar.listevents",
+		"gmail", "email", "mail", "gmail.listemails", "gmail.listthreads",
+		"google chat", "chat", "chat.listmessages",
+	)
 }
 
 func (r *Runtime) clarificationResponse(message contracts.UserMessage, classification *agentintent.ClassificationOutput, activeClarification bool) *contracts.AgentResponse {
@@ -1760,8 +1818,14 @@ func fallbackPendingClarificationResolution(pending sessions.PendingClarificatio
 }
 
 func contextualPendingClarificationText(pending sessions.PendingClarification, userAnswer string) string {
+	partialInput := "{}"
+	if len(pending.PartialInput) > 0 {
+		if data, err := json.Marshal(pending.PartialInput); err == nil {
+			partialInput = string(data)
+		}
+	}
 	return strings.TrimSpace(fmt.Sprintf(`The current user message answers a pending clarification in the same session.
-Use the original request, assistant question, known partial input, and current answer to continue the original task.
+Use the original request, assistant question, already-provided partial input, and current answer to continue the original task.
 Do not treat this as a standalone request.
 Do not execute write/destructive tools without the normal approval boundary.
 
@@ -1774,11 +1838,14 @@ assistant_question:
 target_tool:
 %s
 
+already_provided_input:
+%s
+
 missing_fields:
 %s
 
 current_user_answer:
-%s`, pending.OriginalRequest, pending.Question, pending.ToolName, strings.Join(pending.MissingFields, ", "), strings.TrimSpace(userAnswer)))
+%s`, pending.OriginalRequest, pending.Question, pending.ToolName, partialInput, strings.Join(pending.MissingFields, ", "), strings.TrimSpace(userAnswer)))
 }
 
 func historyWithPendingClarification(pending sessions.PendingClarification, history []string) []string {
@@ -2540,6 +2607,16 @@ func isUsableReference(resolution *reference.Resolution) bool {
 		resolution.Confidence >= 0.6
 }
 
+func isRevisionMessage(message contracts.UserMessage) bool {
+	if message.Metadata == nil {
+		return false
+	}
+	_, hasApprovalID := message.Metadata["approvalId"]
+	_, hasRevisionComment := message.Metadata["revisionComment"]
+	_, hasContinuationOf := message.Metadata["continuationOf"]
+	return hasApprovalID || hasRevisionComment || hasContinuationOf
+}
+
 func hasReferenceCueText(text string) bool {
 	lower := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(text)))
 	if lower == "" {
@@ -2901,8 +2978,9 @@ func normalizeCalendarListEventsArgs(now time.Time, args map[string]any, userTex
 }
 
 func normalizeGmailListArgs(now time.Time, args map[string]any, userText string) map[string]any {
+	sentQuery, sentLabelIDs, hasSentRecipient := sentMailSearchQuery(userText)
 	start, end, ok := providerRelativeDateRange(now, userText)
-	if !ok {
+	if !ok && !hasSentRecipient {
 		return nil
 	}
 
@@ -2910,12 +2988,41 @@ func normalizeGmailListArgs(now time.Time, args map[string]any, userText string)
 	if normalized == nil {
 		normalized = map[string]any{}
 	}
-	normalized["after"] = start.Format("2006-01-02")
-	normalized["before"] = end.Format("2006-01-02")
+	if ok {
+		normalized["after"] = start.Format("2006-01-02")
+		normalized["before"] = end.Format("2006-01-02")
+	}
+	if hasSentRecipient {
+		normalized["query"] = sentQuery
+		normalized["labelIds"] = sentLabelIDs
+		return normalized
+	}
 	if query, ok := normalized["query"].(string); ok {
 		normalized["query"] = normalizeRelativeProviderQuery(query, userText, gmailQueryIntentTerms())
 	}
 	return normalized
+}
+
+func sentMailSearchQuery(userText string) (string, []string, bool) {
+	trimmed := strings.TrimSpace(userText)
+	if trimmed == "" {
+		return "", nil, false
+	}
+	lower := foldVietnameseSearchText(strings.ToLower(trimmed))
+	hasSentCue := containsAnyText(lower,
+		"toi da gui", "minh da gui",
+		"mail da gui", "email da gui",
+		"da gui den", "da gui toi", "da gui cho",
+		"sent to", "sent mail", "sent email",
+	)
+	if !hasSentCue {
+		return "", nil, false
+	}
+	email := emailAnswerPattern.FindString(trimmed)
+	if email == "" {
+		return "", nil, false
+	}
+	return "in:sent to:" + strings.ToLower(email), []string{"SENT"}, true
 }
 
 func providerRelativeDateRange(now time.Time, userText string) (time.Time, time.Time, bool) {
@@ -2944,6 +3051,9 @@ func providerRelativeDateRange(now time.Time, userText string) (time.Time, time.
 	case containsAnyText(text, "ngay mai", "tomorrow"):
 		start := startOfDay(now).AddDate(0, 0, 1)
 		return start, start.AddDate(0, 0, 1), true
+	case containsAnyText(text, "hom qua", "yesterday"):
+		start := startOfDay(now).AddDate(0, 0, -1)
+		return start, start.AddDate(0, 0, 1), true
 	case containsAnyText(text, "hom nay", "today"):
 		start := startOfDay(now)
 		return start, start.AddDate(0, 0, 1), true
@@ -2971,7 +3081,7 @@ func normalizeRelativeProviderQuery(query string, userText string, intentTerms [
 func relativeQueryTerms() []string {
 	return []string{
 		"tuan nay", "tuan sau", "thang nay", "thang toi", "thang sau",
-		"ngay mai", "hom nay", "today", "tomorrow", "this week", "next week",
+		"hom qua", "ngay mai", "hom nay", "yesterday", "today", "tomorrow", "this week", "next week",
 		"this month", "next month",
 	}
 }
@@ -3029,6 +3139,9 @@ func relativeDateRange(now time.Time, userText string) (time.Time, time.Time, bo
 	case containsAnyText(lower, "ngày mai", "ngay mai", "tomorrow"):
 		start := startOfDay(now).AddDate(0, 0, 1)
 		return start, start.AddDate(0, 0, 1), true
+	case containsAnyText(lower, "hôm qua", "hom qua", "yesterday"):
+		start := startOfDay(now).AddDate(0, 0, -1)
+		return start, start.AddDate(0, 0, 1), true
 	case containsAnyText(lower, "hôm nay", "hom nay", "today"):
 		start := startOfDay(now)
 		return start, start.AddDate(0, 0, 1), true
@@ -3064,6 +3177,9 @@ func normalizeCalendarListEventsArgsLegacy(now time.Time, args map[string]any, u
 		end = start.AddDate(0, 1, 0)
 	case containsAnyText(lower, "ngày mai", "ngay mai", "tomorrow"):
 		start = startOfDay(now).AddDate(0, 0, 1)
+		end = start.AddDate(0, 0, 1)
+	case containsAnyText(lower, "hôm qua", "hom qua", "yesterday"):
+		start = startOfDay(now).AddDate(0, 0, -1)
 		end = start.AddDate(0, 0, 1)
 	case containsAnyText(lower, "hôm nay", "hom nay", "today"):
 		start = startOfDay(now)
@@ -3218,6 +3334,39 @@ func (r *Runtime) peekPendingApproval(sessionID string, approvalID string) (pend
 	}
 	pending, ok := r.pendingApprovals[approvalID]
 	return pending, ok
+}
+
+func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
+	remainingNames := make([]string, 0, len(pending.remainingToolCalls))
+	for _, tc := range pending.remainingToolCalls {
+		remainingNames = append(remainingNames, tc.Name)
+	}
+	text := strings.TrimSpace(fmt.Sprintf(`Continuing the original multi-step request after an approved tool completed.
+Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.
+Do not repeat the tool that was just executed.
+
+Original request:
+%s
+
+Completed tool: %s
+Result: %s
+
+Continue by calling the remaining tools in the original plan: %s
+Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.`,
+		pending.message.Text,
+		pending.toolCall.Name,
+		result.ContentForLLM,
+		strings.Join(remainingNames, ", "),
+	))
+	msg := pending.message
+	msg.Text = text
+	msg.Timestamp = now
+	if msg.Metadata == nil {
+		msg.Metadata = map[string]any{}
+	}
+	msg.Metadata["continuationOf"] = pending.request.ApprovalID
+	msg.Metadata["completedTool"] = pending.toolCall.Name
+	return msg
 }
 
 func buildRevisionRequest(pending pendingApproval, comment string) string {
@@ -3477,4 +3626,32 @@ func cloneArguments(args map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+// heuristicFirstResolver tries the heuristic resolver first. It only trusts the
+// heuristic when the result is high-confidence and requires no clarification
+// (isUsableReference). When the heuristic is uncertain — e.g. it finds a cue word
+// but cannot locate a matching past result, or when the cue is a forward reference
+// inside the same request ("sự kiện này" referring to an event being created now) —
+// it falls back to the LLM resolver so the LLM can make the correct judgment.
+type heuristicFirstResolver struct {
+	primary  reference.Resolver
+	fallback reference.Resolver
+}
+
+func newHeuristicFirstResolver(primary reference.Resolver, fallback reference.Resolver) *heuristicFirstResolver {
+	return &heuristicFirstResolver{primary: primary, fallback: fallback}
+}
+
+func (r *heuristicFirstResolver) Resolve(ctx context.Context, input reference.Input) (*reference.Resolution, error) {
+	result, err := r.primary.Resolve(ctx, input)
+	if err == nil && isUsableReference(result) {
+		// Heuristic resolved with high confidence and no clarification needed — trust it.
+		return result, nil
+	}
+	// Heuristic is uncertain (low confidence, needs clarification, or no match).
+	// Delegate to LLM so it can distinguish forward references (e.g. "sự kiện này"
+	// referring to an event being created in the same request) from genuine
+	// past-result references.
+	return r.fallback.Resolve(ctx, input)
 }

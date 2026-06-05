@@ -72,7 +72,7 @@ type CreateEventTool struct {
 func (t *CreateEventTool) Name() string { return ToolNameCreateEvent }
 
 func (t *CreateEventTool) Description() string {
-	return "Create a new event in Google Calendar."
+	return "Create a new event in Google Calendar. Both start and end times are required. If the user did not explicitly provide an end time, ask for it before calling this tool — do not assume or auto-fill a default duration."
 }
 
 func (t *CreateEventTool) Parameters() tools.ToolSchema {
@@ -89,7 +89,7 @@ func (t *CreateEventTool) Parameters() tools.ToolSchema {
 			},
 			"end": map[string]any{
 				"type":        "string",
-				"description": "Event end time in ISO-8601 format",
+				"description": "Event end time in ISO-8601 format. Must be explicitly stated by the user. If not provided, ask the user for the end time before calling this tool.",
 			},
 			"attendees": map[string]any{
 				"type":        "array",

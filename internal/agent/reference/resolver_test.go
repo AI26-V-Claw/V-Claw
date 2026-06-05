@@ -56,6 +56,30 @@ func TestHeuristicResolverResolvesRecentCalendarEvent(t *testing.T) {
 	}
 }
 
+func TestHeuristicResolverResolvesNewlyCreatedCalendarEvent(t *testing.T) {
+	resolver := NewHeuristicResolver()
+	result, err := resolver.Resolve(context.Background(), Input{
+		CurrentMessage: "viet email moi tham du su kien vua tao",
+		Memory: sessions.SessionMemory{LastActionResults: []sessions.ActionResult{{
+			ToolName:  "calendar.createEvent",
+			Content:   `Event created: {"id":"evt_1","title":"Demo Sprint1","start":"2026-06-05T15:00:00+07:00","end":"2026-06-05T17:00:00+07:00"}`,
+			CreatedAt: time.Date(2026, 6, 5, 8, 47, 0, 0, time.UTC),
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !result.HasReference || result.ReferenceType != TypeCalendarEvent {
+		t.Fatalf("expected newly created calendar reference, got %#v", result)
+	}
+	if result.ReferenceID != "evt_1" {
+		t.Fatalf("expected event id, got %q", result.ReferenceID)
+	}
+	if result.NeedsClarification {
+		t.Fatalf("expected resolved reference, got clarification: %#v", result)
+	}
+}
+
 func TestHeuristicResolverResolvesMeetingAboveFromCalendarList(t *testing.T) {
 	resolver := NewHeuristicResolver()
 	result, err := resolver.Resolve(context.Background(), Input{
