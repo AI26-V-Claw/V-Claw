@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	sandboxruntime "vclaw/internal/sandbox/runtime"
@@ -166,5 +168,77 @@ func TestRunShellToolExecutesConfiguredRunner(t *testing.T) {
 	}
 	if runner.shellReq.WorkspaceDir != "/tmp/workspace" {
 		t.Fatalf("WorkspaceDir = %q", runner.shellReq.WorkspaceDir)
+	}
+}
+
+func TestRunPythonToolUsesSessionWorkspaceWhenGuardConfigured(t *testing.T) {
+	root := t.TempDir()
+	guard, err := sandboxruntime.NewWorkspaceGuard(root)
+	if err != nil {
+		t.Fatalf("NewWorkspaceGuard() error = %v", err)
+	}
+
+	runner := &fakeRunner{}
+	tool := NewRunPythonTool(Config{
+		Runner:           runner,
+		Guard:            guard,
+		DefaultSessionID: "fallback_session",
+	})
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "call_session_workspace",
+		Name: ToolNameRunPython,
+		Arguments: map[string]any{
+			"session_id":    "sess_123",
+			"workspace_dir": filepath.Join(root, "ignored"),
+			"code":          "print('hello')",
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	expected := filepath.Join(root, "sess_123", "workspace")
+	if runner.pythonReq == nil {
+		t.Fatal("expected runner RunPython call")
+	}
+	if runner.pythonReq.WorkspaceDir != expected {
+		t.Fatalf("WorkspaceDir = %q, want %q", runner.pythonReq.WorkspaceDir, expected)
+	}
+	if _, err := os.Stat(expected); err != nil {
+		t.Fatalf("expected session workspace to exist: %v", err)
+	}
+}
+
+func TestRunShellToolRejectsInvalidSessionIDWhenGuardConfigured(t *testing.T) {
+	root := t.TempDir()
+	guard, err := sandboxruntime.NewWorkspaceGuard(root)
+	if err != nil {
+		t.Fatalf("NewWorkspaceGuard() error = %v", err)
+	}
+
+	runner := &fakeRunner{}
+	tool := NewRunShellTool(Config{
+		Runner: runner,
+		Guard:  guard,
+	})
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "call_invalid_session",
+		Name: ToolNameRunShell,
+		Arguments: map[string]any{
+			"session_id": "bad/session",
+			"command":    "ls -la",
+		},
+	})
+
+	if result.Success {
+		t.Fatalf("expected failure, got %#v", result)
+	}
+	if result.Error == nil || result.Error.Code != tools.ErrorInvalidArgument {
+		t.Fatalf("expected invalid argument error, got %#v", result.Error)
+	}
+	if runner.shellReq != nil {
+		t.Fatal("runner should not be called for invalid session ID")
 	}
 }

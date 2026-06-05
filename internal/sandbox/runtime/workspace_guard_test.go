@@ -201,13 +201,26 @@ func TestValidateWorkspaceDir_RootItself(t *testing.T) {
 	guard, root, cleanup := tempRoot(t)
 	defer cleanup()
 
-	// Allowing the root itself would let jobs interfere with each other.
-	// The guard should permit the root (it is "under" itself) but the
-	// session lifecycle should always use a subdirectory.
-	// This test verifies the boundary condition is explicit.
-	if err := guard.ValidateWorkspaceDir(root); err != nil {
-		// Root is technically valid under itself; document that behaviour.
-		t.Logf("note: root itself rejected: %v", err)
+	if err := guard.ValidateWorkspaceDir(root); err == nil {
+		t.Fatal("expected trusted root itself to be rejected")
+	}
+}
+
+func TestValidateWorkspaceDir_SymlinkEscape(t *testing.T) {
+	guard, root, cleanup := tempRoot(t)
+	defer cleanup()
+
+	outside := t.TempDir()
+	link := filepath.Join(root, "sess_link", "workspace")
+	if err := os.MkdirAll(filepath.Dir(link), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation is not available in this environment: %v", err)
+	}
+
+	if err := guard.ValidateWorkspaceDir(link); err == nil {
+		t.Fatal("expected symlinked workspace escaping the trusted root to be rejected")
 	}
 }
 

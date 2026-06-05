@@ -17,9 +17,9 @@ import (
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
+	"vclaw/internal/safety"
 	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
-	"vclaw/internal/safety"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
@@ -207,6 +207,7 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 	})
 	return sandboxtool.Config{
 		Runner:              gatedRunner,
+		Guard:               guard,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
 }

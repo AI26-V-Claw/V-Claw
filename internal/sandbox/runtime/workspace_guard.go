@@ -113,19 +113,26 @@ func (g *WorkspaceGuard) ValidateWorkspaceDir(hostDir string) error {
 	}
 
 	clean := filepath.Clean(hostDir)
+	real, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return fmt.Errorf("workspace guard: cannot resolve workspace dir %q: %w", clean, err)
+	}
 
 	// Must be under the trusted root.
-	if !isUnder(g.root, clean) {
-		return fmt.Errorf("workspace guard: workspace dir %q is outside trusted root %q", clean, g.root)
+	if !isUnder(g.root, real) {
+		return fmt.Errorf("workspace guard: workspace dir %q resolves outside trusted root %q", clean, g.root)
+	}
+	if samePath(g.root, real) {
+		return fmt.Errorf("workspace guard: workspace dir must be a session subdirectory under trusted root %q", g.root)
 	}
 
 	// Directory must exist.
-	info, err := os.Stat(clean)
+	info, err := os.Stat(real)
 	if err != nil {
-		return fmt.Errorf("workspace guard: workspace dir %q does not exist: %w", clean, err)
+		return fmt.Errorf("workspace guard: workspace dir %q does not exist: %w", real, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("workspace guard: workspace dir %q is not a directory", clean)
+		return fmt.Errorf("workspace guard: workspace dir %q is not a directory", real)
 	}
 	return nil
 }
@@ -264,6 +271,11 @@ func isUnder(parent, child string) bool {
 		parent = "/"
 	}
 	return child == parent || strings.HasPrefix(child, parent+"/")
+}
+
+func samePath(left, right string) bool {
+	return strings.TrimRight(filepath.ToSlash(filepath.Clean(left)), "/") ==
+		strings.TrimRight(filepath.ToSlash(filepath.Clean(right)), "/")
 }
 
 func isAbsPath(p string) bool {

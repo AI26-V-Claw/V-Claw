@@ -19,9 +19,9 @@ import (
 	"vclaw/internal/connectors/tavily"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
+	"vclaw/internal/safety"
 	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
-	"vclaw/internal/safety"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 	caltools "vclaw/internal/tools/office/calendar"
@@ -146,6 +146,7 @@ func newSandboxToolConfig() (sandboxtools.Config, error) {
 	})
 	return sandboxtools.Config{
 		Runner:              gatedRunner,
+		Guard:               guard,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
 }

@@ -24,6 +24,7 @@ const (
 
 type Config struct {
 	Runner              runtime.Runner
+	Guard               *runtime.WorkspaceGuard
 	DefaultWorkspaceDir string
 	DefaultSessionID    string
 }
@@ -65,10 +66,16 @@ func (t RunPythonTool) Execute(ctx context.Context, call tools.ToolCall) tools.T
 		return sandboxNotConfigured(call)
 	}
 
+	sessionID := stringArgumentOr(call.Arguments, defaultIfEmpty(t.cfg.DefaultSessionID, defaultSessionID), "session_id", "sessionId")
+	workspaceDir, err := resolveWorkspaceDir(call.Arguments, t.cfg, sessionID)
+	if err != nil {
+		return sandboxInputError(call, err)
+	}
+
 	input := pytool.Input{
 		RequestID:      requestID(call),
-		SessionID:      stringArgumentOr(call.Arguments, defaultIfEmpty(t.cfg.DefaultSessionID, defaultSessionID), "session_id", "sessionId"),
-		WorkspaceDir:   workspaceDir(call.Arguments, t.cfg.DefaultWorkspaceDir),
+		SessionID:      sessionID,
+		WorkspaceDir:   workspaceDir,
 		Code:           stringArgument(call.Arguments, "code"),
 		ScriptPath:     stringArgument(call.Arguments, "script_path", "scriptPath"),
 		TimeoutSeconds: intArgument(call.Arguments, "timeout_seconds", "timeoutSeconds"),
@@ -116,10 +123,16 @@ func (t RunShellTool) Execute(ctx context.Context, call tools.ToolCall) tools.To
 		return sandboxNotConfigured(call)
 	}
 
+	sessionID := stringArgumentOr(call.Arguments, defaultIfEmpty(t.cfg.DefaultSessionID, defaultSessionID), "session_id", "sessionId")
+	workspaceDir, err := resolveWorkspaceDir(call.Arguments, t.cfg, sessionID)
+	if err != nil {
+		return sandboxInputError(call, err)
+	}
+
 	input := shtool.Input{
 		RequestID:      requestID(call),
-		SessionID:      stringArgumentOr(call.Arguments, defaultIfEmpty(t.cfg.DefaultSessionID, defaultSessionID), "session_id", "sessionId"),
-		WorkspaceDir:   workspaceDir(call.Arguments, t.cfg.DefaultWorkspaceDir),
+		SessionID:      sessionID,
+		WorkspaceDir:   workspaceDir,
 		Command:        stringArgument(call.Arguments, "command"),
 		TimeoutSeconds: intArgument(call.Arguments, "timeout_seconds", "timeoutSeconds"),
 		UserIntent:     stringArgument(call.Arguments, "user_intent", "userIntent"),
@@ -181,6 +194,17 @@ func requestID(call tools.ToolCall) string {
 	return "tool_call"
 }
 
+func resolveWorkspaceDir(args map[string]any, cfg Config, sessionID string) (string, error) {
+	if cfg.Guard != nil {
+		dir, _, err := cfg.Guard.PrepareSessionWorkspace(sessionID)
+		if err != nil {
+			return "", err
+		}
+		return dir, nil
+	}
+	return workspaceDir(args, cfg.DefaultWorkspaceDir), nil
+}
+
 func workspaceDir(args map[string]any, fallback string) string {
 	return stringArgumentOr(args, fallback, "workspace_dir", "workingDir", "cwd")
 }
@@ -236,6 +260,24 @@ func defaultIfEmpty(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func sandboxInputError(call tools.ToolCall, err error) tools.ToolResult {
+	message := err.Error()
+	if strings.TrimSpace(call.Name) != "" {
+		message = call.Name + ": " + message
+	}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        false,
+		ContentForLLM:  message,
+		ContentForUser: message,
+		Error: &tools.ToolError{
+			Code:    tools.ErrorInvalidArgument,
+			Message: message,
+		},
+	}
 }
 
 func pythonToolResult(call tools.ToolCall, output pytool.Output, err error) tools.ToolResult {
