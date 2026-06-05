@@ -33,13 +33,13 @@ Khi gặp hành động nguy hiểm, AI sẽ:
 
 ## 4. Lộ Trình Phát Triển (Roadmap)
 
-### Sprint 1 — Kết Nối Các Cổng External & Nhận Diện Intent
+### Sprint 1 — Kết Nối Các Cổng External & Ổn Định Agent Routing
 
 | Mục tiêu | Mô tả |
 |---|---|
 | **G1** | Kết nối xong API cơ bản của Gmail, Calendar và Chat (bộ Google Workspace). |
 | **G2** | Thiết lập môi trường (Sandbox/Docker) để chuẩn bị cho việc chạy code Python. |
-| **G3** | AI nhận diện và phân loại đúng > 80% intent của người dùng (chào hỏi, đọc thông tin, thao tác hệ thống nguy hiểm). Khi không đủ thông tin phải hỏi lại — không được tự ý làm hoặc bị ảnh hưởng bởi bộ nhớ cũ. |
+| **G3** | Ổn định luồng agent routing theo kiểu GoClaw: chat an toàn đi no-tool, tác vụ cần dữ liệu/công cụ đi tool-enabled agent loop, prompt injection bị chặn. Clarify chỉ xảy ra khi agent/tool schema thật sự thiếu thông tin bắt buộc; risk/approval do tool policy quyết định, không do intent classifier. |
 | **G4** | Kết nối các phương thức Telegram/Slack để giao tiếp với Agent. |
 | **G5** | Agent loop, tool call, multi-step planning. |
 
@@ -74,7 +74,7 @@ Khi gặp hành động nguy hiểm, AI sẽ:
 | **Kiến trúc hệ thống** | Toàn bộ | Ngồi lại thảo luận về kiến trúc hệ thống, cơ sở dữ liệu, lên diagram cho các luồng chính của dự án. |
 | **Tích hợp API** | 2 người | Tập trung làm việc với API của Mail, Calendar, Chat và đồng bộ dữ liệu về database. |
 | **Hệ thống & Sandbox** | 2 người | Chịu trách nhiệm về môi trường cô lập, xử lý để AI chạy lệnh Shell/Python an toàn khi tương tác với máy tính. |
-| **Agent & Bộ nhớ** | 2 người | Viết prompt, xử lý phân loại lệnh nguy hiểm (kích hoạt HITL) và xây dựng bộ nhớ dài hạn (Knowledge Graph đơn giản). |
+| **Agent & Bộ nhớ** | 2 người | Viết prompt, xây dựng turn router/tool-enabled agent loop, xử lý policy boundary cho hành động cần HITL và xây dựng bộ nhớ dài hạn (Knowledge Graph đơn giản). |
 | **Phương thức kết nối** | 2 người | Kết nối với Telegram/Slack để giao tiếp với Agent. |
 
 ---

@@ -90,6 +90,17 @@ func Classify(ctx context.Context, classifier *Classifier, userInput string) (*C
 		result.Confidence = clamp(result.Confidence + 0.15)
 	}
 
+	if needsTargetClarification(userInput, toolCalls) {
+		if !containsString(missingParams, "path") {
+			missingParams = append(missingParams, "path")
+		}
+		if !containsString(requiredParams, "path") {
+			requiredParams = append(requiredParams, "path")
+		}
+		result.RequiredParams = requiredParams
+		result.MissingParams = missingParams
+	}
+
 	// Step 7: Check if clarification is needed (confidence too low)
 	if shouldClarify(classifier.config, result.Confidence, intentType) {
 		return &ClassificationOutput{
@@ -129,66 +140,39 @@ func Classify(ctx context.Context, classifier *Classifier, userInput string) (*C
 
 func detectIntentType(input string) IntentType {
 	lower := strings.ToLower(input)
+	if hasCalendarDomain(lower) && containsAny(lower, "xóa", "xoá", "delete", "remove") {
+		return TypeDangerousAction
+	}
+
+	if containsAny(lower, "tìm và xóa", "tìm rồi xóa", "tìm file log rồi xóa", "đọc và gửi", "nếu không") {
+		return TypeComposite
+	}
+	if containsAny(lower, "chay lenh", "chay script", "mo shell") {
+		return TypeDangerousAction
+	}
+	if isExplicitShellRequest(lower) {
+		return TypeDangerousAction
+	}
+	if hasCalendarDomain(lower) && hasWriteVerb(lower) {
+		return TypeDangerousAction
+	}
+	if hasMailDomain(lower) && containsAny(lower, "có ai gửi", "co ai gui") {
+		return TypeReadInfo
+	}
+	if hasCompositePattern(lower) {
+		return TypeComposite
+	}
+	if containsAny(lower, "tìm", "xóa") && containsAny(lower, "rồi", "và", "sau đó") {
+		return TypeComposite
+	}
+	if hasSendVerb(lower) || hasWriteVerb(lower) || (hasDangerousVerb(lower) && !containsAny(lower, "liệt kê", "liet ke", "list", "danh sách", "đang chạy", "dang chay")) {
+		return TypeDangerousAction
+	}
 
 	// ── READ_INFO patterns that look like dangerous but are actually safe ──
 	// "Có ai gửi mail cho tôi chưa?" is checking inbox, not sending.
 	// "Liệt kê container Docker đang chạy" is listing, not running commands.
-	readSafeOverrides := []string{
-		"có ai gửi", "có gì không", "đang chạy",
-	}
-	for _, p := range readSafeOverrides {
-		if strings.Contains(lower, p) {
-			return TypeReadInfo
-		}
-	}
-
-	// Composite patterns (check before individual categories)
-	compositePatterns := []string{
-		"tìm và xóa", "find and delete",
-		"đọc và gửi", "read and send",
-		"tìm rồi", "find then",
-		"đọc rồi", "sau đó",
-		"kiểm tra rồi", "rồi xóa",
-		"rồi sửa", "rồi gửi",
-		"rồi trả lời", "rồi restore",
-		"and reply", "and delete", "and send",
-		"then reply", "then delete", "then send",
-		"if not", "nếu không", "if ", "nếu ",
-	}
-	for _, p := range compositePatterns {
-		if strings.Contains(lower, p) {
-			return TypeComposite
-		}
-	}
-	// Detect composite by presence of both read AND dangerous keywords
-	hasRead := containsAny(lower, "tìm", "đọc", "kiểm tra", "lấy", "check", "find", "read", "search", "backup")
-	hasDangerous := containsAny(lower, "xóa", "delete", "gửi", "send", "sửa", "edit", "nén", "zip", "restore", "reply", "trả lời", "restart", "khởi động")
-	hasConjunction := containsAny(lower, "và", "and", "rồi", "then", "sau đó", "after", "if", "nếu")
-	if hasRead && hasDangerous && hasConjunction {
-		return TypeComposite
-	}
-
-	// Dangerous action patterns — checked BEFORE greeting to avoid
-	// false positives like "Write file ... Hello World" matching "hello".
-	dangerousPatterns := []string{
-		"xóa", "delete", "remove", "rm ",
-		"gửi email", "gửi mail", "gửi tài liệu", "gửi cho",
-		"send email", "send mail",
-		"chạy", "run ", "exec", "execute",
-		"sửa", "edit", "modify", "update",
-		"tạo file", "create file", "write file", "write ",
-		"tạo sự kiện", "lên lịch", "đặt lịch",
-		"cài đặt", "install",
-		"khởi động lại", "restart",
-		"deploy", "rename", "di chuyển", "move",
-	}
-	for _, p := range dangerousPatterns {
-		if strings.Contains(lower, p) {
-			return TypeDangerousAction
-		}
-	}
-
-	// Greeting patterns — checked AFTER dangerous so "Write file Hello World" isn't a greeting
+	// Greeting patterns — checked after explicit execution / action checks.
 	greetingPatterns := []string{
 		"chào", "hello", "hey", "xin chào",
 		"cảm ơn", "thank", "tạm biệt", "bye",
@@ -230,6 +214,24 @@ func detectIntentType(input string) IntentType {
 		if strings.Contains(lower, p) {
 			return TypeReadInfo
 		}
+	}
+
+	if hasQuestionMarker(lower) && hasReadDomain(lower) {
+		return TypeReadInfo
+	}
+
+	if hasCalendarDomain(lower) && containsAny(lower, "hôm nay", "hom nay", "ngày mai", "ngay mai", "sáng mai", "sang mai", "tuần này", "tuan nay") {
+		return TypeReadInfo
+	}
+
+	if hasQuestionMarker(lower) {
+		if hasReadDomain(lower) {
+			return TypeReadInfo
+		}
+	}
+
+	if hasDangerousVerb(lower) || hasWriteVerb(lower) || hasSendVerb(lower) {
+		return TypeDangerousAction
 	}
 
 	return TypeUnknown
@@ -344,6 +346,13 @@ func scoreComposite(input string) float64 {
 func extractToolCalls(input string, t IntentType) []ToolCallInfo {
 	lower := strings.ToLower(input)
 
+	if toolName, category, params, ok := routeByObjectAndVerb(lower, input); ok {
+		return []ToolCallInfo{{
+			Name: toolName, Category: category,
+			Parameters: params, Timeout: timeoutForTool(toolName),
+		}}
+	}
+
 	switch t {
 	case TypeGreeting:
 		return nil
@@ -366,13 +375,13 @@ func extractToolCalls(input string, t IntentType) []ToolCallInfo {
 }
 
 func extractReadToolCalls(lower, original string) []ToolCallInfo {
-	if containsAny(lower, "mail", "email", "hộp thư") {
+	if hasMailDomain(lower) {
 		return []ToolCallInfo{{
 			Name: "gmail.listEmails", Category: "SAFE_READ",
 			Parameters: map[string]interface{}{"query": original}, Timeout: 30,
 		}}
 	}
-	if containsAny(lower, "lịch", "calendar", "họp") {
+	if hasCalendarDomain(lower) {
 		return []ToolCallInfo{{
 			Name: "calendar.listEvents", Category: "SAFE_READ",
 			Parameters: map[string]interface{}{}, Timeout: 30,
@@ -382,33 +391,8 @@ func extractReadToolCalls(lower, original string) []ToolCallInfo {
 }
 
 func extractDangerousToolCalls(lower, original string) []ToolCallInfo {
-	if containsAny(lower, "gửi email", "gửi mail", "send email", "gửi cho", "gửi tài liệu") {
-		return []ToolCallInfo{{
-			Name: "gmail.createDraft", Category: "COMMUNICATION",
-			Parameters: extractEmailParams(original), Timeout: 60,
-		}}
-	}
-	if containsAny(lower, "tạo sự kiện", "lên lịch", "đặt lịch") {
-		return []ToolCallInfo{{
-			Name: "calendar.createEvent", Category: "DANGEROUS_WRITE",
-			Parameters: map[string]interface{}{}, Timeout: 60,
-		}}
-	}
-	if containsAny(lower, "xóa", "delete", "remove") {
-		params := map[string]interface{}{}
-		if hasSpecificTarget(original) {
-			params["command"] = original
-		}
-		return []ToolCallInfo{{
-			Name: "sandbox.runShell", Category: "EXECUTION",
-			Parameters: params, Timeout: 120,
-		}}
-	}
-	if containsAny(lower, "chạy", "run", "exec", "sửa", "edit", "modify", "tạo file", "create file", "write file", "write ") {
-		return []ToolCallInfo{{
-			Name: "sandbox.runShell", Category: "EXECUTION",
-			Parameters: map[string]interface{}{"command": original}, Timeout: 120,
-		}}
+	if toolName, category, params, ok := routeByObjectAndVerb(lower, original); ok {
+		return []ToolCallInfo{{Name: toolName, Category: category, Parameters: params, Timeout: timeoutForTool(toolName)}}
 	}
 	return nil
 }
@@ -451,6 +435,209 @@ func requiresConfirmation(t IntentType, toolCalls []ToolCallInfo) bool {
 	}
 	for _, tc := range toolCalls {
 		if IsDangerous(tc.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasQuestionMarker(lower string) bool {
+	return containsAny(lower, "thế nào", "ra sao", "có gì", "có không", "gì mới")
+}
+
+func hasMailDomain(lower string) bool {
+	return containsAny(lower, "mail", "email", "thư", "draft", "thư nháp")
+}
+
+func hasCalendarDomain(lower string) bool {
+	return containsAny(lower, "lịch", "calendar", "cuộc họp", "họp", "sự kiện")
+}
+
+func hasReadDomain(lower string) bool {
+	return hasMailDomain(lower) || hasCalendarDomain(lower)
+}
+
+func hasShellDomain(lower string) bool {
+	return containsAny(lower, "file", "shell", "script", "python", "thư mục", "path", "log")
+}
+
+func hasSendVerb(lower string) bool {
+	return containsAny(lower, "gửi", "send", "reply", "trả lời")
+}
+
+func hasWriteVerb(lower string) bool {
+	return containsAny(lower, "tạo", "ghi", "sửa", "update", "draft", "điền", "đặt", "lên lịch", "create", "write", "rename", "di chuyển", "move", "deploy", "restart", "khởi động", "install", "cài đặt")
+}
+
+func hasDangerousVerb(lower string) bool {
+	return containsAny(lower, "xóa", "xoá", "delete", "remove", "chạy", "run", "exec", "execute", "mở shell", "chạy lệnh")
+}
+
+func hasCompositePattern(lower string) bool {
+	compositePatterns := []string{
+		"tìm và xóa", "find and delete",
+		"đọc và gửi", "read and send",
+		"tìm rồi", "find then",
+		"đọc rồi", "sau đó",
+		"kiểm tra rồi", "rồi xóa",
+		"rồi sửa", "rồi gửi",
+		"rồi trả lời", "rồi restore",
+		"and reply", "and delete", "and send",
+		"then reply", "then delete", "then send",
+		"if not", "nếu không", "if ", "nếu ",
+	}
+	for _, p := range compositePatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	hasRead := containsAny(lower, "tìm", "đọc", "kiểm tra", "lấy", "check", "find", "read", "search", "backup")
+	hasDangerous := containsAny(lower, "xóa", "xoá", "delete", "gửi", "send", "sửa", "edit", "nén", "zip", "restore", "reply", "trả lời", "restart", "khởi động")
+	hasConjunction := containsAny(lower, "và", "and", "rồi", "then", "sau đó", "after", "if", "nếu")
+	return hasRead && hasDangerous && hasConjunction
+}
+
+func isExplicitShellRequest(lower string) bool {
+	if containsAny(lower, "mở shell", "python script", "chạy script", "chạy lệnh") {
+		return true
+	}
+	return hasShellDomain(lower) && containsAny(lower, "shell", "script", "python", "chạy", "dọn", "kiểm tra", "xóa", "xoá")
+}
+
+func routeByObjectAndVerb(lower, original string) (string, string, map[string]interface{}, bool) {
+	if hasCalendarDomain(lower) && containsAny(lower, "xóa", "xoá", "delete", "remove") {
+		return "calendar.deleteEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
+	}
+	if hasCalendarDomain(lower) && containsAny(lower, "tạo", "create", "đặt", "lên lịch") {
+		return "calendar.createEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
+	}
+	if hasCalendarDomain(lower) && containsAny(lower, "sửa", "update", "cập nhật") {
+		return "calendar.updateEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
+	}
+
+	if hasQuestionMarker(lower) && hasReadDomain(lower) {
+		if hasCalendarDomain(lower) {
+			return "calendar.listEvents", "SAFE_READ", map[string]interface{}{}, true
+		}
+		if hasMailDomain(lower) {
+			return "gmail.listEmails", "SAFE_READ", map[string]interface{}{"query": original}, true
+		}
+	}
+
+	if hasCalendarDomain(lower) && containsAny(lower, "hôm nay", "hom nay", "ngày mai", "ngay mai", "sáng mai", "sang mai", "tuần này", "tuan nay") {
+		return "calendar.listEvents", "SAFE_READ", map[string]interface{}{}, true
+	}
+
+	if hasShellDomain(lower) && isExplicitShellRequest(lower) {
+		if containsAny(lower, "python", "script") {
+			return "sandbox.runPython", "EXECUTION", map[string]interface{}{"code": original}, true
+		}
+		params := map[string]interface{}{}
+		if hasSpecificTarget(original) {
+			params["command"] = original
+		}
+		return "sandbox.runShell", "EXECUTION", params, true
+	}
+
+	if containsAny(lower, "gửi", "send") && containsAny(lower, "báo cáo", "bao cao", "tài liệu", "tai lieu", "nhắc họp", "nhac hop", "email", "thư", "mail", "report") {
+		return "gmail.sendDraft", "COMMUNICATION", map[string]interface{}{}, true
+	}
+
+	if hasMailDomain(lower) {
+		switch {
+		case containsAny(lower, "xóa", "xoá", "delete", "remove") && containsAny(lower, "thư nháp", "draft"):
+			return "gmail.deleteDraft", "DANGEROUS_WRITE", map[string]interface{}{}, true
+		case containsAny(lower, "xóa", "xoá", "delete", "remove") && containsAny(lower, "thư", "email", "mail", "message"):
+			return "gmail.modifyMessage", "DANGEROUS_WRITE", map[string]interface{}{}, true
+		case containsAny(lower, "sửa", "update", "cập nhật") && containsAny(lower, "thư nháp", "draft"):
+			return "gmail.updateDraft", "COMMUNICATION", map[string]interface{}{}, true
+		case containsAny(lower, "draft") && !containsAny(lower, "gửi", "send"):
+			return "gmail.createDraft", "COMMUNICATION", map[string]interface{}{}, true
+		case containsAny(lower, "soạn", "soan", "tạo", "ghi", "viết", "viet") && containsAny(lower, "email", "thư", "thư nháp", "note"):
+			return "gmail.createDraft", "COMMUNICATION", map[string]interface{}{}, true
+		case containsAny(lower, "gửi", "send") && containsAny(lower, "mail", "thư", "email", "draft", "báo cáo", "bao cao", "tài liệu", "tai lieu", "nhắc họp", "nhac hop", "report"):
+			return "gmail.sendDraft", "COMMUNICATION", map[string]interface{}{}, true
+		case hasQuestionMarker(lower):
+			return "gmail.listEmails", "SAFE_READ", map[string]interface{}{"query": original}, true
+		}
+	}
+
+	if hasCalendarDomain(lower) {
+		switch {
+		case containsAny(lower, "xóa", "xoá", "delete", "remove"):
+			return "calendar.deleteEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
+		case containsAny(lower, "tạo", "create", "đặt", "lên lịch"):
+			return "calendar.createEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
+		case containsAny(lower, "sửa", "update", "cập nhật"):
+			return "calendar.updateEvent", "DANGEROUS_WRITE", map[string]interface{}{}, true
+		case hasQuestionMarker(lower):
+			return "calendar.listEvents", "SAFE_READ", map[string]interface{}{}, true
+		}
+	}
+
+	if containsAny(lower, "gửi", "send") && containsAny(lower, "tin nhắn", "chat") {
+		return "chat.sendMessage", "COMMUNICATION", map[string]interface{}{}, true
+	}
+
+	if containsAny(lower, "chay lenh", "chạy lệnh", "chay script", "chạy script", "mo shell", "mở shell") {
+		params := map[string]interface{}{}
+		if hasSpecificTarget(original) {
+			params["command"] = original
+		}
+		return "sandbox.runShell", "EXECUTION", params, true
+	}
+
+	if hasShellDomain(lower) {
+		if containsAny(lower, "python", "script") {
+			return "sandbox.runPython", "EXECUTION", map[string]interface{}{"code": original}, true
+		}
+		if containsAny(lower, "ghi", "tạo", "sửa", "xóa", "xoá", "delete", "remove", "mở shell", "chạy lệnh", "dọn") {
+			params := map[string]interface{}{}
+			if hasSpecificTarget(original) {
+				params["command"] = original
+			}
+			return "sandbox.runShell", "EXECUTION", params, true
+		}
+	}
+
+	return "", "", nil, false
+}
+
+func timeoutForTool(toolName string) int {
+	switch NormalizeToolName(toolName) {
+	case "sandbox.runShell", "sandbox.runPython":
+		return 120
+	case "gmail.sendDraft", "gmail.createDraft", "gmail.updateDraft", "gmail.deleteDraft", "gmail.modifyMessage":
+		return 60
+	case "calendar.createEvent", "calendar.updateEvent", "calendar.deleteEvent":
+		return 60
+	case "chat.sendMessage":
+		return 30
+	default:
+		return 30
+	}
+}
+
+func needsTargetClarification(input string, toolCalls []ToolCallInfo) bool {
+	lower := strings.ToLower(input)
+	if !containsAny(lower, "xóa", "xoá", "delete", "remove", "ghi", "tạo", "write", "create") {
+		return false
+	}
+	if hasSpecificTarget(input) {
+		return false
+	}
+	for _, call := range toolCalls {
+		switch NormalizeToolName(call.Name) {
+		case "sandbox.runShell", "sandbox.runPython", "gmail.deleteDraft", "calendar.deleteEvent", "gmail.updateDraft":
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
 			return true
 		}
 	}

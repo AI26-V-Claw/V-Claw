@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"testing"
+	"time"
 
 	"vclaw/internal/providers"
 )
@@ -51,5 +52,60 @@ func TestInMemoryStoreLoadAppendClearTranscript(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("expected cleared transcript, got %#v", empty)
+	}
+}
+
+func TestInMemoryStoreLoadSaveClearMemory(t *testing.T) {
+	store := NewInMemoryStore()
+	ctx := context.Background()
+	memory := SessionMemory{
+		Summary: "user discussed HITL",
+		LastActionResults: []ActionResult{{
+			ToolName:  "calendar.createEvent",
+			Content:   "Event created",
+			CreatedAt: time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+		}},
+		PendingClarification: &PendingClarification{
+			OriginalRequest: "create a meeting",
+			Question:        "what time?",
+			ToolName:        "calendar.createEvent",
+			MissingFields:   []string{"start", "end"},
+			PartialInput:    map[string]any{"title": "meeting"},
+		},
+	}
+
+	if err := store.SaveMemory(ctx, "sess_001", memory); err != nil {
+		t.Fatalf("save memory: %v", err)
+	}
+	loaded, err := store.LoadMemory(ctx, "sess_001")
+	if err != nil {
+		t.Fatalf("load memory: %v", err)
+	}
+	if loaded.Summary != memory.Summary || len(loaded.LastActionResults) != 1 || loaded.PendingClarification == nil {
+		t.Fatalf("unexpected memory: %#v", loaded)
+	}
+	loaded.LastActionResults[0].Content = "mutated"
+	loaded.PendingClarification.MissingFields[0] = "mutated"
+	loaded.PendingClarification.PartialInput["title"] = "mutated"
+	reloaded, err := store.LoadMemory(ctx, "sess_001")
+	if err != nil {
+		t.Fatalf("reload memory: %v", err)
+	}
+	if reloaded.LastActionResults[0].Content != "Event created" {
+		t.Fatalf("memory should be cloned, got %#v", reloaded.LastActionResults)
+	}
+	if reloaded.PendingClarification.MissingFields[0] != "start" || reloaded.PendingClarification.PartialInput["title"] != "meeting" {
+		t.Fatalf("pending clarification should be cloned, got %#v", reloaded.PendingClarification)
+	}
+
+	if err := store.ClearSession(ctx, "sess_001"); err != nil {
+		t.Fatalf("clear session: %v", err)
+	}
+	cleared, err := store.LoadMemory(ctx, "sess_001")
+	if err != nil {
+		t.Fatalf("load cleared memory: %v", err)
+	}
+	if cleared.Summary != "" || len(cleared.LastActionResults) != 0 || cleared.PendingClarification != nil {
+		t.Fatalf("expected cleared memory, got %#v", cleared)
 	}
 }

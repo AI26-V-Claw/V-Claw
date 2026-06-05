@@ -20,7 +20,7 @@ sequenceDiagram
     participant Channel as Message Channel
     participant Adapter as Channel Adapter
     participant Agent as Agent Core
-    participant Safety as Safety Layer
+    participant Policy as Tool Policy
     participant Approval as Approvals
     participant Router as Tool Router
     participant SandboxTool as Sandbox Tool
@@ -31,9 +31,9 @@ sequenceDiagram
     Channel->>Adapter: Deliver message
     Adapter->>Agent: UserMessage
 
-    Agent->>Agent: Extract intent + proposed command/script
-    Agent->>Safety: Check sandbox.runShell / sandbox.runPython
-    Safety-->>Agent: RiskDecision(code_execution/destructive, requires_approval)
+    Agent->>Agent: Let agent loop propose command/script tool call
+    Agent->>Policy: Check sandbox.runShell / sandbox.runPython
+    Policy-->>Agent: RiskDecision(code_execution/destructive, requires_approval)
 
     Agent->>Approval: Create ApprovalRequest(command preview)
     Approval->>Store: Save pending approval

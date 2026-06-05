@@ -92,6 +92,81 @@ func TestRenderAgentResponseFormatsToolFallback(t *testing.T) {
 	}
 }
 
+func TestRenderAgentResponseFormatsRawGmailDraftJSON(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: `{"Draft":{"ID":"r2926357301250964084","MessageID":"19e91b51f8b1fa70","ThreadID":"19e91b51f8b1fa70"}}`,
+		ToolResults: []contracts.ToolResult{
+			{
+				ToolName: "gmail.createDraft",
+				Success:  true,
+				Data: map[string]any{
+					"contentForUser": `{"Draft":{"ID":"r2926357301250964084","MessageID":"19e91b51f8b1fa70","ThreadID":"19e91b51f8b1fa70"}}`,
+				},
+			},
+		},
+	}
+
+	got := renderAgentResponse(response)
+	if strings.Contains(got, `{"Draft"`) {
+		t.Fatalf("expected friendly draft output, got %q", got)
+	}
+	for _, want := range []string{"Đã tạo bản nháp email.", "Draft ID: r2926357301250964084", "Message ID: 19e91b51f8b1fa70"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in rendered output, got %q", want, got)
+		}
+	}
+}
+
+func TestRenderAgentResponseFormatsRawGmailSentMessageJSON(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: `{"Message":{"ID":"msg_1","ThreadID":"thread_1","To":"baolnc@vclaw.site","Subject":"Test HITL"}}`,
+		ToolResults: []contracts.ToolResult{
+			{
+				ToolName: "gmail.sendDraft",
+				Success:  true,
+				Data: map[string]any{
+					"contentForUser": `{"Message":{"ID":"msg_1","ThreadID":"thread_1","To":"baolnc@vclaw.site","Subject":"Test HITL"}}`,
+				},
+			},
+		},
+	}
+
+	got := renderAgentResponse(response)
+	if strings.Contains(got, `{"Message"`) {
+		t.Fatalf("expected friendly message output, got %q", got)
+	}
+	for _, want := range []string{"Đã gửi email.", "Message ID: msg_1", "Người nhận: baolnc@vclaw.site", "Chủ đề: Test HITL"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in rendered output, got %q", want, got)
+		}
+	}
+}
+
+func TestRenderAgentResponseFormatsCalendarAndChatJSON(t *testing.T) {
+	calendar := renderAgentResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: `Event created: {"ID":"evt_1","Title":"Sprint Review","StartTime":"2026-06-05T09:30:00+07:00","EndTime":"2026-06-05T10:30:00+07:00"}`,
+	})
+	if !strings.Contains(calendar, "Đã tạo sự kiện Calendar.") || strings.Contains(calendar, "{") {
+		t.Fatalf("expected friendly calendar output, got %q", calendar)
+	}
+
+	chat := renderAgentResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: `{"Message":{"Name":"spaces/AAAA/messages/msg_1","Text":"Hello everyone"}}`,
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "chat.sendMessage",
+			Success:  true,
+			Data:     map[string]any{"contentForUser": `{"Message":{"Name":"spaces/AAAA/messages/msg_1","Text":"Hello everyone"}}`},
+		}},
+	})
+	if !strings.Contains(chat, "Đã gửi tin nhắn Google Chat.") || strings.Contains(chat, `{"Message"`) {
+		t.Fatalf("expected friendly chat output, got %q", chat)
+	}
+}
+
 func TestRenderAgentResponseStripsInlineMarkdownMarkers(t *testing.T) {
 	response := contracts.AgentResponse{
 		Status: contracts.AgentStatusCompleted,
@@ -133,13 +208,25 @@ func TestParseApprovalCommandIgnoresNaturalAckWithoutPendingRequest(t *testing.T
 	}
 }
 
+func TestParseApprovalCommandIgnoresNaturalEditRequestWithoutPendingApproval(t *testing.T) {
+	for _, text := range []string{
+		"Chỉnh lại lịch Test HITL vào ngày mai thành 9h30 - 10h30",
+		"sửa lịch Test HITL thành 9h30",
+		"revise thêm người tham gia",
+	} {
+		if command, ok := parseApprovalCommand(text, false); ok {
+			t.Fatalf("expected %q without pending approval to be ignored, got %#v", text, command)
+		}
+	}
+}
+
 func TestParseApprovalCommandRejectsWithRevisionComment(t *testing.T) {
 	command, ok := parseApprovalCommand("revise đổi giờ sang 10:00", true)
 	if !ok {
 		t.Fatal("expected revise command")
 	}
-	if command.decision != contracts.ApprovalDecisionRejected {
-		t.Fatalf("expected rejected decision, got %s", command.decision)
+	if !command.revise {
+		t.Fatal("expected revise command flag")
 	}
 	if command.comment != "đổi giờ sang 10:00" {
 		t.Fatalf("unexpected comment: %q", command.comment)

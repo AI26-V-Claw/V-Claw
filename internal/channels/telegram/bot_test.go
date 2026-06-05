@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -109,7 +110,7 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	if handler.finalized != 1 || handler.finalizedErr != nil {
 		t.Fatalf("expected successful audit finalization, got count=%d err=%v", handler.finalized, handler.finalizedErr)
 	}
-	if len(calls) < 4 {
+	if len(calls) < 3 {
 		t.Fatalf("expected processing, progress, and final edits, got %#v", calls)
 	}
 	if !strings.HasSuffix(calls[0].path, "/sendMessage") || calls[0].payload["text"] != "Đang xử lý..." {
@@ -124,9 +125,99 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	if !seenMessageProgress {
 		t.Fatalf("expected chat message progress edit, got %#v", calls)
 	}
+	for _, call := range calls {
+		text := fmt.Sprint(call.payload["text"])
+		if strings.Contains(text, "phân loại") || strings.Contains(text, "lập kế hoạch") || strings.Contains(text, "phân tích yêu cầu") || strings.Contains(text, "tổng hợp") {
+			t.Fatalf("internal progress should not be exposed to Telegram, got %#v", call)
+		}
+	}
 	last := calls[len(calls)-1]
 	if !strings.HasSuffix(last.path, "/editMessageText") || last.payload["text"] != "hello from runtime" {
 		t.Fatalf("unexpected final telegram call: %#v", last)
+	}
+}
+
+func TestTelegramProgressTextHidesInternalRoutingStages(t *testing.T) {
+	for _, stage := range []agent.ProgressStage{
+		agent.ProgressStageClassifying,
+		agent.ProgressStageClassified,
+		agent.ProgressStagePlanning,
+		agent.ProgressStagePlanned,
+		agent.ProgressStageThinking,
+		agent.ProgressStageFinalizing,
+	} {
+		if got := telegramProgressText(agent.ProgressEvent{Stage: stage}); got != "" {
+			t.Fatalf("expected stage %s to be hidden, got %q", stage, got)
+		}
+	}
+}
+
+func TestProcessUpdateDownloadsPhotoAttachmentAndPassesMetadata(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "ok",
+		},
+	}
+
+	botTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getFile"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"file_path":"photos/demo.jpg"}}`), nil
+		case strings.Contains(r.URL.Path, "/file/bottoken/photos/demo.jpg"):
+			return jsonResponse(http.StatusOK, `demo-image-bytes`), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})
+
+	dataDir := t.TempDir()
+	bot := New("token", 123, dataDir, handler, nil)
+	bot.client = &http.Client{Transport: botTransport}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 9,
+		Message: &telegramMessage{
+			MessageID: 88,
+			From:      &telegramUser{ID: 123},
+			Chat:      telegramChat{ID: 55},
+			Caption:   "gửi file này vào nhóm VClaw",
+			Photo: []telegramPhotoSize{
+				{FileID: "small", FileUniqueID: "small", Width: 10, Height: 10},
+				{FileID: "large", FileUniqueID: "large", Width: 100, Height: 100},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.calls != 1 {
+		t.Fatalf("expected one handler call, got %d", handler.calls)
+	}
+	if handler.received.Text != "gửi file này vào nhóm VClaw" {
+		t.Fatalf("expected caption text, got %q", handler.received.Text)
+	}
+	paths, ok := handler.received.Metadata["attachmentPaths"].([]string)
+	if !ok || len(paths) != 1 {
+		t.Fatalf("expected attachment path metadata, got %#v", handler.received.Metadata)
+	}
+	if !strings.Contains(paths[0], "telegram_attachments") {
+		t.Fatalf("expected local attachment path, got %q", paths[0])
+	}
+	bytes, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("read downloaded attachment: %v", err)
+	}
+	if string(bytes) != "demo-image-bytes" {
+		t.Fatalf("unexpected downloaded bytes: %q", string(bytes))
 	}
 }
 

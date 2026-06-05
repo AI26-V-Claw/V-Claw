@@ -5,11 +5,11 @@
 | Actor | Loại | Mô tả |
 |---|---|---|
 | **Người dùng** | Human | Tương tác qua Telegram / Slack. Không giao tiếp trực tiếp với Google Workspace hay Sandbox. |
-| **V-Claw Agent** | AI System | Thực thi tác vụ: phân loại intent, gọi tool, gọi Google Workspace API, chạy Sandbox, điều phối HITL. |
+| **V-Claw Agent** | AI System | Thực thi tác vụ: định tuyến lượt chat, gọi tool khi cần, gọi Google Workspace API, chạy Sandbox, điều phối HITL. |
 
 ---
 
-## 1. Nhận & Phân loại yêu cầu
+## 1. Nhận & Định tuyến lượt chat
 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "mainBkg": "#ffffff", "darkMode": false, "lineColor": "#374151"}}}%%
@@ -17,60 +17,58 @@ flowchart LR
     user(["👤 Người dùng"])
     agent(["🤖 V-Claw Agent"])
  
-    subgraph INPUT ["Nhận & Phân loại yêu cầu"]
+    subgraph INPUT ["Nhận & Định tuyến lượt chat"]
         direction TB
         UC_SEND["Gửi tin nhắn\n(Telegram / Slack)"]
         UC_RECV["Nhận phản hồi"]
         UC_CANCEL["Hủy yêu cầu đang chạy"]
  
-        UC_CLASSIFY["Phân loại intent"]
-        UC_INJECT["Kiểm tra prompt injection"]
-        UC_GREET["Nhận diện chào hỏi"]
-        UC_READ["Nhận diện yêu cầu đọc thông tin"]
-        UC_DANGER["Nhận diện thao tác nhạy cảm"]
-        UC_ASK["Hỏi lại khi thiếu thông tin"]
+        UC_ROUTE["Turn router\n(chỉ chọn tool exposure)"]
+        UC_NO_TOOL["No-tool chat\n(chào hỏi / hỏi đáp an toàn)"]
+        UC_TOOL["Tool-enabled agent loop"]
+        UC_INJECT["Chặn prompt injection"]
+        UC_ASK["Clarify tool\nkhi thiếu thông tin bắt buộc"]
  
-        UC_CLASSIFY -.->|"«include»"| UC_INJECT
-        UC_GREET    -.->|"«extend»"| UC_CLASSIFY
-        UC_READ     -.->|"«extend»"| UC_CLASSIFY
-        UC_DANGER   -.->|"«extend»"| UC_CLASSIFY
-        UC_ASK      -.->|"«extend»"| UC_CLASSIFY
+        UC_ROUTE -.->|"«extend»"| UC_NO_TOOL
+        UC_ROUTE -.->|"«extend»"| UC_TOOL
+        UC_ROUTE -.->|"«extend»"| UC_INJECT
+        UC_ASK   -.->|"«extend»"| UC_TOOL
     end
  
     user  --> UC_SEND
     user  --> UC_RECV
     user  --> UC_CANCEL
-    agent --> UC_CLASSIFY
+    agent --> UC_ROUTE
 ```
 
 ---
 
-## 2. Chạy Tool & Multi-step Planning
+## 2. Agent Loop & Tool Calls
 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "mainBkg": "#ffffff", "darkMode": false, "lineColor": "#374151"}}}%%
 flowchart LR
     agent(["🤖 V-Claw Agent"])
 
-    subgraph TOOL ["Chạy Tool & Planning"]
+    subgraph TOOL ["Agent Loop & Tool Calls"]
         direction TB
-        T_PLAN["Lập kế hoạch đa bước"]
-        T_SELECT["Chọn tool phù hợp"]
-        T_PERM["Kiểm tra quyền\ndùng tool"]
+        T_DECIDE["Model quyết định\ntrả lời / gọi tool / clarify"]
+        T_SCHEMA["Validate input\ntheo tool schema"]
+        T_POLICY["Tool policy\nrisk / approval"]
         T_RUN["Chạy một tool"]
         T_PARALLEL["Chạy nhiều tool\nsong song"]
         T_ERROR["Xử lý lỗi tool"]
         T_RESULT["Tổng hợp &\ntrả kết quả"]
 
-        T_PLAN -.->|"«include»"| T_SELECT
-        T_SELECT -.->|"«include»"| T_PERM
-        T_RUN -.->|"«include»"| T_PERM
+        T_DECIDE -.->|"«include»"| T_SCHEMA
+        T_SCHEMA -.->|"«include»"| T_POLICY
+        T_RUN -.->|"«include»"| T_POLICY
         T_ERROR -.->|"«extend»"| T_RUN
         T_PARALLEL -.->|"«extend»"| T_RUN
-        T_PLAN -.->|"«include»"| T_RESULT
+        T_DECIDE -.->|"«include»"| T_RESULT
     end
 
-    agent --> T_PLAN
+    agent --> T_DECIDE
     agent --> T_RUN
     agent --> T_PARALLEL
 ```

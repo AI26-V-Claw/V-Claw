@@ -10,6 +10,7 @@ import (
 
 	"vclaw/internal/agent"
 	agentintent "vclaw/internal/agent/intent"
+	"vclaw/internal/agent/reference"
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
@@ -68,11 +69,6 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 		return nil, err
 	}
 
-	intentClassifier, err := NewIntentClassifier(provider)
-	if err != nil {
-		return nil, fmt.Errorf("create intent classifier: %w", err)
-	}
-
 	model := strings.TrimSpace(config.OpenAIModel)
 	if model == "" {
 		model = providers.DefaultOpenAIModel
@@ -86,14 +82,16 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 	}
 
 	return agent.NewRuntime(agent.RuntimeConfig{
-		Provider:         provider,
-		Registry:         registry,
-		IntentClassifier: intentClassifier,
-		TaskPlanner:      agent.NewLLMTaskPlanner(provider, model),
-		SessionStore:     sessionStore,
-		Logger:           config.Logger,
-		MaxIterations:    config.MaxIterations,
-		Model:            model,
+		Provider: provider,
+		Registry: registry,
+		ReferenceResolver: reference.NewFallbackResolver(
+			reference.NewLLMResolver(provider, model),
+			reference.NewHeuristicResolver(),
+		),
+		SessionStore:  sessionStore,
+		Logger:        config.Logger,
+		MaxIterations: config.MaxIterations,
+		Model:         model,
 	}), nil
 }
 

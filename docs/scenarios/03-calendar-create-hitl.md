@@ -21,7 +21,7 @@ sequenceDiagram
     participant Channel as Message Channel
     participant Adapter as Channel Adapter
     participant Agent as Agent Core
-    participant Safety as Safety Layer
+    participant Policy as Tool Policy
     participant Router as Tool Router
     participant CalTool as Calendar Tool
     participant CalConnector as Calendar Connector
@@ -33,9 +33,10 @@ sequenceDiagram
     Channel->>Adapter: Deliver message
     Adapter->>Agent: UserMessage
 
-    Agent->>Agent: Extract intent and required params
+    Agent->>Agent: Let agent loop derive required tool input
 
     alt Thiếu thông tin bắt buộc
+        Agent->>Agent: Call internal clarify tool
         Agent-->>Adapter: AgentResponse(status=need_clarification)
         Adapter-->>Channel: Ask missing params
         Channel-->>User: "Mấy giờ, họp bao lâu?"
@@ -84,8 +85,8 @@ sequenceDiagram
         Router-->>Agent: Slot available
     end
 
-    Agent->>Safety: Check proposed calendar.createEvent
-    Safety-->>Agent: RiskDecision(external_write, requires_approval)
+    Agent->>Policy: Check proposed calendar.createEvent
+    Policy-->>Agent: RiskDecision(external_write, requires_approval)
 
     Agent->>Approval: Create ApprovalRequest(calendar.createEvent preview)
     Approval->>Store: Save pending approval

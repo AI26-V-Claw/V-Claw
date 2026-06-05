@@ -128,6 +128,101 @@ func TestClassify_DangerousAction_MissingParams(t *testing.T) {
 	}
 }
 
+func TestClassify_GmailWriteDeleteRouting(t *testing.T) {
+	c := NewClassifier(DefaultConfig)
+
+	cases := []struct {
+		name        string
+		input       string
+		wantIntent  IntentType
+		wantTool    string
+	}{
+		{"Update draft", "Sửa nội dung thư nháp", TypeDangerousAction, "gmail.updateDraft"},
+		{"Delete draft", "Xóa draft email này", TypeDangerousAction, "gmail.deleteDraft"},
+		{"Send draft", "Gửi draft", TypeDangerousAction, "gmail.sendDraft"},
+		{"Draft email meeting", "draft email mời họp", TypeDangerousAction, "gmail.createDraft"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Classify(context.Background(), c, tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if out.Intent.Type != tc.wantIntent {
+				t.Fatalf("expected %s, got %s for %q", tc.wantIntent, out.Intent.Type, tc.input)
+			}
+			if len(out.Intent.ToolCalls) == 0 {
+				t.Fatalf("expected tool call for %q", tc.input)
+			}
+			if got := out.Intent.ToolCalls[0].Name; got != tc.wantTool {
+				t.Fatalf("expected tool %s, got %s for %q", tc.wantTool, got, tc.input)
+			}
+		})
+	}
+}
+
+func TestClassify_GmailSendRouting(t *testing.T) {
+	c := NewClassifier(DefaultConfig)
+
+	cases := []struct {
+		name     string
+		input    string
+		wantTool string
+	}{
+		{"Soan email", "Soạn email cho sếp", "gmail.createDraft"},
+		{"Send message to team", "Gửi tin nhắn cho team", "chat.sendMessage"},
+		{"Send report", "Gửi báo cáo cho sếp", "gmail.sendDraft"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Classify(context.Background(), c, tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(out.Intent.ToolCalls) == 0 {
+				t.Fatalf("expected tool call for %q", tc.input)
+			}
+			if got := out.Intent.ToolCalls[0].Name; got != tc.wantTool {
+				t.Fatalf("expected tool %s, got %s for %q", tc.wantTool, got, tc.input)
+			}
+		})
+	}
+}
+
+func TestClassify_CalendarDeleteAndReadRouting(t *testing.T) {
+	c := NewClassifier(DefaultConfig)
+
+	cases := []struct {
+		name     string
+		input    string
+		wantTool string
+		wantType IntentType
+	}{
+		{"Delete duplicate meeting", "Xóa lịch họp bị trùng", "calendar.deleteEvent", TypeDangerousAction},
+		{"Read calendar", "Xem lịch họp", "calendar.listEvents", TypeReadInfo},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Classify(context.Background(), c, tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if out.Intent.Type != tc.wantType {
+				t.Fatalf("expected %s, got %s for %q", tc.wantType, out.Intent.Type, tc.input)
+			}
+			if len(out.Intent.ToolCalls) == 0 {
+				t.Fatalf("expected tool call for %q", tc.input)
+			}
+			if got := out.Intent.ToolCalls[0].Name; got != tc.wantTool {
+				t.Fatalf("expected tool %s, got %s for %q", tc.wantTool, got, tc.input)
+			}
+		})
+	}
+}
+
 func TestClassify_Composite(t *testing.T) {
 	c := NewClassifier(DefaultConfig)
 
