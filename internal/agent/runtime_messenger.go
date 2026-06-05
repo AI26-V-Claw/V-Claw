@@ -44,6 +44,9 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 		if err != nil {
 			return contracts.AgentResponse{}, err
 		}
+		if output := renderUserOutput(response); output != nil {
+			response.Output = output
+		}
 		if text := renderAgentResponse(response); strings.TrimSpace(text) != "" {
 			response.Message = text
 		}
@@ -55,6 +58,9 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 		return contracts.AgentResponse{}, err
 	}
 
+	if output := renderUserOutput(response); output != nil {
+		response.Output = output
+	}
 	if text := renderAgentResponse(response); strings.TrimSpace(text) != "" {
 		response.Message = text
 	}
@@ -85,6 +91,182 @@ func renderAgentResponse(response contracts.AgentResponse) string {
 		}
 	}
 	return string(response.Status)
+}
+
+func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
+	if response.ApprovalRequest != nil {
+		return &contracts.UserOutput{
+			Kind: contracts.UserOutputKindApproval,
+			Text: limitOutboundText(renderApprovalRequest(*response.ApprovalRequest)),
+			Meta: map[string]any{
+				"approvalId": response.ApprovalRequest.ApprovalID,
+				"expiresAt":  response.ApprovalRequest.ExpiresAt.Format(time.RFC3339),
+			},
+		}
+	}
+
+	if strings.TrimSpace(response.Message) != "" {
+		kind := contracts.UserOutputKindMessage
+		switch response.Status {
+		case contracts.AgentStatusCompleted:
+			kind = contracts.UserOutputKindSuccess
+		case contracts.AgentStatusNeedClarification:
+			kind = contracts.UserOutputKindClarify
+		case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusMaxIterationsReached:
+			kind = contracts.UserOutputKindError
+		}
+		return &contracts.UserOutput{
+			Kind: kind,
+			Text: limitOutboundText(renderAssistantMessage(response.Message, response.ToolResults)),
+		}
+	}
+
+	if response.Error != nil {
+		kind := contracts.UserOutputKindError
+		if response.Error.Code == "APPROVAL_EXPIRED" {
+			kind = contracts.UserOutputKindExpired
+		}
+		return &contracts.UserOutput{
+			Kind: kind,
+			Text: limitOutboundText(renderError(response.Error)),
+		}
+	}
+
+	for _, result := range response.ToolResults {
+		if result.Success {
+			if artifactRef := buildArtifactRef(result.ToolName, result.Data); artifactRef != nil {
+				if text := extractUserText(result.Data); strings.TrimSpace(text) != "" {
+					return &contracts.UserOutput{
+						Kind:        contracts.UserOutputKindSuccess,
+						Text:        limitOutboundText(renderToolFallback(result.ToolName, text)),
+						ArtifactRef: artifactRef,
+					}
+				}
+			}
+			if data, ok := result.Data.(map[string]any); ok {
+				if text, ok := data["contentForUser"].(string); ok && strings.TrimSpace(text) != "" {
+					output := &contracts.UserOutput{
+						Kind: contracts.UserOutputKindSuccess,
+						Text: limitOutboundText(renderToolFallback(result.ToolName, text)),
+					}
+					if artifactRef := buildArtifactRef(result.ToolName, result.Data); artifactRef != nil {
+						output.ArtifactRef = artifactRef
+					}
+					return output
+				}
+			}
+		}
+	}
+
+	return &contracts.UserOutput{
+		Kind: contracts.UserOutputKindMessage,
+		Text: string(response.Status),
+	}
+}
+
+func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
+	payload, ok := data.(map[string]any)
+	if !ok {
+		return nil
+	}
+	content, ok := payload["contentForUser"].(string)
+	if !ok || strings.TrimSpace(content) == "" {
+		return nil
+	}
+	value, ok := extractJSONValue(content)
+	if !ok {
+		return nil
+	}
+
+	switch strings.TrimSpace(toolName) {
+	case "chat.sendMessage":
+		if message, ok := nestedMap(value, "Message"); ok {
+			id := stringValue(message, "Name")
+			if id == "" {
+				return nil
+			}
+			return &contracts.ArtifactRef{
+				Kind:  "chat.message",
+				Label: "Google Chat message",
+				ID:    id,
+			}
+		}
+	case "gmail.sendDraft":
+		if message, ok := nestedMap(value, "Message"); ok {
+			id := stringValue(message, "ID")
+			if id == "" {
+				return nil
+			}
+			return &contracts.ArtifactRef{
+				Kind:  "gmail.message",
+				Label: "Gmail message",
+				ID:    id,
+				URI:   "https://mail.google.com/mail/u/0/#drafts/" + id,
+			}
+		}
+	case "calendar.createEvent":
+		if event, ok := nestedMap(value, "Event"); ok {
+			id := stringValue(event, "ID")
+			if id == "" {
+				id = stringValue(event, "Id")
+			}
+			if id == "" {
+				return nil
+			}
+			ref := &contracts.ArtifactRef{
+				Kind:  "calendar.event",
+				Label: "Google Calendar event",
+				ID:    id,
+				URI:   "https://calendar.google.com/calendar/r/eventedit/" + id,
+			}
+			if meetLink := stringValue(event, "MeetLink"); meetLink != "" {
+				ref.Meta = map[string]any{"meetLink": meetLink}
+			}
+			return ref
+		}
+	}
+	return nil
+}
+
+func extractUserText(data any) string {
+	payload, ok := data.(map[string]any)
+	if !ok {
+		return ""
+	}
+	content, ok := payload["contentForUser"].(string)
+	if !ok {
+		return ""
+	}
+	return content
+}
+
+func extractJSONValue(text string) (any, bool) {
+	_, jsonText := splitMachinePayload(text)
+	if strings.TrimSpace(jsonText) == "" {
+		return nil, false
+	}
+	var value any
+	if err := json.Unmarshal([]byte(jsonText), &value); err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+func nestedMap(value any, key string) (map[string]any, bool) {
+	payload, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	nested, ok := payload[key].(map[string]any)
+	return nested, ok
+}
+
+func stringValue(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	value, _ := payload[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func renderApprovalRequest(approval contracts.ApprovalRequest) string {
