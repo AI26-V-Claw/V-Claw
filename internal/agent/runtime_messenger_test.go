@@ -192,6 +192,100 @@ func TestRenderAgentResponseStripsInlineMarkdownMarkers(t *testing.T) {
 	}
 }
 
+func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
+	t.Run("greeting", func(t *testing.T) {
+		output := renderUserOutput(contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "Chao ban! Toi co the giup gi cho ban hom nay?",
+		})
+		if output == nil || output.Kind != contracts.UserOutputKindSuccess {
+			t.Fatalf("expected success output, got %#v", output)
+		}
+		if !strings.Contains(output.Text, "Chao ban!") {
+			t.Fatalf("unexpected greeting text: %#v", output)
+		}
+	})
+
+	t.Run("success_with_artifact", func(t *testing.T) {
+		output := renderUserOutput(contracts.AgentResponse{
+			Status: contracts.AgentStatusCompleted,
+			ToolResults: []contracts.ToolResult{{
+				ToolName: "gmail.sendDraft",
+				Success:  true,
+				Data: map[string]any{
+					"contentForUser": `{"Message":{"ID":"msg_1","ThreadID":"thread_1","To":"baolnc@vclaw.site","Subject":"Test HITL"}}`,
+				},
+			}},
+		})
+		if output == nil || output.ArtifactRef == nil {
+			t.Fatalf("expected artifact ref, got %#v", output)
+		}
+		if output.ArtifactRef.ID != "msg_1" || output.ArtifactRef.URI != "https://mail.google.com/mail/u/0/#drafts/msg_1" {
+			t.Fatalf("unexpected artifact ref: %#v", output.ArtifactRef)
+		}
+	})
+
+	t.Run("success_without_artifact", func(t *testing.T) {
+		output := renderUserOutput(contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "Da hoan thanh.",
+		})
+		if output == nil || output.ArtifactRef != nil {
+			t.Fatalf("expected no artifact ref, got %#v", output)
+		}
+		if output.Kind != contracts.UserOutputKindSuccess {
+			t.Fatalf("expected success kind, got %#v", output)
+		}
+	})
+
+	t.Run("clarify", func(t *testing.T) {
+		output := renderUserOutput(contracts.AgentResponse{
+			Status:  contracts.AgentStatusNeedClarification,
+			Message: "Ban co the noi ro hon khong?",
+		})
+		if output == nil || output.Kind != contracts.UserOutputKindClarify {
+			t.Fatalf("expected clarify output, got %#v", output)
+		}
+	})
+
+	t.Run("approval", func(t *testing.T) {
+		output := renderUserOutput(contracts.AgentResponse{
+			Status: contracts.AgentStatusApprovalRequired,
+			ApprovalRequest: &contracts.ApprovalRequest{
+				ApprovalID: "appr_1",
+				Status:     contracts.ApprovalStatusPending,
+				RiskLevel:  contracts.RiskLevelExternalWrite,
+				Summary:    "Can xac nhan.",
+				ToolCall: contracts.ToolCall{
+					ToolName: "chat.sendMessage",
+				},
+				ExpiresAt: time.Date(2026, 6, 5, 10, 22, 53, 0, time.FixedZone("ICT", 7*60*60)),
+			},
+		})
+		if output == nil || output.Kind != contracts.UserOutputKindApproval {
+			t.Fatalf("expected approval output, got %#v", output)
+		}
+		if got := output.Meta["approvalId"]; got != "appr_1" {
+			t.Fatalf("expected approvalId meta, got %#v", got)
+		}
+	})
+
+	t.Run("expired", func(t *testing.T) {
+		output := renderUserOutput(contracts.AgentResponse{
+			Status: contracts.AgentStatusFailed,
+			Error: &contracts.ErrorShape{
+				Code:      "APPROVAL_EXPIRED",
+				Message:   "approval expired",
+				Source:    contracts.ErrorSourceAgent,
+				Retryable: false,
+			},
+		})
+		if output == nil || output.Kind != contracts.UserOutputKindExpired {
+			t.Fatalf("expected expired output, got %#v", output)
+		}
+	})
+}
+
 func TestParseApprovalCommandApprovesPendingRequest(t *testing.T) {
 	command, ok := parseApprovalCommand("đồng ý", true)
 	if !ok {

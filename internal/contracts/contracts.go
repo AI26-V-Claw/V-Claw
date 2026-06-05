@@ -13,6 +13,18 @@ const (
 	AgentStatusMaxIterationsReached AgentStatus = "max_iterations_reached"
 )
 
+type UserOutputKind string
+
+const (
+	UserOutputKindMessage   UserOutputKind = "message"
+	UserOutputKindSuccess   UserOutputKind = "success"
+	UserOutputKindError     UserOutputKind = "error"
+	UserOutputKindClarify   UserOutputKind = "clarify"
+	UserOutputKindApproval  UserOutputKind = "approval"
+	UserOutputKindProgress  UserOutputKind = "progress"
+	UserOutputKindExpired   UserOutputKind = "expired"
+)
+
 type RiskLevel string
 
 const (
@@ -86,6 +98,21 @@ type UserMessage struct {
 	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
+type ArtifactRef struct {
+	Kind  string         `json:"kind,omitempty"`
+	Label string         `json:"label,omitempty"`
+	URI   string         `json:"uri,omitempty"`
+	ID    string         `json:"id,omitempty"`
+	Meta  map[string]any `json:"meta,omitempty"`
+}
+
+type UserOutput struct {
+	Kind        UserOutputKind `json:"kind"`
+	Text        string         `json:"text"`
+	ArtifactRef *ArtifactRef   `json:"artifactRef,omitempty"`
+	Meta        map[string]any  `json:"meta,omitempty"`
+}
+
 type AgentResponse struct {
 	RequestID       string           `json:"requestId"`
 	SessionID       string           `json:"sessionId"`
@@ -97,6 +124,7 @@ type AgentResponse struct {
 	ToolResults     []ToolResult     `json:"toolResults,omitempty"`
 	Error           *ErrorShape      `json:"error,omitempty"`
 	Plan            *Plan            `json:"plan,omitempty"`
+	Output          *UserOutput      `json:"output,omitempty"`
 }
 
 type ToolCall struct {

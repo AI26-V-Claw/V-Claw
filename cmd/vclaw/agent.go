@@ -142,31 +142,84 @@ func printAgentResponse(response contracts.AgentResponse, jsonOutput bool, trace
 			return
 		}
 	}
-	fmt.Printf("Status: %s\n", response.Status)
-	if response.Message != "" {
-		fmt.Printf("Message: %s\n", response.Message)
+
+	if output := response.Output; output != nil {
+		printUserOutput(*output)
+	} else if strings.TrimSpace(response.Message) != "" {
+		fmt.Println(response.Message)
 	}
-	if trace && len(response.Data) > 0 {
-		data, err := json.MarshalIndent(response.Data, "", "  ")
-		if err == nil {
-			fmt.Println("Trace:")
-			fmt.Println(string(data))
+
+	if trace {
+		fmt.Fprintf(os.Stdout, "Status: %s\n", response.Status)
+		if len(response.ToolResults) > 0 {
+			fmt.Println("Tool results:")
+			for _, result := range response.ToolResults {
+				fmt.Printf("- %s success=%t\n", result.ToolName, result.Success)
+				if result.Error != nil {
+					fmt.Printf("  error=%s: %s\n", result.Error.Code, result.Error.Message)
+				}
+			}
 		}
-	}
-	if len(response.ToolResults) > 0 {
-		fmt.Println("Tool results:")
-		for _, result := range response.ToolResults {
-			fmt.Printf("- %s success=%t\n", result.ToolName, result.Success)
-			if result.Error != nil {
-				fmt.Printf("  error=%s: %s\n", result.Error.Code, result.Error.Message)
+		if len(response.Data) > 0 {
+			data, err := json.MarshalIndent(response.Data, "", "  ")
+			if err == nil {
+				fmt.Println("Trace:")
+				fmt.Println(string(data))
+			}
+		}
+		if response.ApprovalRequest != nil {
+			data, err := json.MarshalIndent(response.ApprovalRequest, "", "  ")
+			if err == nil {
+				fmt.Println("Approval request:")
+				fmt.Println(string(data))
 			}
 		}
 	}
-	if response.ApprovalRequest != nil {
-		data, err := json.MarshalIndent(response.ApprovalRequest, "", "  ")
-		if err == nil {
-			fmt.Println("Approval request:")
-			fmt.Println(string(data))
+
+	if response.Error != nil && response.Status == contracts.AgentStatusFailed {
+		fmt.Fprintln(os.Stderr, response.Error.Message)
+	}
+}
+
+func printUserOutput(output contracts.UserOutput) {
+	if output.Kind == contracts.UserOutputKindError {
+		if text := strings.TrimSpace(output.Text); text != "" {
+			fmt.Fprintln(os.Stderr, text)
 		}
+		return
+	}
+
+	text := strings.TrimSpace(output.Text)
+	if text != "" {
+		fmt.Println(text)
+	}
+
+	if output.ArtifactRef != nil {
+		ref := output.ArtifactRef
+		label := strings.TrimSpace(ref.Label)
+		uri := strings.TrimSpace(ref.URI)
+		switch {
+		case label != "" && uri != "":
+			fmt.Printf("%s: %s\n", label, uri)
+		case label != "":
+			fmt.Println(label)
+		case uri != "":
+			fmt.Println(uri)
+		case strings.TrimSpace(ref.ID) != "":
+			fmt.Println(ref.ID)
+		}
+	}
+
+	switch output.Kind {
+	case contracts.UserOutputKindApproval:
+		if approvalID, ok := output.Meta["approvalId"].(string); ok && strings.TrimSpace(approvalID) != "" {
+			fmt.Printf("Approval ID: %s\n", strings.TrimSpace(approvalID))
+		}
+		if expiresAt, ok := output.Meta["expiresAt"].(string); ok && strings.TrimSpace(expiresAt) != "" {
+			fmt.Printf("Expires At: %s\n", strings.TrimSpace(expiresAt))
+		}
+		fmt.Println("Reply with: approve, reject, revise <comment>")
+	case contracts.UserOutputKindExpired:
+		// The text already explains the expiry. Nothing else to add.
 	}
 }
