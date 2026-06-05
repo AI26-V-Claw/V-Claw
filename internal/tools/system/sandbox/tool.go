@@ -53,6 +53,7 @@ func (RunPythonTool) Parameters() tools.ToolSchema {
 			"workspace_dir":   map[string]any{"type": "string"},
 			"timeout_seconds": map[string]any{"type": "integer"},
 		},
+		"required":             []string{"code"},
 		"additionalProperties": false,
 	}
 }

@@ -163,7 +163,7 @@ var Registry = map[string]ToolDefinition{
 		Description: "Run Python code or a workspace-relative Python script in sandbox",
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 120000,
 		Parameters: []ParamDef{
-			{Name: "code", Type: "string", Required: false, Description: "Python code to run"},
+			{Name: "code", Type: "string", Required: true, Description: "Python code to run"},
 			{Name: "script_path", Type: "path", Required: false, Description: "Workspace-relative Python script path"},
 			{Name: "workingDir", Type: "path", Required: false, Description: "Sandbox workspace directory"},
 			{Name: "timeout_seconds", Type: "int", Required: false, Description: "Execution timeout in seconds"},

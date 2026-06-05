@@ -86,6 +86,13 @@ func TestRunPythonToolParametersAreOpenAICompatible(t *testing.T) {
 			t.Fatalf("expected %q property in schema: %#v", name, properties)
 		}
 	}
+	required, ok := schema["required"].([]string)
+	if !ok {
+		t.Fatalf("expected required fields, got %#v", schema["required"])
+	}
+	if len(required) != 1 || required[0] != "code" {
+		t.Fatalf("expected code to be the only required field, got %#v", required)
+	}
 }
 
 func TestRunPythonToolExecutesConfiguredRunner(t *testing.T) {
