@@ -1232,6 +1232,32 @@ func TestNormalizeCalendarListEventsNextMonth(t *testing.T) {
 	}
 }
 
+func TestNormalizeCalendarListEventsYesterday(t *testing.T) {
+	now := time.Date(2026, 6, 5, 8, 53, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{Name: "calendar.listEvents", Arguments: map[string]any{}}
+
+	normalized := normalizeProviderToolCall(now, call, "hôm qua thì sao")
+
+	if normalized.Arguments["timeMin"] != "2026-06-04T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMin: %#v", normalized.Arguments["timeMin"])
+	}
+	if normalized.Arguments["timeMax"] != "2026-06-05T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMax: %#v", normalized.Arguments["timeMax"])
+	}
+}
+
+func TestForceToolEnabledForCalendarRelativeFollowUp(t *testing.T) {
+	route := &TurnRoute{Mode: TurnModeNoTool, Reason: "short follow-up"}
+	memory := sessions.SessionMemory{LastActionResults: []sessions.ActionResult{{
+		ToolName: "calendar.listEvents",
+		Content:  `Found events: [{"title":"Hoàn thành Demo Sprint1"}]`,
+	}}}
+
+	if !shouldForceToolEnabledForContextualDataFollowUp(route, "ngày mai thì sao", nil, memory) {
+		t.Fatalf("expected calendar relative follow-up to force tool-enabled route")
+	}
+}
+
 func TestNormalizeGmailListEmailsTodayUsesDateOnlyRange(t *testing.T) {
 	now := time.Date(2026, 6, 4, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
 	userText := "kiem tra xem h\u00f4m nay email cua toi co nhung gi"
@@ -1276,6 +1302,26 @@ func TestNormalizeGmailListThreadsTodayUsesDateOnlyRange(t *testing.T) {
 	}
 	if normalized.Arguments["query"] != "" {
 		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+}
+
+func TestNormalizeGmailListEmailsSentToRecipient(t *testing.T) {
+	now := time.Date(2026, 6, 5, 9, 5, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"query": "baolnc@vclaw.site",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "Hay liet ke nhung mail toi da gui toi baolnc@vclaw.site")
+
+	if normalized.Arguments["query"] != "in:sent to:baolnc@vclaw.site" {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+	labels, ok := normalized.Arguments["labelIds"].([]string)
+	if !ok || len(labels) != 1 || labels[0] != "SENT" {
+		t.Fatalf("unexpected labelIds: %#v", normalized.Arguments["labelIds"])
 	}
 }
 

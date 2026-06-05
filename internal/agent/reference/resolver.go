@@ -75,7 +75,12 @@ func (r *HeuristicResolver) Resolve(_ context.Context, input Input) (*Resolution
 	if containsAny(text, "email này", "email nay", "mail này", "mail nay", "email vừa rồi", "email vua roi", "mail vừa rồi", "mail vua roi") {
 		return resolveFromActionResults(input, TypeGmailEmail, "gmail.", "gmail email"), nil
 	}
-	if containsAny(text, "lich nay", "su kien nay", "event nay", "lich vua roi", "cuoc hop tren", "cuoc hop o tren", "cuoc hop vua liet ke", "cuoc hop vua roi", "meeting above", "meeting vua roi") {
+	if containsAny(text,
+		"lich nay", "lich vua roi", "lich vua tao", "lich vua moi tao",
+		"su kien nay", "su kien vua roi", "su kien vua tao", "su kien vua moi tao",
+		"event nay", "event vua roi", "event vua tao",
+		"cuoc hop tren", "cuoc hop o tren", "cuoc hop vua liet ke", "cuoc hop vua roi", "meeting above", "meeting vua roi",
+	) {
 		return resolveFromActionResults(input, TypeCalendarEvent, "calendar.", "calendar event"), nil
 	}
 	if containsAny(text, "space này", "space nay", "nhóm chat này", "nhom chat nay", "chat này", "chat nay") {
@@ -193,6 +198,7 @@ func BuildSystemPrompt() string {
     <rule>Nếu có nhiều đối tượng phù hợp hoặc thiếu ngữ cảnh, đặt needsClarification=true và hỏi một câu tiếng Việt ngắn.</rule>
     <rule>Không dùng memory để tự lấy tham số cho write/destructive action. Memory chỉ giúp hiểu user đang nói tới đối tượng nào.</rule>
     <rule>Nếu tin nhắn là yêu cầu mới không có đại từ/tham chiếu, trả hasReference=false.</rule>
+    <rule>Nếu đại từ chỉ trỏ tới đối tượng vừa được đề cập trong cùng câu/tin nhắn (forward reference, ví dụ: "tạo sự kiện X... mời tham dự sự kiện này"), không coi là tham chiếu tới đối tượng cũ — trả hasReference=false.</rule>
   </rules>
 
   <tools_instruction>

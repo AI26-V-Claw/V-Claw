@@ -1288,7 +1288,29 @@ func formatJSON(output any) string {
 }
 
 func draftInputFromArgs(args map[string]any) DraftInput {
-	return DraftInput{To: stringSliceArg(args, "to"), Cc: stringSliceArg(args, "cc"), Bcc: stringSliceArg(args, "bcc"), Subject: stringArg(args, "subject"), TextBody: stringArg(args, "textBody"), HTMLBody: stringArg(args, "htmlBody"), ThreadID: stringArg(args, "threadId"), Attachments: stringSliceArg(args, "attachments")}
+	return DraftInput{To: stringSliceArg(args, "to"), Cc: stringSliceArg(args, "cc"), Bcc: stringSliceArg(args, "bcc"), Subject: stringArg(args, "subject"), TextBody: multilineStringArg(args, "textBody"), HTMLBody: multilineStringArg(args, "htmlBody"), ThreadID: stringArg(args, "threadId"), Attachments: stringSliceArg(args, "attachments")}
+}
+
+// multilineStringArg is like stringArg but joins array values with newlines.
+// LLMs occasionally send textBody/htmlBody as a string array instead of a
+// single string; joining preserves all paragraphs instead of dropping them.
+func multilineStringArg(args map[string]any, name string) string {
+	if args == nil {
+		return ""
+	}
+	switch value := args[name].(type) {
+	case string:
+		return value
+	case []string:
+		return strings.Join(value, "\n")
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, item := range value {
+			parts = append(parts, fmt.Sprint(item))
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
 }
 
 func listSchema() tools.ToolSchema {
@@ -1308,13 +1330,31 @@ func getDraftSchema() tools.ToolSchema {
 }
 
 func draftSchema(required []string) tools.ToolSchema {
-	return tools.ToolSchema{"type": "object", "properties": map[string]any{"to": arrayStringSchema(), "cc": arrayStringSchema(), "bcc": arrayStringSchema(), "subject": map[string]any{"type": "string"}, "textBody": map[string]any{"type": "string"}, "htmlBody": map[string]any{"type": "string"}, "threadId": map[string]any{"type": "string"}, "attachments": arrayStringSchema()}, "required": required, "additionalProperties": false}
+	return tools.ToolSchema{"type": "object", "properties": map[string]any{
+		"to":          emailArraySchema("Recipient email addresses. Only include valid non-empty email addresses. Do not include empty strings."),
+		"cc":          emailArraySchema("CC email addresses. Only include valid non-empty email addresses."),
+		"bcc":         emailArraySchema("BCC email addresses. Only include valid non-empty email addresses."),
+		"subject":     map[string]any{"type": "string"},
+		"textBody":    map[string]any{"type": "string"},
+		"htmlBody":    map[string]any{"type": "string"},
+		"threadId":    map[string]any{"type": "string"},
+		"attachments": arrayStringSchema(),
+	}, "required": required, "additionalProperties": false}
+}
+
+func emailArraySchema(description string) map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"items":       map[string]any{"type": "string", "minLength": 1},
+		"description": description,
+	}
 }
 
 func replyDraftSchema() tools.ToolSchema {
-	schema := draftSchema([]string{"to"})
+	schema := draftSchema([]string{"to", "threadId"})
 	props := schema["properties"].(map[string]any)
-	props["messageId"] = map[string]any{"type": "string"}
+	props["messageId"] = map[string]any{"type": "string", "description": "ID of the specific message to reply to. Provides proper Re: headers and quoted text. Preferred over threadId when available."}
+	props["threadId"] = map[string]any{"type": "string", "description": "Thread ID to reply in. Required. Always include this from the email listing result."}
 	return schema
 }
 
