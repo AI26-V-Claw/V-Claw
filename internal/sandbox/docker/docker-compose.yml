@@ -1,0 +1,79 @@
+# V-Claw Sandbox - Docker Compose
+#
+# Dùng để:
+#   1. Build image: docker compose build
+#   2. Chạy test thủ công: docker compose run --rm sandbox python -c "print('hello')"
+#   3. Tham khảo resource limit config cho Go runner
+#
+# KHÔNG dùng compose này trong production - Go runner tạo container trực tiếp
+# qua Docker SDK với cùng config này.
+
+services:
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vclaw-sandbox:latest
+    container_name: vclaw-sandbox-dev
+
+    # ─── Resource limits ────────────────────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          # Tối đa 0.5 CPU core
+          cpus: "0.5"
+          # Tối đa 256MB RAM
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+    # ─── Bảo mật ────────────────────────────────────────────────────────────
+    # Filesystem read-only ngoại trừ /workspace và /tmp
+    read_only: true
+    tmpfs:
+      # /tmp dùng cho pip cache tạm thời, giới hạn 64MB
+      - /tmp:size=64m,mode=1777
+      # /run cần cho một số thư viện
+      - /run:size=4m
+
+    # ─── Network: tắt hoàn toàn ─────────────────────────────────────────────
+    # Sandbox không được kết nối mạng
+    network_mode: none
+
+    # ─── Filesystem workspace ───────────────────────────────────────────────
+    volumes:
+      # Mount workspace session vào /workspace
+      # Trong production: Go runner thay thế ./workspace bằng path session thực
+      - ./workspace:/workspace:rw
+
+    # ─── Security options ───────────────────────────────────────────────────
+    security_opt:
+      # Không cho phép leo thang đặc quyền
+      - no-new-privileges:true
+    # Chạy với user sandbox (uid 1000)
+    user: "1000:1000"
+
+    # ─── Kernel capabilities ────────────────────────────────────────────────
+    # Xóa tất cả capabilities mặc định
+    cap_drop:
+      - ALL
+
+    # ─── Process limit (fork bomb protection) ───────────────────────────────
+    # Tối đa 64 process trong container (thay cho ulimit -u không hỗ trợ dash)
+    pids_limit: 64
+
+    # ─── Timeout ────────────────────────────────────────────────────────────
+    # Container tự stop sau 30s nếu command vẫn chạy
+    # (Go runner dùng context timeout thay vì stop_grace_period)
+    stop_grace_period: 5s
+
+    # Không restart tự động
+    restart: "no"
+
+    # ─── Logging ────────────────────────────────────────────────────────────
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
