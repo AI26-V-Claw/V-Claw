@@ -51,10 +51,6 @@ type IntentClassifier interface {
 	Classify(ctx context.Context, userInput string) (*agentintent.ClassificationOutput, error)
 }
 
-type MemoryAwareIntentClassifier interface {
-	ClassifyWithMemoryIsolation(ctx context.Context, userInput string, recentHistory []string) (*agentintent.ClassificationOutput, error)
-}
-
 type Runtime struct {
 	provider          providers.Provider
 	registry          *tools.ToolRegistry
@@ -323,9 +319,6 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		}, nil
 	}
 
-	var classification *agentintent.ClassificationOutput
-	var planResult *TaskPlanResult
-
 	providerTranscript := transcript
 	providerMemory := sessionMemory
 	providerReference := referenceResolution
@@ -346,7 +339,7 @@ agentLoop:
 	for iteration := 1; iteration <= r.maxIterations; iteration++ {
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, classification, planResult, providerMemory, providerReference, route)
+		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference, route)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
@@ -382,7 +375,7 @@ agentLoop:
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
-			if shouldRetryTextualApprovalAsToolCall(assistantMessage.Content, classification, planResult) {
+			if shouldRetryTextualApprovalAsToolCall(assistantMessage.Content) {
 				r.logger.Info("assistant requested approval without tool call; retrying for tool call",
 					"request_id", message.RequestID,
 					"session_id", message.SessionID,
@@ -411,7 +404,7 @@ If required information is missing, ask one concise clarification question inste
 				SessionID:   message.SessionID,
 				Status:      contracts.AgentStatusCompleted,
 				Message:     assistantMessage.Content,
-				Data:        r.traceData(classification, planResult, referenceResolution, route),
+				Data:        r.traceData(nil, nil, referenceResolution, route),
 				ToolResults: toolResults,
 			}, nil
 		}
@@ -450,7 +443,7 @@ If required information is missing, ask one concise clarification question inste
 					SessionID: message.SessionID,
 					Status:    contracts.AgentStatusNeedClarification,
 					Message:   clarification.question,
-					Data:      r.traceData(classification, planResult, referenceResolution, route),
+					Data:      r.traceData(nil, nil, referenceResolution, route),
 				}, nil
 			}
 
@@ -584,7 +577,7 @@ If required information is missing, ask one concise clarification question inste
 					Message:         approval.Summary,
 					ApprovalID:      approval.ApprovalID,
 					ApprovalRequest: &approval,
-					Data:            r.traceData(classification, planResult, referenceResolution, route),
+					Data:            r.traceData(nil, nil, referenceResolution, route),
 					ToolResults:     toolResults,
 					Error: &contracts.ErrorShape{
 						Code:      contracts.ErrorActionRequiresApproval,
@@ -631,7 +624,7 @@ If required information is missing, ask one concise clarification question inste
 		SessionID:   message.SessionID,
 		Status:      contracts.AgentStatusFailed,
 		Message:     "agent exceeded max iterations",
-		Data:        r.traceData(classification, planResult, referenceResolution, route),
+		Data:        r.traceData(nil, nil, referenceResolution, route),
 		ToolResults: toolResults,
 		Error: &contracts.ErrorShape{
 			Code:      contracts.ErrorMaxIterationsExceeded,
@@ -716,9 +709,12 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			response.Error = errShape
 			response.Message = errShape.Message
 		}
-		// If the approved tool succeeded and there are remaining skipped tools from the
-		// same turn, automatically continue so the user doesn't lose those tasks.
-		if result.Success && len(pending.remainingToolCalls) > 0 {
+		// After a successful approval, always run a continuation pass so that
+		// remaining tasks from the original multi-step request are not lost.
+		// If remainingToolCalls is non-empty (same-batch siblings), the continuation
+		// replays them explicitly. If empty, the continuation gives the LLM a chance
+		// to detect and execute any tasks from the original request not yet done.
+		if result.Success {
 			continuation := buildApprovalContinuationMessage(pending, result, r.now())
 			if continuationResp, err := r.Run(ctx, continuation); err == nil {
 				return continuationResp, nil
@@ -818,8 +814,8 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 	return r.Run(ctx, revisionMessage)
 }
 
-func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, classification *agentintent.ClassificationOutput, planResult *TaskPlanResult, memory sessions.SessionMemory, resolution *reference.Resolution, route *TurnRoute) []providers.Message {
-	messages := make([]providers.Message, 0, len(transcript)+6)
+func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution, route *TurnRoute) []providers.Message {
+	messages := make([]providers.Message, 0, len(transcript)+4)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
 		Content: runtimeSystemPrompt(r.now()),
@@ -837,18 +833,6 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, classi
 		})
 	}
 	if prompt := routeContextPrompt(route); prompt != "" {
-		messages = append(messages, providers.Message{
-			Role:    providers.MessageRoleSystem,
-			Content: prompt,
-		})
-	}
-	if prompt := intentContextPrompt(classification); prompt != "" {
-		messages = append(messages, providers.Message{
-			Role:    providers.MessageRoleSystem,
-			Content: prompt,
-		})
-	}
-	if prompt := planContextPrompt(planResult); prompt != "" {
 		messages = append(messages, providers.Message{
 			Role:    providers.MessageRoleSystem,
 			Content: prompt,
@@ -881,6 +865,7 @@ Use available tools when the user asks for information that a tool can retrieve 
 Do not answer explicit Google Workspace read requests from conversation memory alone. If the current user asks for Gmail, Calendar, Chat, or People data for a concrete date/range/query, call the matching read tool.
 Never claim that an external action was completed unless a tool result confirms it.
 For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
+When the user asks for multiple actions in one request (multi-step task), generate ALL required tool calls in a single response — do not wait for intermediate results before producing the next tool call, unless the next call strictly depends on an output (such as an ID) that cannot be known until the first call completes. The runtime processes approvals sequentially and resumes remaining tool calls automatically; generating them all upfront preserves the full multi-step plan.
 When tools are available and required details are missing, call clarify with one concise question instead of inventing values. In no-tool mode, ask normally if the conversation needs it.
 Keep final answers concise and include the useful result, not internal implementation details.
 
@@ -901,6 +886,11 @@ Gmail date rules, restated in ASCII:
 - "today" / "hom nay" means after=today local date and before=tomorrow local date.
 - Keep relative date words out of Gmail query; query is only for sender, subject, body, labels, or Gmail search terms.
 - Sent mail rule: "mail/email toi da gui toi/cho <email>" means query "in:sent to:<email>" with labelIds ["SENT"].
+For sending email (gửi email / send email):
+- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to actually deliver it.
+- gmail.createDraft alone does NOT send the email — the draft sits unsent until gmail.sendDraft is called.
+- When the user asks to send (not draft) an email, you MUST plan to call both tools. Because sendDraft depends on the draftId from createDraft, generate createDraft first; after it is approved and the draftId is returned, call sendDraft in the continuation.
+- Do not consider the email task complete after createDraft succeeds — it is only complete after sendDraft succeeds.
 For calendar.createEvent and calendar.updateEvent:
 - Attendees must be valid email addresses.
 - If the user provides a person name instead of an email address, call people.searchDirectory first and use the resolved Workspace email.
@@ -1027,48 +1017,16 @@ Do not use reference memory as approval. For any write/destructive action, still
 	))
 }
 
-func (r *Runtime) classifyIntent(ctx context.Context, message contracts.UserMessage, recentHistory []string) (*agentintent.ClassificationOutput, *contracts.ErrorShape) {
-	if r.intentClassifier == nil {
-		return nil, nil
-	}
-	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassifying, Message: "Intent classification started"})
-	var classification *agentintent.ClassificationOutput
-	var err error
-	if memoryAware, ok := r.intentClassifier.(MemoryAwareIntentClassifier); ok && len(recentHistory) > 0 {
-		classification, err = memoryAware.ClassifyWithMemoryIsolation(ctx, message.Text, recentHistory)
-	} else {
-		classification, err = r.intentClassifier.Classify(ctx, message.Text)
-	}
-	if err != nil {
-		retryable := providers.IsRetryableError(err)
-		code := contracts.ErrorProviderError
-		if retryable {
-			code = contracts.ErrorProviderUnavailable
-		}
-		return nil, &contracts.ErrorShape{
-			Code:      code,
-			Message:   "intent classification failed: " + err.Error(),
-			Source:    contracts.ErrorSourceProvider,
-			Retryable: retryable,
-		}
-	}
-	if classification == nil || classification.Intent == nil {
-		return nil, internalError("intent classifier returned empty result", contracts.ErrorSourceAgent)
-	}
-	r.logger.Info("intent classified",
-		"request_id", message.RequestID,
-		"session_id", message.SessionID,
-		"intent_type", classification.Intent.Type,
-		"confidence", classification.Intent.Confidence,
-		"needs_clarification", classification.NeedsClarification,
-	)
-	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassified, Message: "Intent classification completed"})
-	return classification, nil
-}
-
 func (r *Runtime) routeTurn(ctx context.Context, message contracts.UserMessage, recentHistory []string) (*TurnRoute, *contracts.ErrorShape) {
 	if r.turnRouter == nil {
 		route := TurnRoute{Mode: TurnModeToolEnabled, Reason: "router unavailable; exposing tools by default"}
+		return &route, nil
+	}
+	// Continuation and revision messages are internally-generated trusted messages.
+	// Skip the LLM turn router and expose tools directly so these messages are never
+	// blocked or misclassified as prompt injection.
+	if isRevisionMessage(message) {
+		route := TurnRoute{Mode: TurnModeToolEnabled, Reason: "continuation/revision message; tools enabled by runtime"}
 		return &route, nil
 	}
 	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassifying, Message: "Turn routing started"})
@@ -1150,139 +1108,7 @@ func shouldForceToolEnabledForContextualDataFollowUp(route *TurnRoute, text stri
 	)
 }
 
-func (r *Runtime) clarificationResponse(message contracts.UserMessage, classification *agentintent.ClassificationOutput, activeClarification bool) *contracts.AgentResponse {
-	if classification == nil || !classification.NeedsClarification {
-		return nil
-	}
-	if activeClarification {
-		r.logger.Info("intent clarification suppressed for active follow-up",
-			"request_id", message.RequestID,
-			"session_id", message.SessionID,
-			"intent_type", classification.Intent.Type,
-			"confidence", classification.Intent.Confidence,
-		)
-		return nil
-	}
-	clarification := strings.TrimSpace(classification.ClarificationMessage)
-	if clarification == "" {
-		clarification = "Bạn có thể nói rõ hơn bạn muốn tôi làm gì không?"
-	}
-	if isGenericClarification(clarification) {
-		r.logger.Info("generic intent clarification deferred to planner/provider",
-			"request_id", message.RequestID,
-			"session_id", message.SessionID,
-			"intent_type", classification.Intent.Type,
-			"confidence", classification.Intent.Confidence,
-		)
-		return nil
-	}
-	return &contracts.AgentResponse{
-		RequestID: message.RequestID,
-		SessionID: message.SessionID,
-		Status:    contracts.AgentStatusNeedClarification,
-		Message:   clarification,
-		Data:      r.traceData(classification, nil, nil),
-	}
-}
-
-func intentContextPrompt(classification *agentintent.ClassificationOutput) string {
-	if classification == nil || classification.Intent == nil {
-		return ""
-	}
-	intentResult := classification.Intent
-	toolNames := make([]string, 0, len(intentResult.ToolCalls))
-	for _, toolCall := range intentResult.ToolCalls {
-		if strings.TrimSpace(toolCall.Name) != "" {
-			toolNames = append(toolNames, toolCall.Name)
-		}
-	}
-	return strings.TrimSpace(fmt.Sprintf(`Intent classifier result for the current user message:
-- intent_type: %s
-- confidence: %.2f
-- needs_confirm: %t
-- missing_params: %s
-- proposed_tools: %s
-- reasoning_vi: %s
-
-Use this only as routing/safety context. Do not expose it directly to the user. If the intent indicates a write, destructive, local file, or code execution action, keep following the tool approval policy.`,
-		intentResult.Type,
-		intentResult.Confidence,
-		intentResult.NeedsConfirm,
-		strings.Join(intentResult.MissingParams, ", "),
-		strings.Join(toolNames, ", "),
-		strings.TrimSpace(intentResult.Reasoning),
-	))
-}
-
-func (r *Runtime) planTask(ctx context.Context, message contracts.UserMessage, classification *agentintent.ClassificationOutput, recentHistory []string) (*TaskPlanResult, *contracts.ErrorShape) {
-	if r.taskPlanner == nil {
-		return nil, nil
-	}
-	emitProgress(ctx, ProgressEvent{Stage: ProgressStagePlanning, Message: "Task planning started"})
-	toolDefs := []tools.ToolDefinition{}
-	if r.registry != nil {
-		toolDefs = r.registry.ListTools()
-	}
-	planResult, err := r.taskPlanner.Plan(ctx, TaskPlanningInput{
-		Message:        message,
-		Classification: classification,
-		Tools:          toolDefs,
-		RecentHistory:  recentHistory,
-		Now:            r.now(),
-	})
-	if err != nil {
-		retryable := providers.IsRetryableError(err)
-		code := contracts.ErrorProviderError
-		if retryable {
-			code = contracts.ErrorProviderUnavailable
-		}
-		return nil, &contracts.ErrorShape{
-			Code:      code,
-			Message:   "task planning failed: " + err.Error(),
-			Source:    contracts.ErrorSourceProvider,
-			Retryable: retryable,
-		}
-	}
-	if planResult == nil {
-		planResult = &TaskPlanResult{}
-	}
-	r.logger.Info("task planned",
-		"request_id", message.RequestID,
-		"session_id", message.SessionID,
-		"steps", len(planResult.Plan.Steps),
-		"needs_clarification", planResult.NeedsClarification,
-	)
-	emitProgress(ctx, ProgressEvent{Stage: ProgressStagePlanned, Message: "Task planning completed"})
-	return planResult, nil
-}
-
-func (r *Runtime) planningClarificationResponse(message contracts.UserMessage, classification *agentintent.ClassificationOutput, planResult *TaskPlanResult, activeClarification bool) *contracts.AgentResponse {
-	if planResult == nil || !planResult.NeedsClarification {
-		return nil
-	}
-	if activeClarification {
-		r.logger.Info("planning clarification suppressed for active follow-up",
-			"request_id", message.RequestID,
-			"session_id", message.SessionID,
-			"steps", len(planResult.Plan.Steps),
-		)
-		return nil
-	}
-	clarification := strings.TrimSpace(planResult.ClarificationMessage)
-	if clarification == "" {
-		clarification = "Bạn có thể bổ sung thêm thông tin để tôi lập kế hoạch chính xác hơn không?"
-	}
-	return &contracts.AgentResponse{
-		RequestID: message.RequestID,
-		SessionID: message.SessionID,
-		Status:    contracts.AgentStatusNeedClarification,
-		Message:   clarification,
-		Data:      r.traceData(classification, planResult, nil),
-		Plan:      responsePlan(planResult),
-	}
-}
-
-func shouldRetryTextualApprovalAsToolCall(content string, classification *agentintent.ClassificationOutput, planResult *TaskPlanResult) bool {
+func shouldRetryTextualApprovalAsToolCall(content string) bool {
 	lower := strings.ToLower(strings.TrimSpace(content))
 	if lower == "" {
 		return false
@@ -1290,62 +1116,12 @@ func shouldRetryTextualApprovalAsToolCall(content string, classification *agenti
 	if !containsAnyText(lower, "xác nhận", "xac nhan", "confirm", "tiến hành", "tien hanh") {
 		return false
 	}
-	if containsAnyText(lower,
+	return containsAnyText(lower,
 		"tạo", "tao", "create",
 		"gửi", "gui", "send",
 		"xóa", "xoa", "delete",
 		"cập nhật", "cap nhat", "update",
-	) {
-		return true
-	}
-	if classification != nil && classification.Intent != nil {
-		for _, toolCall := range classification.Intent.ToolCalls {
-			if isSideEffectToolName(toolCall.Name) {
-				return true
-			}
-		}
-	}
-	if planResult != nil {
-		for _, step := range planResult.Plan.Steps {
-			if isSideEffectToolNameFromText(step.Description) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isSideEffectToolNameFromText(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(text))
-	for _, name := range []string{
-		"calendar.createevent",
-		"calendar.updateevent",
-		"calendar.deleteevent",
-		"gmail.createdraft",
-		"gmail.updatedraft",
-		"gmail.senddraft",
-		"gmail.deletedraft",
-		"gmail.replydraft",
-		"gmail.forwarddraft",
-		"gmail.downloadattachments",
-		"gmail.modifymessage",
-		"gmail.batchmodifymessages",
-		"gmail.trashmessage",
-		"gmail.untrashmessage",
-		"chat.sendmessage",
-		"chat.updatemessage",
-		"chat.deletemessage",
-		"chat.createspace",
-		"chat.addmember",
-		"chat.removemember",
-		"sandbox.runpython",
-		"sandbox.runshell",
-	} {
-		if strings.Contains(lower, name) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func isSideEffectToolName(name string) bool {
@@ -1698,20 +1474,6 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
-func planContextPrompt(planResult *TaskPlanResult) string {
-	if planResult == nil || len(planResult.Plan.Steps) == 0 {
-		return ""
-	}
-	lines := make([]string, 0, len(planResult.Plan.Steps))
-	for _, step := range planResult.Plan.Steps {
-		lines = append(lines, fmt.Sprintf("- %s: %s (%s)", step.ID, step.Description, step.Status))
-	}
-	return strings.TrimSpace(fmt.Sprintf(`Task planner result for the current user message:
-%s
-
-Use this as execution guidance only. The tool policy and approval boundary remain mandatory. Do not expose this plan unless the user asks for the internal plan.`, strings.Join(lines, "\n")))
-}
-
 func (r *Runtime) resolvePendingClarification(ctx context.Context, pending sessions.PendingClarification, userAnswer string, recentHistory []string) pendingClarificationResolution {
 	fallback := fallbackPendingClarificationResolution(pending, userAnswer)
 	if r == nil || r.provider == nil {
@@ -1911,36 +1673,6 @@ func (r *Runtime) storePendingClarification(ctx context.Context, sessionID strin
 	return r.saveSessionMemory(ctx, sessionID, memory)
 }
 
-func pendingClarificationFromClassification(originalRequest string, question string, classification *agentintent.ClassificationOutput) *sessions.PendingClarification {
-	pending := &sessions.PendingClarification{
-		OriginalRequest: strings.TrimSpace(originalRequest),
-		Question:        strings.TrimSpace(question),
-	}
-	if classification == nil || classification.Intent == nil {
-		return pending
-	}
-	pending.MissingFields = append([]string(nil), classification.Intent.MissingParams...)
-	if len(classification.Intent.ToolCalls) > 0 {
-		toolCall := classification.Intent.ToolCalls[0]
-		pending.ToolName = strings.TrimSpace(toolCall.Name)
-		pending.PartialInput = cloneAnyMap(toolCall.Parameters)
-	}
-	return pending
-}
-
-func pendingClarificationFromPlan(originalRequest string, question string, classification *agentintent.ClassificationOutput, planResult *TaskPlanResult) *sessions.PendingClarification {
-	pending := pendingClarificationFromClassification(originalRequest, question, classification)
-	if strings.TrimSpace(pending.ToolName) != "" || planResult == nil {
-		return pending
-	}
-	for _, step := range planResult.Plan.Steps {
-		if toolName := toolNameFromPlanStep(step.Description); toolName != "" {
-			pending.ToolName = toolName
-			break
-		}
-	}
-	return pending
-}
 
 func pendingClarificationFromToolCall(originalRequest string, question string, toolCall providers.ToolCall, missing []string) *sessions.PendingClarification {
 	return &sessions.PendingClarification{
@@ -1950,19 +1682,6 @@ func pendingClarificationFromToolCall(originalRequest string, question string, t
 		MissingFields:   append([]string(nil), missing...),
 		PartialInput:    cloneAnyMap(toolCall.Arguments),
 	}
-}
-
-func toolNameFromPlanStep(description string) string {
-	fields := strings.FieldsFunc(description, func(r rune) bool {
-		return r == ' ' || r == ':' || r == ',' || r == ';' || r == '\n' || r == '\t'
-	})
-	for _, field := range fields {
-		field = strings.TrimSpace(field)
-		if strings.Count(field, ".") == 1 {
-			return field
-		}
-	}
-	return ""
 }
 
 func cloneAnyMap(values map[string]any) map[string]any {
@@ -2415,20 +2134,6 @@ func isLikelyReadRequest(text string) bool {
 	return containsAnyText(lower,
 		"liệt kê", "liet ke", "xem", "đọc", "doc", "kiểm tra", "kiem tra",
 		"tìm", "tim", "search", "list", "show", "read",
-	)
-}
-
-func isGenericClarification(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(text))
-	if (strings.Contains(lower, "nói rõ hơn") && strings.Contains(lower, "muốn tôi làm gì")) ||
-		(strings.Contains(lower, "noi ro hon") && strings.Contains(lower, "muon toi lam gi")) {
-		return true
-	}
-	return containsAnyText(lower,
-		"bạn có thể nói rõ hơn bạn muốn tôi làm gì không",
-		"ban co the noi ro hon ban muon toi lam gi khong",
-		"bạn muốn tôi làm gì cụ thể hơn",
-		"ban muon toi lam gi cu the hon",
 	)
 }
 
@@ -3337,11 +3042,13 @@ func (r *Runtime) peekPendingApproval(sessionID string, approvalID string) (pend
 }
 
 func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
-	remainingNames := make([]string, 0, len(pending.remainingToolCalls))
-	for _, tc := range pending.remainingToolCalls {
-		remainingNames = append(remainingNames, tc.Name)
-	}
-	text := strings.TrimSpace(fmt.Sprintf(`Continuing the original multi-step request after an approved tool completed.
+	var text string
+	if len(pending.remainingToolCalls) > 0 {
+		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
+		for _, tc := range pending.remainingToolCalls {
+			remainingNames = append(remainingNames, tc.Name)
+		}
+		text = strings.TrimSpace(fmt.Sprintf(`Continuing the original multi-step request after an approved tool completed.
 Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.
 Do not repeat the tool that was just executed.
 
@@ -3353,11 +3060,30 @@ Result: %s
 
 Continue by calling the remaining tools in the original plan: %s
 Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.`,
-		pending.message.Text,
-		pending.toolCall.Name,
-		result.ContentForLLM,
-		strings.Join(remainingNames, ", "),
-	))
+			pending.message.Text,
+			pending.toolCall.Name,
+			result.ContentForLLM,
+			strings.Join(remainingNames, ", "),
+		))
+	} else {
+		text = strings.TrimSpace(fmt.Sprintf(`An approved tool just completed as part of the user's original request.
+Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.
+
+Original request:
+%s
+
+Completed tool: %s
+Result: %s
+
+Check whether the original request contained additional tasks that have not yet been done.
+If yes, call the necessary tool(s) now — do NOT ask the user again for information already given in the original request.
+If all tasks are already complete, respond with a short Vietnamese summary of what was accomplished.
+Do not repeat the tool that was just executed.`,
+			pending.message.Text,
+			pending.toolCall.Name,
+			result.ContentForLLM,
+		))
+	}
 	msg := pending.message
 	msg.Text = text
 	msg.Timestamp = now

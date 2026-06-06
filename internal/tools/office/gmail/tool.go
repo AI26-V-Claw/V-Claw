@@ -1083,11 +1083,11 @@ func (t GmailTool) Description() string {
 	case ToolNameGetDraft:
 		return "Read one Gmail draft in detail."
 	case ToolNameCreateDraft:
-		return "Create a Gmail draft. This external write requires approval."
+		return "Create a Gmail draft WITHOUT sending it. The email is NOT delivered until gmail.sendDraft is called with the returned draftId. If the user asked to send an email, you MUST call gmail.sendDraft after this tool succeeds."
 	case ToolNameUpdateDraft:
 		return "Update a Gmail draft. This external write requires approval."
 	case ToolNameSendDraft:
-		return "Send an existing Gmail draft. This external write requires approval."
+		return "Send a Gmail draft, delivering it to recipients. Call this after gmail.createDraft succeeds, using the draftId returned by createDraft. This is the step that actually sends the email."
 	case ToolNameDeleteDraft:
 		return "Delete an existing Gmail draft. This destructive action requires approval."
 	case ToolNameReplyDraft:
