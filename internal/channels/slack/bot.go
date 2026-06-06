@@ -285,6 +285,19 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 	if strings.TrimSpace(outboundText) == "" {
 		outboundText = "Đã xử lý quyết định."
 	}
+	// Continuation after approval may itself require approval (next task in a
+	// multi-step request). Show the approval blocks so the user can act on it.
+	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
+		if err := b.updateApprovalMessage(ctx, channelID, messageTS, outboundText, outbound.ApprovalID, inbound.SessionID); err != nil {
+			b.logger.Error("slack continuation approval update failed", "error", err)
+			if _, sendErr := b.sendApprovalMessage(ctx, channelID, outboundText, "", outbound.ApprovalID, inbound.SessionID); sendErr != nil {
+				b.orchestrator.FinalizeAudit(inbound, sendErr)
+				return sendErr
+			}
+		}
+		b.orchestrator.FinalizeAudit(inbound, nil)
+		return nil
+	}
 	if err := b.updateMessageClearBlocks(ctx, channelID, messageTS, outboundText); err != nil {
 		b.orchestrator.FinalizeAudit(inbound, err)
 		return err
@@ -543,6 +556,8 @@ func slackProgressText(event agent.ProgressEvent) string {
 		default:
 			return "Đang chạy tool " + event.ToolName + "..."
 		}
+	case agent.ProgressStageToolCompleted, agent.ProgressStageToolFailed:
+		return "Đang xử lý..."
 	default:
 		return ""
 	}

@@ -1232,6 +1232,32 @@ func TestNormalizeCalendarListEventsNextMonth(t *testing.T) {
 	}
 }
 
+func TestNormalizeCalendarListEventsYesterday(t *testing.T) {
+	now := time.Date(2026, 6, 5, 8, 53, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{Name: "calendar.listEvents", Arguments: map[string]any{}}
+
+	normalized := normalizeProviderToolCall(now, call, "hôm qua thì sao")
+
+	if normalized.Arguments["timeMin"] != "2026-06-04T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMin: %#v", normalized.Arguments["timeMin"])
+	}
+	if normalized.Arguments["timeMax"] != "2026-06-05T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMax: %#v", normalized.Arguments["timeMax"])
+	}
+}
+
+func TestForceToolEnabledForCalendarRelativeFollowUp(t *testing.T) {
+	route := &TurnRoute{Mode: TurnModeNoTool, Reason: "short follow-up"}
+	memory := sessions.SessionMemory{LastActionResults: []sessions.ActionResult{{
+		ToolName: "calendar.listEvents",
+		Content:  `Found events: [{"title":"Hoàn thành Demo Sprint1"}]`,
+	}}}
+
+	if !shouldForceToolEnabledForContextualDataFollowUp(route, "ngày mai thì sao", nil, memory) {
+		t.Fatalf("expected calendar relative follow-up to force tool-enabled route")
+	}
+}
+
 func TestNormalizeGmailListEmailsTodayUsesDateOnlyRange(t *testing.T) {
 	now := time.Date(2026, 6, 4, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
 	userText := "kiem tra xem h\u00f4m nay email cua toi co nhung gi"
@@ -1276,6 +1302,26 @@ func TestNormalizeGmailListThreadsTodayUsesDateOnlyRange(t *testing.T) {
 	}
 	if normalized.Arguments["query"] != "" {
 		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+}
+
+func TestNormalizeGmailListEmailsSentToRecipient(t *testing.T) {
+	now := time.Date(2026, 6, 5, 9, 5, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"query": "baolnc@vclaw.site",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "Hay liet ke nhung mail toi da gui toi baolnc@vclaw.site")
+
+	if normalized.Arguments["query"] != "in:sent to:baolnc@vclaw.site" {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+	labels, ok := normalized.Arguments["labelIds"].([]string)
+	if !ok || len(labels) != 1 || labels[0] != "SENT" {
+		t.Fatalf("unexpected labelIds: %#v", normalized.Arguments["labelIds"])
 	}
 }
 
@@ -1443,16 +1489,25 @@ func TestRuntimeReturnsApprovalRequiredForSideEffectTool(t *testing.T) {
 
 func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	executions := 0
-	provider := &fakeProvider{responses: []providers.ChatResponse{{
-		Message: providers.Message{
-			Role: providers.MessageRoleAssistant,
-			ToolCalls: []providers.ToolCall{{
-				ID:        "call_write",
-				Name:      "danger.count",
-				Arguments: map[string]any{"value": "x"},
-			}},
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write",
+					Name:      "danger.count",
+					Arguments: map[string]any{"value": "x"},
+				}},
+			},
 		},
-	}}}
+		// Continuation pass after approval: LLM confirms all tasks done.
+		{
+			Message: providers.Message{
+				Role:    providers.MessageRoleAssistant,
+				Content: "Đã hoàn thành yêu cầu.",
+			},
+		},
+	}}
 	registry := tools.NewToolRegistry()
 	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
 		t.Fatalf("register dangerous tool: %v", err)
@@ -1492,8 +1547,10 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	if executions != 1 {
 		t.Fatalf("expected side-effect tool to execute once after approval, executions=%d", executions)
 	}
-	if len(response.ToolResults) != 1 || !response.ToolResults[0].Success {
-		t.Fatalf("expected successful tool result, got %#v", response.ToolResults)
+	// After approval the runtime runs a continuation pass; the final response comes
+	// from that pass (a text summary). The tool result lives in the transcript.
+	if strings.TrimSpace(response.Message) == "" {
+		t.Fatalf("expected non-empty message from continuation response, got %#v", response)
 	}
 	transcript, err := runtime.sessionStore.LoadTranscript(context.Background(), runtimeTestMessage().SessionID)
 	if err != nil {

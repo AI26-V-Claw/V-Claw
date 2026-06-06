@@ -251,11 +251,13 @@ type CreateSpaceOutput struct {
 
 type AddMemberInput struct {
 	Space string
-	User  string
+	User  string   // single user; combined with Users if both provided
+	Users []string // multiple users; use this when adding more than one member
 }
 
 type AddMemberOutput struct {
-	Membership chatconnector.Membership
+	Membership  chatconnector.Membership
+	Memberships []chatconnector.Membership
 }
 
 type RemoveMemberInput struct {
@@ -483,18 +485,26 @@ func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (AddMembe
 	if space == "" {
 		return AddMemberOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "space must contain a resource name like spaces/AAAA"}
 	}
-	user := strings.TrimSpace(input.User)
-	if user == "" {
-		return AddMemberOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "user is required"}
+	users := cleanStrings(append([]string{input.User}, input.Users...))
+	if len(users) == 0 {
+		return AddMemberOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "user or users is required"}
 	}
-	if errShape := s.validateWorkspaceMemberEmails([]string{user}); errShape != nil {
+	if errShape := s.validateWorkspaceMemberEmails(users); errShape != nil {
 		return AddMemberOutput{}, errShape
 	}
-	membership, err := s.connector.AddMember(ctx, space, user)
-	if err != nil {
-		return AddMemberOutput{}, MapError(err)
+	memberships := make([]chatconnector.Membership, 0, len(users))
+	for _, user := range users {
+		membership, err := s.connector.AddMember(ctx, space, user)
+		if err != nil {
+			return AddMemberOutput{}, MapError(err)
+		}
+		memberships = append(memberships, membership)
 	}
-	return AddMemberOutput{Membership: membership}, nil
+	first := chatconnector.Membership{}
+	if len(memberships) > 0 {
+		first = memberships[0]
+	}
+	return AddMemberOutput{Membership: first, Memberships: memberships}, nil
 }
 
 func (s *Service) RemoveMember(ctx context.Context, input RemoveMemberInput) (RemoveMemberOutput, *ErrorShape) {
@@ -1044,7 +1054,7 @@ func NewAddMemberTool(service *Service) AddMemberTool {
 func (AddMemberTool) Name() string { return ToolNameAddMember }
 
 func (AddMemberTool) Description() string {
-	return "Add a human member to a Google Chat space. This external write requires approval."
+	return "Add one or more human members to a Google Chat space. Always pass all target member emails in the users array — do not call this tool once per member. This external write requires approval."
 }
 
 func (AddMemberTool) Parameters() tools.ToolSchema {
@@ -1052,9 +1062,14 @@ func (AddMemberTool) Parameters() tools.ToolSchema {
 		"type": "object",
 		"properties": map[string]any{
 			"space": map[string]any{"type": "string"},
-			"user":  map[string]any{"type": "string"},
+			"users": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string", "minLength": 1},
+				"minItems":    1,
+				"description": "Email addresses of all members to add. Include every target member in one call.",
+			},
 		},
-		"required":             []string{"space", "user"},
+		"required":             []string{"space", "users"},
 		"additionalProperties": false,
 	}
 }
@@ -1066,12 +1081,18 @@ func (AddMemberTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelExterna
 func (t AddMemberTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
 	output, errShape := t.service.AddMember(ctx, AddMemberInput{
 		Space: stringArg(call.Arguments, "space"),
-		User:  stringArg(call.Arguments, "user"),
+		Users: stringSliceArg(call.Arguments, "users"),
 	})
 	if errShape != nil {
 		return toolErrorResult(call, errShape)
 	}
-	content := "Added Google Chat member: " + output.Membership.Name
+	names := make([]string, 0, len(output.Memberships))
+	for _, m := range output.Memberships {
+		if m.Name != "" {
+			names = append(names, m.Name)
+		}
+	}
+	content := "Added Google Chat member: " + strings.Join(names, ", ")
 	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
 }
 
