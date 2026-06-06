@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"vclaw/internal/contracts"
 )
@@ -72,6 +73,43 @@ func TestPrintAgentResponsePrintsApprovalMetadata(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Reply with: approve, reject, revise <comment>") {
 		t.Fatalf("expected approval reply hint, got %q", stdout)
+	}
+}
+
+func TestPrintAgentResponseRendersApprovalRequestWithoutOutput(t *testing.T) {
+	stdout, stderr := captureStdStreams(t, func() {
+		printAgentResponse(contracts.AgentResponse{
+			Status: contracts.AgentStatusApprovalRequired,
+			ApprovalRequest: &contracts.ApprovalRequest{
+				ApprovalID: "appr_1",
+				Status:     contracts.ApprovalStatusPending,
+				RiskLevel:  contracts.RiskLevelExternalWrite,
+				Summary:    "Can gui tin nhan.",
+				ToolCall: contracts.ToolCall{
+					ToolName: "chat.sendMessage",
+					Input: map[string]any{
+						"text": "hello",
+					},
+				},
+				ExpiresAt: time.Date(2026, 6, 5, 10, 22, 53, 0, time.FixedZone("ICT", 7*60*60)),
+			},
+		}, false, false)
+	})
+
+	for _, want := range []string{
+		"Cần xác nhận trước khi thực hiện.",
+		"Tool: chat.sendMessage",
+		"Risk: external_write",
+		"\"text\": \"hello\"",
+		"Approval ID: appr_1",
+		"Reply with: approve, reject, revise <comment>",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("expected stdout to contain %q, got %q", want, stdout)
+		}
+	}
+	if strings.TrimSpace(stderr) != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
 	}
 }
 

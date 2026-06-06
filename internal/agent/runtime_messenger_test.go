@@ -220,8 +220,30 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 		if output == nil || output.ArtifactRef == nil {
 			t.Fatalf("expected artifact ref, got %#v", output)
 		}
-		if output.ArtifactRef.ID != "msg_1" || output.ArtifactRef.URI != "https://mail.google.com/mail/u/0/#drafts/msg_1" {
+		if output.ArtifactRef.ID != "msg_1" || output.ArtifactRef.URI != "https://mail.google.com/mail/u/0/#sent/msg_1" {
 			t.Fatalf("unexpected artifact ref: %#v", output.ArtifactRef)
+		}
+	})
+
+	t.Run("calendar_artifact_accepts_json_tags", func(t *testing.T) {
+		output := renderUserOutput(contracts.AgentResponse{
+			Status: contracts.AgentStatusCompleted,
+			ToolResults: []contracts.ToolResult{{
+				ToolName: "calendar.createEvent",
+				Success:  true,
+				Data: map[string]any{
+					"contentForUser": `{"Event":{"id":"event_1","summary":"Test HITL","meetLink":"https://meet.google.com/abc-defg-hij"}}`,
+				},
+			}},
+		})
+		if output == nil || output.ArtifactRef == nil {
+			t.Fatalf("expected calendar artifact ref, got %#v", output)
+		}
+		if output.ArtifactRef.ID != "event_1" || output.ArtifactRef.URI != "https://calendar.google.com/calendar/r/eventedit/event_1" {
+			t.Fatalf("unexpected calendar artifact ref: %#v", output.ArtifactRef)
+		}
+		if got := output.ArtifactRef.Meta["meetLink"]; got != "https://meet.google.com/abc-defg-hij" {
+			t.Fatalf("expected meetLink meta, got %#v", got)
 		}
 	})
 

@@ -181,7 +181,7 @@ func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
 	switch strings.TrimSpace(toolName) {
 	case "chat.sendMessage":
 		if message, ok := nestedMap(value, "Message"); ok {
-			id := stringValue(message, "Name")
+			id := firstStringValue(message, "Name", "name")
 			if id == "" {
 				return nil
 			}
@@ -193,7 +193,7 @@ func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
 		}
 	case "gmail.sendDraft":
 		if message, ok := nestedMap(value, "Message"); ok {
-			id := stringValue(message, "ID")
+			id := firstStringValue(message, "ID", "Id", "id")
 			if id == "" {
 				return nil
 			}
@@ -201,15 +201,12 @@ func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
 				Kind:  "gmail.message",
 				Label: "Gmail message",
 				ID:    id,
-				URI:   "https://mail.google.com/mail/u/0/#drafts/" + id,
+				URI:   "https://mail.google.com/mail/u/0/#sent/" + id,
 			}
 		}
 	case "calendar.createEvent":
 		if event, ok := nestedMap(value, "Event"); ok {
-			id := stringValue(event, "ID")
-			if id == "" {
-				id = stringValue(event, "Id")
-			}
+			id := firstStringValue(event, "ID", "Id", "id")
 			if id == "" {
 				return nil
 			}
@@ -219,7 +216,7 @@ func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
 				ID:    id,
 				URI:   "https://calendar.google.com/calendar/r/eventedit/" + id,
 			}
-			if meetLink := stringValue(event, "MeetLink"); meetLink != "" {
+			if meetLink := firstStringValue(event, "MeetLink", "meetLink"); meetLink != "" {
 				ref.Meta = map[string]any{"meetLink": meetLink}
 			}
 			return ref
@@ -267,6 +264,15 @@ func stringValue(payload map[string]any, key string) string {
 	}
 	value, _ := payload[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func firstStringValue(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringValue(payload, key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func renderApprovalRequest(approval contracts.ApprovalRequest) string {

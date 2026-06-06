@@ -145,6 +145,8 @@ func printAgentResponse(response contracts.AgentResponse, jsonOutput bool, trace
 
 	if output := response.Output; output != nil {
 		printUserOutput(*output)
+	} else if output := approvalOutputFromResponse(response); output != nil {
+		printUserOutput(*output)
 	} else if strings.TrimSpace(response.Message) != "" {
 		fmt.Println(response.Message)
 	}
@@ -179,6 +181,50 @@ func printAgentResponse(response contracts.AgentResponse, jsonOutput bool, trace
 	if response.Error != nil && response.Status == contracts.AgentStatusFailed {
 		fmt.Fprintln(os.Stderr, response.Error.Message)
 	}
+}
+
+func approvalOutputFromResponse(response contracts.AgentResponse) *contracts.UserOutput {
+	if response.ApprovalRequest == nil {
+		return nil
+	}
+	approval := response.ApprovalRequest
+	meta := map[string]any{
+		"approvalId": approval.ApprovalID,
+	}
+	if !approval.ExpiresAt.IsZero() {
+		meta["expiresAt"] = approval.ExpiresAt.Format(time.RFC3339)
+	}
+	return &contracts.UserOutput{
+		Kind: contracts.UserOutputKindApproval,
+		Text: renderCLIApprovalRequest(*approval),
+		Meta: meta,
+	}
+}
+
+func renderCLIApprovalRequest(approval contracts.ApprovalRequest) string {
+	var lines []string
+	lines = append(lines, "Cần xác nhận trước khi thực hiện.")
+	lines = append(lines, "")
+	if strings.TrimSpace(approval.Summary) != "" {
+		lines = append(lines, "Tóm tắt: "+strings.TrimSpace(approval.Summary))
+	}
+	if strings.TrimSpace(approval.Details) != "" {
+		lines = append(lines, "Chi tiết: "+strings.TrimSpace(approval.Details))
+	}
+	if strings.TrimSpace(approval.ToolCall.ToolName) != "" {
+		lines = append(lines, "Tool: "+strings.TrimSpace(approval.ToolCall.ToolName))
+	}
+	if approval.RiskLevel != "" {
+		lines = append(lines, "Risk: "+string(approval.RiskLevel))
+	}
+	if len(approval.ToolCall.Input) > 0 {
+		data, err := json.MarshalIndent(approval.ToolCall.Input, "", "  ")
+		if err == nil {
+			lines = append(lines, "Input:")
+			lines = append(lines, string(data))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func printUserOutput(output contracts.UserOutput) {

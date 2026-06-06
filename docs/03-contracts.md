@@ -101,6 +101,14 @@ Agent Core -> Channel / Integration
   "sessionId": "sess_001",
   "status": "approval_required",
   "message": "Tôi cần bạn xác nhận trước khi tạo sự kiện lịch.",
+  "output": {
+    "kind": "approval",
+    "text": "Cần xác nhận trước khi thực hiện.\n\nTóm tắt: Tạo sự kiện lịch.\nTool: calendar.createEvent\nRisk: external_write",
+    "meta": {
+      "approvalId": "appr_001",
+      "expiresAt": "2026-05-30T09:45:00+07:00"
+    }
+  },
   "approvalId": "appr_001",
   "plan": {
     "steps": [
@@ -127,6 +135,34 @@ max_iterations_reached
 ```
 
 `max_iterations_reached` is reserved for an agent runtime that exhausts its loop budget before producing a final answer. It must not be used as a `RiskLevel`.
+
+`output` is an optional user-facing rendering for channels/CLI. When present, integrations should prefer `output` over raw `message`.
+
+`UserOutput.kind` values:
+
+```text
+message
+success
+error
+clarify
+approval
+progress
+expired
+```
+
+`UserOutput.artifactRef` is optional and points to a created or updated external object:
+
+```json
+{
+  "kind": "gmail.message",
+  "label": "Gmail message",
+  "uri": "https://mail.google.com/mail/u/0/#sent/msg_001",
+  "id": "msg_001",
+  "meta": {}
+}
+```
+
+Known artifact kinds in Sprint 1: `gmail.message`, `chat.message`, `calendar.event`.
 
 ---
 
