@@ -299,6 +299,19 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 	if strings.TrimSpace(text) == "" {
 		text = "Đã xử lý quyết định."
 	}
+	// Continuation after approval may itself require approval (e.g. next task in a
+	// multi-step request). Show the inline keyboard so the user can act on it.
+	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
+		if err := progress.UpdateWithReplyMarkup(ctx, text, telegramApprovalKeyboard(outbound.ApprovalID)); err != nil {
+			b.logger.Error("telegram continuation approval edit failed", "error", err)
+			if _, sendErr := b.sendMessageWithReplyMarkup(ctx, callback.Message.Chat.ID, text, telegramApprovalKeyboard(outbound.ApprovalID)); sendErr != nil {
+				b.handler.FinalizeAudit(inbound, sendErr)
+				return false, sendErr
+			}
+		}
+		b.handler.FinalizeAudit(inbound, nil)
+		return true, nil
+	}
 	if err := progress.Update(ctx, text); err != nil {
 		b.handler.FinalizeAudit(inbound, err)
 		return false, err
@@ -715,6 +728,8 @@ func telegramProgressText(event agent.ProgressEvent) string {
 		default:
 			return "Đang chạy tool " + event.ToolName + "..."
 		}
+	case agent.ProgressStageToolCompleted, agent.ProgressStageToolFailed:
+		return "Đang xử lý..."
 	default:
 		return ""
 	}

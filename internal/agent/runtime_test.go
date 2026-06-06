@@ -1489,16 +1489,25 @@ func TestRuntimeReturnsApprovalRequiredForSideEffectTool(t *testing.T) {
 
 func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	executions := 0
-	provider := &fakeProvider{responses: []providers.ChatResponse{{
-		Message: providers.Message{
-			Role: providers.MessageRoleAssistant,
-			ToolCalls: []providers.ToolCall{{
-				ID:        "call_write",
-				Name:      "danger.count",
-				Arguments: map[string]any{"value": "x"},
-			}},
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write",
+					Name:      "danger.count",
+					Arguments: map[string]any{"value": "x"},
+				}},
+			},
 		},
-	}}}
+		// Continuation pass after approval: LLM confirms all tasks done.
+		{
+			Message: providers.Message{
+				Role:    providers.MessageRoleAssistant,
+				Content: "Đã hoàn thành yêu cầu.",
+			},
+		},
+	}}
 	registry := tools.NewToolRegistry()
 	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
 		t.Fatalf("register dangerous tool: %v", err)
@@ -1538,8 +1547,10 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	if executions != 1 {
 		t.Fatalf("expected side-effect tool to execute once after approval, executions=%d", executions)
 	}
-	if len(response.ToolResults) != 1 || !response.ToolResults[0].Success {
-		t.Fatalf("expected successful tool result, got %#v", response.ToolResults)
+	// After approval the runtime runs a continuation pass; the final response comes
+	// from that pass (a text summary). The tool result lives in the transcript.
+	if strings.TrimSpace(response.Message) == "" {
+		t.Fatalf("expected non-empty message from continuation response, got %#v", response)
 	}
 	transcript, err := runtime.sessionStore.LoadTranscript(context.Background(), runtimeTestMessage().SessionID)
 	if err != nil {
