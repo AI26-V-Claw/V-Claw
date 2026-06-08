@@ -215,6 +215,7 @@ func TestCreateUpdateAndSendDraft(t *testing.T) {
 	seenCreate := false
 	seenUpdate := false
 	seenSend := false
+	seenGetSent := false
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			switch {
@@ -228,6 +229,9 @@ func TestCreateUpdateAndSendDraft(t *testing.T) {
 				return jsonResponse(http.StatusOK, `{"id":"draft-1","message":{"id":"msg-updated","threadId":"thread-1"}}`), nil
 			case req.Method == http.MethodPost && req.URL.Path == "/gmail/v1/users/me/drafts/send":
 				seenSend = true
+				return jsonResponse(http.StatusOK, `{"id":"sent-1","threadId":"thread-1","labelIds":["SENT"]}`), nil
+			case req.Method == http.MethodGet && req.URL.Path == "/gmail/v1/users/me/messages/sent-1":
+				seenGetSent = true
 				return jsonResponse(http.StatusOK, `{"id":"sent-1","threadId":"thread-1","labelIds":["SENT"],"payload":{"headers":[{"name":"Subject","value":"Sent"}]}}`), nil
 			default:
 				t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
@@ -256,7 +260,7 @@ func TestCreateUpdateAndSendDraft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendDraft() error = %v", err)
 	}
-	if sent.ID != "sent-1" || sent.Subject != "Sent" || !seenSend {
+	if sent.ID != "sent-1" || sent.Subject != "Sent" || !seenSend || !seenGetSent {
 		t.Fatalf("unexpected sent message: %#v", sent)
 	}
 }

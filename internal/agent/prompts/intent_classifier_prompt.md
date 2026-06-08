@@ -282,7 +282,7 @@ User: "Tìm file log cũ và xóa chúng"
 | Tool | Required Params | Description |
 |------|----------------|-------------|
 | `gmail.createDraft` | `to`, `subject`, `body` | Create Gmail draft |
-| `gmail.updateDraft` | `draftId`, changes | Update Gmail draft |
+| `gmail.updateDraft` | `draftId`, `subject`, changes | Update Gmail draft |
 | `gmail.sendDraft` | `draftId` | Send Gmail draft |
 | `gmail.deleteDraft` | `draftId` | Delete Gmail draft |
 | `gmail.replyDraft` | `messageId`, body | Create Gmail reply draft |

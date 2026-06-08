@@ -189,7 +189,7 @@ var Registry = map[string]ToolDefinition{
 		Name: "gmail.updateDraft", Category: CategoryCommunication,
 		Description: "Update a Gmail draft",
 		Dangerous:   true, RequiresConfirm: true, TimeoutMs: 60000,
-		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Draft ID"}, {Name: "to", Type: "email", Required: false, Description: "Recipient email address"}, {Name: "subject", Type: "string", Required: false, Description: "Email subject"}, {Name: "body", Type: "string", Required: false, Description: "Email body"}},
+		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Draft ID"}, {Name: "to", Type: "email", Required: false, Description: "Recipient email address"}, {Name: "subject", Type: "string", Required: true, Description: "Email subject"}, {Name: "body", Type: "string", Required: false, Description: "Email body"}},
 	},
 	"gmail.sendDraft": {
 		Name: "gmail.sendDraft", Category: CategoryCommunication,
