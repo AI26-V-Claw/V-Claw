@@ -493,6 +493,7 @@ Rules:
 > Render text để hiển thị (ví dụ fallback từ HTML sang text) thuộc tool layer, không thuộc connector raw API boundary.
 
 > Draft/reply/forward tools create or send Gmail drafts and must pass the approval boundary before agent-triggered execution.
+> New or updated Gmail drafts must include a non-empty subject before approval/execution; reply/forward drafts may derive `Re:` / `Fwd:` subjects from the original Gmail message.
 > `gmail.downloadAttachments` writes local files and is treated as `local_write`; `gmail.modifyMessage` supports read/unread, star/unstar, archive, moveToInbox, addLabels, and removeLabels.
 > Draft creation/update/reply/forward may include local file attachments via `attachments`; local file reading happens in the Gmail tool layer before creating the external draft.
 > `gmail.batchModifyMessages` applies the same modify actions to 1-50 messages. `gmail.deleteDraft` and `gmail.trashMessage` are destructive and require approval; `gmail.untrashMessage` is an external write and also requires approval.

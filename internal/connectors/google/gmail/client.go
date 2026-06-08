@@ -414,6 +414,15 @@ func SendDraft(ctx context.Context, client *http.Client, userID string, draftID 
 	if err != nil {
 		return MessageSummary{}, err
 	}
+	if strings.TrimSpace(message.Id) != "" {
+		fullMessage, getErr := service.Users.Messages.Get(userID, message.Id).
+			Format("metadata").
+			MetadataHeaders("From", "To", "Subject", "Date", "Message-ID", "References").
+			Do()
+		if getErr == nil {
+			return messageSummaryFromAPI(fullMessage), nil
+		}
+	}
 	return messageSummaryFromAPI(message), nil
 }
 

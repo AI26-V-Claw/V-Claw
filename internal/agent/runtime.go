@@ -889,6 +889,7 @@ Gmail date rules, restated in ASCII:
 For sending email (gửi email / send email):
 - Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to actually deliver it.
 - gmail.createDraft alone does NOT send the email — the draft sits unsent until gmail.sendDraft is called.
+- New Gmail drafts must include a non-empty subject. If the user asks to send or draft email without a subject, ask for the exact subject or ask permission to generate one; do not ask whether a subject is optional.
 - When the user asks to send (not draft) an email, you MUST plan to call both tools. Because sendDraft depends on the draftId from createDraft, generate createDraft first; after it is approved and the draftId is returned, call sendDraft in the continuation.
 - Do not consider the email task complete after createDraft succeeds — it is only complete after sendDraft succeeds.
 For calendar.createEvent and calendar.updateEvent:
@@ -1672,7 +1673,6 @@ func (r *Runtime) storePendingClarification(ctx context.Context, sessionID strin
 	memory.PendingClarification = clonePendingClarification(pending)
 	return r.saveSessionMemory(ctx, sessionID, memory)
 }
-
 
 func pendingClarificationFromToolCall(originalRequest string, question string, toolCall providers.ToolCall, missing []string) *sessions.PendingClarification {
 	return &sessions.PendingClarification{
