@@ -693,6 +693,75 @@ func TestTelegramNewMessageDismissesExistingApprovalKeyboard(t *testing.T) {
 	}
 }
 
+func TestTelegramRevisionLikeMessageDismissesExistingApprovalKeyboard(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "ok",
+		},
+	}
+
+	type telegramCall struct {
+		path    string
+		payload map[string]any
+	}
+
+	var calls []telegramCall
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.state.registerApproval(telegramApprovalContext{
+		ApprovalID: "appr_existing",
+		SessionID:  "telegram_chat_55",
+		ChatID:     55,
+		MessageID:  42,
+		ToolName:   "gmail.createDraft",
+		PromptText: "pending approval",
+	})
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+		}
+		calls = append(calls, telegramCall{path: r.URL.Path, payload: payload})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/editMessageReplyMarkup"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":90}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 14,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "sửa lại nội dung cho thân mật hơn nhé",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.received.Text != "revise sửa lại nội dung cho thân mật hơn nhé" {
+		t.Fatalf("unexpected user text routed to handler: %q", handler.received.Text)
+	}
+	if len(calls) < 3 {
+		t.Fatalf("expected dismissal, processing message, and final update, got %#v", calls)
+	}
+	if !strings.HasSuffix(calls[0].path, "/editMessageReplyMarkup") {
+		t.Fatalf("expected existing approval keyboard to be dismissed first, got %#v", calls)
+	}
+}
+
 func TestTelegramRevisePromptIncludesPendingContext(t *testing.T) {
 	handler := &fakeHandler{}
 	var (

@@ -167,23 +167,27 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
-	if !looksLikeTelegramApprovalCommand(inbound.Text) {
-		if approvalContext, ok := b.state.approvalForChat(update.Message.Chat.ID); ok {
-			if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
-				b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
-			}
-			b.state.deleteApproval(approvalContext.ApprovalID)
-			inbound.SessionID = approvalContext.SessionID
+	if approvalContext, ok := b.state.approvalForChat(update.Message.Chat.ID); ok {
+		if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
+			b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
+		}
+		b.state.deleteApproval(approvalContext.ApprovalID)
+		inbound.SessionID = approvalContext.SessionID
+		inbound.Metadata["approvalId"] = approvalContext.ApprovalID
+		action := telegramApprovalTextAction(inbound.Text)
+		switch action {
+		case "approve", "reject":
+			inbound.Text = action + " " + approvalContext.ApprovalID
+			inbound.Metadata["telegramCallback"] = action
+		default:
 			inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
 			inbound.Metadata["telegramCallback"] = "revise"
-			inbound.Metadata["approvalId"] = approvalContext.ApprovalID
 		}
-		if revision, ok := b.state.consumeRevision(update.Message.Chat.ID); ok {
-			inbound.SessionID = revision.SessionID
-			inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
-			inbound.Metadata["telegramCallback"] = "revise"
-			inbound.Metadata["approvalId"] = revision.ApprovalID
-		}
+	} else if revision, ok := b.state.consumeRevision(update.Message.Chat.ID); ok {
+		inbound.SessionID = revision.SessionID
+		inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
+		inbound.Metadata["telegramCallback"] = "revise"
+		inbound.Metadata["approvalId"] = revision.ApprovalID
 	}
 	if b.handler == nil {
 		return false, fmt.Errorf("message handler is not configured")

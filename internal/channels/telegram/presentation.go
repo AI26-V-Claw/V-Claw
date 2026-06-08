@@ -658,6 +658,31 @@ func formatTelegramUserText(lines ...string) string {
 	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
+func telegramApprovalTextAction(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	switch strings.ToLower(trimmed) {
+	case "approve", "/approve":
+		return "approve"
+	case "reject", "/reject":
+		return "reject"
+	}
+
+	first := strings.ToLower(strings.TrimSpace(strings.Fields(trimmed)[0]))
+	switch first {
+	case "approve", "/approve":
+		return "approve"
+	case "reject", "/reject":
+		return "reject"
+	case "revise", "/revise", "sá»­a", "sua", "chá»‰nh", "chinh":
+		return "revise"
+	default:
+		return ""
+	}
+}
+
 func looksLikeTelegramApprovalCommand(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
