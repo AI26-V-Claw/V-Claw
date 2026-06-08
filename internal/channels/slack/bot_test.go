@@ -12,6 +12,23 @@ import (
 	"vclaw/internal/contracts"
 )
 
+type fakeSlackHandler struct {
+	calls     int
+	received  contracts.UserMessage
+	outbound  contracts.AgentResponse
+	handleErr error
+}
+
+func (f *fakeSlackHandler) HandleMessage(_ context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error) {
+	f.calls++
+	f.received = msg
+	return f.outbound, f.handleErr
+}
+
+func (f *fakeSlackHandler) FinalizeAudit(_ contracts.UserMessage, _ error) {}
+
+func (f *fakeSlackHandler) RecordIgnored(_ contracts.UserMessage, _ string) {}
+
 func TestHandleSlackMessageIgnoresBotOwnMessages(t *testing.T) {
 	bot := &Bot{botUserID: "U123"}
 
@@ -114,10 +131,111 @@ func TestSlackApprovalBlocksContainMultipleChoiceButtons(t *testing.T) {
 		}
 		labels = append(labels, button.Text.Text)
 	}
-	for _, want := range []string{"Yes", "No", "Revise"} {
+	for _, want := range []string{"Xác nhận", "Hủy", "Chỉnh sửa"} {
 		if !containsString(labels, want) {
 			t.Fatalf("expected labels to contain %q, got %#v", want, labels)
 		}
+	}
+}
+
+func TestSlackApprovalTextOmitsTechnicalFields(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_1",
+			Summary:    "Tôi cần bạn xác nhận trước khi gửi email.",
+			RiskLevel:  contracts.RiskLevelExternalWrite,
+			ToolCall: contracts.ToolCall{
+				ToolName: "gmail.sendDraft",
+				Input: map[string]any{
+					"draftId": "draft-1",
+				},
+			},
+		},
+	})
+
+	for _, forbidden := range []string{"Approval ID", "Input:", "draft-1", "Risk:", "Tool:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("slack approval text leaked %q: %q", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, "Hành động: Gửi email") {
+		t.Fatalf("expected human-friendly approval action, got %q", text)
+	}
+}
+
+func TestSlackApprovalTextShowsSandboxPythonCode(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_py",
+			Summary:    "Tôi cần bạn xác nhận trước khi chạy code trong sandbox.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "sandbox.runPython",
+				Input: map[string]any{
+					"code": "print('hello')\nprint('world')",
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(text, "Mã Python sẽ chạy:") {
+		t.Fatalf("expected sandbox code heading, got %q", text)
+	}
+	if !strings.Contains(text, "print('hello')") || !strings.Contains(text, "print('world')") {
+		t.Fatalf("expected full sandbox code in approval text, got %q", text)
+	}
+}
+
+func TestHandleSlackInteractionRejectsMismatchedApprovalContext(t *testing.T) {
+	handler := &fakeSlackHandler{}
+	bot := &Bot{
+		orchestrator: handler,
+		ownerUserID:  "U1",
+		state:        newSlackChannelState(),
+	}
+	bot.state.registerApproval(slackApprovalContext{
+		ApprovalID: "appr_123",
+		SessionID:  "slack_channel_C1",
+		ChannelID:  "C1",
+		MessageTS:  "123.45",
+	})
+
+	callback := slack.InteractionCallback{
+		Type: slack.InteractionTypeBlockActions,
+		User: slack.User{ID: "U1"},
+		Container: slack.Container{
+			ChannelID: "C1",
+			MessageTs: "999.00",
+		},
+		ActionCallback: slack.ActionCallbacks{
+			BlockActions: []*slack.BlockAction{
+				{
+					Value: slackApprovalValue("approve", "appr_123", "slack_channel_C1"),
+				},
+			},
+		},
+	}
+
+	if err := bot.handleSlackInteraction(context.Background(), callback); err != nil {
+		t.Fatalf("handleSlackInteraction() error = %v", err)
+	}
+	if handler.calls != 0 {
+		t.Fatalf("mismatched interaction should not call handler, got %d calls", handler.calls)
+	}
+}
+
+func TestSlackRevisionPromptIncludesPendingContext(t *testing.T) {
+	prompt := slackRevisionPrompt(slackApprovalContext{
+		ToolName:   "sandbox.runPython",
+		PromptText: "Hành động: Chạy mã Python trong sandbox\n\nMã Python sẽ chạy:\n\nprint('hello')",
+	})
+
+	if !strings.Contains(prompt, "Nội dung đang chờ xác nhận") {
+		t.Fatalf("expected prompt to include pending context, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "print('hello')") {
+		t.Fatalf("expected prompt to include pending code, got %q", prompt)
 	}
 }
 
