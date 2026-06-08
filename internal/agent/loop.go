@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sync"
+	"time"
 
 	"vclaw/internal/policies"
 	"vclaw/internal/tools"
@@ -60,9 +60,12 @@ type LLMResponse struct {
 }
 
 type AgentLoop struct {
-	llm      LLMClient
-	registry *tools.ToolRegistry
-	policy   policies.ToolPolicy
+	llm                        LLMClient
+	registry                   *tools.ToolRegistry
+	policy                     policies.ToolPolicy
+	parallelExecutionEnabled   bool
+	parallelMaxWorkers         int
+	parallelToolTimeoutDefault time.Duration
 }
 
 func NewAgentLoop(llm LLMClient, registry *tools.ToolRegistry) *AgentLoop {
@@ -70,7 +73,13 @@ func NewAgentLoop(llm LLMClient, registry *tools.ToolRegistry) *AgentLoop {
 }
 
 func NewAgentLoopWithPolicy(llm LLMClient, registry *tools.ToolRegistry, policy policies.ToolPolicy) *AgentLoop {
-	return &AgentLoop{llm: llm, registry: registry, policy: policy}
+	return &AgentLoop{
+		llm:                        llm,
+		registry:                   registry,
+		policy:                     policy,
+		parallelMaxWorkers:         8,
+		parallelToolTimeoutDefault: 15 * time.Second,
+	}
 }
 
 func (l *AgentLoop) Run(ctx context.Context, request RunRequest) RunResult {
@@ -146,16 +155,26 @@ func (l *AgentLoop) executeToolCalls(ctx context.Context, toolCalls []tools.Tool
 	if len(toolCalls) == 0 {
 		return nil
 	}
-	if len(toolCalls) == 1 || !l.canExecuteAllInParallel(toolCalls) {
+	if len(toolCalls) == 1 || !l.parallelExecutionEnabled || !l.canExecuteAllInParallel(toolCalls) {
 		return l.executeToolCallsSequentially(ctx, toolCalls)
 	}
-	return l.executeToolCallsInParallel(ctx, toolCalls)
+	return ExecuteParallelBatch(
+		ctx,
+		toolCalls,
+		l,
+		l.policy,
+		ParallelConfig{
+			MaxWorkers:         l.parallelMaxWorkers,
+			ToolTimeoutDefault: l.parallelToolTimeoutDefault,
+		},
+		l.toolRegistryMap(),
+	)
 }
 
 func (l *AgentLoop) canExecuteAllInParallel(toolCalls []tools.ToolCall) bool {
 	for _, toolCall := range toolCalls {
 		tool, ok := l.registry.GetTool(toolCall.Name)
-		if !ok || !l.policy.CanExecute(tool) {
+		if !ok || !l.policy.CanRunInParallel(tool) {
 			return false
 		}
 	}
@@ -170,20 +189,6 @@ func (l *AgentLoop) executeToolCallsSequentially(ctx context.Context, toolCalls 
 	return results
 }
 
-func (l *AgentLoop) executeToolCallsInParallel(ctx context.Context, toolCalls []tools.ToolCall) []tools.ToolResult {
-	results := make([]tools.ToolResult, len(toolCalls))
-	var wg sync.WaitGroup
-	wg.Add(len(toolCalls))
-	for index, toolCall := range toolCalls {
-		go func(index int, toolCall tools.ToolCall) {
-			defer wg.Done()
-			results[index] = l.executeAllowedTool(ctx, toolCall)
-		}(index, toolCall)
-	}
-	wg.Wait()
-	return results
-}
-
 func (l *AgentLoop) executeAllowedTool(ctx context.Context, toolCall tools.ToolCall) tools.ToolResult {
 	tool, ok := l.registry.GetTool(toolCall.Name)
 	if !ok {
@@ -195,6 +200,10 @@ func (l *AgentLoop) executeAllowedTool(ctx context.Context, toolCall tools.ToolC
 	return executeToolSafely(ctx, tool, toolCall)
 }
 
+func (l *AgentLoop) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	return l.executeAllowedTool(ctx, call)
+}
+
 func executeToolSafely(ctx context.Context, tool tools.Tool, toolCall tools.ToolCall) (result tools.ToolResult) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -203,6 +212,22 @@ func executeToolSafely(ctx context.Context, tool tools.Tool, toolCall tools.Tool
 	}()
 
 	return tool.Execute(ctx, toolCall)
+}
+
+func (l *AgentLoop) toolRegistryMap() map[string]tools.Tool {
+	if l == nil || l.registry == nil {
+		return nil
+	}
+	definitions := l.registry.ListTools()
+	toolMap := make(map[string]tools.Tool, len(definitions))
+	for _, definition := range definitions {
+		tool, ok := l.registry.GetTool(definition.Name)
+		if !ok || tool == nil {
+			continue
+		}
+		toolMap[definition.Name] = tool
+	}
+	return toolMap
 }
 
 func truncateToolContentForLLM(content string) string {

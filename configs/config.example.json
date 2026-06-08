@@ -2,6 +2,12 @@
   "app_name": "vclaw",
   "http_addr": ":8080",
   "approval_mode": "telegram",
+  "parallel_execution_enabled": false,
+  "_parallel_execution_enabled_comment": "Enable parallel execution for safe read and safe compute tool batches.",
+  "parallel_max_workers": 8,
+  "_parallel_max_workers_comment": "Maximum workers per batch, capped at 8 and never higher than the batch size.",
+  "parallel_tool_timeout_default": "15s",
+  "_parallel_tool_timeout_default_comment": "Default timeout for each tool running inside a parallel batch.",
   "telegram": {
     "enabled": false,
     "bot_token": ""

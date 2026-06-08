@@ -62,6 +62,35 @@ func (t blockingSafeTool) Execute(_ context.Context, call tools.ToolCall) tools.
 	}
 }
 
+type blockingSafeToolWithDelay struct {
+	name      string
+	started   chan string
+	release   chan struct{}
+	startOnce *sync.Once
+	delay     time.Duration
+}
+
+func (t blockingSafeToolWithDelay) Name() string               { return t.name }
+func (blockingSafeToolWithDelay) Description() string          { return "Blocks until released after an optional delay." }
+func (blockingSafeToolWithDelay) Parameters() tools.ToolSchema { return tools.ToolSchema{"type": "object"} }
+func (blockingSafeToolWithDelay) Capability() tools.Capability { return tools.CapabilityReadOnly }
+func (blockingSafeToolWithDelay) RiskLevel() tools.RiskLevel   { return tools.RiskLevelSafeCompute }
+func (t blockingSafeToolWithDelay) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	t.started <- t.name
+	if t.delay > 0 {
+		time.Sleep(t.delay)
+	}
+	t.startOnce.Do(func() { close(t.release) })
+	<-t.release
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  "result from " + t.name,
+		ContentForUser: "result from " + t.name,
+	}
+}
+
 type panicTool struct{}
 
 func (panicTool) Name() string                 { return "test.panic" }
@@ -309,6 +338,116 @@ func TestAgentLoopExecutesMultipleSafeToolsInParallelAndAppendsStableOrder(t *te
 	}
 	if secondCallMessages[3].ToolCallID != "call_fast" || secondCallMessages[3].Content != "result from test.fast" {
 		t.Fatalf("expected second tool result to match original call order, got %#v", secondCallMessages[3])
+	}
+}
+
+func TestAgentLoopParallelExecutionStartsBothSafeToolsBeforeCompletion(t *testing.T) {
+	llm := &mockLLM{responses: []LLMResponse{
+		{ToolCalls: []tools.ToolCall{
+			{ID: "call_one", Name: "test.one"},
+			{ID: "call_two", Name: "test.two"},
+		}},
+		{Content: "Đã chạy xong song song."},
+	}}
+
+	registry := tools.NewToolRegistry()
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	once := &sync.Once{}
+	if err := registry.Register(blockingSafeToolWithDelay{name: "test.one", started: started, release: release, startOnce: once, delay: 50 * time.Millisecond}); err != nil {
+		t.Fatalf("register test.one: %v", err)
+	}
+	if err := registry.Register(blockingSafeToolWithDelay{name: "test.two", started: started, release: release, startOnce: once, delay: 50 * time.Millisecond}); err != nil {
+		t.Fatalf("register test.two: %v", err)
+	}
+
+	loop := NewAgentLoop(llm, registry)
+	done := make(chan RunResult, 1)
+	go func() {
+		done <- loop.Run(context.Background(), RunRequest{
+			UserMessage:   "Chạy 2 tool song song",
+			SessionID:     "sess_parallel",
+			MaxIterations: 3,
+		})
+	}()
+
+	startedNames := map[string]bool{}
+	for len(startedNames) < 2 {
+		select {
+		case name := <-started:
+			startedNames[name] = true
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected both safe tools to start before release")
+		}
+	}
+	result := <-done
+	if result.Status != RunStatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	if !startedNames["test.one"] || !startedNames["test.two"] {
+		t.Fatalf("expected both tools to start, got %#v", startedNames)
+	}
+	if len(llm.calls) != 2 {
+		t.Fatalf("expected 2 llm calls, got %d", len(llm.calls))
+	}
+	secondCallMessages := llm.calls[1].messages
+	if len(secondCallMessages) != 4 {
+		t.Fatalf("expected 4 messages in second llm call, got %#v", secondCallMessages)
+	}
+	if secondCallMessages[2].ToolCallID != "call_one" {
+		t.Fatalf("expected first result to stay in original order, got %#v", secondCallMessages[2])
+	}
+	if secondCallMessages[3].ToolCallID != "call_two" {
+		t.Fatalf("expected second result to stay in original order, got %#v", secondCallMessages[3])
+	}
+}
+
+func TestAgentLoopFallsBackToSequentialWhenAnyToolIsNotParallelSafe(t *testing.T) {
+	executions := 0
+	llm := &mockLLM{responses: []LLMResponse{
+		{ToolCalls: []tools.ToolCall{
+			{ID: "call_safe", Name: "test.safe"},
+			{ID: "call_danger", Name: "danger.count"},
+		}},
+		{Content: "Đã xử lý tuần tự."},
+	}}
+
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(blockingSafeToolWithDelay{name: "test.safe", started: make(chan string, 1), release: make(chan struct{}), startOnce: &sync.Once{}, delay: 0}); err != nil {
+		t.Fatalf("register test.safe: %v", err)
+	}
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register danger.count: %v", err)
+	}
+
+	loop := NewAgentLoop(llm, registry)
+	result := loop.Run(context.Background(), RunRequest{
+		UserMessage:   "Chạy mixed tools",
+		SessionID:     "sess_sequential",
+		MaxIterations: 3,
+	})
+
+	if result.Status != RunStatusCompleted {
+		t.Fatalf("expected completed, got %s", result.Status)
+	}
+	if executions != 0 {
+		t.Fatalf("dangerous tool should be blocked before execution, got %d executions", executions)
+	}
+	if len(llm.calls) != 2 {
+		t.Fatalf("expected 2 llm calls, got %d", len(llm.calls))
+	}
+	secondCallMessages := llm.calls[1].messages
+	if len(secondCallMessages) != 4 {
+		t.Fatalf("expected 4 messages, got %#v", secondCallMessages)
+	}
+	if secondCallMessages[2].ToolCallID != "call_safe" {
+		t.Fatalf("expected safe result first, got %#v", secondCallMessages[2])
+	}
+	if secondCallMessages[3].ToolCallID != "call_danger" {
+		t.Fatalf("expected dangerous denied result second, got %#v", secondCallMessages[3])
+	}
+	if secondCallMessages[3].Content != "Permission denied for tool: danger.count" {
+		t.Fatalf("expected dangerous tool to be denied, got %q", secondCallMessages[3].Content)
 	}
 }
 

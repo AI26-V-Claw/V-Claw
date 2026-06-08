@@ -5,33 +5,37 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	TelegramEnabled          bool
-	TelegramBotToken         string
-	AllowedTelegramUserID    int64
-	SlackEnabled             bool
-	SlackBotToken            string
-	SlackAppToken            string
-	SlackOwnerUserID         string
-	SlackAllowedChannelIDs   []string
-	DataDir                  string
-	LogDir                   string
-	LLMProvider              string
-	LLMAPIKey                string
-	LLMBaseURL               string
-	LLMModel                 string
-	AnthropicAPIKey          string
-	AnthropicClassifierModel string
-	AnthropicResponseModel   string
-	UseLLMClassifier         bool
-	OpenAIAPIKey             string
-	OpenAIBaseURL            string
-	OpenAIModel              string
-	GoogleCredentialsPath    string
-	GoogleTokenPath          string
-	GoogleToolsEnabled       bool
+	TelegramEnabled            bool
+	TelegramBotToken           string
+	AllowedTelegramUserID      int64
+	SlackEnabled               bool
+	SlackBotToken              string
+	SlackAppToken              string
+	SlackOwnerUserID           string
+	SlackAllowedChannelIDs     []string
+	DataDir                    string
+	LogDir                     string
+	LLMProvider                string
+	LLMAPIKey                  string
+	LLMBaseURL                 string
+	LLMModel                   string
+	AnthropicAPIKey            string
+	AnthropicClassifierModel   string
+	AnthropicResponseModel     string
+	UseLLMClassifier           bool
+	OpenAIAPIKey               string
+	OpenAIBaseURL              string
+	OpenAIModel                string
+	GoogleCredentialsPath      string
+	GoogleTokenPath            string
+	GoogleToolsEnabled         bool
+	ParallelExecutionEnabled   bool
+	ParallelMaxWorkers         int
+	ParallelToolTimeoutDefault time.Duration
 }
 
 func Load() (Config, error) {
@@ -62,6 +66,15 @@ func Load() (Config, error) {
 	slackAppToken := firstNonEmptyEnv("VCLAW_SLACK_APP_TOKEN")
 	slackOwnerUserID := firstCSVValue(firstNonEmptyEnv("VCLAW_SLACK_OWNER_USER_ID", "VCLAW_SLACK_ALLOWED_USER_ID", "VCLAW_SLACK_ALLOWED_USER_IDS"))
 	slackAllowedChannelIDs := splitCSV(firstNonEmptyEnv("VCLAW_SLACK_ALLOWED_CHANNEL_IDS"))
+	parallelExecutionEnabled := envBool("VCLAW_PARALLEL_EXECUTION_ENABLED", false)
+	parallelMaxWorkers := envInt("VCLAW_PARALLEL_MAX_WORKERS", 8)
+	if parallelMaxWorkers < 1 {
+		parallelMaxWorkers = 1
+	}
+	if parallelMaxWorkers > 8 {
+		parallelMaxWorkers = 8
+	}
+	parallelToolTimeoutDefault := envDuration("VCLAW_PARALLEL_TOOL_TIMEOUT_DEFAULT", 15*time.Second)
 	if slackEnabled {
 		if strings.TrimSpace(slackBotToken) == "" {
 			return Config{}, fmt.Errorf("VCLAW_SLACK_BOT_TOKEN is required when VCLAW_SLACK_ENABLED=true")
@@ -75,30 +88,33 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		TelegramEnabled:          telegramEnabled,
-		TelegramBotToken:         telegramToken,
-		AllowedTelegramUserID:    allowedUserID,
-		SlackEnabled:             slackEnabled,
-		SlackBotToken:            slackBotToken,
-		SlackAppToken:            slackAppToken,
-		SlackOwnerUserID:         slackOwnerUserID,
-		SlackAllowedChannelIDs:   slackAllowedChannelIDs,
-		DataDir:                  envOrDefault("DATA_DIR", "./data"),
-		LogDir:                   envOrDefault("LOG_DIR", "./logs"),
-		LLMProvider:              strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER"))),
-		LLMAPIKey:                strings.TrimSpace(os.Getenv("LLM_API_KEY")),
-		LLMBaseURL:               envOrDefault("LLM_BASE_URL", ""),
-		LLMModel:                 strings.TrimSpace(os.Getenv("LLM_MODEL")),
-		AnthropicAPIKey:          strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
-		AnthropicClassifierModel: strings.TrimSpace(os.Getenv("ANTHROPIC_CLASSIFIER_MODEL")),
-		AnthropicResponseModel:   strings.TrimSpace(os.Getenv("ANTHROPIC_RESPONSE_MODEL")),
-		UseLLMClassifier:         envBool("USE_LLM_CLASSIFIER", false),
-		OpenAIAPIKey:             envFirst("OPENAI_API_KEY", "LLM_API_KEY"),
-		OpenAIBaseURL:            envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
-		OpenAIModel:              envFirst("OPENAI_MODEL", "LLM_MODEL"),
-		GoogleCredentialsPath:    envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", "configs/google/credentials.json"),
-		GoogleTokenPath:          envOrDefault("VCLAW_GOOGLE_TOKEN_PATH", "configs/google/token.json"),
-		GoogleToolsEnabled:       envBool("VCLAW_AGENT_GOOGLE_TOOLS_ENABLED", false),
+		TelegramEnabled:            telegramEnabled,
+		TelegramBotToken:           telegramToken,
+		AllowedTelegramUserID:      allowedUserID,
+		SlackEnabled:               slackEnabled,
+		SlackBotToken:              slackBotToken,
+		SlackAppToken:              slackAppToken,
+		SlackOwnerUserID:           slackOwnerUserID,
+		SlackAllowedChannelIDs:     slackAllowedChannelIDs,
+		DataDir:                    envOrDefault("DATA_DIR", "./data"),
+		LogDir:                     envOrDefault("LOG_DIR", "./logs"),
+		LLMProvider:                strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER"))),
+		LLMAPIKey:                  strings.TrimSpace(os.Getenv("LLM_API_KEY")),
+		LLMBaseURL:                 envOrDefault("LLM_BASE_URL", ""),
+		LLMModel:                   strings.TrimSpace(os.Getenv("LLM_MODEL")),
+		AnthropicAPIKey:            strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
+		AnthropicClassifierModel:   strings.TrimSpace(os.Getenv("ANTHROPIC_CLASSIFIER_MODEL")),
+		AnthropicResponseModel:     strings.TrimSpace(os.Getenv("ANTHROPIC_RESPONSE_MODEL")),
+		UseLLMClassifier:           envBool("USE_LLM_CLASSIFIER", false),
+		OpenAIAPIKey:               envFirst("OPENAI_API_KEY", "LLM_API_KEY"),
+		OpenAIBaseURL:              envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
+		OpenAIModel:                envFirst("OPENAI_MODEL", "LLM_MODEL"),
+		GoogleCredentialsPath:      envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", "configs/google/credentials.json"),
+		GoogleTokenPath:            envOrDefault("VCLAW_GOOGLE_TOKEN_PATH", "configs/google/token.json"),
+		GoogleToolsEnabled:         envBool("VCLAW_AGENT_GOOGLE_TOOLS_ENABLED", false),
+		ParallelExecutionEnabled:   parallelExecutionEnabled,
+		ParallelMaxWorkers:         parallelMaxWorkers,
+		ParallelToolTimeoutDefault: parallelToolTimeoutDefault,
 	}, nil
 }
 
@@ -141,6 +157,30 @@ func envBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func splitCSV(value string) []string {
