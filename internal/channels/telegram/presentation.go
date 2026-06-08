@@ -97,6 +97,27 @@ func (s *telegramChannelState) lookupApproval(approvalID string, chatID int64, m
 	return ctx, true
 }
 
+func (s *telegramChannelState) approvalForChat(chatID int64) (telegramApprovalContext, bool) {
+	if s == nil || chatID == 0 {
+		return telegramApprovalContext{}, false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for approvalID, ctx := range s.approvals {
+		if ctx.ChatID != chatID {
+			continue
+		}
+		if isExpiredTelegramState(ctx.RegisteredAt) {
+			delete(s.approvals, approvalID)
+			return telegramApprovalContext{}, false
+		}
+		return ctx, true
+	}
+	return telegramApprovalContext{}, false
+}
+
 func (s *telegramChannelState) deleteApproval(approvalID string) {
 	if s == nil {
 		return
@@ -200,7 +221,7 @@ func telegramApprovalText(approval contracts.ApprovalRequest) string {
 	if detail := telegramApprovalDetailText(approval); detail != "" {
 		lines = append(lines, "", detail)
 	}
-	lines = append(lines, "", "Bạn có thể xác nhận, chỉnh sửa hoặc hủy.")
+	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy. Nếu muốn thay đổi, cứ nhắn thêm cho mình.")
 	return formatTelegramUserText(lines...)
 }
 

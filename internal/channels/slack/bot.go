@@ -157,6 +157,16 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 	if strings.TrimSpace(replyThreadTimestamp) == "" && channelType != "im" {
 		replyThreadTimestamp = timestamp
 	}
+	if approvalContext, ok := b.state.approvalForSession(inbound.SessionID, channelID); ok {
+		if err := b.updateMessageClearBlocks(ctx, approvalContext.ChannelID, approvalContext.MessageTS, approvalContext.PromptText); err != nil {
+			b.logger.Error("slack approval block dismiss failed", "channel_id", approvalContext.ChannelID, "message_ts", approvalContext.MessageTS, "error", err)
+		}
+		b.state.deleteApproval(approvalContext.ApprovalID)
+		inbound.SessionID = approvalContext.SessionID
+		inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
+		inbound.Metadata["slack_action"] = "revise"
+		inbound.Metadata["approvalId"] = approvalContext.ApprovalID
+	}
 
 	processingTimestamp, err := b.sendMessage(ctx, channelID, "Đang xử lý...", replyThreadTimestamp)
 	if err != nil {
@@ -281,7 +291,7 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 			"source":           "slack",
 		},
 	}
-	if err := b.updateMessageClearBlocks(ctx, channelID, messageTS, "Đang xử lý quyết định..."); err != nil {
+	if err := b.updateMessageClearBlocks(ctx, channelID, messageTS, "Đang xử lý..."); err != nil {
 		b.logger.Error("slack approval progress update failed", "error", err)
 	}
 	outbound, err := b.orchestrator.HandleMessage(ctx, inbound)

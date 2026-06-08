@@ -120,8 +120,8 @@ func TestSlackApprovalBlocksContainMultipleChoiceButtons(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected action block, got %T", blocks[1])
 	}
-	if len(actionBlock.Elements.ElementSet) != 3 {
-		t.Fatalf("expected three approval buttons, got %#v", actionBlock.Elements.ElementSet)
+	if len(actionBlock.Elements.ElementSet) != 2 {
+		t.Fatalf("expected two approval buttons, got %#v", actionBlock.Elements.ElementSet)
 	}
 	labels := []string{}
 	for _, element := range actionBlock.Elements.ElementSet {
@@ -131,7 +131,7 @@ func TestSlackApprovalBlocksContainMultipleChoiceButtons(t *testing.T) {
 		}
 		labels = append(labels, button.Text.Text)
 	}
-	for _, want := range []string{"Xác nhận", "Hủy", "Chỉnh sửa"} {
+	for _, want := range []string{"Xác nhận", "Hủy"} {
 		if !containsString(labels, want) {
 			t.Fatalf("expected labels to contain %q, got %#v", want, labels)
 		}

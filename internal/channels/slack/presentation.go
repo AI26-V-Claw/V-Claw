@@ -79,6 +79,27 @@ func (s *slackChannelState) lookupApproval(approvalID, sessionID, channelID, mes
 	return ctx, true
 }
 
+func (s *slackChannelState) approvalForSession(sessionID, channelID string) (slackApprovalContext, bool) {
+	if s == nil {
+		return slackApprovalContext{}, false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for approvalID, ctx := range s.approvals {
+		if ctx.SessionID != strings.TrimSpace(sessionID) || ctx.ChannelID != strings.TrimSpace(channelID) {
+			continue
+		}
+		if isExpiredSlackState(ctx.RegisteredAt) {
+			delete(s.approvals, approvalID)
+			return slackApprovalContext{}, false
+		}
+		return ctx, true
+	}
+	return slackApprovalContext{}, false
+}
+
 func (s *slackChannelState) deleteApproval(approvalID string) {
 	if s == nil {
 		return
@@ -145,7 +166,7 @@ func slackApprovalText(approval contracts.ApprovalRequest) string {
 	if detail := slackApprovalDetailText(approval); detail != "" {
 		lines = append(lines, "", detail)
 	}
-	lines = append(lines, "", "Bạn có thể xác nhận, chỉnh sửa hoặc hủy.")
+	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy. Nếu muốn thay đổi, cứ nhắn thêm cho mình.")
 	return formatSlackUserText(lines...)
 }
 
@@ -321,15 +342,10 @@ func slackApprovalBlocks(text, approvalID, sessionID string) []slack.Block {
 		slackApprovalValue("reject", approvalID, sessionID),
 		slack.NewTextBlockObject(slack.PlainTextType, "Hủy", false, false),
 	).WithStyle(slack.StyleDanger)
-	revise := slack.NewButtonBlockElement(
-		slackApprovalReviseActionID,
-		slackApprovalValue("revise", approvalID, sessionID),
-		slack.NewTextBlockObject(slack.PlainTextType, "Chỉnh sửa", false, false),
-	)
 	sectionText := slack.NewTextBlockObject(slack.MarkdownType, slackMrkdwn(text), false, false)
 	return []slack.Block{
 		slack.NewSectionBlock(sectionText, nil, nil),
-		slack.NewActionBlock("vclaw_approval_actions", approve, reject, revise),
+		slack.NewActionBlock("vclaw_approval_actions", approve, reject),
 	}
 }
 
