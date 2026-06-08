@@ -2,7 +2,9 @@ package telegram
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -355,6 +357,15 @@ func sanitizeTelegramResponseText(text string) string {
 
 func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 	input := approval.ToolCall.Input
+	toolName := strings.TrimSpace(approval.ToolCall.ToolName)
+	switch toolName {
+	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft":
+		if detail := telegramDraftApprovalDetailText(input); detail != "" {
+			return detail
+		}
+	case "gmail.sendDraft":
+		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
+	}
 	switch strings.TrimSpace(approval.ToolCall.ToolName) {
 	case "sandbox.runPython":
 		if code := stringMapValue(input, "code"); code != "" {
@@ -368,7 +379,101 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 			return "Lệnh shell sẽ chạy:\n\n" + telegramCodeBlock("bash", command)
 		}
 	}
-	return ""
+	return telegramGenericApprovalDetailText(input)
+}
+
+func telegramDraftApprovalDetailText(input map[string]any) string {
+	lines := []string{}
+	if recipients := stringSliceMapValue(input, "to"); len(recipients) > 0 {
+		lines = append(lines, "Người nhận: "+strings.Join(recipients, ", "))
+	}
+	if cc := stringSliceMapValue(input, "cc"); len(cc) > 0 {
+		lines = append(lines, "CC: "+strings.Join(cc, ", "))
+	}
+	if bcc := stringSliceMapValue(input, "bcc"); len(bcc) > 0 {
+		lines = append(lines, "BCC: "+strings.Join(bcc, ", "))
+	}
+	if subject := stringMapValue(input, "subject"); subject != "" {
+		lines = append(lines, "Tiêu đề: "+subject)
+	}
+	if body := firstNonEmptyStringMapValue(input, "textBody", "body", "content", "message", "text", "htmlBody"); body != "" {
+		lines = append(lines, "", "Nội dung email:", "", body)
+	}
+	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
+		lines = append(lines, "", "Tệp đính kèm: "+strings.Join(attachments, ", "))
+	}
+	return formatTelegramUserText(lines...)
+}
+
+func telegramGenericApprovalDetailText(input map[string]any) string {
+	if len(input) == 0 {
+		return ""
+	}
+
+	lines := []string{}
+	seen := map[string]struct{}{}
+
+	appendLine := func(label string, value any) {
+		text := telegramApprovalValueText(value)
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		lines = append(lines, label+": "+text)
+	}
+	appendMultiline := func(label string, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		lines = append(lines, label+":", "", value)
+	}
+
+	for _, spec := range []struct {
+		keys      []string
+		label     string
+		multiline bool
+	}{
+		{keys: []string{"title", "name", "subject"}, label: "Tiêu đề"},
+		{keys: []string{"description", "textBody", "body", "content", "message", "text", "htmlBody"}, label: "Nội dung", multiline: true},
+		{keys: []string{"to"}, label: "Người nhận"},
+		{keys: []string{"cc"}, label: "CC"},
+		{keys: []string{"bcc"}, label: "BCC"},
+		{keys: []string{"location"}, label: "Địa điểm"},
+		{keys: []string{"date", "startDate", "startTime"}, label: "Bắt đầu"},
+		{keys: []string{"endDate", "endTime", "dueDate", "dueTime"}, label: "Kết thúc"},
+		{keys: []string{"attachments"}, label: "Tệp đính kèm"},
+		{keys: []string{"query"}, label: "Truy vấn"},
+		{keys: []string{"command"}, label: "Lệnh", multiline: true},
+		{keys: []string{"path", "filePath", "scriptPath", "script_path"}, label: "Đường dẫn"},
+	} {
+		for _, key := range spec.keys {
+			value, ok := input[key]
+			if !ok || telegramShouldSkipApprovalField(key, value) {
+				continue
+			}
+			seen[key] = struct{}{}
+			if spec.multiline {
+				appendMultiline(spec.label, fmt.Sprint(value))
+			} else {
+				appendLine(spec.label, value)
+			}
+			break
+		}
+	}
+
+	extraKeys := make([]string, 0, len(input))
+	for key, value := range input {
+		if _, ok := seen[key]; ok || telegramShouldSkipApprovalField(key, value) {
+			continue
+		}
+		extraKeys = append(extraKeys, key)
+	}
+	sort.Strings(extraKeys)
+	for _, key := range extraKeys {
+		appendLine(humanizeApprovalKey(key), input[key])
+	}
+
+	return formatTelegramUserText(lines...)
 }
 
 func telegramCodeBlock(language string, code string) string {
@@ -392,6 +497,139 @@ func stringMapValue(input map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func stringSliceMapValue(input map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		if input == nil {
+			continue
+		}
+		value, ok := input[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case []string:
+			if cleaned := cleanStringSlice(typed); len(cleaned) > 0 {
+				return cleaned
+			}
+		case []any:
+			items := make([]string, 0, len(typed))
+			for _, item := range typed {
+				if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+					items = append(items, text)
+				}
+			}
+			if cleaned := cleanStringSlice(items); len(cleaned) > 0 {
+				return cleaned
+			}
+		case string:
+			if cleaned := cleanStringSlice(strings.Split(typed, ",")); len(cleaned) > 0 {
+				return cleaned
+			}
+		}
+	}
+	return nil
+}
+
+func firstNonEmptyStringMapValue(input map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringMapValue(input, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func attachmentNames(input map[string]any, keys ...string) []string {
+	paths := stringSliceMapValue(input, keys...)
+	if len(paths) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(paths))
+	for _, path := range paths {
+		name := strings.TrimSpace(filepath.Base(path))
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			name = strings.TrimSpace(path)
+		}
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func cleanStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func telegramShouldSkipApprovalField(key string, value any) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	if key == "" {
+		return true
+	}
+	if strings.Contains(key, "token") || strings.Contains(key, "secret") || strings.Contains(key, "password") || strings.Contains(key, "authorization") || strings.Contains(key, "apikey") || strings.Contains(key, "api_key") {
+		return true
+	}
+	switch key {
+	case "draftid", "messageid", "threadid", "userid", "user_id", "approvalid", "toolcallid", "tool_call_id", "rendermode", "previewchars", "full", "pagetoken", "page_token", "source":
+		return true
+	}
+	if strings.HasSuffix(key, "id") || strings.HasSuffix(key, "ids") {
+		return true
+	}
+	return strings.TrimSpace(telegramApprovalValueText(value)) == ""
+}
+
+func telegramApprovalValueText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []string:
+		return strings.Join(cleanStringSlice(typed), ", ")
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				items = append(items, text)
+			}
+		}
+		return strings.Join(items, ", ")
+	case bool:
+		if typed {
+			return "Có"
+		}
+		return "Không"
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func humanizeApprovalKey(key string) string {
+	replacer := strings.NewReplacer("_", " ", "-", " ")
+	key = replacer.Replace(strings.TrimSpace(key))
+	if key == "" {
+		return ""
+	}
+	var builder strings.Builder
+	runes := []rune(key)
+	for i, r := range runes {
+		if i > 0 && r >= 'A' && r <= 'Z' && runes[i-1] != ' ' {
+			builder.WriteRune(' ')
+		}
+		builder.WriteRune(r)
+	}
+	text := strings.TrimSpace(builder.String())
+	if text == "" {
+		return ""
+	}
+	return strings.ToUpper(text[:1]) + text[1:]
 }
 
 func looksLikeTelegramMachinePayload(text string) bool {

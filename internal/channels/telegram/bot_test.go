@@ -460,6 +460,58 @@ func TestTelegramApprovalTextShowsSandboxPythonCode(t *testing.T) {
 	}
 }
 
+func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_mail",
+			Summary:    "Tôi cần bạn xác nhận trước khi tạo Gmail draft.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "gmail.createDraft",
+				Input: map[string]any{
+					"to":       []any{"vmkqa2@gmail.com"},
+					"subject":  "Mời họp chiều nay",
+					"textBody": "Chào bạn,\nMời bạn tham dự cuộc họp chiều nay.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestTelegramApprovalTextUsesGenericFallbackForUnknownTool(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_generic",
+			Summary:    "Cần bạn xác nhận trước khi tạo task.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "tasks.createTask",
+				Input: map[string]any{
+					"title":       "Chuẩn bị báo cáo tuần",
+					"description": "Tổng hợp số liệu bán hàng",
+					"dueDate":     "2026-06-09",
+					"taskId":      "task-123",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{"Tiêu đề: Chuẩn bị báo cáo tuần", "Nội dung:", "Tổng hợp số liệu bán hàng", "Kết thúc: 2026-06-09"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected generic approval text to contain %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "task-123") {
+		t.Fatalf("expected generic fallback to avoid leaking raw ids, got %q", text)
+	}
+}
+
 func TestTelegramProcessCallbackQueryRejectsMismatchedApprovalContext(t *testing.T) {
 	handler := &fakeHandler{}
 	var callbackAnswer string
