@@ -172,6 +172,10 @@ func isExpiredTelegramState(registeredAt time.Time) bool {
 }
 
 func telegramTextFromResponse(response contracts.AgentResponse) string {
+	if telegramIsUserCancelledApproval(response) {
+		return "Đã hủy theo yêu cầu của bạn."
+	}
+
 	switch response.Status {
 	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusMaxIterationsReached:
 		return telegramGenericErrorText()
@@ -206,6 +210,13 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	default:
 		return "Agent chưa có phản hồi."
 	}
+}
+
+func telegramIsUserCancelledApproval(response contracts.AgentResponse) bool {
+	if response.Error != nil && strings.EqualFold(strings.TrimSpace(response.Error.Message), "approval rejected") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(response.Message)), "đã hủy thao tác")
 }
 
 func telegramApprovalText(approval contracts.ApprovalRequest) string {

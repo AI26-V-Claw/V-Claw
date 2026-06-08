@@ -117,6 +117,10 @@ func isExpiredSlackState(registeredAt time.Time) bool {
 }
 
 func slackTextFromResponse(response contracts.AgentResponse) string {
+	if slackIsUserCancelledApproval(response) {
+		return "Đã hủy theo yêu cầu của bạn."
+	}
+
 	switch response.Status {
 	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusMaxIterationsReached:
 		return slackGenericErrorText()
@@ -151,6 +155,13 @@ func slackTextFromResponse(response contracts.AgentResponse) string {
 	default:
 		return "Agent chưa có phản hồi."
 	}
+}
+
+func slackIsUserCancelledApproval(response contracts.AgentResponse) bool {
+	if response.Error != nil && strings.EqualFold(strings.TrimSpace(response.Error.Message), "approval rejected") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(response.Message)), "đã hủy thao tác")
 }
 
 func slackApprovalText(approval contracts.ApprovalRequest) string {

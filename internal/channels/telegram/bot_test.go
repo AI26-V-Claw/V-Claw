@@ -366,6 +366,20 @@ func TestTelegramTextHidesDetailedFailedErrors(t *testing.T) {
 	}
 }
 
+func TestTelegramTextShowsFriendlyCancelMessage(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusBlocked,
+		Message: "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
+		Error: &contracts.ErrorShape{
+			Message: "approval rejected",
+		},
+	})
+
+	if !strings.Contains(text, "Đã hủy theo yêu cầu") {
+		t.Fatalf("expected friendly cancel text, got %q", text)
+	}
+}
+
 func TestRedactTelegramToken(t *testing.T) {
 	got := redactTelegramToken("Post https://api.telegram.org/botabc/sendMessage failed", "abc")
 	if strings.Contains(got, "abc") {

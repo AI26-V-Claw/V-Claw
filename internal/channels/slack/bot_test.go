@@ -100,6 +100,19 @@ func TestSlackTextFromFailedResponseHidesDetails(t *testing.T) {
 	}
 }
 
+func TestSlackTextShowsFriendlyCancelMessage(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusBlocked,
+		Message: "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
+		Error: &contracts.ErrorShape{
+			Message: "approval rejected",
+		},
+	})
+	if !strings.Contains(text, "Đã hủy theo yêu cầu") {
+		t.Fatalf("expected friendly cancel text, got %q", text)
+	}
+}
+
 func TestSlackApprovalValueRoundTrip(t *testing.T) {
 	value := slackApprovalValue("approve", "appr_123", "slack_channel_C1")
 	action, approvalID, sessionID, ok := parseSlackApprovalValue(value)
