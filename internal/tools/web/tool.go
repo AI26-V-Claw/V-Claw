@@ -249,10 +249,10 @@ func (t FetchTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	if err := registry.RegisterWithEntry(NewSearchTool(service), tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
+	if err := registry.RegisterWithEntry(NewSearchTool(service), tools.ToolRegistryEntry{Owner: "integration", Group: "web"}); err != nil {
 		return err
 	}
-	if err := registry.RegisterWithEntry(NewFetchTool(service), tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
+	if err := registry.RegisterWithEntry(NewFetchTool(service), tools.ToolRegistryEntry{Owner: "integration", Group: "web"}); err != nil {
 		return err
 	}
 	return nil
