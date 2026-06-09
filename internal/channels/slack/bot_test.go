@@ -172,8 +172,10 @@ func TestSlackApprovalTextOmitsTechnicalFields(t *testing.T) {
 			t.Fatalf("slack approval text leaked %q: %q", forbidden, text)
 		}
 	}
-	if !strings.Contains(text, "Hành động: Gửi email") {
-		t.Fatalf("expected human-friendly approval action, got %q", text)
+	for _, forbidden := range []string{"Cần bạn xác nhận trước khi thực hiện.", "Hành động:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("slack approval text should omit %q: %q", forbidden, text)
+		}
 	}
 }
 
@@ -201,6 +203,7 @@ func TestSlackApprovalTextShowsSandboxPythonCode(t *testing.T) {
 }
 
 func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
+	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := slackTextFromResponse(contracts.AgentResponse{
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
@@ -211,16 +214,85 @@ func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
 				Input: map[string]any{
 					"to":       []any{"vmkqa2@gmail.com"},
 					"subject":  "Mời họp chiều nay",
-					"textBody": "Chào bạn,\nMời bạn tham dự cuộc họp chiều nay.",
+					"textBody": body,
 				},
 			},
 		},
 	})
 
-	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay."} {
+	for _, want := range []string{"*Người nhận:*", "`vmkqa2@gmail.com`", "*Tiêu đề:*", "`Mời họp chiều nay`", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", "```"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
 		}
+	}
+	if strings.Contains(text, "Nội dung email:") {
+		t.Fatalf("expected email approval text to omit body label, got %q", text)
+	}
+}
+
+func TestSlackApprovalTextShowsCalendarEventDetails(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_calendar",
+			Summary:    "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "calendar.createEvent",
+				Input: map[string]any{
+					"title":       "Họp",
+					"start":       "2026-06-10T08:00:00+07:00",
+					"end":         "2026-06-10T09:30:00+07:00",
+					"attendees":   []any{"a@test.com", "b@test.com"},
+					"location":    "Phòng A",
+					"description": "Chuẩn bị số liệu bán hàng.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"*Tiêu đề:* Họp",
+		"*Bắt đầu:* 10/06/2026, 08:00 (+07:00)",
+		"*Kết thúc:* 10/06/2026, 09:30 (+07:00)",
+		"*Thời lượng:* 1 giờ 30 phút",
+		"*Người tham gia:* a@test.com, b@test.com",
+		"*Địa điểm:* Phòng A",
+		"Ghi chú:", "Chuẩn bị số liệu bán hàng.", "```",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected calendar approval text to contain %q, got %q", want, text)
+		}
+	}
+	for _, forbidden := range []string{"Start: 2026-06-10T08:00:00+07:00", "End: 2026-06-10T09:30:00+07:00"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected calendar approval text to avoid raw time field %q, got %q", forbidden, text)
+		}
+	}
+}
+
+func TestSlackApprovalTextShowsChatMessageDetails(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_chat",
+			Summary:    "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "chat.sendMessage",
+				Input: map[string]any{
+					"space": "spaces/87bFdyAAAAE",
+					"text":  "Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{"Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.", "```"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected chat approval text to contain %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "Nội dung:") || strings.Contains(text, "Space:") || strings.Contains(text, "spaces/87bFdyAAAAE") {
+		t.Fatalf("expected chat approval text to omit raw space identifier, got %q", text)
 	}
 }
 
