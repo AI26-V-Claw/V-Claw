@@ -854,8 +854,8 @@ func TestTelegramRenderHTMLConvertsCodeBlockMarkers(t *testing.T) {
 func TestTelegramRenderHTMLConvertsPreBlockMarkers(t *testing.T) {
 	rendered := telegramRenderHTML("Nội dung email:\n\n" + telegramPreBlock("Chào bạn,\n\nThân mến,\nV-Claw"))
 
-	if !strings.Contains(rendered, "<pre>") {
-		t.Fatalf("expected html pre block, got %q", rendered)
+	if !strings.Contains(rendered, "<blockquote>") {
+		t.Fatalf("expected html blockquote, got %q", rendered)
 	}
 	if strings.Contains(rendered, "<code") {
 		t.Fatalf("expected email preview to avoid code markup, got %q", rendered)

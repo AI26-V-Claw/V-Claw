@@ -569,9 +569,9 @@ func telegramRenderHTML(text string) string {
 				builder.WriteString(html.EscapeString(text[start:]))
 				break
 			}
-			builder.WriteString("<pre>")
+			builder.WriteString("<blockquote>")
 			builder.WriteString(html.EscapeString(remaining[:end]))
-			builder.WriteString("</pre>")
+			builder.WriteString("</blockquote>")
 			text = remaining[end+len(telegramPreBlockClose):]
 			continue
 		}
