@@ -762,6 +762,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 		if result.Success {
 			continuation := buildApprovalContinuationMessage(pending, result, r.now())
 			if continuationResp, err := r.Run(ctx, continuation); err == nil {
+				continuationResp.ToolResults = prependToolResultIfMissing(continuationResp.ToolResults, contractResult)
 				return continuationResp, nil
 			}
 		}
@@ -932,11 +933,11 @@ Gmail date rules, restated in ASCII:
 - Keep relative date words out of Gmail query; query is only for sender, subject, body, labels, or Gmail search terms.
 - Sent mail rule: "mail/email toi da gui toi/cho <email>" means query "in:sent to:<email>" with labelIds ["SENT"].
 For sending email (gửi email / send email):
-- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to actually deliver it.
+- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to submit it to Gmail for sending.
 - gmail.createDraft alone does NOT send the email — the draft sits unsent until gmail.sendDraft is called.
 - New Gmail drafts must include a non-empty subject. If the user asks to send or draft email without a subject, ask for the exact subject or ask permission to generate one; do not ask whether a subject is optional.
 - When the user asks to send (not draft) an email, you MUST plan to call both tools. Because sendDraft depends on the draftId from createDraft, generate createDraft first; after it is approved and the draftId is returned, call sendDraft in the continuation.
-- Do not consider the email task complete after createDraft succeeds — it is only complete after sendDraft succeeds.
+- Do not consider the email task complete after createDraft succeeds. After gmail.sendDraft succeeds, say the email was handed to Gmail for sending; do not claim the recipient received the email or that delivery succeeded.
 For calendar.createEvent and calendar.updateEvent:
 - Attendees must be valid email addresses.
 - If the user provides a person name instead of an email address, call people.searchDirectory first and use the resolved Workspace email.
@@ -2666,6 +2667,34 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	}
 }
 
+func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall providers.ToolCall) tools.ToolResult {
+	if r == nil || r.registry == nil {
+		return tools.ToolNotFoundResult(providerToolCallToToolCall(toolCall))
+	}
+	definition, found := r.registry.GetDefinition(toolCall.Name)
+	if !found {
+		definition.Name = toolCall.Name
+	}
+	now := time.Now
+	if r.now != nil {
+		now = r.now
+	}
+	decision := r.policy.DecideToolCall(toolCall.ID, definition, found, now())
+	if r.logger != nil {
+		r.logger.Info("internal tool call proposed",
+			"tool_call_id", toolCall.ID,
+			"tool_name", toolCall.Name,
+			"decision", decision.Decision,
+			"risk_level", decision.RiskLevel,
+			"arguments", logToolArguments(toolCall.Name, toolCall.Arguments),
+		)
+	}
+	if decision.Decision != contracts.RiskDecisionAllow {
+		return tools.PermissionDeniedResult(providerToolCallToToolCall(toolCall))
+	}
+	return r.executeAllowedTool(ctx, toolCall, definition)
+}
+
 func logToolArguments(toolName string, args map[string]any) any {
 	if args == nil {
 		return map[string]any{}
@@ -3107,6 +3136,7 @@ func (r *Runtime) peekPendingApproval(sessionID string, approvalID string) (pend
 
 func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
+	resultNote := approvalContinuationResultNote(pending.toolCall.Name)
 	if len(pending.remainingToolCalls) > 0 {
 		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
 		for _, tc := range pending.remainingToolCalls {
@@ -3121,6 +3151,7 @@ Original request:
 
 Completed tool: %s
 Result: %s
+%s
 
 Continue by calling the remaining tools in the original plan: %s
 Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.
@@ -3128,6 +3159,7 @@ Call each remaining tool exactly once. Do not call a tool that already appears i
 			pending.message.Text,
 			pending.toolCall.Name,
 			result.ContentForLLM,
+			resultNote,
 			strings.Join(remainingNames, ", "),
 		))
 	} else {
@@ -3139,6 +3171,7 @@ Original request:
 
 Completed tool: %s
 Result: %s
+%s
 
 Check whether the original request contained additional tasks that have not yet been done.
 If the completed tool returned a resource ID (such as draftId, eventId, messageId) that is required by a follow-up tool described in that tool's description (e.g. gmail.createDraft must be followed by gmail.sendDraft to actually deliver the email), call that follow-up tool now using the ID from the result above.
@@ -3148,6 +3181,7 @@ Do not repeat the tool that was just executed.`,
 			pending.message.Text,
 			pending.toolCall.Name,
 			result.ContentForLLM,
+			resultNote,
 		))
 	}
 	msg := pending.message
@@ -3159,6 +3193,15 @@ Do not repeat the tool that was just executed.`,
 	msg.Metadata["continuationOf"] = pending.request.ApprovalID
 	msg.Metadata["completedTool"] = pending.toolCall.Name
 	return msg
+}
+
+func approvalContinuationResultNote(toolName string) string {
+	switch strings.TrimSpace(toolName) {
+	case "gmail.sendDraft":
+		return "Important delivery wording: gmail.sendDraft means the email was handed to Gmail for sending. Do not say the recipient received the email, do not say delivery succeeded, and avoid wording like 'sent successfully'. In Vietnamese, prefer 'Email da duoc chuyen cho Gmail de gui'."
+	default:
+		return ""
+	}
 }
 
 func buildRevisionRequest(pending pendingApproval, comment string) string {
@@ -3267,6 +3310,18 @@ func contractToolResult(result tools.ToolResult) contracts.ToolResult {
 		contractResult.Error = toolErrorShape(result)
 	}
 	return contractResult
+}
+
+func prependToolResultIfMissing(results []contracts.ToolResult, result contracts.ToolResult) []contracts.ToolResult {
+	for _, existing := range results {
+		if strings.TrimSpace(existing.ToolCallID) != "" && existing.ToolCallID == result.ToolCallID {
+			return results
+		}
+	}
+	merged := make([]contracts.ToolResult, 0, len(results)+1)
+	merged = append(merged, result)
+	merged = append(merged, results...)
+	return merged
 }
 
 func toolErrorShape(result tools.ToolResult) *contracts.ErrorShape {
