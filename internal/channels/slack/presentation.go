@@ -310,6 +310,10 @@ func slackApprovalDetailText(approval contracts.ApprovalRequest) string {
 		if detail := slackCalendarApprovalDetailText(input); detail != "" {
 			return detail
 		}
+	case "chat.sendMessage", "chat.updateMessage":
+		if detail := slackChatApprovalDetailText(input); detail != "" {
+			return detail
+		}
 	case "gmail.sendDraft":
 		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
 	}
@@ -381,6 +385,14 @@ func slackCalendarApprovalDetailText(input map[string]any) string {
 		lines = append(lines, "", "Ghi chú:", "", slackPreBlock(description))
 	}
 
+	return formatSlackUserText(lines...)
+}
+
+func slackChatApprovalDetailText(input map[string]any) string {
+	lines := []string{}
+	if body := firstNonEmptyStringMapValue(input, "text", "message", "content", "body"); body != "" {
+		lines = append(lines, slackPreBlock(body))
+	}
 	return formatSlackUserText(lines...)
 }
 

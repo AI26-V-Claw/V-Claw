@@ -270,6 +270,32 @@ func TestSlackApprovalTextShowsCalendarEventDetails(t *testing.T) {
 	}
 }
 
+func TestSlackApprovalTextShowsChatMessageDetails(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_chat",
+			Summary:    "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "chat.sendMessage",
+				Input: map[string]any{
+					"space": "spaces/87bFdyAAAAE",
+					"text":  "Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{"Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.", "```"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected chat approval text to contain %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "Nội dung:") || strings.Contains(text, "Space:") || strings.Contains(text, "spaces/87bFdyAAAAE") {
+		t.Fatalf("expected chat approval text to omit raw space identifier, got %q", text)
+	}
+}
+
 func TestSlackApprovalTextUsesGenericFallbackForUnknownTool(t *testing.T) {
 	text := slackTextFromResponse(contracts.AgentResponse{
 		Status: contracts.AgentStatusApprovalRequired,

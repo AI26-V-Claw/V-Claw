@@ -372,6 +372,10 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		if detail := telegramCalendarApprovalDetailText(input); detail != "" {
 			return detail
 		}
+	case "chat.sendMessage", "chat.updateMessage":
+		if detail := telegramChatApprovalDetailText(input); detail != "" {
+			return detail
+		}
 	case "gmail.sendDraft":
 		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
 	}
@@ -443,6 +447,14 @@ func telegramCalendarApprovalDetailText(input map[string]any) string {
 		lines = append(lines, "", "Ghi chú:", "", telegramPreBlock(description))
 	}
 
+	return formatTelegramUserText(lines...)
+}
+
+func telegramChatApprovalDetailText(input map[string]any) string {
+	lines := []string{}
+	if body := firstNonEmptyStringMapValue(input, "text", "message", "content", "body"); body != "" {
+		lines = append(lines, telegramPreBlock(body))
+	}
 	return formatTelegramUserText(lines...)
 }
 
