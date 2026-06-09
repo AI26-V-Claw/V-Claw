@@ -25,6 +25,97 @@ type fakeHandler struct {
 	finalizedErr error
 }
 
+func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "ÄÃ£ cháº¡y xong.",
+		},
+	}
+
+	type telegramCall struct {
+		path    string
+		payload map[string]any
+	}
+
+	var calls []telegramCall
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.state.registerApproval(telegramApprovalContext{
+		ApprovalID: "appr_py",
+		SessionID:  "telegram_chat_55",
+		ChatID:     55,
+		MessageID:  42,
+		ToolName:   "sandbox.runPython",
+		PromptText: "HÃ nh Ä‘á»™ng: Cháº¡y mÃ£ Python trong sandbox\n\nMÃ£ Python sáº½ cháº¡y:\n\nprint('hello')",
+	})
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+		}
+		calls = append(calls, telegramCall{path: r.URL.Path, payload: payload})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/answerCallbackQuery"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageReplyMarkup"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":88}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	processed, err := bot.processCallbackQuery(context.Background(), telegramUpdate{
+		UpdateID: 12,
+		CallbackQuery: &telegramCallbackQuery{
+			ID:   "cb3",
+			From: &telegramUser{ID: 123},
+			Data: telegramApprovalCallbackData("approve", "appr_py"),
+			Message: &telegramMessage{
+				MessageID: 42,
+				Chat:      telegramChat{ID: 55},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("processCallbackQuery() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected callback to be processed")
+	}
+	if handler.received.Text != "approve appr_py" {
+		t.Fatalf("unexpected approval command: %q", handler.received.Text)
+	}
+	if len(calls) < 4 {
+		t.Fatalf("expected keyboard dismissal, callback answer, a new processing message, and a final update, got %#v", calls)
+	}
+	if !strings.HasSuffix(calls[0].path, "/editMessageReplyMarkup") {
+		t.Fatalf("expected approval keyboard to be dismissed first, got %#v", calls)
+	}
+	if got := fmt.Sprint(calls[0].payload["message_id"]); got != "42" {
+		t.Fatalf("expected keyboard dismissal to target the approval message, got message_id=%q payload=%#v", got, calls[0].payload)
+	}
+	if !strings.HasSuffix(calls[2].path, "/sendMessage") {
+		t.Fatalf("expected a new processing message after approval, got %#v", calls)
+	}
+	if got := fmt.Sprint(calls[2].payload["text"]); strings.TrimSpace(got) == "" {
+		t.Fatalf("expected processing message text, got %q", got)
+	}
+	last := calls[len(calls)-1]
+	if !strings.HasSuffix(last.path, "/editMessageText") {
+		t.Fatalf("expected final result to update the new processing message, got %#v", last)
+	}
+	if got := fmt.Sprint(last.payload["message_id"]); got != "88" {
+		t.Fatalf("expected final edit to target the new processing message, got message_id=%q payload=%#v", got, last.payload)
+	}
+}
+
 func (f *fakeHandler) HandleMessage(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
 	f.calls++
 	f.received = message
@@ -275,6 +366,20 @@ func TestTelegramTextHidesDetailedFailedErrors(t *testing.T) {
 	}
 }
 
+func TestTelegramTextShowsFriendlyCancelMessage(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusBlocked,
+		Message: "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
+		Error: &contracts.ErrorShape{
+			Message: "approval rejected",
+		},
+	})
+
+	if !strings.Contains(text, "Đã hủy theo yêu cầu") {
+		t.Fatalf("expected friendly cancel text, got %q", text)
+	}
+}
+
 func TestRedactTelegramToken(t *testing.T) {
 	got := redactTelegramToken("Post https://api.telegram.org/botabc/sendMessage failed", "abc")
 	if strings.Contains(got, "abc") {
@@ -296,12 +401,449 @@ func TestTelegramApprovalCallbackRoundTrip(t *testing.T) {
 func TestTelegramApprovalKeyboardContainsMultipleChoiceButtons(t *testing.T) {
 	keyboard := telegramApprovalKeyboard("appr_123")
 	rows, ok := keyboard["inline_keyboard"].([][]map[string]string)
-	if !ok || len(rows) != 1 || len(rows[0]) != 3 {
+	if !ok || len(rows) != 1 || len(rows[0]) != 2 {
 		t.Fatalf("unexpected keyboard shape: %#v", keyboard)
 	}
-	for index, want := range []string{"Yes", "No", "Revise"} {
+	for index, want := range []string{"Xác nhận", "Hủy"} {
 		if rows[0][index]["text"] != want {
 			t.Fatalf("expected button %d to be %q, got %#v", index, want, rows[0][index])
 		}
+	}
+}
+
+func TestTelegramApprovalTextOmitsTechnicalFields(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_1",
+			Summary:    "Tôi cần bạn xác nhận trước khi gửi email.",
+			RiskLevel:  contracts.RiskLevelExternalWrite,
+			ToolCall: contracts.ToolCall{
+				ToolName: "gmail.sendDraft",
+				Input: map[string]any{
+					"draftId": "draft-1",
+				},
+			},
+		},
+	})
+
+	for _, forbidden := range []string{"Approval ID", "Input:", "draft-1", "Risk:", "Tool:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("telegram approval text leaked %q: %q", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, "Hành động: Gửi email") {
+		t.Fatalf("expected human-friendly approval action, got %q", text)
+	}
+}
+
+func TestTelegramApprovalTextShowsSandboxPythonCode(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_py",
+			Summary:    "Tôi cần bạn xác nhận trước khi chạy code trong sandbox.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "sandbox.runPython",
+				Input: map[string]any{
+					"code": "print('hello')\nprint('world')",
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(text, "Mã Python sẽ chạy:") {
+		t.Fatalf("expected sandbox code heading, got %q", text)
+	}
+	if !strings.Contains(text, "print('hello')") || !strings.Contains(text, "print('world')") {
+		t.Fatalf("expected full sandbox code in approval text, got %q", text)
+	}
+}
+
+func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_mail",
+			Summary:    "Tôi cần bạn xác nhận trước khi tạo Gmail draft.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "gmail.createDraft",
+				Input: map[string]any{
+					"to":       []any{"vmkqa2@gmail.com"},
+					"subject":  "Mời họp chiều nay",
+					"textBody": "Chào bạn,\nMời bạn tham dự cuộc họp chiều nay.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestTelegramApprovalTextUsesGenericFallbackForUnknownTool(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_generic",
+			Summary:    "Cần bạn xác nhận trước khi tạo task.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "tasks.createTask",
+				Input: map[string]any{
+					"title":       "Chuẩn bị báo cáo tuần",
+					"description": "Tổng hợp số liệu bán hàng",
+					"dueDate":     "2026-06-09",
+					"taskId":      "task-123",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{"Tiêu đề: Chuẩn bị báo cáo tuần", "Nội dung:", "Tổng hợp số liệu bán hàng", "Kết thúc: 2026-06-09"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected generic approval text to contain %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "task-123") {
+		t.Fatalf("expected generic fallback to avoid leaking raw ids, got %q", text)
+	}
+}
+
+func TestTelegramProcessCallbackQueryRejectsMismatchedApprovalContext(t *testing.T) {
+	handler := &fakeHandler{}
+	var callbackAnswer string
+	var calls []string
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.state.registerApproval(telegramApprovalContext{
+		ApprovalID: "appr_123",
+		SessionID:  "telegram_chat_55",
+		ChatID:     55,
+		MessageID:  42,
+	})
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		calls = append(calls, r.URL.Path)
+		if !strings.HasSuffix(r.URL.Path, "/answerCallbackQuery") && !strings.HasSuffix(r.URL.Path, "/editMessageReplyMarkup") {
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if strings.HasSuffix(r.URL.Path, "/answerCallbackQuery") {
+			callbackAnswer = fmt.Sprint(payload["text"])
+		}
+		return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+	})}
+
+	processed, err := bot.processCallbackQuery(context.Background(), telegramUpdate{
+		CallbackQuery: &telegramCallbackQuery{
+			ID:   "cb1",
+			From: &telegramUser{ID: 123},
+			Data: telegramApprovalCallbackData("approve", "appr_123"),
+			Message: &telegramMessage{
+				MessageID: 99,
+				Chat:      telegramChat{ID: 55},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("processCallbackQuery() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected callback to be processed")
+	}
+	if handler.calls != 0 {
+		t.Fatalf("mismatched callback should not call handler, got %d calls", handler.calls)
+	}
+	if len(calls) < 2 || !strings.HasSuffix(calls[0], "/editMessageReplyMarkup") {
+		t.Fatalf("expected stale approval to dismiss keyboard before answering, got %#v", calls)
+	}
+	if !strings.Contains(callbackAnswer, "không còn hợp lệ") {
+		t.Fatalf("expected invalid approval feedback, got %q", callbackAnswer)
+	}
+}
+
+func TestTelegramRevisionReplyUsesStoredApprovalContext(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "Đã ghi nhận chỉnh sửa.",
+		},
+	}
+
+	var calls []map[string]any
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.state.revisions[55] = telegramRevisionContext{
+		ApprovalID: "appr_123",
+		SessionID:  "telegram_chat_55",
+		ChatID:     55,
+	}
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		calls = append(calls, payload)
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
+		}
+		return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 11,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "đổi tiêu đề thành Chào buổi sáng",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.received.Text != "revise đổi tiêu đề thành Chào buổi sáng" {
+		t.Fatalf("unexpected revision command: %q", handler.received.Text)
+	}
+	if handler.received.SessionID != "telegram_chat_55" {
+		t.Fatalf("unexpected revision session: %q", handler.received.SessionID)
+	}
+	if len(calls) < 2 {
+		t.Fatalf("expected send and edit calls, got %#v", calls)
+	}
+}
+
+func TestTelegramNewMessageDismissesExistingApprovalKeyboard(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "ok",
+		},
+	}
+
+	type telegramCall struct {
+		path    string
+		payload map[string]any
+	}
+
+	var calls []telegramCall
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.state.registerApproval(telegramApprovalContext{
+		ApprovalID: "appr_existing",
+		SessionID:  "telegram_chat_55",
+		ChatID:     55,
+		MessageID:  42,
+		ToolName:   "sandbox.runPython",
+		PromptText: "pending approval",
+	})
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+		}
+		calls = append(calls, telegramCall{path: r.URL.Path, payload: payload})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/editMessageReplyMarkup"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":90}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 13,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "chạy tiếp nhé",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.received.Text != "revise chạy tiếp nhé" {
+		t.Fatalf("unexpected user text routed to handler: %q", handler.received.Text)
+	}
+	if _, ok := bot.state.lookupApproval("appr_existing", 55, 42); ok {
+		t.Fatal("expected stale approval to be removed after the user sent a new message")
+	}
+	if len(calls) < 3 {
+		t.Fatalf("expected keyboard dismissal, processing message, and final update, got %#v", calls)
+	}
+	if !strings.HasSuffix(calls[0].path, "/editMessageReplyMarkup") {
+		t.Fatalf("expected existing approval keyboard to be dismissed first, got %#v", calls)
+	}
+	if got := fmt.Sprint(calls[0].payload["message_id"]); got != "42" {
+		t.Fatalf("expected dismissal to target the old approval message, got message_id=%q payload=%#v", got, calls[0].payload)
+	}
+}
+
+func TestTelegramRevisionLikeMessageDismissesExistingApprovalKeyboard(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "ok",
+		},
+	}
+
+	type telegramCall struct {
+		path    string
+		payload map[string]any
+	}
+
+	var calls []telegramCall
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.state.registerApproval(telegramApprovalContext{
+		ApprovalID: "appr_existing",
+		SessionID:  "telegram_chat_55",
+		ChatID:     55,
+		MessageID:  42,
+		ToolName:   "gmail.createDraft",
+		PromptText: "pending approval",
+	})
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+		}
+		calls = append(calls, telegramCall{path: r.URL.Path, payload: payload})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/editMessageReplyMarkup"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":90}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 14,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "sửa lại nội dung cho thân mật hơn nhé",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.received.Text != "revise sửa lại nội dung cho thân mật hơn nhé" {
+		t.Fatalf("unexpected user text routed to handler: %q", handler.received.Text)
+	}
+	if len(calls) < 3 {
+		t.Fatalf("expected dismissal, processing message, and final update, got %#v", calls)
+	}
+	if !strings.HasSuffix(calls[0].path, "/editMessageReplyMarkup") {
+		t.Fatalf("expected existing approval keyboard to be dismissed first, got %#v", calls)
+	}
+}
+
+func TestTelegramRevisePromptIncludesPendingContext(t *testing.T) {
+	handler := &fakeHandler{}
+	var (
+		editedText          string
+		sentText            string
+		editAttempts        int
+		replyMarkupEdits    int
+		dismissedMessageIDs []string
+	)
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.state.registerApproval(telegramApprovalContext{
+		ApprovalID: "appr_py",
+		SessionID:  "telegram_chat_55",
+		ChatID:     55,
+		MessageID:  42,
+		ToolName:   "sandbox.runPython",
+		PromptText: "Hành động: Chạy mã Python trong sandbox\n\nMã Python sẽ chạy:\n\nprint('hello')",
+	})
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			sentText = fmt.Sprint(payload["text"])
+			editedText = sentText
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":77}}`), nil
+		}
+		if strings.HasSuffix(r.URL.Path, "/editMessageReplyMarkup") {
+			replyMarkupEdits++
+			dismissedMessageIDs = append(dismissedMessageIDs, fmt.Sprint(payload["message_id"]))
+		}
+		if strings.HasSuffix(r.URL.Path, "/editMessageText") {
+			editAttempts++
+		}
+		return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+	})}
+
+	processed, err := bot.processCallbackQuery(context.Background(), telegramUpdate{
+		CallbackQuery: &telegramCallbackQuery{
+			ID:   "cb2",
+			From: &telegramUser{ID: 123},
+			Data: telegramApprovalCallbackData("revise", "appr_py"),
+			Message: &telegramMessage{
+				MessageID: 42,
+				Chat:      telegramChat{ID: 55},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("processCallbackQuery() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected callback to be processed")
+	}
+	if !strings.Contains(editedText, "Nội dung đang chờ xác nhận") {
+		t.Fatalf("expected revise prompt to include pending context, got %q", editedText)
+	}
+	if !strings.Contains(editedText, "print(&#39;hello&#39;)") && !strings.Contains(editedText, "print('hello')") {
+		t.Fatalf("expected revise prompt to include pending code, got %q", editedText)
+	}
+	if editAttempts != 0 {
+		t.Fatalf("expected revise flow to preserve the original approval message, got %d edit attempts", editAttempts)
+	}
+	if replyMarkupEdits != 1 {
+		t.Fatalf("expected revise flow to dismiss the old approval keyboard once, got %d", replyMarkupEdits)
+	}
+	if len(dismissedMessageIDs) != 1 || dismissedMessageIDs[0] != "42" {
+		t.Fatalf("expected revise flow to dismiss keyboard on the original approval message, got %#v", dismissedMessageIDs)
+	}
+}
+
+func TestTelegramRenderHTMLConvertsCodeBlockMarkers(t *testing.T) {
+	rendered := telegramRenderHTML("Mã Python sẽ chạy:\n\n" + telegramCodeBlock("python", "print('hello')"))
+
+	if !strings.Contains(rendered, "<pre><code") {
+		t.Fatalf("expected html code block, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "language-python") {
+		t.Fatalf("expected python language class, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "print(&#39;hello&#39;)") && !strings.Contains(rendered, "print('hello')") {
+		t.Fatalf("expected escaped code content, got %q", rendered)
 	}
 }
