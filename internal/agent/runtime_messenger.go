@@ -26,7 +26,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 	}
 
 	msg.Text = strings.TrimSpace(msg.Text)
-	if command, ok := parseApprovalCommand(msg.Text, m.runtime.HasPendingApproval(msg.SessionID)); ok {
+	if command, ok := parseApprovalCommand(msg.Text, m.runtime.HasPendingApproval(ctx, msg.SessionID)); ok {
 		var response contracts.AgentResponse
 		var err error
 		if command.revise {

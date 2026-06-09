@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"vclaw/internal/agent"
-	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
@@ -93,28 +92,6 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 		MaxIterations: config.MaxIterations,
 		Model:         model,
 	}), nil
-}
-
-func NewIntentClassifier(provider providers.Provider) (agent.IntentClassifier, error) {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VCLAW_INTENT_CLASSIFIER_MODE")))
-	if mode == "" {
-		mode = agentintent.ClassifierModeFallback
-	}
-	heuristic := agentintent.NewHeuristicRunner(agentintent.DefaultConfig)
-	switch mode {
-	case agentintent.ClassifierModeHeuristic:
-		return heuristic, nil
-	case agentintent.ClassifierModeLLM:
-		return agentintent.NewLLMClassifier(provider, agentintent.DefaultConfig)
-	case agentintent.ClassifierModeFallback:
-		llm, err := agentintent.NewLLMClassifier(provider, agentintent.DefaultConfig)
-		if err != nil {
-			return nil, err
-		}
-		return agentintent.NewFallbackClassifier(llm, heuristic), nil
-	default:
-		return nil, fmt.Errorf("intent classifier mode must be one of: fallback, llm, heuristic")
-	}
 }
 
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {

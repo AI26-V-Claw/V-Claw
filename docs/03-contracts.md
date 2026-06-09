@@ -7,10 +7,10 @@
 ## 1. Boundary
 
 ```text
-Channel -> Agent Core -> Turn Router -> Agent Loop -> Tool Policy -> Tool Layer -> Tool Execution -> Agent Core -> Channel
+Channel -> Agent Core -> Agent Loop -> Tool Policy -> Tool Layer -> Tool Execution -> Agent Core -> Channel
 ```
 
-- Turn Router only decides tool exposure mode: `no_tool`, `tool_enabled`, or `blocked_prompt_injection`. It must not decide intent, tool name, risk, approval, plan, or clarification.
+- Agent Loop receives the runtime-filtered tool set and lets the provider decide whether to answer directly, call a tool, or call `clarify`.
 - Agent Loop may return `need_clarification` by calling the internal `clarify` tool when required information is missing.
 - `Plan` is optional/advisory only; it must not authorize tool execution.
 - Channel approval UI, such as Telegram/Slack buttons or modal comments, must resolve to `ApprovalDecision`.
@@ -612,7 +612,6 @@ Expected:
 
 ```text
 UserMessage
--> Turn Router: tool_enabled
 -> Agent Loop
 -> gmail.listEmails
 -> calendar.listEvents
@@ -644,7 +643,6 @@ Expected:
 
 ```text
 UserMessage
--> Turn Router: tool_enabled
 -> Agent Loop
 -> sandbox.runShell or sandbox.runPython proposed
 -> RiskDecision: destructive/code_execution, requires_approval
