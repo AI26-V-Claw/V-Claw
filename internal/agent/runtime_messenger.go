@@ -52,6 +52,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 		if text := renderAgentResponse(response); strings.TrimSpace(text) != "" {
 			response.Message = text
 		}
+		m.scheduleGmailBounceFollowUps(ctx, response)
 		return response, nil
 	}
 
@@ -66,6 +67,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 	if text := renderAgentResponse(response); strings.TrimSpace(text) != "" {
 		response.Message = text
 	}
+	m.scheduleGmailBounceFollowUps(ctx, response)
 	return response, nil
 }
 

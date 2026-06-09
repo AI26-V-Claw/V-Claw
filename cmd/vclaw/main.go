@@ -42,6 +42,8 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "agent":
 		return runAgent(ctx, args[1:])
+	case "tools":
+		return runTools(ctx, args[1:])
 	case "google":
 		return runGoogle(ctx, args[1:])
 	case "slack":
@@ -268,6 +270,7 @@ func printUsage() {
 	fmt.Println(`Usage:
   vclaw agent -prompt "..."
   vclaw agent chat
+  vclaw tools list [-group <group>]
   vclaw slack run
   vclaw telegram run
   vclaw google auth

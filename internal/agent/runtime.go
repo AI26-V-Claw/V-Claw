@@ -62,25 +62,25 @@ type IntentClassifier interface {
 }
 
 type Runtime struct {
-	provider          providers.Provider
-	registry          *tools.ToolRegistry
-	intentClassifier  IntentClassifier
-	taskPlanner       TaskPlanner
-	turnRouter        TurnRouter
-	referenceResolver reference.Resolver
-	policy            policies.ToolPolicy
-	sessionStore      sessions.Store
-	logger            *slog.Logger
-	approvalMu        sync.Mutex
-	pendingApprovals  map[string]pendingApproval
-	pendingBySession  map[string]string
-	maxIterations     int
-	toolTimeout       time.Duration
-	model                  string
-	now                    func() time.Time
-	compactor              *sessions.Compactor
-	contextWindow          int
-	memoryClassifierModel  string
+	provider              providers.Provider
+	registry              *tools.ToolRegistry
+	intentClassifier      IntentClassifier
+	taskPlanner           TaskPlanner
+	turnRouter            TurnRouter
+	referenceResolver     reference.Resolver
+	policy                policies.ToolPolicy
+	sessionStore          sessions.Store
+	logger                *slog.Logger
+	approvalMu            sync.Mutex
+	pendingApprovals      map[string]pendingApproval
+	pendingBySession      map[string]string
+	maxIterations         int
+	toolTimeout           time.Duration
+	model                 string
+	now                   func() time.Time
+	compactor             *sessions.Compactor
+	contextWindow         int
+	memoryClassifierModel string
 }
 
 type pendingApproval struct {
@@ -141,17 +141,17 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		contextWindow = 128_000
 	}
 	return &Runtime{
-		provider:          config.Provider,
-		registry:          config.Registry,
-		intentClassifier:  config.IntentClassifier,
-		taskPlanner:       config.TaskPlanner,
-		turnRouter:        turnRouter,
-		referenceResolver: referenceResolver,
-		policy:            config.Policy,
-		sessionStore:      sessionStore,
-		logger:            logger,
-		pendingApprovals:  make(map[string]pendingApproval),
-		pendingBySession:  make(map[string]string),
+		provider:              config.Provider,
+		registry:              config.Registry,
+		intentClassifier:      config.IntentClassifier,
+		taskPlanner:           config.TaskPlanner,
+		turnRouter:            turnRouter,
+		referenceResolver:     referenceResolver,
+		policy:                config.Policy,
+		sessionStore:          sessionStore,
+		logger:                logger,
+		pendingApprovals:      make(map[string]pendingApproval),
+		pendingBySession:      make(map[string]string),
 		maxIterations:         maxIterations,
 		toolTimeout:           toolTimeout,
 		model:                 config.Model,
@@ -244,7 +244,28 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			return base, nil
 		}
 	}
-	activeClarification := pendingClarificationActive || (hasActiveClarification(transcript) && isLikelyClarificationAnswer(message.Text))
+	// Revision and continuation messages are internally-generated trusted messages.
+	// Skip semantic classification — they carry their own context and must never be isolated.
+	isRevision := isRevisionMessage(message)
+	// Single LLM pre-call that classifies all semantic flags at once:
+	// isClarificationAnswer, isResultFollowUp, isContextualFollowUp, memoryMode.
+	// Replaces the four individual keyword heuristics. Heuristics remain as fallback.
+	var turnMeta turnAnalysis
+	if !isRevision {
+		clarificationQ := ""
+		if !pendingClarificationActive && hasActiveClarification(transcript) {
+			clarificationQ = lastAssistantText(transcript)
+		}
+		turnMeta = r.analyzeTurn(ctx, turnAnalysisInput{
+			Text:                        message.Text,
+			History:                     history,
+			Memory:                      sessionMemory,
+			ActiveClarificationQuestion: clarificationQ,
+			HasRecentResults:            hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory),
+			CheckMemoryMode:             isPotentialWriteRequest(message.Text),
+		})
+	}
+	activeClarification := pendingClarificationActive || (hasActiveClarification(transcript) && turnMeta.IsClarificationAnswer)
 	activeTranscript := []providers.Message(nil)
 	if pendingClarificationActive {
 		activeTranscript = activeClarificationTranscript(transcript, 8)
@@ -264,21 +285,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	hasReferenceCue := hasReferenceCueText(message.Text)
 	resolvedReference := hasReferenceCue && isUsableReference(referenceResolution)
 	resultFollowUp := !activeClarification &&
-		((isLikelyResultFollowUpQuestion(message.Text) && (hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory))) ||
+		((turnMeta.IsResultFollowUp && (hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory))) ||
 			(hasReferenceCue && isResultReferenceFollowUp(referenceResolution, message.Text)))
 	contextualFollowUp := !activeClarification &&
 		!resultFollowUp &&
 		!resolvedReference &&
-		isLikelyContextualFollowUpQuestion(message.Text, history, sessionMemory)
-	// Revision and continuation messages are internally-generated and already carry
-	// the necessary context in their Text. Never isolate them — isolation would drop
-	// the transcript history that the model needs to know what has already been done.
-	isRevision := isRevisionMessage(message)
-	// Use LLM (with heuristic fallback) to decide if this message is a fresh
-	// standalone request or references prior conversation context. Only called
-	// when the message contains write-action keywords that would otherwise
-	// trigger isolation.
-	memMode := r.classifyMemoryMode(ctx, message.Text, history)
+		turnMeta.IsContextualFollowUp
 	standaloneReadRequest := !isRevision &&
 		!activeClarification &&
 		!resultFollowUp &&
@@ -286,7 +298,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		!resolvedReference &&
 		shouldIsolateMemoryForStandaloneReadRequest(message.Text)
 	isolatedNewWriteRequest := !isRevision && !resultFollowUp && !resolvedReference &&
-		memMode == memoryModeFresh &&
+		turnMeta.MemoryMode == memoryModeFresh &&
 		shouldIsolateMemoryForNewRequest(message.Text, activeClarification)
 	understandingHistory := history
 	if !isolatedNewWriteRequest && !standaloneReadRequest && !activeClarification {
@@ -300,6 +312,19 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	}
 
 	userMessage := providers.Message{Role: providers.MessageRoleUser, Content: messageTextWithAttachmentContext(message)}
+	// Continuation messages carry the full pipeline instruction in their Text for use
+	// as the current LLM prompt, but that text must NOT be persisted verbatim in the
+	// transcript. If it were, future turns would load the pipeline hint ("call
+	// gmail.sendDraft") and the LLM would re-execute the action. Store a compact label
+	// instead; the LLM for this turn still receives the full text via understandingMessage.
+	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
+		completedTool, _ := message.Metadata["completedTool"].(string)
+		if completedTool != "" {
+			userMessage.Content = fmt.Sprintf("[Tiếp tục sau khi %s được xác nhận và thực thi]", completedTool)
+		} else {
+			userMessage.Content = "[Tiếp tục sau khi hành động được xác nhận và thực thi]"
+		}
+	}
 	transcript = append(transcript, userMessage)
 	if err := r.sessionStore.AppendMessage(ctx, message.SessionID, userMessage); err != nil {
 		base.Error = internalError("append user message: "+err.Error(), contracts.ErrorSourceSession)
@@ -762,6 +787,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 		if result.Success {
 			continuation := buildApprovalContinuationMessage(pending, result, r.now())
 			if continuationResp, err := r.Run(ctx, continuation); err == nil {
+				continuationResp.ToolResults = prependToolResultIfMissing(continuationResp.ToolResults, contractResult)
 				return continuationResp, nil
 			}
 		}
@@ -907,7 +933,7 @@ func runtimeSystemPrompt(now time.Time) string {
 Reply in the user's language.
 If the user writes in Vietnamese, always answer in Vietnamese even when tool results, system context, revision prompts, or memory snippets are in English.
 Use available tools when the user asks for information that a tool can retrieve or compute.
-Do not answer explicit Google Workspace read requests from conversation memory alone. If the current user asks for Gmail, Calendar, Chat, or People data for a concrete date/range/query, call the matching read tool.
+Tool results in conversation history are snapshots and may be stale — the user may have changed data externally since the last tool call. Never answer a question about current external state (what events exist, what emails are in inbox, what calendar looks like today) from history or memory alone. Always call the matching read tool to fetch live data, even if a previous result for the same query appears in the conversation history.
 Never claim that an external action was completed unless a tool result confirms it.
 For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
 When the user asks for multiple actions in one request (multi-step task), generate ALL required tool calls in a single response — do not wait for intermediate results before producing the next tool call, unless the next call strictly depends on an output (such as an ID) that cannot be known until the first call completes. The runtime processes approvals sequentially and resumes remaining tool calls automatically; generating them all upfront preserves the full multi-step plan.
@@ -932,11 +958,11 @@ Gmail date rules, restated in ASCII:
 - Keep relative date words out of Gmail query; query is only for sender, subject, body, labels, or Gmail search terms.
 - Sent mail rule: "mail/email toi da gui toi/cho <email>" means query "in:sent to:<email>" with labelIds ["SENT"].
 For sending email (gửi email / send email):
-- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to actually deliver it.
+- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to submit it to Gmail for sending.
 - gmail.createDraft alone does NOT send the email — the draft sits unsent until gmail.sendDraft is called.
 - New Gmail drafts must include a non-empty subject. If the user asks to send or draft email without a subject, ask for the exact subject or ask permission to generate one; do not ask whether a subject is optional.
 - When the user asks to send (not draft) an email, you MUST plan to call both tools. Because sendDraft depends on the draftId from createDraft, generate createDraft first; after it is approved and the draftId is returned, call sendDraft in the continuation.
-- Do not consider the email task complete after createDraft succeeds — it is only complete after sendDraft succeeds.
+- Do not consider the email task complete after createDraft succeeds. After gmail.sendDraft succeeds, say the email was handed to Gmail for sending; do not claim the recipient received the email or that delivery succeeded.
 For calendar.createEvent and calendar.updateEvent:
 - Attendees must be valid email addresses.
 - If the user provides a person name instead of an email address, call people.searchDirectory first and use the resolved Workspace email.
@@ -1159,14 +1185,36 @@ func shouldRetryTextualApprovalAsToolCall(content string) bool {
 	if lower == "" {
 		return false
 	}
-	if !containsAnyText(lower, "xác nhận", "xac nhan", "confirm", "tiến hành", "tien hanh") {
-		return false
-	}
-	return containsAnyText(lower,
+	if !containsAnyText(lower,
 		"tạo", "tao", "create",
 		"gửi", "gui", "send",
 		"xóa", "xoa", "delete",
 		"cập nhật", "cap nhat", "update",
+	) {
+		return false
+	}
+	// Require the assistant to be actively asking the user to confirm the action —
+	// not just mentioning these words in a summary or report.
+	// Example false positive: email summary containing subject "Xác nhận tham dự sự kiện"
+	// alongside "gửi mail" in a delivery-failure notice.
+	return containsAnyText(lower,
+		// Direct ask-to-confirm phrases
+		"bạn xác nhận", "ban xac nhan",
+		"bạn có xác nhận", "ban co xac nhan",
+		"có xác nhận không", "co xac nhan khong",
+		"vui lòng xác nhận", "vui long xac nhan",
+		"xác nhận để", "xac nhan de",
+		// "proceed?" patterns
+		"tiến hành không", "tien hanh khong",
+		"tiến hành nhé", "tien hanh nhe",
+		"tiến hành tạo", "tien hanh tao",
+		"tiến hành gửi", "tien hanh gui",
+		"tiến hành xóa", "tien hanh xoa",
+		"tiến hành cập nhật", "tien hanh cap nhat",
+		// English equivalents
+		"please confirm",
+		"do you confirm",
+		"confirm to proceed",
 	)
 }
 
@@ -1755,17 +1803,22 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 			if content == "" {
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("- %s: %s", strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
+			ts := ""
+			if !result.CreatedAt.IsZero() {
+				ts = " (at " + result.CreatedAt.Format("15:04") + ")"
+			}
+			lines = append(lines, fmt.Sprintf("- %s%s: %s", strings.TrimSpace(result.ToolName), ts, truncateToolContentForLLM(content)))
 		}
 		if len(lines) > 0 {
-			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
+			parts = append(parts, "Recent action results (snapshot from last tool call — may be stale if user made external changes):\n"+strings.Join(lines, "\n"))
 		}
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return strings.TrimSpace(`Session memory for understanding context only.
-Use this memory to answer follow-up questions and maintain conversational continuity.
+Use this memory to recall what actions were taken and what IDs or names were returned.
+Do NOT answer questions about current state (does X still exist, what events are on my calendar now) from memory alone — always call the live API to verify current state.
 Do not use memory alone to fill required parameters for a new write, destructive, local file, or code execution action.
 If the current user message does not explicitly provide required write parameters, ask a concise clarification question.
 
@@ -2666,6 +2719,34 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	}
 }
 
+func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall providers.ToolCall) tools.ToolResult {
+	if r == nil || r.registry == nil {
+		return tools.ToolNotFoundResult(providerToolCallToToolCall(toolCall))
+	}
+	definition, found := r.registry.GetDefinition(toolCall.Name)
+	if !found {
+		definition.Name = toolCall.Name
+	}
+	now := time.Now
+	if r.now != nil {
+		now = r.now
+	}
+	decision := r.policy.DecideToolCall(toolCall.ID, definition, found, now())
+	if r.logger != nil {
+		r.logger.Info("internal tool call proposed",
+			"tool_call_id", toolCall.ID,
+			"tool_name", toolCall.Name,
+			"decision", decision.Decision,
+			"risk_level", decision.RiskLevel,
+			"arguments", logToolArguments(toolCall.Name, toolCall.Arguments),
+		)
+	}
+	if decision.Decision != contracts.RiskDecisionAllow {
+		return tools.PermissionDeniedResult(providerToolCallToToolCall(toolCall))
+	}
+	return r.executeAllowedTool(ctx, toolCall, definition)
+}
+
 func logToolArguments(toolName string, args map[string]any) any {
 	if args == nil {
 		return map[string]any{}
@@ -3105,8 +3186,19 @@ func (r *Runtime) peekPendingApproval(sessionID string, approvalID string) (pend
 	return pending, ok
 }
 
+// isDraftCreationTool returns true for tools that produce a draftId requiring
+// a gmail.sendDraft follow-up to actually deliver the email.
+func isDraftCreationTool(toolName string) bool {
+	switch toolName {
+	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft":
+		return true
+	}
+	return false
+}
+
 func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
+	resultNote := approvalContinuationResultNote(pending.toolCall.Name)
 	if len(pending.remainingToolCalls) > 0 {
 		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
 		for _, tc := range pending.remainingToolCalls {
@@ -3121,6 +3213,7 @@ Original request:
 
 Completed tool: %s
 Result: %s
+%s
 
 Continue by calling the remaining tools in the original plan: %s
 Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.
@@ -3128,9 +3221,19 @@ Call each remaining tool exactly once. Do not call a tool that already appears i
 			pending.message.Text,
 			pending.toolCall.Name,
 			result.ContentForLLM,
+			resultNote,
 			strings.Join(remainingNames, ", "),
 		))
 	} else {
+		// Only add the draft-pipeline hint when the completed tool actually
+		// produces a draftId that needs a sendDraft follow-up. Showing this hint
+		// after sendDraft (or any other terminal tool) causes the LLM to call
+		// sendDraft again on the next user turn because the hint stays in the
+		// persisted transcript.
+		pipelineHint := ""
+		if isDraftCreationTool(pending.toolCall.Name) {
+			pipelineHint = "\nIf the completed tool returned a draftId, call gmail.sendDraft with that draftId now to actually deliver the email."
+		}
 		text = strings.TrimSpace(fmt.Sprintf(`An approved tool just completed as part of the user's original request.
 Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.
 
@@ -3139,15 +3242,17 @@ Original request:
 
 Completed tool: %s
 Result: %s
+%s
 
-Check whether the original request contained additional tasks that have not yet been done.
-If the completed tool returned a resource ID (such as draftId, eventId, messageId) that is required by a follow-up tool described in that tool's description (e.g. gmail.createDraft must be followed by gmail.sendDraft to actually deliver the email), call that follow-up tool now using the ID from the result above.
+Check whether the original request contained additional tasks that have not yet been done.%s
 If yes, call the necessary tool(s) now — do NOT ask the user again for information already given in the original request.
 If all tasks are already complete, respond with a short Vietnamese summary of what was accomplished.
 Do not repeat the tool that was just executed.`,
 			pending.message.Text,
 			pending.toolCall.Name,
 			result.ContentForLLM,
+			resultNote,
+			pipelineHint,
 		))
 	}
 	msg := pending.message
@@ -3159,6 +3264,15 @@ Do not repeat the tool that was just executed.`,
 	msg.Metadata["continuationOf"] = pending.request.ApprovalID
 	msg.Metadata["completedTool"] = pending.toolCall.Name
 	return msg
+}
+
+func approvalContinuationResultNote(toolName string) string {
+	switch strings.TrimSpace(toolName) {
+	case "gmail.sendDraft":
+		return "Important delivery wording: gmail.sendDraft means the email was handed to Gmail for sending. Do not say the recipient received the email, do not say delivery succeeded, and avoid wording like 'sent successfully'. In Vietnamese, prefer 'Email da duoc chuyen cho Gmail de gui'."
+	default:
+		return ""
+	}
 }
 
 func buildRevisionRequest(pending pendingApproval, comment string) string {
@@ -3267,6 +3381,18 @@ func contractToolResult(result tools.ToolResult) contracts.ToolResult {
 		contractResult.Error = toolErrorShape(result)
 	}
 	return contractResult
+}
+
+func prependToolResultIfMissing(results []contracts.ToolResult, result contracts.ToolResult) []contracts.ToolResult {
+	for _, existing := range results {
+		if strings.TrimSpace(existing.ToolCallID) != "" && existing.ToolCallID == result.ToolCallID {
+			return results
+		}
+	}
+	merged := make([]contracts.ToolResult, 0, len(results)+1)
+	merged = append(merged, result)
+	merged = append(merged, results...)
+	return merged
 }
 
 func toolErrorShape(result tools.ToolResult) *contracts.ErrorShape {
