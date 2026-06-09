@@ -163,7 +163,15 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 	}
 	progress := newSlackProgressEditor(b, channelID, processingTimestamp)
 
-	progressCtx := agent.WithProgressSink(ctx, func(progressCtx context.Context, event agent.ProgressEvent) {
+	followUpCtx := agent.WithFollowUpSink(ctx, func(followCtx context.Context, message agent.FollowUpMessage) {
+		if strings.TrimSpace(message.Text) == "" {
+			return
+		}
+		if _, err := b.sendMessage(followCtx, channelID, message.Text, replyThreadTimestamp); err != nil {
+			b.logger.Error("slack follow-up send failed", "error", err)
+		}
+	})
+	progressCtx := agent.WithProgressSink(followUpCtx, func(progressCtx context.Context, event agent.ProgressEvent) {
 		progressText := slackProgressText(event)
 		if strings.TrimSpace(progressText) == "" {
 			return
@@ -274,7 +282,15 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 	if err := b.updateMessageClearBlocks(ctx, channelID, messageTS, "Đang xử lý quyết định..."); err != nil {
 		b.logger.Error("slack approval progress update failed", "error", err)
 	}
-	outbound, err := b.orchestrator.HandleMessage(ctx, inbound)
+	followUpCtx := agent.WithFollowUpSink(ctx, func(followCtx context.Context, message agent.FollowUpMessage) {
+		if strings.TrimSpace(message.Text) == "" {
+			return
+		}
+		if _, err := b.sendMessage(followCtx, channelID, message.Text, messageTS); err != nil {
+			b.logger.Error("slack follow-up send failed", "error", err)
+		}
+	})
+	outbound, err := b.orchestrator.HandleMessage(followUpCtx, inbound)
 	if err != nil {
 		b.orchestrator.FinalizeAudit(inbound, err)
 		b.logger.Error("agent approval handler failed", "request_id", inbound.RequestID, "session_id", inbound.SessionID, "error", err)
@@ -328,7 +344,15 @@ func (b *Bot) handleSlackReviseSubmission(ctx context.Context, callback slack.In
 			"source":           "slack",
 		},
 	}
-	outbound, err := b.orchestrator.HandleMessage(ctx, inbound)
+	followUpCtx := agent.WithFollowUpSink(ctx, func(followCtx context.Context, message agent.FollowUpMessage) {
+		if strings.TrimSpace(message.Text) == "" {
+			return
+		}
+		if _, err := b.sendMessage(followCtx, meta.ChannelID, message.Text, meta.MessageTS); err != nil {
+			b.logger.Error("slack follow-up send failed", "error", err)
+		}
+	})
+	outbound, err := b.orchestrator.HandleMessage(followUpCtx, inbound)
 	if err != nil {
 		b.orchestrator.FinalizeAudit(inbound, err)
 		b.logger.Error("agent revise handler failed", "request_id", inbound.RequestID, "session_id", inbound.SessionID, "error", err)

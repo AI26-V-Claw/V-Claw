@@ -175,7 +175,15 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	}
 	progress := newTelegramProgressEditor(b, update.Message.Chat.ID, processingMessage.MessageID)
 
-	progressCtx := agent.WithProgressSink(ctx, func(progressCtx context.Context, event agent.ProgressEvent) {
+	followUpCtx := agent.WithFollowUpSink(ctx, func(followCtx context.Context, message agent.FollowUpMessage) {
+		if strings.TrimSpace(message.Text) == "" {
+			return
+		}
+		if _, err := b.sendMessage(followCtx, update.Message.Chat.ID, message.Text); err != nil {
+			b.logger.Error("telegram follow-up send failed", "error", err)
+		}
+	})
+	progressCtx := agent.WithProgressSink(followUpCtx, func(progressCtx context.Context, event agent.ProgressEvent) {
 		text := telegramProgressText(event)
 		if strings.TrimSpace(text) == "" {
 			return
@@ -288,7 +296,15 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 	if err := progress.Update(ctx, "Đang xử lý quyết định..."); err != nil {
 		b.logger.Error("telegram approval progress edit failed", "error", err)
 	}
-	outbound, err := b.handler.HandleMessage(ctx, inbound)
+	followUpCtx := agent.WithFollowUpSink(ctx, func(followCtx context.Context, message agent.FollowUpMessage) {
+		if strings.TrimSpace(message.Text) == "" {
+			return
+		}
+		if _, err := b.sendMessage(followCtx, callback.Message.Chat.ID, message.Text); err != nil {
+			b.logger.Error("telegram follow-up send failed", "error", err)
+		}
+	})
+	outbound, err := b.handler.HandleMessage(followUpCtx, inbound)
 	if err != nil {
 		b.handler.FinalizeAudit(inbound, err)
 		b.logger.Error("agent approval handler failed", "request_id", inbound.RequestID, "session_id", inbound.SessionID, "error", err)

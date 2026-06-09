@@ -1548,9 +1548,13 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 		t.Fatalf("expected side-effect tool to execute once after approval, executions=%d", executions)
 	}
 	// After approval the runtime runs a continuation pass; the final response comes
-	// from that pass (a text summary). The tool result lives in the transcript.
+	// from that pass, but it must keep the approved tool result so follow-up logic
+	// such as Gmail bounce detection can observe the side effect.
 	if strings.TrimSpace(response.Message) == "" {
 		t.Fatalf("expected non-empty message from continuation response, got %#v", response)
+	}
+	if len(response.ToolResults) == 0 || response.ToolResults[0].ToolName != "danger.count" || !response.ToolResults[0].Success {
+		t.Fatalf("expected approved tool result to survive continuation, got %#v", response.ToolResults)
 	}
 	transcript, err := runtime.sessionStore.LoadTranscript(context.Background(), runtimeTestMessage().SessionID)
 	if err != nil {
@@ -1565,6 +1569,25 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	}
 	if len(memory.LastActionResults) != 1 || !strings.Contains(memory.LastActionResults[0].Content, "danger executed") {
 		t.Fatalf("expected approved tool result stored in memory, got %#v", memory)
+	}
+}
+
+func TestApprovalContinuationMessageWarnsGmailSendDraftDeliveryWording(t *testing.T) {
+	message := buildApprovalContinuationMessage(pendingApproval{
+		message:  runtimeTestMessage(),
+		toolCall: providers.ToolCall{Name: "gmail.sendDraft"},
+	}, tools.ToolResult{
+		ToolCallID:    "call_send",
+		ToolName:      "gmail.sendDraft",
+		Success:       true,
+		ContentForLLM: `{"Message":{"To":"baolnc@gmail.com"}}`,
+	}, runtimeTestMessage().Timestamp)
+
+	if !strings.Contains(message.Text, "handed to Gmail for sending") {
+		t.Fatalf("expected Gmail delivery wording caveat, got %q", message.Text)
+	}
+	if !strings.Contains(message.Text, "avoid wording like 'sent successfully'") {
+		t.Fatalf("expected warning against success wording, got %q", message.Text)
 	}
 }
 
