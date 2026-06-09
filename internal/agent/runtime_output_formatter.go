@@ -146,6 +146,12 @@ func renderPayloadMap(toolName string, prefix string, payload map[string]any) []
 		return renderCalendarPayload(toolName, prefix, payload)
 	case strings.HasPrefix(toolName, "chat."):
 		return renderChatPayload(toolName, payload)
+	case strings.HasPrefix(toolName, "drive."):
+		return renderDrivePayload(toolName, payload)
+	case strings.HasPrefix(toolName, "docs."):
+		return renderDocsPayload(toolName, payload)
+	case strings.HasPrefix(toolName, "sheets."):
+		return renderSheetsPayload(toolName, payload)
 	case hasAnyPayloadKey(payload, "Draft", "Drafts"):
 		return renderGmailPayload(toolName, payload)
 	case hasAnyPayloadKey(payload, "Event", "Title", "StartTime", "EndTime"):
@@ -271,6 +277,78 @@ func renderChatPayload(toolName string, payload map[string]any) []string {
 	return renderGenericPayload(payloadTitle(toolName, ""), payload)
 }
 
+func renderDrivePayload(toolName string, payload map[string]any) []string {
+	if files, ok := payloadArrayAnyCase(payload, "files", "Files"); ok {
+		return renderPayloadList(toolName, "Danh sách file Google Drive", files)
+	}
+	title := "Kết quả Google Drive."
+	switch toolName {
+	case "drive.createTextFile":
+		title = "Đã tạo file Google Drive."
+	case "drive.updateTextFile":
+		title = "Đã cập nhật file Google Drive."
+	case "drive.shareFile":
+		title = "Đã cập nhật quyền chia sẻ Google Drive."
+	case "drive.downloadFile":
+		title = "Đã tải file Google Drive."
+	}
+	return append([]string{title}, payloadBullets(payload, []fieldLabel{
+		{"name", "Tên"},
+		{"Name", "Tên"},
+		{"id", "File ID"},
+		{"ID", "File ID"},
+		{"mimeType", "Loại"},
+		{"webViewLink", "Link"},
+		{"path", "Đường dẫn"},
+		{"permissionId", "Permission ID"},
+		{"emailAddress", "Email"},
+		{"domain", "Domain"},
+	})...)
+}
+
+func renderDocsPayload(toolName string, payload map[string]any) []string {
+	title := "Kết quả Google Docs."
+	switch toolName {
+	case "docs.createDocument":
+		title = "Đã tạo tài liệu Google Docs."
+	case "docs.appendText":
+		title = "Đã cập nhật tài liệu Google Docs."
+	}
+	return append([]string{title}, payloadBullets(payload, []fieldLabel{
+		{"title", "Tiêu đề"},
+		{"Title", "Tiêu đề"},
+		{"id", "Document ID"},
+		{"ID", "Document ID"},
+		{"text", "Nội dung"},
+		{"Text", "Nội dung"},
+	})...)
+}
+
+func renderSheetsPayload(toolName string, payload map[string]any) []string {
+	if sheets, ok := payloadArrayAnyCase(payload, "sheets", "Sheets"); ok {
+		return renderPayloadList(toolName, "Danh sách sheet", sheets)
+	}
+	title := "Kết quả Google Sheets."
+	switch toolName {
+	case "sheets.createSpreadsheet":
+		title = "Đã tạo Google Sheets."
+	case "sheets.updateRange":
+		title = "Đã cập nhật range Google Sheets."
+	case "sheets.appendRows":
+		title = "Đã thêm dòng vào Google Sheets."
+	}
+	return append([]string{title}, payloadBullets(payload, []fieldLabel{
+		{"title", "Tiêu đề"},
+		{"Title", "Tiêu đề"},
+		{"id", "Spreadsheet ID"},
+		{"ID", "Spreadsheet ID"},
+		{"spreadsheetId", "Spreadsheet ID"},
+		{"range", "Range"},
+		{"url", "Link"},
+		{"URL", "Link"},
+	})...)
+}
+
 func renderPayloadList(_ string, title string, items []any) []string {
 	if title == "" {
 		title = "Kết quả"
@@ -374,8 +452,11 @@ func renderPayloadScalar(value any) string {
 }
 
 func compactPayloadItem(payload map[string]any) string {
-	for _, key := range []string{"Title", "Subject", "DisplayName", "Email", "Name", "ID", "Text", "Snippet"} {
+	for _, key := range []string{"Title", "title", "Subject", "subject", "DisplayName", "displayName", "Email", "email", "Name", "name", "ID", "id", "Text", "text", "Snippet", "snippet"} {
 		if text := renderPayloadScalar(payload[key]); text != "" {
+			if link := firstPayloadString(payload, "webViewLink", "url", "URL"); link != "" && key != "webViewLink" {
+				return text + " - " + link
+			}
 			return text
 		}
 	}
@@ -412,6 +493,24 @@ func payloadArray(payload map[string]any, key string) ([]any, bool) {
 	return typed, ok
 }
 
+func payloadArrayAnyCase(payload map[string]any, keys ...string) ([]any, bool) {
+	for _, key := range keys {
+		if typed, ok := payloadArray(payload, key); ok {
+			return typed, true
+		}
+	}
+	return nil, false
+}
+
+func firstPayloadString(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if text := renderPayloadScalar(payload[key]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
 func hasAnyPayloadKey(payload map[string]any, keys ...string) bool {
 	for _, key := range keys {
 		if _, ok := payload[key]; ok {
@@ -434,6 +533,12 @@ func payloadTitle(toolName string, prefix string) string {
 		return "Kết quả Google Chat"
 	case strings.HasPrefix(toolName, "people."):
 		return "Kết quả danh bạ Workspace"
+	case strings.HasPrefix(toolName, "drive."):
+		return "Kết quả Google Drive"
+	case strings.HasPrefix(toolName, "docs."):
+		return "Kết quả Google Docs"
+	case strings.HasPrefix(toolName, "sheets."):
+		return "Kết quả Google Sheets"
 	case strings.HasPrefix(toolName, "web."):
 		return "Kết quả web"
 	default:
@@ -444,17 +549,31 @@ func payloadTitle(toolName string, prefix string) string {
 func genericFieldLabels() []fieldLabel {
 	return []fieldLabel{
 		{"Title", "Tiêu đề"},
+		{"title", "Tiêu đề"},
 		{"Subject", "Chủ đề"},
+		{"subject", "Chủ đề"},
 		{"ID", "ID"},
+		{"id", "ID"},
 		{"Name", "Tên"},
+		{"name", "Tên"},
 		{"DisplayName", "Tên hiển thị"},
+		{"displayName", "Tên hiển thị"},
 		{"Email", "Email"},
+		{"email", "Email"},
 		{"From", "Người gửi"},
+		{"from", "Người gửi"},
 		{"To", "Người nhận"},
+		{"to", "Người nhận"},
 		{"Date", "Ngày"},
+		{"date", "Ngày"},
 		{"Snippet", "Tóm tắt"},
+		{"snippet", "Tóm tắt"},
 		{"Text", "Nội dung"},
+		{"text", "Nội dung"},
+		{"webViewLink", "Link"},
+		{"url", "Link"},
 		{"NextPageToken", "Trang tiếp theo"},
+		{"nextPageToken", "Trang tiếp theo"},
 	}
 }
 
