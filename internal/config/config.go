@@ -29,6 +29,7 @@ type Config struct {
 	OpenAIAPIKey             string
 	OpenAIBaseURL            string
 	OpenAIModel              string
+	CompactorModel           string
 	GoogleCredentialsPath    string
 	GoogleTokenPath          string
 	GoogleToolsEnabled       bool
@@ -96,6 +97,7 @@ func Load() (Config, error) {
 		OpenAIAPIKey:             envFirst("OPENAI_API_KEY", "LLM_API_KEY"),
 		OpenAIBaseURL:            envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
 		OpenAIModel:              envFirst("OPENAI_MODEL", "LLM_MODEL"),
+		CompactorModel:           strings.TrimSpace(os.Getenv("VCLAW_COMPACTOR_MODEL")),
 		GoogleCredentialsPath:    envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", "configs/google/credentials.json"),
 		GoogleTokenPath:          envOrDefault("VCLAW_GOOGLE_TOKEN_PATH", "configs/google/token.json"),
 		GoogleToolsEnabled:       envBool("VCLAW_AGENT_GOOGLE_TOOLS_ENABLED", false),

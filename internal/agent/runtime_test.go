@@ -634,7 +634,10 @@ func TestRuntimeCalendarTimeRangeFollowUpBypassesClassifierClarification(t *test
 	}
 }
 
-func TestRuntimePendingClarificationUsesLLMResolverForNaturalFollowUp(t *testing.T) {
+func TestRuntimePendingClarificationPreservesOriginalRequestParams(t *testing.T) {
+	// The UpdatedRequest sent to the provider must always include the full original
+	// request, not a summarized version from the LLM resolver. This ensures parameters
+	// like email addresses or names in the original message are never silently dropped.
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: `{"is_answer":true,"is_new_request":false,"updated_request":"Tao lich hop ngay mai luc 17h00, ket thuc 18h00","provided_fields":["start","end"],"still_missing":[],"reason":"Nguoi dung tra loi thoi gian hop."}`}},
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"}},
@@ -679,9 +682,14 @@ func TestRuntimePendingClarificationUsesLLMResolverForNaturalFollowUp(t *testing
 	if len(provider.calls) != 2 {
 		t.Fatalf("expected resolver and main provider calls, got %d", len(provider.calls))
 	}
+	// The provider must receive the full original request, not the LLM's summarized version.
+	// This guarantees that params from the original request (emails, names, etc.) are preserved.
 	joined := providerMessagesContent(provider.calls[1].Messages)
-	if !strings.Contains(joined, "Tao lich hop ngay mai luc 17h00") {
-		t.Fatalf("expected provider to receive LLM-merged request, got %s", joined)
+	if !strings.Contains(joined, "Tao lich hop ngay mai cho toi") {
+		t.Fatalf("expected provider to receive original request params, got %s", joined)
+	}
+	if !strings.Contains(joined, "luc tan hoc") {
+		t.Fatalf("expected provider to receive clarification answer, got %s", joined)
 	}
 	memory, err := store.LoadMemory(ctx, "sess_001")
 	if err != nil {
