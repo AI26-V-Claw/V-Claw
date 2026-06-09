@@ -13,8 +13,12 @@ import (
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
+	gdocs "vclaw/internal/connectors/google/docs"
+	gdrive "vclaw/internal/connectors/google/drive"
 	ggmail "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
+	gpeople "vclaw/internal/connectors/google/people"
+	gsheets "vclaw/internal/connectors/google/sheets"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/safety"
@@ -24,14 +28,18 @@ import (
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
+	docstool "vclaw/internal/tools/office/docs"
+	drivetool "vclaw/internal/tools/office/drive"
 	gmailtool "vclaw/internal/tools/office/gmail"
+	peopletool "vclaw/internal/tools/office/people"
+	sheetstool "vclaw/internal/tools/office/sheets"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 )
 
 type AgentRuntimeConfig struct {
-	OpenAIAPIKey          string
-	OpenAIModel           string
-	OpenAIBaseURL         string
+	OpenAIAPIKey  string
+	OpenAIModel   string
+	OpenAIBaseURL string
 	// CompactorModel is the LLM model used for session summarization.
 	// Should be a cheaper model than OpenAIModel (e.g. "gpt-4o-mini").
 	// Defaults to OpenAIModel when empty.
@@ -151,6 +159,35 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	gmailService := gmailtool.NewService(ggmail.NewClient(httpClient))
 	if err := gmailtool.RegisterTools(registry, gmailService); err != nil {
 		return nil, fmt.Errorf("register gmail tools: %w", err)
+	}
+
+	peopleService := peopletool.NewService(gpeople.NewClient(httpClient))
+	if err := peopletool.RegisterTools(registry, peopleService); err != nil {
+		return nil, fmt.Errorf("register people tools: %w", err)
+	}
+
+	driveClient, err := gdrive.NewClient(ctx, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("drive client: %w", err)
+	}
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(driveClient)); err != nil {
+		return nil, fmt.Errorf("register drive tools: %w", err)
+	}
+
+	docsClient, err := gdocs.NewClient(ctx, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("docs client: %w", err)
+	}
+	if err := docstool.RegisterTools(registry, docstool.NewService(docsClient)); err != nil {
+		return nil, fmt.Errorf("register docs tools: %w", err)
+	}
+
+	sheetsClient, err := gsheets.NewClient(ctx, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("sheets client: %w", err)
+	}
+	if err := sheetstool.RegisterTools(registry, sheetstool.NewService(sheetsClient)); err != nil {
+		return nil, fmt.Errorf("register sheets tools: %w", err)
 	}
 
 	return registry, nil

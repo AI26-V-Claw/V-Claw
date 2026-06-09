@@ -26,6 +26,7 @@ Phụ trách tích hợp API và các phương thức kết nối.
 Bao gồm:
 
 - Google Workspace connectors: Gmail, Calendar, Chat.
+- Google Workspace connectors: Drive, Docs, Sheets theo MVP read-first.
 - Telegram/Slack/channel adapters.
 - OAuth/config/secrets liên quan external services.
 - Mock/fake adapters cho external APIs.
@@ -90,12 +91,18 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 | `internal/tools/office/gmail/` | Integration | Agent-callable Gmail tools, ví dụ `listEmails`, `getEmail`, `listThreads`, `getThread`, draft tools, attachment download, `modifyMessage`. |
 | `internal/tools/office/calendar/` | Integration | Agent-callable Calendar tools, ví dụ `listEvents`, `createEvent`, `deleteEvent`. |
 | `internal/tools/office/chat/` | Integration | Agent-callable Google Chat tools theo roadmap Google Workspace. |
+| `internal/tools/office/drive/` | Integration | Agent-callable Drive tools, ví dụ `searchFiles`, `getFileMetadata`, `exportFile`, `downloadFile`, `createTextFile`, `updateTextFile`, `shareFile`. |
+| `internal/tools/office/docs/` | Integration | Agent-callable Google Docs tools, ví dụ `getDocument`, `createDocument`, `appendText`. |
+| `internal/tools/office/sheets/` | Integration | Agent-callable Google Sheets tools, ví dụ `getSpreadsheet`, `listSheets`, `readRange`, `createSpreadsheet`, `updateRange`, `appendRows`. |
 | `internal/tools/system/` | Agent Core | Agent-callable local/system tools đi qua sandbox/safety. |
 | `internal/connectors/` | Integration | Raw API clients/adapters cho external services. Không chứa agent reasoning. |
 | `internal/connectors/google/` | Integration | Gmail/Calendar/Chat raw clients, OAuth/API response handling. |
 | `internal/connectors/google/gmail/` | Integration | Gmail API client. |
 | `internal/connectors/google/calendar/` | Integration | Calendar API client. |
 | `internal/connectors/google/chat/` | Integration | Google Chat API client theo roadmap Google Workspace. |
+| `internal/connectors/google/drive/` | Integration | Google Drive API client cho file metadata, export/download, create/update/share. |
+| `internal/connectors/google/docs/` | Integration | Google Docs API client cho read/create/append. |
+| `internal/connectors/google/sheets/` | Integration | Google Sheets API client cho metadata/range read/write/append. |
 | `internal/channels/` | Integration | User-facing adapters: Telegram/Slack. |
 | `internal/channels/telegram/` | Integration | Kênh giao tiếp với Agent theo Sprint 1. |
 | `internal/channels/slack/` | Integration | Kênh giao tiếp với Agent theo Sprint 1. |

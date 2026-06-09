@@ -14,6 +14,12 @@ const (
 	ScopeChatMessagesCreate   = "https://www.googleapis.com/auth/chat.messages.create"
 	ScopeChatMessagesReadonly = "https://www.googleapis.com/auth/chat.messages.readonly"
 	ScopeDirectoryReadonly    = "https://www.googleapis.com/auth/directory.readonly"
+	ScopeDriveReadonly        = "https://www.googleapis.com/auth/drive.readonly"
+	ScopeDriveFile            = "https://www.googleapis.com/auth/drive.file"
+	ScopeDocumentsReadonly    = "https://www.googleapis.com/auth/documents.readonly"
+	ScopeDocuments            = "https://www.googleapis.com/auth/documents"
+	ScopeSpreadsheetsReadonly = "https://www.googleapis.com/auth/spreadsheets.readonly"
+	ScopeSpreadsheets         = "https://www.googleapis.com/auth/spreadsheets"
 )
 
 var G1Scopes = []string{
@@ -30,4 +36,10 @@ var G1Scopes = []string{
 	ScopeChatMemberships,
 	ScopeChatSpaces,
 	ScopeDirectoryReadonly,
+	ScopeDriveReadonly,
+	ScopeDriveFile,
+	ScopeDocumentsReadonly,
+	ScopeDocuments,
+	ScopeSpreadsheetsReadonly,
+	ScopeSpreadsheets,
 }

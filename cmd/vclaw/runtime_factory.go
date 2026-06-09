@@ -12,9 +12,12 @@ import (
 	"vclaw/internal/connectors/google"
 	gcalconnector "vclaw/internal/connectors/google/calendar"
 	gchatconnector "vclaw/internal/connectors/google/chat"
+	gdocsconnector "vclaw/internal/connectors/google/docs"
+	gdriveconnector "vclaw/internal/connectors/google/drive"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeopleconnector "vclaw/internal/connectors/google/people"
+	gsheetsconnector "vclaw/internal/connectors/google/sheets"
 	"vclaw/internal/connectors/tavily"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
@@ -25,8 +28,11 @@ import (
 	"vclaw/internal/tools"
 	caltools "vclaw/internal/tools/office/calendar"
 	chattools "vclaw/internal/tools/office/chat"
+	docstools "vclaw/internal/tools/office/docs"
+	drivetools "vclaw/internal/tools/office/drive"
 	gmailtools "vclaw/internal/tools/office/gmail"
 	peopletools "vclaw/internal/tools/office/people"
+	sheetstools "vclaw/internal/tools/office/sheets"
 	sandboxtools "vclaw/internal/tools/system/sandbox"
 	webtools "vclaw/internal/tools/web"
 )
@@ -231,6 +237,30 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, opti
 
 	peopleService := peopletools.NewService(gpeopleconnector.NewClient(httpClient))
 	if err := peopletools.RegisterTools(registry, peopleService); err != nil {
+		return err
+	}
+
+	driveClient, err := gdriveconnector.NewClient(ctx, httpClient)
+	if err != nil {
+		return fmt.Errorf("create drive connector: %w", err)
+	}
+	if err := drivetools.RegisterTools(registry, drivetools.NewService(driveClient)); err != nil {
+		return err
+	}
+
+	docsClient, err := gdocsconnector.NewClient(ctx, httpClient)
+	if err != nil {
+		return fmt.Errorf("create docs connector: %w", err)
+	}
+	if err := docstools.RegisterTools(registry, docstools.NewService(docsClient)); err != nil {
+		return err
+	}
+
+	sheetsClient, err := gsheetsconnector.NewClient(ctx, httpClient)
+	if err != nil {
+		return fmt.Errorf("create sheets connector: %w", err)
+	}
+	if err := sheetstools.RegisterTools(registry, sheetstools.NewService(sheetsClient)); err != nil {
 		return err
 	}
 	return nil

@@ -51,6 +51,30 @@ var toolNameAliases = map[string]string{
 	// People tools
 	"search_directory": "people.searchDirectory",
 
+	// Drive tools
+	"drive_search":      "drive.searchFiles",
+	"search_drive":      "drive.searchFiles",
+	"get_drive_file":    "drive.getFileMetadata",
+	"export_drive_file": "drive.exportFile",
+	"download_drive":    "drive.downloadFile",
+	"create_drive_file": "drive.createTextFile",
+	"update_drive_file": "drive.updateTextFile",
+	"share_drive_file":  "drive.shareFile",
+
+	// Docs tools
+	"get_doc":         "docs.getDocument",
+	"read_doc":        "docs.getDocument",
+	"create_doc":      "docs.createDocument",
+	"append_doc_text": "docs.appendText",
+
+	// Sheets tools
+	"get_spreadsheet":    "sheets.getSpreadsheet",
+	"list_sheets":        "sheets.listSheets",
+	"read_sheet":         "sheets.readRange",
+	"create_spreadsheet": "sheets.createSpreadsheet",
+	"update_sheet":       "sheets.updateRange",
+	"append_sheet_rows":  "sheets.appendRows",
+
 	// Web tools
 	"web_search": "web.search",
 	"web_fetch":  "web.fetch",

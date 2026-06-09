@@ -18,6 +18,9 @@ Gmail API
 Google Calendar API
 Google Chat API
 Google People API
+Google Drive API
+Google Docs API
+Google Sheets API
 ```
 
 3. Configure the OAuth consent screen for your Workspace.
@@ -155,6 +158,9 @@ go run ./cmd/vclaw google chat list-members -space spaces/AAAA...
 go run ./cmd/vclaw google chat list-messages -space spaces/AAAA...
 go run ./cmd/vclaw google gmail list -max-results 10
 go run ./cmd/vclaw google gmail list-threads -max-results 10
+go run ./cmd/vclaw google drive search -query "name contains 'report'"
+go run ./cmd/vclaw google docs get -id DOCUMENT_ID
+go run ./cmd/vclaw google sheets read -id SPREADSHEET_ID -range "Sheet1!A1:D20"
 ```
 
 Use the `Candidate Chat users` values from the output to compare with `google chat list-members`. You can also pass a candidate `users/...` value directly to `google chat find-spaces-by-members` before listing messages.
@@ -250,6 +256,12 @@ https://www.googleapis.com/auth/chat.messages
 https://www.googleapis.com/auth/chat.memberships
 https://www.googleapis.com/auth/chat.spaces
 https://www.googleapis.com/auth/directory.readonly
+https://www.googleapis.com/auth/drive.readonly
+https://www.googleapis.com/auth/drive.file
+https://www.googleapis.com/auth/documents.readonly
+https://www.googleapis.com/auth/documents
+https://www.googleapis.com/auth/spreadsheets.readonly
+https://www.googleapis.com/auth/spreadsheets
 ```
 
 Scope usage:
@@ -260,6 +272,12 @@ Scope usage:
 - `calendar.events`: creating, updating, and deleting Calendar events after HITL approval.
 - Chat scopes: listing spaces/messages, sending text replies/attachments, updating/deleting messages, creating spaces, and adding/removing members.
 - `directory.readonly`: searching Workspace directory profiles so the agent can resolve names or emails before matching Google Chat members.
+- `drive.readonly`: searching Drive files, reading metadata, exporting Google-native files, and downloading file content.
+- `drive.file`: creating/updating files that V-Claw owns or that the user explicitly opens with the app; used for MVP text file writes and permission updates where allowed.
+- `documents.readonly`: reading Google Docs document structure and text.
+- `documents`: creating documents and appending text after HITL approval.
+- `spreadsheets.readonly`: reading spreadsheet metadata and ranges.
+- `spreadsheets`: creating spreadsheets, updating ranges, and appending rows after HITL approval.
 
 ## Safety Notes
 
@@ -271,6 +289,9 @@ Examples of mutating actions:
 Gmail draft/send/modify/download attachment
 Google Chat send/update/delete/create space/add member/remove member
 Calendar create/update/delete
+Drive download/create/update/share
+Docs create/append
+Sheets create/update/append
 ```
 
 Card messages are not supported by the current Google Chat user OAuth flow. Use normal text messages for Google Chat manual tests. If the project needs rich cards later, add a Google Chat app authentication flow and update contracts, docs, and tests before exposing it to agents.

@@ -57,6 +57,18 @@ func TestNormalizeToolName(t *testing.T) {
 		// People
 		{"search_directory", "people.searchDirectory"},
 
+		// Drive/Docs/Sheets
+		{"drive_search", "drive.searchFiles"},
+		{"download_drive", "drive.downloadFile"},
+		{"create_drive_file", "drive.createTextFile"},
+		{"share_drive_file", "drive.shareFile"},
+		{"read_doc", "docs.getDocument"},
+		{"create_doc", "docs.createDocument"},
+		{"append_doc_text", "docs.appendText"},
+		{"get_spreadsheet", "sheets.getSpreadsheet"},
+		{"read_sheet", "sheets.readRange"},
+		{"append_sheet_rows", "sheets.appendRows"},
+
 		// Unknown (no alias)
 		{"unknown_tool", "unknown_tool"},
 		{"custom.tool", "custom.tool"}, // already in domain.action format

@@ -34,4 +34,3 @@ func TestEDGE_CASE_001_PromptInjectionGuard(t *testing.T) {
 		t.Fatalf("expected needs_clarification = true")
 	}
 }
-

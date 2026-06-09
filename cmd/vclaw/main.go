@@ -165,6 +165,12 @@ func runGoogle(ctx context.Context, args []string) error {
 		return runGoogleChat(ctx, args[1:])
 	case "people":
 		return runGooglePeople(ctx, args[1:])
+	case "drive":
+		return runGoogleDrive(ctx, args[1:])
+	case "docs":
+		return runGoogleDocs(ctx, args[1:])
+	case "sheets":
+		return runGoogleSheets(ctx, args[1:])
 
 	case "help", "-h", "--help":
 		printGoogleUsage()
@@ -277,6 +283,9 @@ func printUsage() {
   vclaw google smoke [-chat-space spaces/AAAA...]
   vclaw google gmail <labels|profile|list|get|list-threads|get-thread|list-drafts|get-draft|create-draft|update-draft|send-draft|delete-draft|reply-draft|forward-draft|download-attachments|modify-message|batch-modify|trash-message|untrash-message>
   vclaw google people <search-directory>
+  vclaw google drive <search|get|export|download|create-text|update-text|share>
+  vclaw google docs <get|create|append>
+  vclaw google sheets <get|list|read|create|update|append>
   vclaw google chat <list-spaces|list-members|find-spaces-by-members|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>
 
 Agent runtime env:
@@ -299,6 +308,12 @@ func printGoogleUsage() {
 	printGoogleGmailUsage()
 	fmt.Println()
 	printGooglePeopleUsage()
+	fmt.Println()
+	printGoogleDriveUsage()
+	fmt.Println()
+	printGoogleDocsUsage()
+	fmt.Println()
+	printGoogleSheetsUsage()
 	fmt.Println()
 	printGoogleChatUsage()
 }

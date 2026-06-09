@@ -538,6 +538,48 @@ Rules:
 
 > `people.searchDirectory` only reads Google Workspace directory profiles to resolve names/emails before matching Google Chat members.
 
+### Drive
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `drive.searchFiles` | Integration | `safe_read` | No |
+| `drive.getFileMetadata` | Integration | `safe_read` | No |
+| `drive.exportFile` | Integration | `safe_read` | No |
+| `drive.downloadFile` | Integration | `local_write` | Yes |
+| `drive.createTextFile` | Integration | `external_write` | Yes |
+| `drive.updateTextFile` | Integration | `external_write` | Yes |
+| `drive.shareFile` | Integration | `external_write` | Yes |
+
+> Drive MVP is read-first: search, metadata, and export are read-only.
+> Downloading writes a local file and must pass approval.
+> Creating/updating files and sharing permissions mutate external Google Drive state and must pass approval.
+> MVP create/update supports text-like content only; richer binary upload can be added later with explicit contract updates.
+
+### Docs
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `docs.getDocument` | Integration | `safe_read` | No |
+| `docs.createDocument` | Integration | `external_write` | Yes |
+| `docs.appendText` | Integration | `external_write` | Yes |
+
+> Docs MVP reads document structure and extracts plain text for agent summarization.
+> Creating a document or appending text changes Google Docs state and must pass approval.
+
+### Sheets
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `sheets.getSpreadsheet` | Integration | `safe_read` | No |
+| `sheets.listSheets` | Integration | `safe_read` | No |
+| `sheets.readRange` | Integration | `safe_read` | No |
+| `sheets.createSpreadsheet` | Integration | `external_write` | Yes |
+| `sheets.updateRange` | Integration | `external_write` | Yes |
+| `sheets.appendRows` | Integration | `external_write` | Yes |
+
+> Sheets MVP reads spreadsheet metadata and ranges first.
+> Creating spreadsheets, updating ranges, and appending rows mutate external Google Sheets state and must pass approval.
+
 ### Web
 
 | Tool | Owner | Risk | Approval |
