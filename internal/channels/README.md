@@ -46,16 +46,7 @@ heuristic use heuristic classifier for quick local testing
 
 Even in `heuristic` mode, the main agent response model still needs `OPENAI_API_KEY`.
 
-Short-term session memory:
-
-```env
-VCLAW_SESSION_STORE=redis
-VCLAW_REDIS_URL=redis://localhost:6379/0
-VCLAW_SESSION_MAX_MESSAGES=40
-VCLAW_SESSION_TTL_SECONDS=86400
-```
-
-Use Redis when Telegram/Slack should remember recent turns across bot restarts. The transcript and pending clarification state are keyed by `sessionId`, so follow-ups like `11am`, `17h00`, or a natural answer to the previous clarification can be interpreted in the same chat/session. If Redis is not configured, V-Claw falls back to in-process memory.
+Session memory is kept in-process (no external server required). The transcript and pending clarification state are keyed by `sessionId`, so follow-ups like `11am`, `17h00`, or a natural answer to a previous clarification are interpreted in the same chat session. Sessions are lost on process restart, which is acceptable for a personal local assistant. File-based persistence is planned for Sprint 3.
 
 ## Telegram Setup
 

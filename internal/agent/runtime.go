@@ -45,6 +45,16 @@ type RuntimeConfig struct {
 	ToolTimeout       time.Duration
 	Model             string
 	Now               func() time.Time
+	// Compactor is optional. When set, async LLM-based compaction runs after
+	// each turn to summarize old messages and truncate the transcript.
+	Compactor *sessions.Compactor
+	// ContextWindow is the LLM context window in tokens used to determine the
+	// compaction threshold. Default: 128_000.
+	ContextWindow int
+	// MemoryClassifierModel is the model used to classify whether an incoming
+	// message is a fresh request or a follow-up referencing prior context.
+	// Defaults to the main Model when empty.
+	MemoryClassifierModel string
 }
 
 type IntentClassifier interface {
@@ -66,8 +76,11 @@ type Runtime struct {
 	pendingBySession  map[string]string
 	maxIterations     int
 	toolTimeout       time.Duration
-	model             string
-	now               func() time.Time
+	model                  string
+	now                    func() time.Time
+	compactor              *sessions.Compactor
+	contextWindow          int
+	memoryClassifierModel  string
 }
 
 type pendingApproval struct {
@@ -123,6 +136,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 			referenceResolver = reference.NewHeuristicResolver()
 		}
 	}
+	contextWindow := config.ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = 128_000
+	}
 	return &Runtime{
 		provider:          config.Provider,
 		registry:          config.Registry,
@@ -135,14 +152,30 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		logger:            logger,
 		pendingApprovals:  make(map[string]pendingApproval),
 		pendingBySession:  make(map[string]string),
-		maxIterations:     maxIterations,
-		toolTimeout:       toolTimeout,
-		model:             config.Model,
-		now:               now,
+		maxIterations:         maxIterations,
+		toolTimeout:           toolTimeout,
+		model:                 config.Model,
+		now:                   now,
+		compactor:             config.Compactor,
+		contextWindow:         contextWindow,
+		memoryClassifierModel: memoryClassifierModel(config),
 	}
 }
 
+func memoryClassifierModel(config RuntimeConfig) string {
+	if m := strings.TrimSpace(config.MemoryClassifierModel); m != "" {
+		return m
+	}
+	return strings.TrimSpace(config.Model)
+}
+
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
+	// Trigger async compaction after every turn. The compactor guard checks for
+	// pending approval / clarification and skips truncation when either is active.
+	if r.compactor != nil {
+		sessionID := message.SessionID
+		defer func() { go r.maybeCompactAsync(sessionID) }()
+	}
 	emitProgress(ctx, ProgressEvent{Stage: ProgressStageStarted, Message: "Agent run started"})
 	base := contracts.AgentResponse{
 		RequestID: message.RequestID,
@@ -237,12 +270,24 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		!resultFollowUp &&
 		!resolvedReference &&
 		isLikelyContextualFollowUpQuestion(message.Text, history, sessionMemory)
-	standaloneReadRequest := !activeClarification &&
+	// Revision and continuation messages are internally-generated and already carry
+	// the necessary context in their Text. Never isolate them — isolation would drop
+	// the transcript history that the model needs to know what has already been done.
+	isRevision := isRevisionMessage(message)
+	// Use LLM (with heuristic fallback) to decide if this message is a fresh
+	// standalone request or references prior conversation context. Only called
+	// when the message contains write-action keywords that would otherwise
+	// trigger isolation.
+	memMode := r.classifyMemoryMode(ctx, message.Text, history)
+	standaloneReadRequest := !isRevision &&
+		!activeClarification &&
 		!resultFollowUp &&
 		!contextualFollowUp &&
 		!resolvedReference &&
 		shouldIsolateMemoryForStandaloneReadRequest(message.Text)
-	isolatedNewWriteRequest := !resultFollowUp && !resolvedReference && shouldIsolateMemoryForNewRequest(message.Text, activeClarification)
+	isolatedNewWriteRequest := !isRevision && !resultFollowUp && !resolvedReference &&
+		memMode == memoryModeFresh &&
+		shouldIsolateMemoryForNewRequest(message.Text, activeClarification)
 	understandingHistory := history
 	if !isolatedNewWriteRequest && !standaloneReadRequest && !activeClarification {
 		understandingHistory = historyWithSessionMemory(sessionMemory, understandingHistory)
@@ -889,6 +934,7 @@ Gmail date rules, restated in ASCII:
 For sending email (gửi email / send email):
 - Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to actually deliver it.
 - gmail.createDraft alone does NOT send the email — the draft sits unsent until gmail.sendDraft is called.
+- New Gmail drafts must include a non-empty subject. If the user asks to send or draft email without a subject, ask for the exact subject or ask permission to generate one; do not ask whether a subject is optional.
 - When the user asks to send (not draft) an email, you MUST plan to call both tools. Because sendDraft depends on the draftId from createDraft, generate createDraft first; after it is approved and the draftId is returned, call sendDraft in the continuation.
 - Do not consider the email task complete after createDraft succeeds — it is only complete after sendDraft succeeds.
 For calendar.createEvent and calendar.updateEvent:
@@ -1497,9 +1543,12 @@ func (r *Runtime) resolvePendingClarification(ctx context.Context, pending sessi
 		r.logger.Warn("pending clarification resolver returned invalid JSON; using heuristic fallback", "error", err, "response_preview", logPreview(resp.Text, 200))
 		return fallback
 	}
-	resolved.UpdatedRequest = strings.TrimSpace(resolved.UpdatedRequest)
 	resolved.Reason = strings.TrimSpace(resolved.Reason)
-	if resolved.IsAnswer && resolved.UpdatedRequest == "" {
+	// Always use the programmatically-constructed context as UpdatedRequest rather than
+	// the LLM-generated summary. The LLM summary can silently drop parameters from the
+	// original request (e.g. email addresses, names) when the model is weak or the
+	// request is long. The structured version always preserves the full original request.
+	if resolved.IsAnswer {
 		resolved.UpdatedRequest = contextualPendingClarificationText(pending, userAnswer)
 	}
 	if !resolved.IsAnswer && fallback.IsAnswer {
@@ -1672,7 +1721,6 @@ func (r *Runtime) storePendingClarification(ctx context.Context, sessionID strin
 	memory.PendingClarification = clonePendingClarification(pending)
 	return r.saveSessionMemory(ctx, sessionID, memory)
 }
-
 
 func pendingClarificationFromToolCall(originalRequest string, question string, toolCall providers.ToolCall, missing []string) *sessions.PendingClarification {
 	return &sessions.PendingClarification{
@@ -2310,6 +2358,22 @@ func isUsableReference(resolution *reference.Resolution) bool {
 		!resolution.NeedsClarification &&
 		resolution.ReferenceType != reference.TypeNone &&
 		resolution.Confidence >= 0.6
+}
+
+// isOrdinalActionReference returns true when the message references a numbered item
+// from the agent's previous response (e.g. "Xóa số 1", "chọn cái 2"). These messages
+// always require the transcript context and must never be isolated.
+func isOrdinalActionReference(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	return containsAnyText(lower,
+		"số 1", "so 1", "số 2", "so 2", "số 3", "so 3", "số 4", "so 4", "số 5", "so 5",
+		"cái 1", "cai 1", "cái 2", "cai 2", "cái 3", "cai 3",
+		"cái đầu tiên", "cai dau tien", "cái đầu", "cai dau",
+		"cái thứ nhất", "cai thu nhat", "cái thứ hai", "cai thu hai", "cái thứ ba", "cai thu ba",
+		"mục 1", "muc 1", "mục 2", "muc 2", "mục 3", "muc 3",
+		"#1", "#2", "#3", "#4", "#5",
+		"item 1", "item 2", "item 3", "option 1", "option 2",
+	)
 }
 
 func isRevisionMessage(message contracts.UserMessage) bool {
@@ -3059,7 +3123,8 @@ Completed tool: %s
 Result: %s
 
 Continue by calling the remaining tools in the original plan: %s
-Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.`,
+Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.
+Call each remaining tool exactly once. Do not call a tool that already appears in the conversation history.`,
 			pending.message.Text,
 			pending.toolCall.Name,
 			result.ContentForLLM,
@@ -3076,6 +3141,7 @@ Completed tool: %s
 Result: %s
 
 Check whether the original request contained additional tasks that have not yet been done.
+If the completed tool returned a resource ID (such as draftId, eventId, messageId) that is required by a follow-up tool described in that tool's description (e.g. gmail.createDraft must be followed by gmail.sendDraft to actually deliver the email), call that follow-up tool now using the ID from the result above.
 If yes, call the necessary tool(s) now — do NOT ask the user again for information already given in the original request.
 If all tasks are already complete, respond with a short Vietnamese summary of what was accomplished.
 Do not repeat the tool that was just executed.`,
@@ -3380,4 +3446,67 @@ func (r *heuristicFirstResolver) Resolve(ctx context.Context, input reference.In
 	// referring to an event being created in the same request) from genuine
 	// past-result references.
 	return r.fallback.Resolve(ctx, input)
+}
+
+// maybeCompactAsync loads the current transcript and memory for sessionID, then
+// calls the compactor. The compactor guard blocks truncation when a pending
+// approval or clarification is active (see docs/03-contracts.md §9.5).
+// Runs in a goroutine — errors are logged and never surfaced to the caller.
+func (r *Runtime) maybeCompactAsync(sessionID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	transcript, err := r.sessionStore.LoadTranscript(ctx, sessionID)
+	if err != nil {
+		r.logger.Warn("compaction: load transcript failed", "session_id", sessionID, "error", err)
+		return
+	}
+
+	memory, errShape := r.loadSessionMemory(ctx, sessionID)
+	if errShape != nil {
+		r.logger.Warn("compaction: load memory failed", "session_id", sessionID, "error", errShape.Message)
+		return
+	}
+
+	guard := sessions.CompactorGuard{
+		HasPendingApproval: r.HasPendingApproval,
+		HasPendingClarification: func(sid string) bool {
+			return memory.PendingClarification != nil
+		},
+	}
+
+	result, err := r.compactor.MaybeCompact(ctx, sessionID, transcript, memory, guard)
+	if err != nil {
+		r.logger.Warn("compaction: summarization failed", "session_id", sessionID, "error", err)
+		return
+	}
+	if !result.Compacted {
+		if result.SkipReason != "below_threshold" {
+			r.logger.Debug("compaction skipped", "session_id", sessionID, "reason", result.SkipReason)
+		}
+		return
+	}
+
+	if err := r.sessionStore.SetTranscript(ctx, sessionID, result.KeptMessages); err != nil {
+		r.logger.Warn("compaction: set transcript failed", "session_id", sessionID, "error", err)
+		return
+	}
+
+	// Reload memory to pick up any changes that happened while compaction ran,
+	// then update only the summary field.
+	latest, errShape := r.loadSessionMemory(ctx, sessionID)
+	if errShape != nil {
+		r.logger.Warn("compaction: reload memory failed", "session_id", sessionID, "error", errShape.Message)
+		return
+	}
+	latest.Summary = result.Summary
+	if errShape := r.saveSessionMemory(ctx, sessionID, latest); errShape != nil {
+		r.logger.Warn("compaction: save summary failed", "session_id", sessionID, "error", errShape.Message)
+		return
+	}
+
+	r.logger.Info("session compacted",
+		"session_id", sessionID,
+		"messages_kept", len(result.KeptMessages),
+	)
 }

@@ -33,6 +33,10 @@ type AgentRuntimeConfig struct {
 	OpenAIAPIKey          string
 	OpenAIModel           string
 	OpenAIBaseURL         string
+	// CompactorModel is the LLM model used for session summarization.
+	// Should be a cheaper model than OpenAIModel (e.g. "gpt-4o-mini").
+	// Defaults to OpenAIModel when empty.
+	CompactorModel        string
 	Provider              providers.Provider
 	SessionStore          sessions.Store
 	Logger                *slog.Logger
@@ -81,6 +85,14 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 		}
 	}
 
+	compactorModel := strings.TrimSpace(config.CompactorModel)
+	if compactorModel == "" {
+		compactorModel = model
+	}
+	compactor := sessions.NewCompactor(provider, sessions.CompactorConfig{
+		SummarizeModel: compactorModel,
+	}, config.Logger)
+
 	return agent.NewRuntime(agent.RuntimeConfig{
 		Provider: provider,
 		Registry: registry,
@@ -88,10 +100,12 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),
 		),
-		SessionStore:  sessionStore,
-		Logger:        config.Logger,
-		MaxIterations: config.MaxIterations,
-		Model:         model,
+		SessionStore:          sessionStore,
+		Logger:                config.Logger,
+		MaxIterations:         config.MaxIterations,
+		Model:                 model,
+		Compactor:             compactor,
+		MemoryClassifierModel: compactorModel,
 	}), nil
 }
 

@@ -33,6 +33,7 @@ type Config struct {
 	GoogleCredentialsPath      string
 	GoogleTokenPath            string
 	GoogleToolsEnabled         bool
+	CompactorModel             string
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
 	ParallelToolTimeoutDefault time.Duration
@@ -112,6 +113,7 @@ func Load() (Config, error) {
 		GoogleCredentialsPath:      envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", "configs/google/credentials.json"),
 		GoogleTokenPath:            envOrDefault("VCLAW_GOOGLE_TOKEN_PATH", "configs/google/token.json"),
 		GoogleToolsEnabled:         envBool("VCLAW_AGENT_GOOGLE_TOOLS_ENABLED", false),
+		CompactorModel:             strings.TrimSpace(os.Getenv("VCLAW_COMPACTOR_MODEL")),
 		ParallelExecutionEnabled:   parallelExecutionEnabled,
 		ParallelMaxWorkers:         parallelMaxWorkers,
 		ParallelToolTimeoutDefault: parallelToolTimeoutDefault,
