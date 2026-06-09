@@ -37,3 +37,5 @@ examples/
 configs/SOUL.md
 configs/intent_classifier_prompt.md
 .codeboarding/
+
+.codegraph/
