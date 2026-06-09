@@ -141,7 +141,7 @@ func TestRenderAgentResponseFormatsRawGmailSentMessageJSON(t *testing.T) {
 	if strings.Contains(got, `{"Message"`) {
 		t.Fatalf("expected friendly message output, got %q", got)
 	}
-	for _, want := range []string{"Email đã được gửi.", "Message ID: msg_1", "Người nhận: baolnc@vclaw.site", "Chủ đề: Test HITL"} {
+	for _, want := range []string{"Email đã được chuyển cho Gmail để gửi.", "Message ID: msg_1", "Người nhận: baolnc@vclaw.site", "Chủ đề: Test HITL"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in rendered output, got %q", want, got)
 		}
@@ -167,8 +167,8 @@ func TestRenderAgentResponseSanitizesGmailSendDeliveryClaim(t *testing.T) {
 	if strings.Contains(got, "\u0111\u00e3 \u0111\u01b0\u1ee3c g\u1eedi th\u00e0nh c\u00f4ng") {
 		t.Fatalf("expected delivery success claim to be sanitized, got %q", got)
 	}
-	if !strings.Contains(got, "Gmail ch\u1ea5p nh\u1eadn") {
-		t.Fatalf("expected Gmail acceptance wording, got %q", got)
+	if !strings.Contains(got, "chuy\u1ec3n cho Gmail \u0111\u1ec3 g\u1eedi") {
+		t.Fatalf("expected Gmail handoff wording, got %q", got)
 	}
 }
 
