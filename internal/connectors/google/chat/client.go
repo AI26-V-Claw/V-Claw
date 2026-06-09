@@ -165,8 +165,17 @@ func ListMessages(ctx context.Context, client *http.Client, parent string, pageS
 		return ListMessagesOutput{}, err
 	}
 
-	call := service.Spaces.Messages.List(parent).PageSize(pageSize).ShowDeleted(showDeleted)
-	if strings.TrimSpace(pageToken) != "" {
+	// Google Chat API returns messages in ascending createTime order (oldest first).
+	// When the caller wants the most recent N messages (no pagination token), fetch
+	// a larger batch and take the tail so recent messages are returned.
+	fetchSize := pageSize
+	isPaged := strings.TrimSpace(pageToken) != ""
+	if !isPaged && pageSize <= 25 {
+		fetchSize = 50
+	}
+
+	call := service.Spaces.Messages.List(parent).PageSize(fetchSize).ShowDeleted(showDeleted)
+	if isPaged {
 		call = call.PageToken(pageToken)
 	}
 	response, err := call.Do()
@@ -174,9 +183,18 @@ func ListMessages(ctx context.Context, client *http.Client, parent string, pageS
 		return ListMessagesOutput{}, err
 	}
 
-	messages := make([]Message, 0, len(response.Messages))
-	for _, message := range response.Messages {
-		messages = append(messages, messageFromAPI(message))
+	raw := response.Messages
+	if !isPaged && int64(len(raw)) > pageSize {
+		raw = raw[int64(len(raw))-pageSize:]
+	}
+
+	messages := make([]Message, len(raw))
+	for i, message := range raw {
+		messages[i] = messageFromAPI(message)
+	}
+	// Reverse so newest message appears first.
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
 	}
 	return ListMessagesOutput{
 		Messages:      messages,

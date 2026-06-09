@@ -25,17 +25,22 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 			if content == "" {
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("- %s: %s", strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
+			timestamp := ""
+			if !result.CreatedAt.IsZero() {
+				timestamp = " (at " + result.CreatedAt.Format("15:04") + ")"
+			}
+			lines = append(lines, fmt.Sprintf("- %s%s: %s", strings.TrimSpace(result.ToolName), timestamp, truncateToolContentForLLM(content)))
 		}
 		if len(lines) > 0 {
-			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
+			parts = append(parts, "Recent action results (snapshot from last tool call - may be stale if user made external changes):\n"+strings.Join(lines, "\n"))
 		}
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return strings.TrimSpace(`Session memory for understanding context only.
-Use this memory to answer follow-up questions and maintain conversational continuity.
+Use this memory to recall what actions were taken and what IDs or names were returned.
+Do not answer questions about current state from memory alone; always call the live API to verify current state.
 Do not use memory alone to fill required parameters for a new write, destructive, local file, or code execution action.
 If the current user message does not explicitly provide required write parameters, ask a concise clarification question.
 
@@ -602,6 +607,19 @@ func isUsableReference(resolution *reference.Resolution) bool {
 		!resolution.NeedsClarification &&
 		resolution.ReferenceType != reference.TypeNone &&
 		resolution.Confidence >= 0.6
+}
+
+func isOrdinalActionReference(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	return containsAnyText(lower,
+		"số 1", "so 1", "số 2", "so 2", "số 3", "so 3", "số 4", "so 4", "số 5", "so 5",
+		"cái 1", "cai 1", "cái 2", "cai 2", "cái 3", "cai 3",
+		"cái đầu tiên", "cai dau tien", "cái đầu", "cai dau",
+		"cái thứ nhất", "cai thu nhat", "cái thứ hai", "cai thu hai", "cái thứ ba", "cai thu ba",
+		"mục 1", "muc 1", "mục 2", "muc 2", "mục 3", "muc 3",
+		"#1", "#2", "#3", "#4", "#5",
+		"item 1", "item 2", "item 3", "option 1", "option 2",
+	)
 }
 
 func isRevisionMessage(message contracts.UserMessage) bool {

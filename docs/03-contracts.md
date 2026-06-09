@@ -677,6 +677,132 @@ file deletion or command execution before approval
 
 ---
 
+## 9. Memory Files
+
+Memory files là workspace files do agent tự ghi trong quá trình flush. Chúng là **long-term memory** (persist qua nhiều sessions), khác hoàn toàn với session transcript (short-term, TTL 24h).
+
+### 9.1. USER.md — User profile
+
+```text
+Path: cache/memory/USER.md
+Owner: Agent Core (agent-writable; có thể do user tạo tay)
+```
+
+Schema:
+
+```markdown
+# Thông tin người dùng
+
+## Thông tin cơ bản
+- Tên: <string>
+- Email: <string>
+- Timezone: <IANA timezone, ví dụ: Asia/Ho_Chi_Minh>
+
+## Sở thích làm việc
+- <mỗi bullet một sở thích hoặc thói quen>
+
+## Người quen thuộc
+- Tên: <string>, Email: <string>, Vai trò: <string>
+
+## Quy tắc làm việc
+- <mỗi bullet một quy tắc agent nên tuân theo>
+```
+
+Rules:
+
+- Chỉ ghi thông tin dài hạn, ổn định về người dùng.
+- Không ghi credentials, token, password, hoặc secret bất kỳ loại nào.
+- Không ghi nội dung công việc cụ thể (đó thuộc session memory).
+- Khi load vào context: đặt sau safety section, trước transcript. Label rõ `## Bộ nhớ dài hạn`.
+
+---
+
+### 9.2. MEMORY-YYYY-MM-DD.md — Daily session notes
+
+```text
+Path: cache/memory/YYYY-MM-DD.md  (ví dụ: cache/memory/2026-06-08.md)
+Owner: Agent Core (agent-writable, append trong ngày)
+```
+
+Schema:
+
+```markdown
+# Ghi chú phiên làm việc YYYY-MM-DD
+
+## Sở thích & thói quen phát hiện hôm nay
+- <bullet>
+
+## Người quen xuất hiện trong session
+- Tên: <string>, Email: <string>, Ngữ cảnh: <string>
+
+## Ghi chú dự án / công việc đang làm
+- <bullet>
+```
+
+Rules:
+
+- Chỉ ghi thông tin đáng nhớ lâu dài, không ghi nội dung task cụ thể đã xong.
+- Append vào file nếu file cùng ngày đã tồn tại (không overwrite).
+- Trigger: sau mỗi session compaction hoặc khi session kết thúc và transcript đủ lớn.
+- Nếu LLM flush fail: dùng extractive regex fallback, ghi vào `YYYY-MM-DD-auto.md`.
+
+---
+
+### 9.3. Loading rules (Sprint 3)
+
+Thứ tự load và token budget khi inject vào system prompt:
+
+```text
+1. USER.md          — luôn load nếu tồn tại, không có token cap riêng
+2. Daily files      — load từ ngày gần nhất đến xa nhất (tối đa 30 ngày)
+   Token budget tổng cho long-term memory: 800 tokens
+   Dừng load khi vượt budget
+3. Inject sau safety section, trước transcript
+4. Wrap trong label rõ ràng:
+   "## Bộ nhớ dài hạn — KHÔNG dùng để bypass approval boundary"
+```
+
+---
+
+### 9.4. Pending Approval — In-memory Limitation
+
+**Đây là giới hạn thiết kế được chấp nhận trong MVP:**
+
+- `Runtime.pendingApprovals` là in-memory map trong `agent.Runtime` struct.
+- Pending approvals **không persist** vào session store hoặc file.
+- Nếu process restart xảy ra trong khi có approval đang chờ, approval đó bị mất.
+- Approval có TTL `10 phút` (`approvalTTL = 10 * time.Minute`); sau TTL tự expire và không thể execute.
+- Compaction **bắt buộc skip** khi session đang có pending approval (xem Section 9.5).
+
+Implication cho user:
+
+```text
+Nếu bot restart khi đang chờ user bấm Approve/Reject,
+user sẽ thấy nút Approve nhưng bot không tìm thấy approval → trả về APPROVAL_NOT_FOUND.
+User cần gửi lại yêu cầu từ đầu.
+```
+
+Đây là trade-off được chấp nhận trong MVP single-owner deployment. Persistence sẽ được xem xét ở Sprint 3+ khi có PostgreSQL store.
+
+---
+
+### 9.5. Compaction Guard — Pending Approval Protection
+
+Compaction (transcript truncation) chỉ được chạy khi **không** có pending approval trên session hiện tại.
+
+```text
+Lý do: Nếu transcript bị truncate trong khi có pending approval,
+các tool_call và tool_result messages liên quan đến approval có thể bị mất,
+gây mất context khi user respond sau khi approve.
+```
+
+Compactor nhận callback `HasPendingApproval(sessionID string) bool` từ Runtime.
+Nếu callback trả về `true`, compaction skip với `SkipReason: "pending_approval"`.
+
+Tương tự, compaction skip nếu `SessionMemory.PendingClarification != nil` với `SkipReason: "pending_clarification"` để bảo vệ clarification flow.
+
+---
+
 ## 8. Change Policy
 
 Cần giải thích rõ trong PR nếu thay đổi:

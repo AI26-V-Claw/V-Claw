@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
 type ToolDefinition struct {
 	Name             string
 	Owner            string
+	Group            string
 	Description      string
 	Parameters       ToolSchema
 	Capability       Capability
@@ -22,6 +24,7 @@ type ToolDefinition struct {
 type ToolRegistryEntry struct {
 	Name             string
 	Owner            string
+	Group            string
 	Description      string
 	Parameters       ToolSchema
 	Capability       Capability
@@ -97,6 +100,20 @@ func (r *ToolRegistry) ListTools() []ToolDefinition {
 	return defs
 }
 
+func (r *ToolRegistry) ListToolsByGroup(group string) []ToolDefinition {
+	var defs []ToolDefinition
+	for _, registered := range r.tools {
+		def := definitionFromEntry(registered.entry)
+		if def.Group == group {
+			defs = append(defs, def)
+		}
+	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Name < defs[j].Name
+	})
+	return defs
+}
+
 func (r *ToolRegistry) SetEnabled(name string, enabled bool) error {
 	registered, ok := r.tools[name]
 	if !ok {
@@ -123,6 +140,9 @@ func normalizeEntry(tool Tool, entry ToolRegistryEntry) ToolRegistryEntry {
 	}
 	if entry.Owner == "" {
 		entry.Owner = "agent_core"
+	}
+	if entry.Group == "" {
+		entry.Group = inferGroup(entry.Name)
 	}
 	if entry.Description == "" {
 		entry.Description = tool.Description()
@@ -151,6 +171,7 @@ func definitionFromEntry(entry ToolRegistryEntry) ToolDefinition {
 	return ToolDefinition{
 		Name:             entry.Name,
 		Owner:            entry.Owner,
+		Group:            entry.Group,
 		Description:      entry.Description,
 		Parameters:       entry.Parameters,
 		Capability:       entry.Capability,
@@ -158,6 +179,22 @@ func definitionFromEntry(entry ToolRegistryEntry) ToolDefinition {
 		RequiresApproval: entry.RequiresApproval,
 		Timeout:          entry.Timeout,
 		Enabled:          entry.Enabled,
+	}
+}
+
+func inferGroup(toolName string) string {
+	switch {
+	case strings.HasPrefix(toolName, "gmail.") ||
+		strings.HasPrefix(toolName, "calendar.") ||
+		strings.HasPrefix(toolName, "chat.") ||
+		strings.HasPrefix(toolName, "people."):
+		return "google_workspace"
+	case strings.HasPrefix(toolName, "web."):
+		return "web"
+	case strings.HasPrefix(toolName, "sandbox."):
+		return "sandbox"
+	default:
+		return "builtin"
 	}
 }
 

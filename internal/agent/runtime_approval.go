@@ -535,6 +535,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 	if result.Success {
 		continuation := buildApprovalContinuationMessage(pending, result, r.now())
 		if continuationResp, err := r.Run(ctx, continuation); err == nil {
+			continuationResp.ToolResults = prependToolResultIfMissing(continuationResp.ToolResults, contractResult)
 			return continuationResp, nil
 		}
 	}
@@ -583,6 +584,7 @@ func (r *Runtime) responseForUnclaimedApprovedAction(record ActionRecord, pendin
 
 func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
+	resultNote := approvalContinuationResultNote(pending.toolCall.Name)
 	if len(pending.remainingToolCalls) > 0 {
 		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
 		for _, tc := range pending.remainingToolCalls {
@@ -597,15 +599,22 @@ Original request:
 
 Completed tool: %s
 Result: %s
+%s
 
 Continue by calling the remaining tools in the original plan: %s
-Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.`,
+Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.
+Call each remaining tool exactly once. Do not call a tool that already appears in the conversation history.`,
 			pending.message.Text,
 			pending.toolCall.Name,
 			result.ContentForLLM,
+			resultNote,
 			strings.Join(remainingNames, ", "),
 		))
 	} else {
+		pipelineHint := ""
+		if isDraftCreationTool(pending.toolCall.Name) {
+			pipelineHint = "\nIf the completed tool returned a draftId, call gmail.sendDraft with that draftId now to actually deliver the email."
+		}
 		text = strings.TrimSpace(fmt.Sprintf(`An approved tool just completed as part of the user's original request.
 Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.
 
@@ -614,14 +623,17 @@ Original request:
 
 Completed tool: %s
 Result: %s
+%s
 
-Check whether the original request contained additional tasks that have not yet been done.
+Check whether the original request contained additional tasks that have not yet been done.%s
 If yes, call the necessary tool(s) now — do NOT ask the user again for information already given in the original request.
 If all tasks are already complete, respond with a short Vietnamese summary of what was accomplished.
 Do not repeat the tool that was just executed.`,
 			pending.message.Text,
 			pending.toolCall.Name,
 			result.ContentForLLM,
+			resultNote,
+			pipelineHint,
 		))
 	}
 	msg := pending.message
@@ -633,6 +645,22 @@ Do not repeat the tool that was just executed.`,
 	msg.Metadata["continuationOf"] = pending.request.ApprovalID
 	msg.Metadata["completedTool"] = pending.toolCall.Name
 	return msg
+}
+
+func isDraftCreationTool(toolName string) bool {
+	switch toolName {
+	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft":
+		return true
+	default:
+		return false
+	}
+}
+
+func approvalContinuationResultNote(toolName string) string {
+	if strings.TrimSpace(toolName) == "gmail.sendDraft" {
+		return "Important delivery wording: gmail.sendDraft means the email was handed to Gmail for sending. Do not say the recipient received the email, do not say delivery succeeded, and avoid wording like 'sent successfully'. In Vietnamese, prefer 'Email da duoc chuyen cho Gmail de gui'."
+	}
+	return ""
 }
 
 func buildRevisionRequest(pending pendingApproval, comment string) string {

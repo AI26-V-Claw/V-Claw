@@ -299,7 +299,10 @@ func TestRuntimeCalendarTimeRangeFollowUpBypassesClassifierClarification(t *test
 	}
 }
 
-func TestRuntimePendingClarificationUsesLLMResolverForNaturalFollowUp(t *testing.T) {
+func TestRuntimePendingClarificationPreservesOriginalRequestParams(t *testing.T) {
+	// The UpdatedRequest sent to the provider must always include the full original
+	// request, not a summarized version from the LLM resolver. This ensures parameters
+	// like email addresses or names in the original message are never silently dropped.
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: `{"is_answer":true,"is_new_request":false,"updated_request":"Tao lich hop ngay mai luc 17h00, ket thuc 18h00","provided_fields":["start","end"],"still_missing":[],"reason":"Nguoi dung tra loi thoi gian hop."}`}},
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"}},
@@ -334,9 +337,14 @@ func TestRuntimePendingClarificationUsesLLMResolverForNaturalFollowUp(t *testing
 	if len(provider.calls) != 2 {
 		t.Fatalf("expected resolver and main provider calls, got %d", len(provider.calls))
 	}
+	// The provider must receive the full original request, not the LLM's summarized version.
+	// This guarantees that params from the original request (emails, names, etc.) are preserved.
 	joined := providerMessagesContent(provider.calls[1].Messages)
-	if !strings.Contains(joined, "Tao lich hop ngay mai luc 17h00") {
-		t.Fatalf("expected provider to receive LLM-merged request, got %s", joined)
+	if !strings.Contains(joined, "Tao lich hop ngay mai cho toi") {
+		t.Fatalf("expected provider to receive original request params, got %s", joined)
+	}
+	if !strings.Contains(joined, "luc tan hoc") {
+		t.Fatalf("expected provider to receive clarification answer, got %s", joined)
 	}
 	memory, err := store.LoadMemory(ctx, "sess_001")
 	if err != nil {
@@ -1207,9 +1215,13 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 		t.Fatalf("expected side-effect tool to execute once after approval, executions=%d", executions)
 	}
 	// After approval the runtime runs a continuation pass; the final response comes
-	// from that pass (a text summary). The tool result lives in the transcript.
+	// from that pass, but it must keep the approved tool result so follow-up logic
+	// such as Gmail bounce detection can observe the side effect.
 	if strings.TrimSpace(response.Message) == "" {
 		t.Fatalf("expected non-empty message from continuation response, got %#v", response)
+	}
+	if len(response.ToolResults) == 0 || response.ToolResults[0].ToolName != "danger.count" || !response.ToolResults[0].Success {
+		t.Fatalf("expected approved tool result to survive continuation, got %#v", response.ToolResults)
 	}
 	transcript, err := runtime.sessionStore.LoadTranscript(context.Background(), runtimeTestMessage().SessionID)
 	if err != nil {
@@ -1652,6 +1664,25 @@ func TestRuntimeApprovalResumeIsAtomicUnderConcurrentRequests(t *testing.T) {
 	executionMu.Unlock()
 	if gotExecutions != 1 {
 		t.Fatalf("expected exactly one execution under concurrent approvals, got %d", gotExecutions)
+	}
+}
+
+func TestApprovalContinuationMessageWarnsGmailSendDraftDeliveryWording(t *testing.T) {
+	message := buildApprovalContinuationMessage(pendingApproval{
+		message:  runtimeTestMessage(),
+		toolCall: providers.ToolCall{Name: "gmail.sendDraft"},
+	}, tools.ToolResult{
+		ToolCallID:    "call_send",
+		ToolName:      "gmail.sendDraft",
+		Success:       true,
+		ContentForLLM: `{"Message":{"To":"baolnc@gmail.com"}}`,
+	}, runtimeTestMessage().Timestamp)
+
+	if !strings.Contains(message.Text, "handed to Gmail for sending") {
+		t.Fatalf("expected Gmail delivery wording caveat, got %q", message.Text)
+	}
+	if !strings.Contains(message.Text, "avoid wording like 'sent successfully'") {
+		t.Fatalf("expected warning against success wording, got %q", message.Text)
 	}
 }
 

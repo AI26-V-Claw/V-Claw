@@ -245,6 +245,10 @@ func (failingLoadSessionStore) AppendMessage(context.Context, string, providers.
 	return nil
 }
 
+func (failingLoadSessionStore) SetTranscript(context.Context, string, []providers.Message) error {
+	return nil
+}
+
 func (failingLoadSessionStore) ClearSession(context.Context, string) error {
 	return nil
 }

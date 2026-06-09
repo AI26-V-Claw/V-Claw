@@ -355,9 +355,8 @@ func (r *Runtime) resolvePendingClarification(ctx context.Context, pending sessi
 		r.logger.Warn("pending clarification resolver returned invalid JSON; using heuristic fallback", "error", err, "response_preview", logPreview(resp.Text, 200))
 		return fallback
 	}
-	resolved.UpdatedRequest = strings.TrimSpace(resolved.UpdatedRequest)
 	resolved.Reason = strings.TrimSpace(resolved.Reason)
-	if resolved.IsAnswer && resolved.UpdatedRequest == "" {
+	if resolved.IsAnswer {
 		resolved.UpdatedRequest = contextualPendingClarificationText(pending, userAnswer)
 	}
 	if !resolved.IsAnswer && fallback.IsAnswer {

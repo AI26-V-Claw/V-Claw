@@ -43,7 +43,7 @@ func runtimeSystemPrompt(now time.Time) string {
 Reply in the user's language.
 If the user writes in Vietnamese, always answer in Vietnamese even when tool results, system context, revision prompts, or memory snippets are in English.
 Use available tools when the user asks for information that a tool can retrieve or compute.
-Do not answer explicit Google Workspace read requests from conversation memory alone. If the current user asks for Gmail, Calendar, Chat, or People data for a concrete date/range/query, call the matching read tool.
+Tool results in conversation history are snapshots and may be stale. Never answer a question about current external state from history or memory alone; always call the matching read tool.
 Never claim that an external action was completed unless a tool result confirms it.
 For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
 When the user asks for multiple actions in one request (multi-step task), generate ALL required tool calls in a single response — do not wait for intermediate results before producing the next tool call, unless the next call strictly depends on an output (such as an ID) that cannot be known until the first call completes. The runtime processes approvals sequentially and resumes remaining tool calls automatically; generating them all upfront preserves the full multi-step plan.
@@ -68,11 +68,11 @@ Gmail date rules, restated in ASCII:
 - Keep relative date words out of Gmail query; query is only for sender, subject, body, labels, or Gmail search terms.
 - Sent mail rule: "mail/email toi da gui toi/cho <email>" means query "in:sent to:<email>" with labelIds ["SENT"].
 For sending email (gửi email / send email):
-- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to actually deliver it.
+- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to submit it to Gmail for sending.
 - gmail.createDraft alone does NOT send the email — the draft sits unsent until gmail.sendDraft is called.
 - New Gmail drafts must include a non-empty subject. If the user asks to send or draft email without a subject, ask for the exact subject or ask permission to generate one; do not ask whether a subject is optional.
 - When the user asks to send (not draft) an email, you MUST plan to call both tools. Because sendDraft depends on the draftId from createDraft, generate createDraft first; after it is approved and the draftId is returned, call sendDraft in the continuation.
-- Do not consider the email task complete after createDraft succeeds — it is only complete after sendDraft succeeds.
+- Do not consider the email task complete after createDraft succeeds. After gmail.sendDraft succeeds, say the email was handed to Gmail for sending; do not claim the recipient received the email or that delivery succeeded.
 For calendar.createEvent and calendar.updateEvent:
 - Attendees must be valid email addresses.
 - If the user provides a person name instead of an email address, call people.searchDirectory first and use the resolved Workspace email.
@@ -209,14 +209,29 @@ func shouldRetryTextualApprovalAsToolCall(content string) bool {
 	if lower == "" {
 		return false
 	}
-	if !containsAnyText(lower, "xác nhận", "xac nhan", "confirm", "tiến hành", "tien hanh") {
-		return false
-	}
-	return containsAnyText(lower,
+	if !containsAnyText(lower,
 		"tạo", "tao", "create",
 		"gửi", "gui", "send",
 		"xóa", "xoa", "delete",
 		"cập nhật", "cap nhat", "update",
+	) {
+		return false
+	}
+	return containsAnyText(lower,
+		"bạn xác nhận", "ban xac nhan",
+		"bạn có xác nhận", "ban co xac nhan",
+		"có xác nhận không", "co xac nhan khong",
+		"vui lòng xác nhận", "vui long xac nhan",
+		"xác nhận để", "xac nhan de",
+		"tiến hành không", "tien hanh khong",
+		"tiến hành nhé", "tien hanh nhe",
+		"tiến hành tạo", "tien hanh tao",
+		"tiến hành gửi", "tien hanh gui",
+		"tiến hành xóa", "tien hanh xoa",
+		"tiến hành cập nhật", "tien hanh cap nhat",
+		"please confirm",
+		"do you confirm",
+		"confirm to proceed",
 	)
 }
 

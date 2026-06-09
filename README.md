@@ -65,36 +65,6 @@ Copy the example environment file before running local commands:
 Copy-Item .env.example .env
 ```
 
-### Redis session memory
-
-Redis is optional, but recommended for Telegram/Slack development so recent conversation turns survive bot restarts. Start a local Redis container:
-
-```powershell
-docker run --name vclaw-redis -p 6379:6379 -v vclaw-redis-data:/data -d redis:7 redis-server --appendonly yes
-```
-
-If the container already exists, start it again with:
-
-```powershell
-docker start vclaw-redis
-```
-
-Verify Redis is reachable:
-
-```powershell
-docker exec vclaw-redis redis-cli ping
-```
-
-Use these values in `.env`:
-
-```env
-VCLAW_SESSION_STORE=redis
-VCLAW_REDIS_URL=redis://localhost:6379/0
-VCLAW_REDIS_KEY_PREFIX=vclaw:session:
-VCLAW_SESSION_MAX_MESSAGES=40
-VCLAW_SESSION_TTL_SECONDS=86400
-```
-
 Google Workspace setup lives in [configs/google/README.md](configs/google/README.md). Telegram and Slack setup lives in [internal/channels/README.md](internal/channels/README.md).
 
 ## Development note

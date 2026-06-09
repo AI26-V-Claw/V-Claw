@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -29,34 +30,40 @@ var (
 )
 
 type RuntimeConfig struct {
-	Provider          providers.Provider
-	Registry          *tools.ToolRegistry
-	ReferenceResolver reference.Resolver
-	Policy            policies.ToolPolicy
-	SessionStore      sessions.Store
-	StateStore        RuntimeStateStore
-	Logger            *slog.Logger
-	MaxIterations     int
-	ToolTimeout       time.Duration
-	Model             string
-	Now               func() time.Time
+	Provider              providers.Provider
+	Registry              *tools.ToolRegistry
+	ReferenceResolver     reference.Resolver
+	Policy                policies.ToolPolicy
+	SessionStore          sessions.Store
+	StateStore            RuntimeStateStore
+	Logger                *slog.Logger
+	MaxIterations         int
+	ToolTimeout           time.Duration
+	Model                 string
+	Now                   func() time.Time
+	Compactor             *sessions.Compactor
+	ContextWindow         int
+	MemoryClassifierModel string
 }
 
 type Runtime struct {
-	provider          providers.Provider
-	registry          *tools.ToolRegistry
-	referenceResolver reference.Resolver
-	policy            policies.ToolPolicy
-	sessionStore      sessions.Store
-	stateStore        RuntimeStateStore
-	logger            *slog.Logger
-	approvalMu        sync.Mutex
-	pendingApprovals  map[string]pendingApproval
-	pendingBySession  map[string]string
-	maxIterations     int
-	toolTimeout       time.Duration
-	model             string
-	now               func() time.Time
+	provider              providers.Provider
+	registry              *tools.ToolRegistry
+	referenceResolver     reference.Resolver
+	policy                policies.ToolPolicy
+	sessionStore          sessions.Store
+	stateStore            RuntimeStateStore
+	logger                *slog.Logger
+	approvalMu            sync.Mutex
+	pendingApprovals      map[string]pendingApproval
+	pendingBySession      map[string]string
+	maxIterations         int
+	toolTimeout           time.Duration
+	model                 string
+	now                   func() time.Time
+	compactor             *sessions.Compactor
+	contextWindow         int
+	memoryClassifierModel string
 }
 
 type pendingApproval struct {
@@ -114,24 +121,42 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 			referenceResolver = reference.NewHeuristicResolver()
 		}
 	}
+	contextWindow := config.ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = 128_000
+	}
 	return &Runtime{
-		provider:          config.Provider,
-		registry:          config.Registry,
-		referenceResolver: referenceResolver,
-		policy:            config.Policy,
-		sessionStore:      sessionStore,
-		stateStore:        stateStore,
-		logger:            logger,
-		pendingApprovals:  make(map[string]pendingApproval),
-		pendingBySession:  make(map[string]string),
-		maxIterations:     maxIterations,
-		toolTimeout:       toolTimeout,
-		model:             config.Model,
-		now:               now,
+		provider:              config.Provider,
+		registry:              config.Registry,
+		referenceResolver:     referenceResolver,
+		policy:                config.Policy,
+		sessionStore:          sessionStore,
+		stateStore:            stateStore,
+		logger:                logger,
+		pendingApprovals:      make(map[string]pendingApproval),
+		pendingBySession:      make(map[string]string),
+		maxIterations:         maxIterations,
+		toolTimeout:           toolTimeout,
+		model:                 config.Model,
+		now:                   now,
+		compactor:             config.Compactor,
+		contextWindow:         contextWindow,
+		memoryClassifierModel: memoryClassifierModel(config),
 	}
 }
 
+func memoryClassifierModel(config RuntimeConfig) string {
+	if model := strings.TrimSpace(config.MemoryClassifierModel); model != "" {
+		return model
+	}
+	return strings.TrimSpace(config.Model)
+}
+
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
+	if r.compactor != nil {
+		sessionID := message.SessionID
+		defer func() { go r.maybeCompactAsync(sessionID) }()
+	}
 	emitProgress(ctx, ProgressEvent{Stage: ProgressStageStarted, Message: "Agent run started"})
 	base := contracts.AgentResponse{
 		RequestID: message.RequestID,
@@ -224,7 +249,23 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			return failStartedRun(errShape)
 		}
 	}
-	activeClarification := pendingClarificationActive || (hasActiveClarification(transcript) && isLikelyClarificationAnswer(message.Text))
+	isRevision := isRevisionMessage(message)
+	var turnMeta turnAnalysis
+	if !isRevision {
+		clarificationQuestion := ""
+		if !pendingClarificationActive && hasActiveClarification(transcript) {
+			clarificationQuestion = lastAssistantText(transcript)
+		}
+		turnMeta = r.analyzeTurn(ctx, turnAnalysisInput{
+			Text:                        message.Text,
+			History:                     history,
+			Memory:                      sessionMemory,
+			ActiveClarificationQuestion: clarificationQuestion,
+			HasRecentResults:            hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory),
+			CheckMemoryMode:             isPotentialWriteRequest(message.Text),
+		})
+	}
+	activeClarification := pendingClarificationActive || (hasActiveClarification(transcript) && turnMeta.IsClarificationAnswer)
 	activeTranscript := []providers.Message(nil)
 	if pendingClarificationActive {
 		activeTranscript = activeClarificationTranscript(transcript, 8)
@@ -242,20 +283,33 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	hasReferenceCue := hasReferenceCueText(message.Text)
 	resolvedReference := hasReferenceCue && isUsableReference(referenceResolution)
 	resultFollowUp := !activeClarification &&
-		((isLikelyResultFollowUpQuestion(message.Text) && (hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory))) ||
+		((turnMeta.IsResultFollowUp && (hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory))) ||
 			(hasReferenceCue && isResultReferenceFollowUp(referenceResolution, message.Text)))
 	contextualFollowUp := !activeClarification &&
 		!resultFollowUp &&
 		!resolvedReference &&
-		isLikelyContextualFollowUpQuestion(message.Text, history, sessionMemory)
-	standaloneReadRequest := !activeClarification &&
+		turnMeta.IsContextualFollowUp
+	standaloneReadRequest := !isRevision &&
+		!activeClarification &&
 		!resultFollowUp &&
 		!contextualFollowUp &&
 		!resolvedReference &&
 		shouldIsolateMemoryForStandaloneReadRequest(message.Text)
-	isolatedNewWriteRequest := !resultFollowUp && !resolvedReference && shouldIsolateMemoryForNewRequest(message.Text, activeClarification)
+	isolatedNewWriteRequest := !isRevision &&
+		!resultFollowUp &&
+		!resolvedReference &&
+		turnMeta.MemoryMode == memoryModeFresh &&
+		shouldIsolateMemoryForNewRequest(message.Text, activeClarification)
 
 	userMessage := providers.Message{Role: providers.MessageRoleUser, Content: messageTextWithAttachmentContext(message)}
+	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
+		completedTool, _ := message.Metadata["completedTool"].(string)
+		if completedTool != "" {
+			userMessage.Content = fmt.Sprintf("[Tiếp tục sau khi %s được xác nhận và thực thi]", completedTool)
+		} else {
+			userMessage.Content = "[Tiếp tục sau khi hành động được xác nhận và thực thi]"
+		}
+	}
 	transcript = append(transcript, userMessage)
 	if err := r.sessionStore.AppendMessage(ctx, message.SessionID, userMessage); err != nil {
 		return failStartedRun(internalError("append user message: "+err.Error(), contracts.ErrorSourceSession))

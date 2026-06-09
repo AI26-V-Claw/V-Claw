@@ -140,6 +140,34 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	}
 }
 
+func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall providers.ToolCall) tools.ToolResult {
+	if r == nil || r.registry == nil {
+		return tools.ToolNotFoundResult(providerToolCallToToolCall(toolCall))
+	}
+	definition, found := r.registry.GetDefinition(toolCall.Name)
+	if !found {
+		definition.Name = toolCall.Name
+	}
+	now := time.Now
+	if r.now != nil {
+		now = r.now
+	}
+	decision := r.policy.DecideToolCall(toolCall.ID, definition, found, now())
+	if r.logger != nil {
+		r.logger.Info("internal tool call proposed",
+			"tool_call_id", toolCall.ID,
+			"tool_name", toolCall.Name,
+			"decision", decision.Decision,
+			"risk_level", decision.RiskLevel,
+			"arguments", logToolArguments(toolCall.Name, toolCall.Arguments),
+		)
+	}
+	if decision.Decision != contracts.RiskDecisionAllow {
+		return tools.PermissionDeniedResult(providerToolCallToToolCall(toolCall))
+	}
+	return r.executeAllowedTool(ctx, toolCall, definition)
+}
+
 func logToolArguments(toolName string, args map[string]any) any {
 	if args == nil {
 		return map[string]any{}
@@ -521,6 +549,18 @@ func contractToolResult(result tools.ToolResult) contracts.ToolResult {
 		contractResult.Error = toolErrorShape(result)
 	}
 	return contractResult
+}
+
+func prependToolResultIfMissing(results []contracts.ToolResult, result contracts.ToolResult) []contracts.ToolResult {
+	for _, existing := range results {
+		if strings.TrimSpace(existing.ToolCallID) != "" && existing.ToolCallID == result.ToolCallID {
+			return results
+		}
+	}
+	merged := make([]contracts.ToolResult, 0, len(results)+1)
+	merged = append(merged, result)
+	merged = append(merged, results...)
+	return merged
 }
 
 func toolErrorShape(result tools.ToolResult) *contracts.ErrorShape {
