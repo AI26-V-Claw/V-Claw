@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,7 +28,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 	}
 
 	msg.Text = strings.TrimSpace(msg.Text)
-	if command, ok := parseApprovalCommand(msg.Text, m.runtime.HasPendingApproval(msg.SessionID)); ok {
+	if command, ok := parseApprovalCommand(msg.Text, m.runtime.HasPendingApproval(ctx, msg.SessionID)); ok {
 		if m.runtime != nil && m.runtime.logger != nil {
 			m.runtime.logger.Info("approval decision received and parsed",
 				"request_id", msg.RequestID,
@@ -53,6 +55,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 		if text := renderAgentResponse(response); strings.TrimSpace(text) != "" {
 			response.Message = text
 		}
+		m.scheduleGmailBounceFollowUps(ctx, response)
 		return response, nil
 	}
 
@@ -67,6 +70,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 	if text := renderAgentResponse(response); strings.TrimSpace(text) != "" {
 		response.Message = text
 	}
+	m.scheduleGmailBounceFollowUps(ctx, response)
 	return response, nil
 }
 
@@ -287,27 +291,148 @@ func renderApprovalRequest(approval contracts.ApprovalRequest) string {
 	lines = append(lines, "Cần xác nhận trước khi thực hiện.")
 	lines = append(lines, "")
 	if strings.TrimSpace(approval.Summary) != "" {
-		lines = append(lines, "Tóm tắt: "+strings.TrimSpace(approval.Summary))
+		lines = append(lines, strings.TrimSpace(approval.Summary))
 	}
-	if strings.TrimSpace(approval.Details) != "" {
-		lines = append(lines, "Chi tiết: "+strings.TrimSpace(approval.Details))
+
+	if fields := visibleApprovalFields(approval.ToolCall.Input); len(fields) > 0 {
+		lines = append(lines, "")
+		for _, kv := range fields {
+			lines = append(lines, approvalFieldLabel(kv[0])+": "+kv[1])
+		}
 	}
-	lines = append(lines, "Tool: "+strings.TrimSpace(approval.ToolCall.ToolName))
-	lines = append(lines, "Risk: "+string(approval.RiskLevel))
-	lines = append(lines, "Approval ID: "+strings.TrimSpace(approval.ApprovalID))
+
 	lines = append(lines, "")
 	lines = append(lines, "Trả lời một trong các lệnh:")
 	lines = append(lines, "- approve")
 	lines = append(lines, "- reject")
 	lines = append(lines, "- revise <nội dung muốn chỉnh>")
 
-	body := formatOutboundText(strings.Join(lines, "\n"))
-	if len(approval.ToolCall.Input) > 0 {
-		if data, err := json.MarshalIndent(approval.ToolCall.Input, "", "  "); err == nil {
-			return body + "\n\nInput:\n" + string(data)
-		}
+	return formatOutboundText(strings.Join(lines, "\n"))
+}
+
+// approvalSkipFields are opaque internal IDs that are not meaningful to the user.
+var approvalSkipFields = map[string]bool{
+	"draftId": true, "eventId": true, "messageId": true,
+	"threadId": true, "threadKey": true, "threadName": true,
+	"space": true, "calendarId": true, "messageName": true,
+	"replyToMessageId": true, "messageReplyOption": true, "requestId": true,
+}
+
+// approvalFieldPriority controls display order; lower = shown first.
+var approvalFieldPriority = map[string]int{
+	"subject": 1, "title": 1,
+	"to": 2, "attendees": 2,
+	"textBody": 3, "htmlBody": 3, "text": 3, "body": 3, "content": 3,
+	"start": 4, "end": 5,
+	"cc": 6, "bcc": 7,
+	"description": 8, "location": 9,
+	"attachments": 10,
+}
+
+var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
+
+// visibleApprovalFields returns [key, formattedValue] pairs in display order.
+func visibleApprovalFields(input map[string]any) [][2]string {
+	type entry struct {
+		key      string
+		priority int
 	}
-	return body
+	var entries []entry
+	for k := range input {
+		if approvalSkipFields[k] {
+			continue
+		}
+		pri, ok := approvalFieldPriority[k]
+		if !ok {
+			pri = 99
+		}
+		entries = append(entries, entry{k, pri})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].priority != entries[j].priority {
+			return entries[i].priority < entries[j].priority
+		}
+		return entries[i].key < entries[j].key
+	})
+
+	var result [][2]string
+	for _, e := range entries {
+		v := formatApprovalValue(e.key, input[e.key])
+		if v == "" {
+			continue
+		}
+		result = append(result, [2]string{e.key, v})
+	}
+	return result
+}
+
+func approvalFieldLabel(key string) string {
+	switch key {
+	case "subject", "title":
+		return "Tiêu đề"
+	case "to":
+		return "Người nhận"
+	case "cc":
+		return "CC"
+	case "bcc":
+		return "BCC"
+	case "textBody", "body", "content":
+		return "Nội dung"
+	case "htmlBody":
+		return "Nội dung"
+	case "text":
+		return "Tin nhắn"
+	case "start":
+		return "Bắt đầu"
+	case "end":
+		return "Kết thúc"
+	case "attendees":
+		return "Người tham gia"
+	case "description":
+		return "Mô tả"
+	case "location":
+		return "Địa điểm"
+	case "attachments":
+		return "Đính kèm"
+	default:
+		return key
+	}
+}
+
+const maxApprovalFieldRunes = 300
+
+func formatApprovalValue(key string, v any) string {
+	if v == nil {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		s := strings.TrimSpace(val)
+		if key == "htmlBody" {
+			s = strings.TrimSpace(htmlTagRe.ReplaceAllString(s, " "))
+			s = strings.Join(strings.Fields(s), " ")
+		}
+		if runes := []rune(s); len(runes) > maxApprovalFieldRunes {
+			s = string(runes[:maxApprovalFieldRunes]) + "..."
+		}
+		return s
+	case []any:
+		var parts []string
+		for _, item := range val {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				parts = append(parts, strings.TrimSpace(s))
+			} else if item != nil {
+				parts = append(parts, fmt.Sprintf("%v", item))
+			}
+		}
+		return strings.Join(parts, ", ")
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(data)
+	}
 }
 
 func renderError(errorShape *contracts.ErrorShape) string {

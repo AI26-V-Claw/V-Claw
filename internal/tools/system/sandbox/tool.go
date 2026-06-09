@@ -160,6 +160,7 @@ func RegisterToolsWithConfig(registry *tools.ToolRegistry, cfg Config) error {
 func registryEntry(timeout time.Duration) tools.ToolRegistryEntry {
 	return tools.ToolRegistryEntry{
 		Owner:            "agent_core",
+		Group:            "sandbox",
 		RequiresApproval: true,
 		Timeout:          timeout,
 	}

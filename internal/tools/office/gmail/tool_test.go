@@ -360,7 +360,7 @@ func TestDraftManagementService(t *testing.T) {
 	}
 }
 
-func TestCreateDraftValidatesRecipientAndBody(t *testing.T) {
+func TestCreateDraftValidatesRecipientSubjectAndBody(t *testing.T) {
 	service := NewService(&mockConnector{})
 
 	_, errShape := service.CreateDraft(context.Background(), DraftInput{TextBody: "hello"})
@@ -368,7 +368,12 @@ func TestCreateDraftValidatesRecipientAndBody(t *testing.T) {
 		t.Fatalf("expected recipient validation error, got %#v", errShape)
 	}
 
-	_, errShape = service.CreateDraft(context.Background(), DraftInput{To: []string{"a@example.com"}})
+	_, errShape = service.CreateDraft(context.Background(), DraftInput{To: []string{"a@example.com"}, TextBody: "hello"})
+	if errShape == nil || errShape.Code != "INVALID_INPUT" || !strings.Contains(errShape.Message, "subject") {
+		t.Fatalf("expected subject validation error, got %#v", errShape)
+	}
+
+	_, errShape = service.CreateDraft(context.Background(), DraftInput{To: []string{"a@example.com"}, Subject: "Hello"})
 	if errShape == nil || errShape.Code != "INVALID_INPUT" {
 		t.Fatalf("expected body validation error, got %#v", errShape)
 	}
@@ -390,6 +395,7 @@ func TestCreateDraftLoadsAttachments(t *testing.T) {
 	}
 	output, errShape := service.CreateDraft(context.Background(), DraftInput{
 		To:          []string{"alice@example.com"},
+		Subject:     "Report",
 		TextBody:    "hello",
 		Attachments: []string{path},
 	})
@@ -440,6 +446,7 @@ func TestCreateDraftRejectsMissingAttachment(t *testing.T) {
 
 	_, errShape := service.CreateDraft(context.Background(), DraftInput{
 		To:          []string{"alice@example.com"},
+		Subject:     "Report",
 		TextBody:    "hello",
 		Attachments: []string{filepath.Join(t.TempDir(), "missing.txt")},
 	})
@@ -619,6 +626,31 @@ func TestModifyMessageSchemaIncludesLabelIDsProperty(t *testing.T) {
 
 	if _, ok := schema["labelIds"]; ok {
 		t.Fatalf("modify message schema should not expose top-level labelIds: %#v", schema)
+	}
+}
+
+func schemaRequires(schema tools.ToolSchema, name string) bool {
+	required, ok := schema["required"].([]string)
+	if !ok {
+		return false
+	}
+	for _, item := range required {
+		if item == name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCreateAndUpdateDraftSchemasRequireSubject(t *testing.T) {
+	createSchema := NewTool(ToolNameCreateDraft, nil).Parameters()
+	if !schemaRequires(createSchema, "to") || !schemaRequires(createSchema, "subject") {
+		t.Fatalf("create draft schema should require to and subject: %#v", createSchema["required"])
+	}
+
+	updateSchema := NewTool(ToolNameUpdateDraft, nil).Parameters()
+	if !schemaRequires(updateSchema, "draftId") || !schemaRequires(updateSchema, "to") || !schemaRequires(updateSchema, "subject") {
+		t.Fatalf("update draft schema should require draftId, to, and subject: %#v", updateSchema["required"])
 	}
 }
 

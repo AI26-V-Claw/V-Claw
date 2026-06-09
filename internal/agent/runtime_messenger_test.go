@@ -35,17 +35,21 @@ func TestRenderAgentResponseFormatsApprovalForChat(t *testing.T) {
 	got := renderAgentResponse(response)
 	for _, want := range []string{
 		"Cần xác nhận trước khi thực hiện.",
-		"Tóm tắt: Send a Google Chat message.",
-		"Tool: chat.sendMessage",
-		"Risk: external_write",
-		"Approval ID: appr_1",
+		"Send a Google Chat message.",
+		"Tin nhắn: Hello",
 		"approve",
 		"reject",
 		"revise <nội dung muốn chỉnh>",
-		"Input:",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected rendered approval to contain %q, got:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{
+		"Tool:", "Risk:", "Approval ID:", "Input:", "spaces/AAAA",
+	} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("expected rendered approval NOT to contain %q, got:\n%s", notWant, got)
 		}
 	}
 }
@@ -137,10 +141,34 @@ func TestRenderAgentResponseFormatsRawGmailSentMessageJSON(t *testing.T) {
 	if strings.Contains(got, `{"Message"`) {
 		t.Fatalf("expected friendly message output, got %q", got)
 	}
-	for _, want := range []string{"Đã gửi email.", "Message ID: msg_1", "Người nhận: baolnc@vclaw.site", "Chủ đề: Test HITL"} {
+	for _, want := range []string{"Email đã được chuyển cho Gmail để gửi.", "Message ID: msg_1", "Người nhận: baolnc@vclaw.site", "Chủ đề: Test HITL"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in rendered output, got %q", want, got)
 		}
+	}
+}
+
+func TestRenderAgentResponseSanitizesGmailSendDeliveryClaim(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "Email m\u1eddi tham d\u1ef1 cu\u1ed9c h\u1ecdp \u0111\u00e3 \u0111\u01b0\u1ee3c g\u1eedi th\u00e0nh c\u00f4ng \u0111\u1ebfn baolnc@gmail.com.",
+		ToolResults: []contracts.ToolResult{
+			{
+				ToolName: "gmail.sendDraft",
+				Success:  true,
+				Data: map[string]any{
+					"contentForUser": `{"Message":{"ID":"msg_1","ThreadID":"thread_1","To":"baolnc@gmail.com","Subject":"Test"}}`,
+				},
+			},
+		},
+	}
+
+	got := renderAgentResponse(response)
+	if strings.Contains(got, "\u0111\u00e3 \u0111\u01b0\u1ee3c g\u1eedi th\u00e0nh c\u00f4ng") {
+		t.Fatalf("expected delivery success claim to be sanitized, got %q", got)
+	}
+	if !strings.Contains(got, "chuy\u1ec3n cho Gmail \u0111\u1ec3 g\u1eedi") {
+		t.Fatalf("expected Gmail handoff wording, got %q", got)
 	}
 }
 
@@ -346,5 +374,34 @@ func TestParseApprovalCommandRejectsWithRevisionComment(t *testing.T) {
 	}
 	if command.comment != "đổi giờ sang 10:00" {
 		t.Fatalf("unexpected comment: %q", command.comment)
+	}
+}
+
+func TestGmailBounceHelpers(t *testing.T) {
+	sent, ok := sentGmailMessageFromContent(`{"Message":{"ID":"msg_1","To":"Obama <obama@gmail.com>, alice@example.com","Subject":"Hello","Date":"Mon, 8 Jun 2026 20:10:58 -0700"}}`)
+	if !ok {
+		t.Fatal("expected sent Gmail message to parse")
+	}
+	if sent.MessageID != "msg_1" || sent.Subject != "Hello" {
+		t.Fatalf("unexpected sent message: %#v", sent)
+	}
+	if sent.SentAt.IsZero() || sent.SentAt.Format(time.RFC3339) != "2026-06-09T03:10:58Z" {
+		t.Fatalf("expected Gmail Date to be parsed, got %s", sent.SentAt.Format(time.RFC3339))
+	}
+	if len(sent.To) != 2 || sent.To[0] != "obama@gmail.com" || sent.To[1] != "alice@example.com" {
+		t.Fatalf("unexpected recipients: %#v", sent.To)
+	}
+
+	bounceText := "Address not found. Your message wasn't delivered to obama@gmail.com because the address couldn't be found, or is unable to receive mail."
+	if !gmailBounceMentionsRecipient(bounceText, "obama@gmail.com") {
+		t.Fatal("expected bounce text to match recipient")
+	}
+	if gmailBounceMentionsRecipient(bounceText, "alice@example.com") {
+		t.Fatal("did not expect unrelated recipient to match")
+	}
+
+	candidates := gmailBounceCandidates(`{"Messages":[{"ID":"bounce_1","Snippet":"Address not found","InternalDate":1780974657000}]}`, sent.SentAt)
+	if len(candidates) != 1 || candidates[0].MessageID != "bounce_1" {
+		t.Fatalf("expected nearby bounce candidate to survive skew filter, got %#v", candidates)
 	}
 }

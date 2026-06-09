@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -34,6 +35,7 @@ type Bot struct {
 	policyStore   *policies.UserPolicyStore
 	policyMu      sync.Mutex
 	policyDrafts  map[int64]map[contracts.RiskLevel]policies.PolicyGroup
+	state         *telegramChannelState
 }
 
 type messageHandler interface {
@@ -59,6 +61,7 @@ func New(token string, allowedUserID int64, dataDir string, policyStore *policie
 		apiBase:      "https://api.telegram.org",
 		policyStore:  policyStore,
 		policyDrafts: make(map[int64]map[contracts.RiskLevel]policies.PolicyGroup),
+		state:   newTelegramChannelState(),
 	}
 }
 
@@ -178,6 +181,28 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+	if approvalContext, ok := b.state.approvalForChat(update.Message.Chat.ID); ok {
+		if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
+			b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
+		}
+		b.state.deleteApproval(approvalContext.ApprovalID)
+		inbound.SessionID = approvalContext.SessionID
+		inbound.Metadata["approvalId"] = approvalContext.ApprovalID
+		action := telegramApprovalTextAction(inbound.Text)
+		switch action {
+		case "approve", "reject":
+			inbound.Text = action + " " + approvalContext.ApprovalID
+			inbound.Metadata["telegramCallback"] = action
+		default:
+			inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
+			inbound.Metadata["telegramCallback"] = "revise"
+		}
+	} else if revision, ok := b.state.consumeRevision(update.Message.Chat.ID); ok {
+		inbound.SessionID = revision.SessionID
+		inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
+		inbound.Metadata["telegramCallback"] = "revise"
+		inbound.Metadata["approvalId"] = revision.ApprovalID
+	}
 	if b.handler == nil {
 		return false, fmt.Errorf("message handler is not configured")
 	}
@@ -189,7 +214,15 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	}
 	progress := newTelegramProgressEditor(b, update.Message.Chat.ID, processingMessage.MessageID)
 
-	progressCtx := agent.WithProgressSink(ctx, func(progressCtx context.Context, event agent.ProgressEvent) {
+	followUpCtx := agent.WithFollowUpSink(ctx, func(followCtx context.Context, message agent.FollowUpMessage) {
+		if strings.TrimSpace(message.Text) == "" {
+			return
+		}
+		if _, err := b.sendMessage(followCtx, update.Message.Chat.ID, message.Text); err != nil {
+			b.logger.Error("telegram follow-up send failed", "error", err)
+		}
+	})
+	progressCtx := agent.WithProgressSink(followUpCtx, func(progressCtx context.Context, event agent.ProgressEvent) {
 		text := telegramProgressText(event)
 		if strings.TrimSpace(text) == "" {
 			return
@@ -225,12 +258,29 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 			"tool_call_id", outbound.ApprovalRequest.ToolCallID,
 			"telegram_chat_id", update.Message.Chat.ID,
 		)
+		b.state.registerApproval(telegramApprovalContext{
+			ApprovalID: outbound.ApprovalID,
+			SessionID:  outbound.SessionID,
+			ChatID:     update.Message.Chat.ID,
+			MessageID:  processingMessage.MessageID,
+			PromptText: text,
+			ToolName:   outbound.ApprovalRequest.ToolCall.ToolName,
+		})
 		if err := progress.UpdateWithReplyMarkup(ctx, text, telegramApprovalKeyboard(outbound.ApprovalID)); err != nil {
 			b.logger.Error("telegram final approval edit failed", "error", err)
-			if _, sendErr := b.sendMessageWithReplyMarkup(ctx, update.Message.Chat.ID, text, telegramApprovalKeyboard(outbound.ApprovalID)); sendErr != nil {
+			sentMessage, sendErr := b.sendMessageWithReplyMarkup(ctx, update.Message.Chat.ID, text, telegramApprovalKeyboard(outbound.ApprovalID))
+			if sendErr != nil {
 				b.handler.FinalizeAudit(inbound, sendErr)
 				return false, sendErr
 			}
+			b.state.registerApproval(telegramApprovalContext{
+				ApprovalID: outbound.ApprovalID,
+				SessionID:  outbound.SessionID,
+				ChatID:     update.Message.Chat.ID,
+				MessageID:  sentMessage.MessageID,
+				PromptText: text,
+				ToolName:   outbound.ApprovalRequest.ToolCall.ToolName,
+			})
 		}
 		b.handler.FinalizeAudit(inbound, nil)
 		return true, nil
@@ -326,25 +376,36 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 		"decision", action,
 		"telegram_user_id", callback.From.ID,
 	)
-	if action == "revise" {
-		_ = b.answerCallbackQuery(ctx, callback.ID, "Reply with your revision comment.")
-		text := "Bạn muốn chỉnh gì? Hãy gửi tin nhắn theo mẫu:\n\nrevise <nội dung muốn chỉnh>"
-		if approvalID != "" {
-			text += "\n\nApproval ID: " + approvalID
+	approvalContext, ok := b.state.lookupApproval(approvalID, callback.Message.Chat.ID, callback.Message.MessageID)
+	if !ok {
+		if err := b.editMessageReplyMarkup(ctx, callback.Message.Chat.ID, callback.Message.MessageID, map[string]any{
+			"inline_keyboard": [][]map[string]string{},
+		}); err != nil {
+			b.logger.Error("telegram stale approval keyboard dismiss failed", "chat_id", callback.Message.Chat.ID, "message_id", callback.Message.MessageID, "error", err)
 		}
-		if err := b.editMessageText(ctx, callback.Message.Chat.ID, callback.Message.MessageID, text); err != nil {
+		_ = b.answerCallbackQuery(ctx, callback.ID, "Yêu cầu xác nhận này không còn hợp lệ.")
+		return true, nil
+	}
+	if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
+		b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
+	}
+	if action == "revise" {
+		b.state.rememberRevision(approvalContext)
+		_ = b.answerCallbackQuery(ctx, callback.ID, "Hãy gửi nội dung bạn muốn chỉnh.")
+		text := telegramRevisionPrompt(approvalContext)
+		if _, err := b.sendMessage(ctx, callback.Message.Chat.ID, text); err != nil {
 			return false, err
 		}
 		return true, nil
 	}
 
 	command := action
-	if approvalID != "" {
-		command += " " + approvalID
+	if approvalContext.ApprovalID != "" {
+		command += " " + approvalContext.ApprovalID
 	}
 	inbound := contracts.UserMessage{
 		RequestID: fmt.Sprintf("telegram_callback_%s", safeTelegramID(callback.ID)),
-		SessionID: fmt.Sprintf("telegram_chat_%d", callback.Message.Chat.ID),
+		SessionID: approvalContext.SessionID,
 		Channel:   "telegram",
 		Text:      command,
 		Timestamp: time.Now().UTC(),
@@ -352,18 +413,30 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 			"telegramUpdateId": update.UpdateID,
 			"telegramChatId":   callback.Message.Chat.ID,
 			"telegramCallback": action,
+			"approvalId":       approvalContext.ApprovalID,
 			"source":           "telegram",
 		},
 	}
 	if b.handler == nil {
 		return false, fmt.Errorf("message handler is not configured")
 	}
+	b.state.deleteApproval(approvalContext.ApprovalID)
 	_ = b.answerCallbackQuery(ctx, callback.ID, "Đang xử lý...")
-	progress := newTelegramProgressEditor(b, callback.Message.Chat.ID, callback.Message.MessageID)
-	if err := progress.Update(ctx, "Đang xử lý quyết định..."); err != nil {
-		b.logger.Error("telegram approval progress edit failed", "error", err)
+	processingMessage, sendErr := b.sendMessage(ctx, callback.Message.Chat.ID, "Đang xử lý...")
+	if sendErr != nil {
+		b.handler.FinalizeAudit(inbound, sendErr)
+		return false, sendErr
 	}
-	outbound, err := b.handler.HandleMessage(ctx, inbound)
+	progress := newTelegramProgressEditor(b, callback.Message.Chat.ID, processingMessage.MessageID)
+	followUpCtx := agent.WithFollowUpSink(ctx, func(followCtx context.Context, message agent.FollowUpMessage) {
+		if strings.TrimSpace(message.Text) == "" {
+			return
+		}
+		if _, err := b.sendMessage(followCtx, callback.Message.Chat.ID, message.Text); err != nil {
+			b.logger.Error("telegram follow-up send failed", "error", err)
+		}
+	})
+	outbound, err := b.handler.HandleMessage(followUpCtx, inbound)
 	if err != nil {
 		b.handler.FinalizeAudit(inbound, err)
 		b.logger.Error("agent approval handler failed", "request_id", inbound.RequestID, "session_id", inbound.SessionID, "error", err)
@@ -384,16 +457,34 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 			"tool_call_id", outbound.ApprovalRequest.ToolCallID,
 			"telegram_chat_id", callback.Message.Chat.ID,
 		)
+		b.state.registerApproval(telegramApprovalContext{
+			ApprovalID: outbound.ApprovalID,
+			SessionID:  outbound.SessionID,
+			ChatID:     callback.Message.Chat.ID,
+			MessageID:  processingMessage.MessageID,
+			PromptText: text,
+			ToolName:   outbound.ApprovalRequest.ToolCall.ToolName,
+		})
 		if err := progress.UpdateWithReplyMarkup(ctx, text, telegramApprovalKeyboard(outbound.ApprovalID)); err != nil {
 			b.logger.Error("telegram continuation approval edit failed", "error", err)
-			if _, sendErr := b.sendMessageWithReplyMarkup(ctx, callback.Message.Chat.ID, text, telegramApprovalKeyboard(outbound.ApprovalID)); sendErr != nil {
+			sentMessage, sendErr := b.sendMessageWithReplyMarkup(ctx, callback.Message.Chat.ID, text, telegramApprovalKeyboard(outbound.ApprovalID))
+			if sendErr != nil {
 				b.handler.FinalizeAudit(inbound, sendErr)
 				return false, sendErr
 			}
+			b.state.registerApproval(telegramApprovalContext{
+				ApprovalID: outbound.ApprovalID,
+				SessionID:  outbound.SessionID,
+				ChatID:     callback.Message.Chat.ID,
+				MessageID:  sentMessage.MessageID,
+				PromptText: text,
+				ToolName:   outbound.ApprovalRequest.ToolCall.ToolName,
+			})
 		}
 		b.handler.FinalizeAudit(inbound, nil)
 		return true, nil
 	}
+	b.state.deleteApproval(approvalContext.ApprovalID)
 	if err := progress.Update(ctx, text); err != nil {
 		b.handler.FinalizeAudit(inbound, err)
 		return false, err
@@ -455,16 +546,16 @@ func (b *Bot) getUpdates(ctx context.Context, offset int64) ([]telegramUpdate, e
 func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) (telegramSentMessage, error) {
 	payload := map[string]any{
 		"chat_id": chatID,
-		"text":    text,
 	}
+	applyTelegramFormattedText(payload, text)
 	return b.sendMessagePayload(ctx, payload)
 }
 
 func (b *Bot) sendMessageWithReplyMarkup(ctx context.Context, chatID int64, text string, replyMarkup any) (telegramSentMessage, error) {
 	payload := map[string]any{
 		"chat_id": chatID,
-		"text":    text,
 	}
+	applyTelegramFormattedText(payload, text)
 	if replyMarkup != nil {
 		payload["reply_markup"] = replyMarkup
 	}
@@ -490,8 +581,8 @@ func (b *Bot) editMessageText(ctx context.Context, chatID int64, messageID int, 
 	payload := map[string]any{
 		"chat_id":    chatID,
 		"message_id": messageID,
-		"text":       text,
 	}
+	applyTelegramFormattedText(payload, text)
 	return b.editMessageTextPayload(ctx, payload)
 }
 
@@ -499,12 +590,86 @@ func (b *Bot) editMessageTextWithReplyMarkup(ctx context.Context, chatID int64, 
 	payload := map[string]any{
 		"chat_id":    chatID,
 		"message_id": messageID,
-		"text":       text,
 	}
+	applyTelegramFormattedText(payload, text)
 	if replyMarkup != nil {
 		payload["reply_markup"] = replyMarkup
 	}
 	return b.editMessageTextPayload(ctx, payload)
+}
+
+func (b *Bot) editMessageReplyMarkup(ctx context.Context, chatID int64, messageID int, replyMarkup any) error {
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	}
+	payload["reply_markup"] = replyMarkup
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	_, err := b.doJSON(ctx, http.MethodPost, "/editMessageReplyMarkup", payload, &response)
+	if err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("telegram editMessageReplyMarkup returned not ok")
+	}
+	return nil
+}
+
+func (b *Bot) dismissApprovalKeyboard(ctx context.Context, approvalContext telegramApprovalContext) error {
+	if approvalContext.ChatID == 0 || approvalContext.MessageID == 0 {
+		return nil
+	}
+	return b.editMessageReplyMarkup(ctx, approvalContext.ChatID, approvalContext.MessageID, map[string]any{
+		"inline_keyboard": [][]map[string]string{},
+	})
+}
+
+func applyTelegramFormattedText(payload map[string]any, text string) {
+	payload["text"] = telegramRenderHTML(text)
+	payload["parse_mode"] = "HTML"
+}
+
+func telegramRenderHTML(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	for {
+		start := strings.Index(text, telegramCodeBlockOpen)
+		if start < 0 {
+			builder.WriteString(html.EscapeString(text))
+			break
+		}
+		builder.WriteString(html.EscapeString(text[:start]))
+		remaining := text[start+len(telegramCodeBlockOpen):]
+		end := strings.Index(remaining, telegramCodeBlockClose)
+		if end < 0 {
+			builder.WriteString(html.EscapeString(text[start:]))
+			break
+		}
+		block := remaining[:end]
+		language := ""
+		code := block
+		if newline := strings.Index(block, "\n"); newline >= 0 {
+			language = strings.TrimSpace(block[:newline])
+			code = block[newline+1:]
+		}
+		builder.WriteString("<pre><code")
+		if language != "" {
+			builder.WriteString(` class="language-`)
+			builder.WriteString(html.EscapeString(language))
+			builder.WriteString(`"`)
+		}
+		builder.WriteString(">")
+		builder.WriteString(html.EscapeString(code))
+		builder.WriteString("</code></pre>")
+		text = remaining[end+len(telegramCodeBlockClose):]
+	}
+	return builder.String()
 }
 
 func (b *Bot) editMessageTextPayload(ctx context.Context, payload map[string]any) error {
@@ -918,9 +1083,8 @@ func telegramApprovalKeyboard(approvalID string) map[string]any {
 	return map[string]any{
 		"inline_keyboard": [][]map[string]string{
 			{
-				{"text": "Yes", "callback_data": telegramApprovalCallbackData("approve", approvalID)},
-				{"text": "No", "callback_data": telegramApprovalCallbackData("reject", approvalID)},
-				{"text": "Revise", "callback_data": telegramApprovalCallbackData("revise", approvalID)},
+				{"text": "Xác nhận", "callback_data": telegramApprovalCallbackData("approve", approvalID)},
+				{"text": "Hủy", "callback_data": telegramApprovalCallbackData("reject", approvalID)},
 			},
 		},
 	}

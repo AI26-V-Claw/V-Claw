@@ -38,6 +38,7 @@ func New() (*App, error) {
 		OpenAIAPIKey:          cfg.OpenAIAPIKey,
 		OpenAIModel:           cfg.OpenAIModel,
 		OpenAIBaseURL:         cfg.OpenAIBaseURL,
+		CompactorModel:        cfg.CompactorModel,
 		Logger:                logger,
 		MaxIterations:         agent.DefaultMaxIterations,
 		EnableGoogleTools:     cfg.GoogleToolsEnabled,

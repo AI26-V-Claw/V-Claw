@@ -17,6 +17,7 @@ evaluation_results.json
 
 # Logging and temporary files
 data/telegram_offset.txt
+data/sessions/
 logs/audit.jsonl
 .antigravity/
 .gotmp/
@@ -36,3 +37,5 @@ examples/
 configs/SOUL.md
 configs/intent_classifier_prompt.md
 .codeboarding/
+
+.codegraph/

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -10,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
 	"vclaw/internal/policies"
@@ -32,45 +30,45 @@ var (
 )
 
 type RuntimeConfig struct {
-	Provider          providers.Provider
-	Registry          *tools.ToolRegistry
-	IntentClassifier  IntentClassifier
-	TaskPlanner       TaskPlanner
-	TurnRouter        TurnRouter
-	ReferenceResolver reference.Resolver
-	Policy            policies.ToolPolicy
-	SessionStore      sessions.Store
-	Logger            *slog.Logger
-	MaxIterations     int
-	ToolTimeout       time.Duration
-	Model             string
-	Now               func() time.Time
-}
-
-type IntentClassifier interface {
-	Classify(ctx context.Context, userInput string) (*agentintent.ClassificationOutput, error)
+	Provider              providers.Provider
+	Registry              *tools.ToolRegistry
+	ReferenceResolver     reference.Resolver
+	Policy                policies.ToolPolicy
+	SessionStore          sessions.Store
+	StateStore            RuntimeStateStore
+	Logger                *slog.Logger
+	MaxIterations         int
+	ToolTimeout           time.Duration
+	Model                 string
+	Now                   func() time.Time
+	Compactor             *sessions.Compactor
+	ContextWindow         int
+	MemoryClassifierModel string
 }
 
 type Runtime struct {
-	provider          providers.Provider
-	registry          *tools.ToolRegistry
-	intentClassifier  IntentClassifier
-	taskPlanner       TaskPlanner
-	turnRouter        TurnRouter
-	referenceResolver reference.Resolver
-	policy            policies.ToolPolicy
-	sessionStore      sessions.Store
-	logger            *slog.Logger
-	approvalMu        sync.Mutex
-	pendingApprovals  map[string]pendingApproval
-	pendingBySession  map[string]string
-	maxIterations     int
-	toolTimeout       time.Duration
-	model             string
-	now               func() time.Time
+	provider              providers.Provider
+	registry              *tools.ToolRegistry
+	referenceResolver     reference.Resolver
+	policy                policies.ToolPolicy
+	sessionStore          sessions.Store
+	stateStore            RuntimeStateStore
+	logger                *slog.Logger
+	approvalMu            sync.Mutex
+	pendingApprovals      map[string]pendingApproval
+	pendingBySession      map[string]string
+	maxIterations         int
+	toolTimeout           time.Duration
+	model                 string
+	now                   func() time.Time
+	compactor             *sessions.Compactor
+	contextWindow         int
+	memoryClassifierModel string
 }
 
 type pendingApproval struct {
+	runID              string
+	actionID           string
 	message            contracts.UserMessage
 	request            contracts.ApprovalRequest
 	toolCall           providers.ToolCall
@@ -100,6 +98,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if sessionStore == nil {
 		sessionStore = sessions.NewInMemoryStore()
 	}
+	stateStore := config.StateStore
+	if stateStore == nil {
+		stateStore = NewInMemoryRuntimeStateStore()
+	}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -107,10 +109,6 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	now := config.Now
 	if now == nil {
 		now = time.Now
-	}
-	turnRouter := config.TurnRouter
-	if turnRouter == nil {
-		turnRouter = NewLLMTurnRouter(config.Provider, config.Model)
 	}
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
@@ -123,26 +121,42 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 			referenceResolver = reference.NewHeuristicResolver()
 		}
 	}
+	contextWindow := config.ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = 128_000
+	}
 	return &Runtime{
-		provider:          config.Provider,
-		registry:          config.Registry,
-		intentClassifier:  config.IntentClassifier,
-		taskPlanner:       config.TaskPlanner,
-		turnRouter:        turnRouter,
-		referenceResolver: referenceResolver,
-		policy:            config.Policy,
-		sessionStore:      sessionStore,
-		logger:            logger,
-		pendingApprovals:  make(map[string]pendingApproval),
-		pendingBySession:  make(map[string]string),
-		maxIterations:     maxIterations,
-		toolTimeout:       toolTimeout,
-		model:             config.Model,
-		now:               now,
+		provider:              config.Provider,
+		registry:              config.Registry,
+		referenceResolver:     referenceResolver,
+		policy:                config.Policy,
+		sessionStore:          sessionStore,
+		stateStore:            stateStore,
+		logger:                logger,
+		pendingApprovals:      make(map[string]pendingApproval),
+		pendingBySession:      make(map[string]string),
+		maxIterations:         maxIterations,
+		toolTimeout:           toolTimeout,
+		model:                 config.Model,
+		now:                   now,
+		compactor:             config.Compactor,
+		contextWindow:         contextWindow,
+		memoryClassifierModel: memoryClassifierModel(config),
 	}
 }
 
+func memoryClassifierModel(config RuntimeConfig) string {
+	if model := strings.TrimSpace(config.MemoryClassifierModel); model != "" {
+		return model
+	}
+	return strings.TrimSpace(config.Model)
+}
+
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
+	if r.compactor != nil {
+		sessionID := message.SessionID
+		defer func() { go r.maybeCompactAsync(sessionID) }()
+	}
 	emitProgress(ctx, ProgressEvent{Stage: ProgressStageStarted, Message: "Agent run started"})
 	base := contracts.AgentResponse{
 		RequestID: message.RequestID,
@@ -169,23 +183,36 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		base.Message = base.Error.Message
 		return base, nil
 	}
-
-	transcript, err := r.sessionStore.LoadTranscript(ctx, message.SessionID)
-	if err != nil {
-		base.Error = internalError("load session transcript: "+err.Error(), contracts.ErrorSourceSession)
+	if r.stateStore == nil {
+		base.Error = internalError("runtime state store is required", contracts.ErrorSourceAgent)
 		base.Message = base.Error.Message
 		return base, nil
 	}
-	if errShape := r.refreshSessionSummary(ctx, message.SessionID, transcript); errShape != nil {
-		base.Error = errShape
-		base.Message = errShape.Message
-		return base, nil
-	}
-	sessionMemory, errShape := r.loadSessionMemory(ctx, message.SessionID)
+	runState, errShape := r.startRunState(ctx, message)
 	if errShape != nil {
 		base.Error = errShape
 		base.Message = errShape.Message
 		return base, nil
+	}
+	failStartedRun := func(errShape *contracts.ErrorShape) (contracts.AgentResponse, error) {
+		if finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); finishErr != nil {
+			errShape = finishErr
+		}
+		base.Error = errShape
+		base.Message = errShape.Message
+		return base, nil
+	}
+
+	transcript, err := r.sessionStore.LoadTranscript(ctx, message.SessionID)
+	if err != nil {
+		return failStartedRun(internalError("load session transcript: "+err.Error(), contracts.ErrorSourceSession))
+	}
+	if errShape := r.refreshSessionSummary(ctx, message.SessionID, transcript); errShape != nil {
+		return failStartedRun(errShape)
+	}
+	sessionMemory, errShape := r.loadSessionMemory(ctx, message.SessionID)
+	if errShape != nil {
+		return failStartedRun(errShape)
 	}
 	history := recentHistoryForPrompt(transcript, 8)
 	pendingClarification := clonePendingClarification(sessionMemory.PendingClarification)
@@ -199,6 +226,19 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			history = historyWithPendingClarification(*pendingClarification, history)
 			sessionMemory.PendingClarification = nil
 			pendingMemoryChanged = true
+			if pendingRunID := strings.TrimSpace(pendingClarification.RunID); pendingRunID != "" && pendingRunID != runState.RunID {
+				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted); errShape != nil {
+					return failStartedRun(errShape)
+				}
+				if errShape := r.resumeRunState(ctx, pendingRunID); errShape != nil {
+					return failStartedRun(errShape)
+				}
+				resumedRun, err := r.stateStore.GetRun(ctx, pendingRunID)
+				if err != nil {
+					return failStartedRun(internalError("load resumed run state: "+err.Error(), contracts.ErrorSourceAgent))
+				}
+				runState = resumedRun
+			}
 		} else if pendingClarificationResolution.IsNewRequest || isPotentialWriteRequest(message.Text) || isLikelyReadRequest(message.Text) {
 			sessionMemory.PendingClarification = nil
 			pendingMemoryChanged = true
@@ -206,12 +246,26 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	}
 	if pendingMemoryChanged {
 		if errShape := r.saveSessionMemory(ctx, message.SessionID, sessionMemory); errShape != nil {
-			base.Error = errShape
-			base.Message = errShape.Message
-			return base, nil
+			return failStartedRun(errShape)
 		}
 	}
-	activeClarification := pendingClarificationActive || (hasActiveClarification(transcript) && isLikelyClarificationAnswer(message.Text))
+	isRevision := isRevisionMessage(message)
+	var turnMeta turnAnalysis
+	if !isRevision {
+		clarificationQuestion := ""
+		if !pendingClarificationActive && hasActiveClarification(transcript) {
+			clarificationQuestion = lastAssistantText(transcript)
+		}
+		turnMeta = r.analyzeTurn(ctx, turnAnalysisInput{
+			Text:                        message.Text,
+			History:                     history,
+			Memory:                      sessionMemory,
+			ActiveClarificationQuestion: clarificationQuestion,
+			HasRecentResults:            hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory),
+			CheckMemoryMode:             isPotentialWriteRequest(message.Text),
+		})
+	}
+	activeClarification := pendingClarificationActive || (hasActiveClarification(transcript) && turnMeta.IsClarificationAnswer)
 	activeTranscript := []providers.Message(nil)
 	if pendingClarificationActive {
 		activeTranscript = activeClarificationTranscript(transcript, 8)
@@ -224,45 +278,50 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	}
 	referenceResolution, errShape := r.resolveReference(ctx, message, history, sessionMemory, activeClarification)
 	if errShape != nil {
-		base.Error = errShape
-		base.Message = errShape.Message
-		return base, nil
+		return failStartedRun(errShape)
 	}
 	hasReferenceCue := hasReferenceCueText(message.Text)
 	resolvedReference := hasReferenceCue && isUsableReference(referenceResolution)
 	resultFollowUp := !activeClarification &&
-		((isLikelyResultFollowUpQuestion(message.Text) && (hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory))) ||
+		((turnMeta.IsResultFollowUp && (hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory))) ||
 			(hasReferenceCue && isResultReferenceFollowUp(referenceResolution, message.Text)))
 	contextualFollowUp := !activeClarification &&
 		!resultFollowUp &&
 		!resolvedReference &&
-		isLikelyContextualFollowUpQuestion(message.Text, history, sessionMemory)
-	standaloneReadRequest := !activeClarification &&
+		turnMeta.IsContextualFollowUp
+	standaloneReadRequest := !isRevision &&
+		!activeClarification &&
 		!resultFollowUp &&
 		!contextualFollowUp &&
 		!resolvedReference &&
 		shouldIsolateMemoryForStandaloneReadRequest(message.Text)
-	isolatedNewWriteRequest := !resultFollowUp && !resolvedReference && shouldIsolateMemoryForNewRequest(message.Text, activeClarification)
-	understandingHistory := history
-	if !isolatedNewWriteRequest && !standaloneReadRequest && !activeClarification {
-		understandingHistory = historyWithSessionMemory(sessionMemory, understandingHistory)
-	}
-	if resolvedReference {
-		understandingHistory = historyWithReferenceResolution(referenceResolution, understandingHistory)
-	}
-	if isolatedNewWriteRequest || standaloneReadRequest {
-		understandingHistory = nil
-	}
+	isolatedNewWriteRequest := !isRevision &&
+		!resultFollowUp &&
+		!resolvedReference &&
+		turnMeta.MemoryMode == memoryModeFresh &&
+		shouldIsolateMemoryForNewRequest(message.Text, activeClarification)
 
 	userMessage := providers.Message{Role: providers.MessageRoleUser, Content: messageTextWithAttachmentContext(message)}
+	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
+		completedTool, _ := message.Metadata["completedTool"].(string)
+		if completedTool != "" {
+			userMessage.Content = fmt.Sprintf("[Tiếp tục sau khi %s được xác nhận và thực thi]", completedTool)
+		} else {
+			userMessage.Content = "[Tiếp tục sau khi hành động được xác nhận và thực thi]"
+		}
+	}
 	transcript = append(transcript, userMessage)
 	if err := r.sessionStore.AppendMessage(ctx, message.SessionID, userMessage); err != nil {
-		base.Error = internalError("append user message: "+err.Error(), contracts.ErrorSourceSession)
-		base.Message = base.Error.Message
-		return base, nil
+		return failStartedRun(internalError("append user message: "+err.Error(), contracts.ErrorSourceSession))
 	}
 	if clarification := r.referenceClarificationResponse(message, referenceResolution); clarification != nil {
 		if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.Message); errShape != nil {
+			clarification.Error = errShape
+			clarification.Message = errShape.Message
+			clarification.Status = contracts.AgentStatusFailed
+		}
+		runState.Status = RuntimeRunStatusWaitingClarification
+		if errShape := r.updateRunState(ctx, runState); errShape != nil {
 			clarification.Error = errShape
 			clarification.Message = errShape.Message
 			clarification.Status = contracts.AgentStatusFailed
@@ -287,38 +346,6 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	}
 	understandingMessage.Text = textWithAttachmentContext(understandingMessage.Text, message.Metadata)
 
-	route, errShape := r.routeTurn(ctx, understandingMessage, understandingHistory)
-	if errShape != nil {
-		base.Error = errShape
-		base.Message = errShape.Message
-		return base, nil
-	}
-	if shouldForceToolEnabledForContextualDataFollowUp(route, message.Text, history, sessionMemory) {
-		route.Mode = TurnModeToolEnabled
-		route.Reason = strings.TrimSpace(route.Reason + "; contextual data follow-up requires tools")
-	}
-	if route.Mode == TurnModeBlockedPromptInjection {
-		blocked := "Tôi không thể hỗ trợ yêu cầu cố gắng thay đổi hoặc bỏ qua hướng dẫn hệ thống."
-		if errShape := r.appendAssistantTranscript(ctx, message.SessionID, blocked); errShape != nil {
-			base.Error = errShape
-			base.Message = errShape.Message
-			return base, nil
-		}
-		return contracts.AgentResponse{
-			RequestID: message.RequestID,
-			SessionID: message.SessionID,
-			Status:    contracts.AgentStatusBlocked,
-			Message:   blocked,
-			Data:      r.traceData(nil, nil, nil, route),
-			Error: &contracts.ErrorShape{
-				Code:      contracts.ErrorActionBlockedByPolicy,
-				Message:   "prompt injection blocked",
-				Source:    contracts.ErrorSourcePolicy,
-				Retryable: false,
-			},
-		}, nil
-	}
-
 	providerTranscript := transcript
 	providerMemory := sessionMemory
 	providerReference := referenceResolution
@@ -337,14 +364,20 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	toolResults := []contracts.ToolResult{}
 agentLoop:
 	for iteration := 1; iteration <= r.maxIterations; iteration++ {
+		runState.IterationCount = iteration
+		if errShape := r.updateRunState(ctx, runState); errShape != nil {
+			base.Error = errShape
+			base.Message = errShape.Message
+			return base, nil
+		}
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference, route)
+		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
-			Tools:      r.providerToolsForRoute(route),
-			ToolChoice: toolChoiceForRoute(route),
+			Tools:      r.providerTools(),
+			ToolChoice: "auto",
 		})
 		if err != nil {
 			code := contracts.ErrorProviderError
@@ -358,6 +391,9 @@ agentLoop:
 				Source:    contracts.ErrorSourceProvider,
 				Retryable: retryable,
 			}
+			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+				base.Error = errShape
+			}
 			base.Message = base.Error.Message
 			return base, nil
 		}
@@ -369,9 +405,7 @@ agentLoop:
 		transcript = append(transcript, assistantMessage)
 		providerTranscript = append(providerTranscript, assistantMessage)
 		if err := r.sessionStore.AppendMessage(ctx, message.SessionID, assistantMessage); err != nil {
-			base.Error = internalError("append assistant message: "+err.Error(), contracts.ErrorSourceSession)
-			base.Message = base.Error.Message
-			return base, nil
+			return failStartedRun(internalError("append assistant message: "+err.Error(), contracts.ErrorSourceSession))
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
@@ -399,12 +433,17 @@ If required information is missing, ask one concise clarification question inste
 				"content_preview", logPreview(assistantMessage.Content, 180),
 			)
 			emitProgress(ctx, ProgressEvent{Stage: ProgressStageFinalizing, Message: "Agent is finalizing the response"})
+			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted); errShape != nil {
+				base.Error = errShape
+				base.Message = errShape.Message
+				return base, nil
+			}
 			return contracts.AgentResponse{
 				RequestID:   message.RequestID,
 				SessionID:   message.SessionID,
 				Status:      contracts.AgentStatusCompleted,
 				Message:     assistantMessage.Content,
-				Data:        r.traceData(nil, nil, referenceResolution, route),
+				Data:        r.traceData(referenceResolution),
 				ToolResults: toolResults,
 			}, nil
 		}
@@ -433,7 +472,14 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(message.Text, clarification.question, providerToolCall, stringSliceArg(providerToolCall.Arguments, "missing_fields"))); errShape != nil {
+				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, message.Text, clarification.question, providerToolCall, stringSliceArg(providerToolCall.Arguments, "missing_fields"))); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				runState.Status = RuntimeRunStatusWaitingClarification
+				runState.PendingClarificationID = providerToolCall.ID
+				if errShape := r.updateRunState(ctx, runState); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -443,7 +489,7 @@ If required information is missing, ask one concise clarification question inste
 					SessionID: message.SessionID,
 					Status:    contracts.AgentStatusNeedClarification,
 					Message:   clarification.question,
-					Data:      r.traceData(nil, nil, referenceResolution, route),
+					Data:      r.traceData(referenceResolution),
 				}, nil
 			}
 
@@ -509,7 +555,14 @@ If required information is missing, ask one concise clarification question inste
 					clarification.Status = contracts.AgentStatusFailed
 					return *clarification, nil
 				}
-				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(message.Text, clarification.Message, providerToolCall, toolCallMissingFields)); errShape != nil {
+				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, message.Text, clarification.Message, providerToolCall, toolCallMissingFields)); errShape != nil {
+					clarification.Error = errShape
+					clarification.Message = errShape.Message
+					clarification.Status = contracts.AgentStatusFailed
+				}
+				runState.Status = RuntimeRunStatusWaitingClarification
+				runState.PendingClarificationID = providerToolCall.ID
+				if errShape := r.updateRunState(ctx, runState); errShape != nil {
 					clarification.Error = errShape
 					clarification.Message = errShape.Message
 					clarification.Status = contracts.AgentStatusFailed
@@ -519,7 +572,13 @@ If required information is missing, ask one concise clarification question inste
 			switch decision.Decision {
 			case contracts.RiskDecisionAllow:
 				providerToolCall = normalizeProviderToolCall(r.now(), providerToolCall, message.Text)
+				startedAt := time.Now()
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
+				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, providerToolCall, result, time.Since(startedAt)); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
 				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -541,6 +600,11 @@ If required information is missing, ask one concise clarification question inste
 					return base, nil
 				}
 				if !result.Success {
+					if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+						base.Error = errShape
+						base.Message = errShape.Message
+						return base, nil
+					}
 					base.ToolResults = toolResults
 					base.Error = toolErrorShape(result)
 					base.Message = base.Error.Message
@@ -549,7 +613,36 @@ If required information is missing, ask one concise clarification question inste
 
 			case contracts.RiskDecisionRequiresApproval:
 				approval := r.approvalRequest(message, providerToolCall, decision)
+				action, errShape := r.createApprovalAction(ctx, runState, message, providerToolCall, decision, approval)
+				if errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				if action.Status == ActionStatusCompleted && action.Result != nil {
+					toolMessage := providers.Message{
+						Role:       providers.MessageRoleTool,
+						ToolCallID: providerToolCall.ID,
+						Content:    truncateToolContentForLLM("ACTION_ALREADY_COMPLETED: " + action.Result.ContentForLLM),
+					}
+					transcript = append(transcript, toolMessage)
+					providerTranscript = append(providerTranscript, toolMessage)
+					if err := r.appendToolObservation(ctx, message.SessionID, transcript, toolMessage); err != nil {
+						base.Error = err
+						base.Message = err.Message
+						return base, nil
+					}
+					continue agentLoop
+				}
+				approval.ApprovalID = action.ApprovalID
+				approval.ToolCallID = action.ToolCallID
+				approval.CreatedAt = action.CreatedAt
+				approval.ExpiresAt = action.ApprovalExpiresAt
+				approval.ToolCall.ToolCallID = action.ToolCallID
+				approval.ToolCall.Input = cloneArguments(action.ArgsSnapshot)
 				r.storePendingApproval(pendingApproval{
+					runID:              runState.RunID,
+					actionID:           action.ActionID,
 					message:            message,
 					request:            approval,
 					toolCall:           providerToolCall,
@@ -579,6 +672,13 @@ If required information is missing, ask one concise clarification question inste
 					"risk_level", approval.RiskLevel,
 					"waiting_for_approval", true,
 				)
+				runState.Status = RuntimeRunStatusWaitingApproval
+				runState.PendingActionID = action.ActionID
+				if errShape := r.updateRunState(ctx, runState); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
 				return contracts.AgentResponse{
 					RequestID:       message.RequestID,
 					SessionID:       message.SessionID,
@@ -586,7 +686,7 @@ If required information is missing, ask one concise clarification question inste
 					Message:         approval.Summary,
 					ApprovalID:      approval.ApprovalID,
 					ApprovalRequest: &approval,
-					Data:            r.traceData(nil, nil, referenceResolution, route),
+					Data:            r.traceData(referenceResolution),
 					ToolResults:     toolResults,
 					Error: &contracts.ErrorShape{
 						Code:      contracts.ErrorActionRequiresApproval,
@@ -624,17 +724,25 @@ If required information is missing, ask one concise clarification question inste
 					Source:    contracts.ErrorSourcePolicy,
 					Retryable: false,
 				}
+				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusBlocked); errShape != nil {
+					base.Error = errShape
+				}
 				return base, nil
 			}
 		}
 	}
 
+	if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations); errShape != nil {
+		base.Error = errShape
+		base.Message = errShape.Message
+		return base, nil
+	}
 	return contracts.AgentResponse{
 		RequestID:   message.RequestID,
 		SessionID:   message.SessionID,
 		Status:      contracts.AgentStatusFailed,
 		Message:     "agent exceeded max iterations",
-		Data:        r.traceData(nil, nil, referenceResolution, route),
+		Data:        r.traceData(referenceResolution),
 		ToolResults: toolResults,
 		Error: &contracts.ErrorShape{
 			Code:      contracts.ErrorMaxIterationsExceeded,

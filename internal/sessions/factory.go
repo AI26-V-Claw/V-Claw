@@ -1,54 +1,14 @@
 package sessions
 
-import (
-	"fmt"
-	"os"
-	"strconv"
-	"strings"
-	"time"
-)
+import "os"
 
-const (
-	StoreModeMemory = "memory"
-	StoreModeRedis  = "redis"
-)
-
+// NewStoreFromEnv creates the session store used by the agent runtime.
+// Sessions are persisted as JSON files under DATA_DIR/sessions/ so they survive
+// process restarts. No external server is required.
 func NewStoreFromEnv() (Store, error) {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VCLAW_SESSION_STORE")))
-	redisURL := strings.TrimSpace(os.Getenv("VCLAW_REDIS_URL"))
-	if mode == "" {
-		if redisURL != "" {
-			mode = StoreModeRedis
-		} else {
-			mode = StoreModeMemory
-		}
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "./data"
 	}
-	switch mode {
-	case StoreModeMemory, "inmemory", "in-memory":
-		return NewInMemoryStore(), nil
-	case StoreModeRedis:
-		if redisURL == "" {
-			return nil, fmt.Errorf("VCLAW_REDIS_URL is required when VCLAW_SESSION_STORE=redis")
-		}
-		return NewRedisStore(RedisStoreConfig{
-			URL:         redisURL,
-			KeyPrefix:   strings.TrimSpace(os.Getenv("VCLAW_REDIS_KEY_PREFIX")),
-			MaxMessages: envInt("VCLAW_SESSION_MAX_MESSAGES", defaultRedisMaxMessages),
-			TTL:         time.Duration(envInt("VCLAW_SESSION_TTL_SECONDS", 24*60*60)) * time.Second,
-		})
-	default:
-		return nil, fmt.Errorf("VCLAW_SESSION_STORE must be one of: memory, redis")
-	}
-}
-
-func envInt(key string, fallback int) int {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return fallback
-	}
-	return parsed
+	return NewFileStore(dataDir)
 }

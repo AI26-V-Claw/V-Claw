@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	googleconnector "vclaw/internal/connectors/google"
 	chatconnector "vclaw/internal/connectors/google/chat"
 	"vclaw/internal/tools"
 
@@ -1147,7 +1148,7 @@ func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 		NewAddMemberTool(service),
 		NewRemoveMemberTool(service),
 	} {
-		if err := registry.RegisterWithEntry(tool, tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
+		if err := registry.RegisterWithEntry(tool, tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
 	}
@@ -1357,6 +1358,9 @@ func memberNamesForOutput(members []chatconnector.Membership) string {
 func MapError(err error) *ErrorShape {
 	if err == nil {
 		return nil
+	}
+	if googleconnector.IsNetworkError(err) {
+		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "network error contacting Chat API: " + err.Error(), Retryable: true}
 	}
 	gerr, ok := err.(*googleapi.Error)
 	if !ok {

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	googleconnector "vclaw/internal/connectors/google"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	"vclaw/internal/tools"
 
@@ -475,7 +476,7 @@ func (s *Service) CreateDraft(ctx context.Context, input DraftInput) (CreateDraf
 	if errShape := s.validateConnector(); errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
-	draftInput, errShape := buildDraftMessageInput(input, true)
+	draftInput, errShape := buildDraftMessageInput(input, true, true)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
@@ -493,7 +494,7 @@ func (s *Service) UpdateDraft(ctx context.Context, input UpdateDraftInput) (Crea
 	if strings.TrimSpace(input.DraftID) == "" {
 		return CreateDraftOutput{}, invalidInput("draftId is required")
 	}
-	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true)
+	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true, true)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
@@ -535,7 +536,8 @@ func (s *Service) ReplyDraft(ctx context.Context, input ReplyDraftInput) (Create
 	if errShape := s.validateConnector(); errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
-	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true)
+	requireSubject := strings.TrimSpace(input.MessageID) == ""
+	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true, requireSubject)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
@@ -567,7 +569,7 @@ func (s *Service) ForwardDraft(ctx context.Context, input ForwardDraftInput) (Cr
 	if strings.TrimSpace(input.MessageID) == "" {
 		return CreateDraftOutput{}, invalidInput("messageId is required")
 	}
-	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true)
+	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true, false)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
@@ -731,6 +733,9 @@ func BuildSearchQuery(input ListEmailsInput) (string, error) {
 }
 
 func MapError(err error) *ErrorShape {
+	if googleconnector.IsNetworkError(err) {
+		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "network error contacting Gmail API: " + err.Error(), Retryable: true}
+	}
 	var gerr *googleapi.Error
 	if !asGoogleError(err, &gerr) {
 		return internalError(err.Error())
@@ -778,9 +783,12 @@ func normalizeMaxResults(value int64) (int64, *ErrorShape) {
 	return value, nil
 }
 
-func buildDraftMessageInput(input DraftInput, requireRecipient bool) (gmailconnector.DraftMessageInput, *ErrorShape) {
+func buildDraftMessageInput(input DraftInput, requireRecipient bool, requireSubject bool) (gmailconnector.DraftMessageInput, *ErrorShape) {
 	if requireRecipient && len(cleanStringSlice(append(append(input.To, input.Cc...), input.Bcc...))) == 0 {
 		return gmailconnector.DraftMessageInput{}, invalidInput("at least one recipient is required")
+	}
+	if requireSubject && strings.TrimSpace(input.Subject) == "" {
+		return gmailconnector.DraftMessageInput{}, invalidInput("subject is required")
 	}
 	if strings.TrimSpace(input.TextBody) == "" && strings.TrimSpace(input.HTMLBody) == "" {
 		return gmailconnector.DraftMessageInput{}, invalidInput("textBody or htmlBody is required")
@@ -1124,9 +1132,9 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 	case ToolNameGetDraft:
 		return getDraftSchema()
 	case ToolNameCreateDraft:
-		return draftSchema([]string{"to"})
+		return draftSchema([]string{"to", "subject"})
 	case ToolNameUpdateDraft:
-		schema := draftSchema([]string{"draftId", "to"})
+		schema := draftSchema([]string{"draftId", "to", "subject"})
 		props := schema["properties"].(map[string]any)
 		props["draftId"] = map[string]any{"type": "string"}
 		return schema
@@ -1260,7 +1268,7 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 	for _, name := range []string{ToolNameListEmails, ToolNameGetEmail, ToolNameListLabels, ToolNameGetProfile, ToolNameListThreads, ToolNameGetThread, ToolNameListDrafts, ToolNameGetDraft, ToolNameCreateDraft, ToolNameUpdateDraft, ToolNameSendDraft, ToolNameDeleteDraft, ToolNameReplyDraft, ToolNameForwardDraft, ToolNameDownloadAttachments, ToolNameModifyMessage, ToolNameBatchModifyMessages, ToolNameTrashMessage, ToolNameUntrashMessage} {
-		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
+		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
 	}

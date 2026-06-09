@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"vclaw/internal/agent"
-	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
@@ -33,6 +32,10 @@ type AgentRuntimeConfig struct {
 	OpenAIAPIKey          string
 	OpenAIModel           string
 	OpenAIBaseURL         string
+	// CompactorModel is the LLM model used for session summarization.
+	// Should be a cheaper model than OpenAIModel (e.g. "gpt-4o-mini").
+	// Defaults to OpenAIModel when empty.
+	CompactorModel        string
 	Provider              providers.Provider
 	SessionStore          sessions.Store
 	Logger                *slog.Logger
@@ -85,6 +88,14 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 		return nil, fmt.Errorf("load user policy config: %w", err)
 	}
 
+	compactorModel := strings.TrimSpace(config.CompactorModel)
+	if compactorModel == "" {
+		compactorModel = model
+	}
+	compactor := sessions.NewCompactor(provider, sessions.CompactorConfig{
+		SummarizeModel: compactorModel,
+	}, config.Logger)
+
 	return agent.NewRuntime(agent.RuntimeConfig{
 		Provider: provider,
 		Registry: registry,
@@ -92,34 +103,14 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),
 		),
-		SessionStore:  sessionStore,
+		SessionStore:          sessionStore,
 		Policy:        userPolicy,
-		Logger:        config.Logger,
-		MaxIterations: config.MaxIterations,
-		Model:         model,
+		Logger:                config.Logger,
+		MaxIterations:         config.MaxIterations,
+		Model:                 model,
+		Compactor:             compactor,
+		MemoryClassifierModel: compactorModel,
 	}), nil
-}
-
-func NewIntentClassifier(provider providers.Provider) (agent.IntentClassifier, error) {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VCLAW_INTENT_CLASSIFIER_MODE")))
-	if mode == "" {
-		mode = agentintent.ClassifierModeFallback
-	}
-	heuristic := agentintent.NewHeuristicRunner(agentintent.DefaultConfig)
-	switch mode {
-	case agentintent.ClassifierModeHeuristic:
-		return heuristic, nil
-	case agentintent.ClassifierModeLLM:
-		return agentintent.NewLLMClassifier(provider, agentintent.DefaultConfig)
-	case agentintent.ClassifierModeFallback:
-		llm, err := agentintent.NewLLMClassifier(provider, agentintent.DefaultConfig)
-		if err != nil {
-			return nil, err
-		}
-		return agentintent.NewFallbackClassifier(llm, heuristic), nil
-	default:
-		return nil, fmt.Errorf("intent classifier mode must be one of: fallback, llm, heuristic")
-	}
 }
 
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {
