@@ -171,7 +171,7 @@ func (t SearchDirectoryTool) Execute(ctx context.Context, call tools.ToolCall) t
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	return registry.Register(NewSearchDirectoryTool(service))
+	return registry.RegisterWithEntry(NewSearchDirectoryTool(service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"})
 }
 
 func formatPerson(person peopleconnector.DirectoryPerson) string {

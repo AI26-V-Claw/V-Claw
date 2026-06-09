@@ -141,10 +141,10 @@ func (CalculatorTool) Execute(_ context.Context, call ToolCall) ToolResult {
 }
 
 func RegisterBuiltInTools(registry *ToolRegistry) error {
-	if err := registry.Register(NewCurrentTimeTool()); err != nil {
+	if err := registry.RegisterWithEntry(NewCurrentTimeTool(), ToolRegistryEntry{Group: "builtin"}); err != nil {
 		return err
 	}
-	if err := registry.Register(NewCalculatorTool()); err != nil {
+	if err := registry.RegisterWithEntry(NewCalculatorTool(), ToolRegistryEntry{Group: "builtin"}); err != nil {
 		return err
 	}
 	return nil

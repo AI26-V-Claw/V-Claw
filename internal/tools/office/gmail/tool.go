@@ -1264,7 +1264,7 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 	for _, name := range []string{ToolNameListEmails, ToolNameGetEmail, ToolNameListLabels, ToolNameGetProfile, ToolNameListThreads, ToolNameGetThread, ToolNameListDrafts, ToolNameGetDraft, ToolNameCreateDraft, ToolNameUpdateDraft, ToolNameSendDraft, ToolNameDeleteDraft, ToolNameReplyDraft, ToolNameForwardDraft, ToolNameDownloadAttachments, ToolNameModifyMessage, ToolNameBatchModifyMessages, ToolNameTrashMessage, ToolNameUntrashMessage} {
-		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
+		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
 	}

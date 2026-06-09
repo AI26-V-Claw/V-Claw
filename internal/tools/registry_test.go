@@ -165,3 +165,55 @@ func TestToolRegistryExposesMetadataAndEnabledState(t *testing.T) {
 		t.Fatalf("expected disabled tool metadata")
 	}
 }
+
+func TestToolRegistryGroupField(t *testing.T) {
+	registry := NewToolRegistry()
+	if err := registry.RegisterWithEntry(sampleTool{}, ToolRegistryEntry{
+		Group: "test_group",
+	}); err != nil {
+		t.Fatalf("register with group: %v", err)
+	}
+
+	def, ok := registry.GetDefinition("test.echo")
+	if !ok {
+		t.Fatal("expected tool definition")
+	}
+	if def.Group != "test_group" {
+		t.Fatalf("expected group test_group, got %q", def.Group)
+	}
+}
+
+func TestToolRegistryInferGroupFromName(t *testing.T) {
+	registry := NewToolRegistry()
+	if err := registry.Register(sampleTool{}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	def, ok := registry.GetDefinition("test.echo")
+	if !ok {
+		t.Fatal("expected tool definition")
+	}
+	if def.Group == "" {
+		t.Fatal("expected inferred group, got empty")
+	}
+}
+
+func TestToolRegistryListToolsByGroup(t *testing.T) {
+	registry := NewToolRegistry()
+	if err := registry.RegisterWithEntry(sampleTool{}, ToolRegistryEntry{Group: "alpha"}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	results := registry.ListToolsByGroup("alpha")
+	if len(results) != 1 {
+		t.Fatalf("expected 1 tool in group alpha, got %d", len(results))
+	}
+	if results[0].Name != "test.echo" {
+		t.Fatalf("expected test.echo, got %q", results[0].Name)
+	}
+
+	empty := registry.ListToolsByGroup("nonexistent")
+	if len(empty) != 0 {
+		t.Fatalf("expected 0 tools in nonexistent group, got %d", len(empty))
+	}
+}
