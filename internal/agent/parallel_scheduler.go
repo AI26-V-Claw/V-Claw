@@ -20,6 +20,14 @@ type ParallelPolicy interface {
 	CanRunInParallel(tool tools.Tool) bool
 }
 
+type ApprovableToolDefinition interface {
+	RequiresApproval() bool
+}
+
+type TimeoutProvider interface {
+	ExecutionTimeout() time.Duration
+}
+
 type ParallelConfig struct {
 	MaxWorkers         int
 	ToolTimeoutDefault time.Duration
@@ -73,6 +81,12 @@ func ExecuteParallelBatch(
 			results[i] = executionErrorResult(call, "tool is not parallel-safe")
 			continue
 		}
+		if approvalTool, ok := tool.(ApprovableToolDefinition); ok {
+			if approvalTool.RequiresApproval() {
+				results[i] = executionErrorResult(call, "tool requires approval, cannot run in parallel")
+				continue
+			}
+		}
 
 		wg.Add(1)
 		go func() {
@@ -81,6 +95,11 @@ func ExecuteParallelBatch(
 			defer func() { <-sem }()
 
 			timeout := cfg.ToolTimeoutDefault
+			if timeoutTool, ok := tool.(TimeoutProvider); ok {
+				if t := timeoutTool.ExecutionTimeout(); t > 0 {
+					timeout = t
+				}
+			}
 			if timeout <= 0 {
 				timeout = 15 * time.Second
 			}
@@ -115,6 +134,13 @@ func ExecuteParallelBatch(
 				)
 				results[i] = timeoutResult(call, toolCtx.Err())
 			case result := <-resultCh:
+				if result.Success {
+					slog.Info("parallel tool executed",
+						"tool_call_id", call.ID,
+						"tool_name", call.Name,
+						"duration", time.Since(start),
+					)
+				}
 				results[i] = result
 			}
 		}()
