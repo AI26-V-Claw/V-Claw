@@ -32,6 +32,7 @@ type Bot struct {
 	botUserID       string
 	ownerUserID     string
 	allowedChannels map[string]struct{}
+	state           *slackChannelState
 }
 
 type messageHandler interface {
@@ -62,6 +63,7 @@ func New(cfg Config, orchestrator messageHandler, logger *slog.Logger) (*Bot, er
 		socketClient:    socketClient,
 		ownerUserID:     strings.TrimSpace(cfg.OwnerUserID),
 		allowedChannels: makeAllowSet(cfg.AllowedChannelIDs),
+		state:           newSlackChannelState(),
 	}
 
 	auth, err := api.AuthTest()
@@ -155,6 +157,16 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 	if strings.TrimSpace(replyThreadTimestamp) == "" && channelType != "im" {
 		replyThreadTimestamp = timestamp
 	}
+	if approvalContext, ok := b.state.approvalForSession(inbound.SessionID, channelID); ok {
+		if err := b.updateMessageClearBlocks(ctx, approvalContext.ChannelID, approvalContext.MessageTS, approvalContext.PromptText); err != nil {
+			b.logger.Error("slack approval block dismiss failed", "channel_id", approvalContext.ChannelID, "message_ts", approvalContext.MessageTS, "error", err)
+		}
+		b.state.deleteApproval(approvalContext.ApprovalID)
+		inbound.SessionID = approvalContext.SessionID
+		inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
+		inbound.Metadata["slack_action"] = "revise"
+		inbound.Metadata["approvalId"] = approvalContext.ApprovalID
+	}
 
 	processingTimestamp, err := b.sendMessage(ctx, channelID, "Đang xử lý...", replyThreadTimestamp)
 	if err != nil {
@@ -199,9 +211,9 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 		b.logger.Error("agent response error", "request_id", outbound.RequestID, "session_id", outbound.SessionID, "status", outbound.Status, "message", outbound.Message)
 	}
 	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
-		if err := progress.UpdateApproval(ctx, outboundText, outbound.ApprovalID, inbound.SessionID); err != nil {
+		if err := progress.UpdateApproval(ctx, outboundText, outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); err != nil {
 			b.logger.Error("slack final approval update failed", "error", err)
-			if _, sendErr := b.sendApprovalMessage(ctx, channelID, outboundText, replyThreadTimestamp, outbound.ApprovalID, inbound.SessionID); sendErr != nil {
+			if _, sendErr := b.sendApprovalMessage(ctx, channelID, outboundText, replyThreadTimestamp, outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); sendErr != nil {
 				b.orchestrator.FinalizeAudit(inbound, sendErr)
 				return sendErr
 			}
@@ -244,10 +256,17 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 	if strings.TrimSpace(messageTS) == "" {
 		messageTS = callback.MessageTs
 	}
+	approvalContext, ok := b.state.lookupApproval(approvalID, sessionID, channelID, messageTS)
+	if !ok {
+		if b.api != nil {
+			_ = b.updateMessageClearBlocks(ctx, channelID, messageTS, "Yêu cầu xác nhận này không còn hợp lệ.")
+		}
+		return nil
+	}
 	if !b.isAllowed(channelID, callback.User.ID) {
 		b.orchestrator.RecordIgnored(contracts.UserMessage{
 			RequestID: "slack_interaction_" + normalizeSlackTimestamp(callback.ActionTs),
-			SessionID: sessionID,
+			SessionID: approvalContext.SessionID,
 			Channel:   "slack",
 			Text:      approvalAction,
 			Timestamp: time.Now().UTC(),
@@ -256,19 +275,19 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 	}
 	if approvalAction == "revise" {
 		return b.openSlackReviseModal(ctx, callback.TriggerID, slackApprovalMetadata{
-			ApprovalID: approvalID,
-			SessionID:  sessionID,
+			ApprovalID: approvalContext.ApprovalID,
+			SessionID:  approvalContext.SessionID,
 			ChannelID:  channelID,
 			MessageTS:  messageTS,
 		})
 	}
 	command := approvalAction
-	if strings.TrimSpace(approvalID) != "" {
-		command += " " + approvalID
+	if strings.TrimSpace(approvalContext.ApprovalID) != "" {
+		command += " " + approvalContext.ApprovalID
 	}
 	inbound := contracts.UserMessage{
 		RequestID: "slack_interaction_" + normalizeSlackTimestamp(callback.ActionTs),
-		SessionID: sessionID,
+		SessionID: approvalContext.SessionID,
 		Channel:   "slack",
 		Text:      command,
 		Timestamp: time.Now().UTC(),
@@ -276,10 +295,11 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 			"slack_channel_id": channelID,
 			"slack_user_id":    callback.User.ID,
 			"slack_action":     approvalAction,
+			"approvalId":       approvalContext.ApprovalID,
 			"source":           "slack",
 		},
 	}
-	if err := b.updateMessageClearBlocks(ctx, channelID, messageTS, "Đang xử lý quyết định..."); err != nil {
+	if err := b.updateMessageClearBlocks(ctx, channelID, messageTS, "Đang xử lý..."); err != nil {
 		b.logger.Error("slack approval progress update failed", "error", err)
 	}
 	followUpCtx := agent.WithFollowUpSink(ctx, func(followCtx context.Context, message agent.FollowUpMessage) {
@@ -304,9 +324,9 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 	// Continuation after approval may itself require approval (next task in a
 	// multi-step request). Show the approval blocks so the user can act on it.
 	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
-		if err := b.updateApprovalMessage(ctx, channelID, messageTS, outboundText, outbound.ApprovalID, inbound.SessionID); err != nil {
+		if err := b.updateApprovalMessage(ctx, channelID, messageTS, outboundText, outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); err != nil {
 			b.logger.Error("slack continuation approval update failed", "error", err)
-			if _, sendErr := b.sendApprovalMessage(ctx, channelID, outboundText, "", outbound.ApprovalID, inbound.SessionID); sendErr != nil {
+			if _, sendErr := b.sendApprovalMessage(ctx, channelID, outboundText, "", outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); sendErr != nil {
 				b.orchestrator.FinalizeAudit(inbound, sendErr)
 				return sendErr
 			}
@@ -314,6 +334,7 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 		b.orchestrator.FinalizeAudit(inbound, nil)
 		return nil
 	}
+	b.state.deleteApproval(approvalContext.ApprovalID)
 	if err := b.updateMessageClearBlocks(ctx, channelID, messageTS, outboundText); err != nil {
 		b.orchestrator.FinalizeAudit(inbound, err)
 		return err
@@ -326,6 +347,13 @@ func (b *Bot) handleSlackReviseSubmission(ctx context.Context, callback slack.In
 	meta, err := parseSlackApprovalMetadata(callback.View.PrivateMetadata)
 	if err != nil {
 		return err
+	}
+	approvalContext, ok := b.state.lookupApproval(meta.ApprovalID, meta.SessionID, meta.ChannelID, meta.MessageTS)
+	if !ok {
+		if b.api != nil {
+			_ = b.updateMessageClearBlocks(ctx, meta.ChannelID, meta.MessageTS, "Yêu cầu xác nhận này không còn hợp lệ.")
+		}
+		return nil
 	}
 	comment := slackReviseComment(callback)
 	if strings.TrimSpace(comment) == "" {
@@ -341,6 +369,7 @@ func (b *Bot) handleSlackReviseSubmission(ctx context.Context, callback slack.In
 			"slack_channel_id": meta.ChannelID,
 			"slack_user_id":    callback.User.ID,
 			"slack_action":     "revise",
+			"approvalId":       approvalContext.ApprovalID,
 			"source":           "slack",
 		},
 	}
@@ -363,6 +392,15 @@ func (b *Bot) handleSlackReviseSubmission(ctx context.Context, callback slack.In
 	if strings.TrimSpace(outboundText) == "" {
 		outboundText = "Đã ghi nhận phần chỉnh sửa."
 	}
+	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
+		if err := b.updateApprovalMessage(ctx, meta.ChannelID, meta.MessageTS, outboundText, outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); err != nil {
+			b.orchestrator.FinalizeAudit(inbound, err)
+			return err
+		}
+		b.orchestrator.FinalizeAudit(inbound, nil)
+		return nil
+	}
+	b.state.deleteApproval(approvalContext.ApprovalID)
 	if err := b.updateMessageClearBlocks(ctx, meta.ChannelID, meta.MessageTS, outboundText); err != nil {
 		b.orchestrator.FinalizeAudit(inbound, err)
 		return err
@@ -383,7 +421,7 @@ func (b *Bot) sendMessage(ctx context.Context, channelID, text, threadTimestamp 
 	return timestamp, err
 }
 
-func (b *Bot) sendApprovalMessage(ctx context.Context, channelID, text, threadTimestamp, approvalID, sessionID string) (string, error) {
+func (b *Bot) sendApprovalMessage(ctx context.Context, channelID, text, threadTimestamp, approvalID, sessionID, toolName string) (string, error) {
 	options := []slack.MsgOption{
 		slack.MsgOptionText(text, false),
 		slack.MsgOptionBlocks(slackApprovalBlocks(text, approvalID, sessionID)...),
@@ -394,6 +432,16 @@ func (b *Bot) sendApprovalMessage(ctx context.Context, channelID, text, threadTi
 		}))
 	}
 	_, timestamp, err := b.api.PostMessageContext(ctx, channelID, options...)
+	if err == nil {
+		b.state.registerApproval(slackApprovalContext{
+			ApprovalID: approvalID,
+			SessionID:  sessionID,
+			ChannelID:  channelID,
+			MessageTS:  timestamp,
+			PromptText: text,
+			ToolName:   toolName,
+		})
+	}
 	return timestamp, err
 }
 
@@ -402,11 +450,21 @@ func (b *Bot) updateMessage(ctx context.Context, channelID, timestamp, text stri
 	return err
 }
 
-func (b *Bot) updateApprovalMessage(ctx context.Context, channelID, timestamp, text, approvalID, sessionID string) error {
+func (b *Bot) updateApprovalMessage(ctx context.Context, channelID, timestamp, text, approvalID, sessionID, toolName string) error {
 	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp,
 		slack.MsgOptionText(text, false),
 		slack.MsgOptionBlocks(slackApprovalBlocks(text, approvalID, sessionID)...),
 	)
+	if err == nil {
+		b.state.registerApproval(slackApprovalContext{
+			ApprovalID: approvalID,
+			SessionID:  sessionID,
+			ChannelID:  channelID,
+			MessageTS:  timestamp,
+			PromptText: text,
+			ToolName:   toolName,
+		})
+	}
 	return err
 }
 
@@ -423,23 +481,29 @@ func (b *Bot) openSlackReviseModal(ctx context.Context, triggerID string, metada
 	if err != nil {
 		return err
 	}
+	approvalContext, _ := b.state.lookupApproval(metadata.ApprovalID, metadata.SessionID, metadata.ChannelID, metadata.MessageTS)
 	placeholder := slack.NewTextBlockObject(slack.PlainTextType, "Ví dụ: đổi giờ họp sang 10:00", false, false)
 	input := slack.NewPlainTextInputBlockElement(placeholder, slackApprovalReviseInputActionID).WithMultiline(true).WithMaxLength(1000)
+	blocks := []slack.Block{}
+	if prompt := strings.TrimSpace(slackRevisionPrompt(approvalContext)); prompt != "" {
+		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, slackMrkdwn(prompt), false, false), nil, nil))
+	}
+	blocks = append(blocks,
+		slack.NewInputBlock(
+			slackApprovalReviseInputBlockID,
+			slack.NewTextBlockObject(slack.PlainTextType, "Bạn muốn chỉnh gì?", false, false),
+			nil,
+			input,
+		),
+	)
 	view := slack.ModalViewRequest{
 		Type:            slack.VTModal,
-		Title:           slack.NewTextBlockObject(slack.PlainTextType, "Revise approval", false, false),
-		Close:           slack.NewTextBlockObject(slack.PlainTextType, "Cancel", false, false),
-		Submit:          slack.NewTextBlockObject(slack.PlainTextType, "Submit", false, false),
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, "Chỉnh sửa yêu cầu", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "Đóng", false, false),
+		Submit:          slack.NewTextBlockObject(slack.PlainTextType, "Gửi", false, false),
 		CallbackID:      slackApprovalReviseCallbackID,
 		PrivateMetadata: encoded,
-		Blocks: slack.Blocks{BlockSet: []slack.Block{
-			slack.NewInputBlock(
-				slackApprovalReviseInputBlockID,
-				slack.NewTextBlockObject(slack.PlainTextType, "Bạn muốn chỉnh gì?", false, false),
-				nil,
-				input,
-			),
-		}},
+		Blocks:          slack.Blocks{BlockSet: blocks},
 	}
 	_, err = b.api.OpenViewContext(ctx, triggerID, view)
 	return err
@@ -547,12 +611,12 @@ func (e *slackProgressEditor) Update(ctx context.Context, text string) error {
 	return nil
 }
 
-func (e *slackProgressEditor) UpdateApproval(ctx context.Context, text, approvalID, sessionID string) error {
+func (e *slackProgressEditor) UpdateApproval(ctx context.Context, text, approvalID, sessionID, toolName string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
-	if err := e.bot.updateApprovalMessage(ctx, e.channelID, e.timestamp, text, approvalID, sessionID); err != nil {
+	if err := e.bot.updateApprovalMessage(ctx, e.channelID, e.timestamp, text, approvalID, sessionID, toolName); err != nil {
 		return err
 	}
 	e.lastText = text
@@ -587,33 +651,6 @@ func slackProgressText(event agent.ProgressEvent) string {
 	}
 }
 
-func slackTextFromResponse(response contracts.AgentResponse) string {
-	if strings.EqualFold(string(response.Status), "failed") {
-		return slackGenericErrorText()
-	}
-	if strings.TrimSpace(response.Message) != "" {
-		return response.Message
-	}
-	if response.ApprovalRequest != nil && strings.TrimSpace(response.ApprovalRequest.Summary) != "" {
-		return response.ApprovalRequest.Summary
-	}
-	switch response.Status {
-	case contracts.AgentStatusApprovalRequired:
-		return "Tôi cần bạn xác nhận trước khi thực hiện hành động này."
-	case contracts.AgentStatusCompleted:
-		return "Đã hoàn tất."
-	case contracts.AgentStatusNeedClarification:
-		if response.Data != nil {
-			if clarifyQuestion, ok := response.Data["clarifyQuestion"].(string); ok && strings.TrimSpace(clarifyQuestion) != "" {
-				return clarifyQuestion
-			}
-		}
-		return "Bạn muốn tôi làm gì cụ thể hơn?"
-	default:
-		return "Agent chưa có phản hồi."
-	}
-}
-
 func slackGenericErrorText() string {
 	return "Mình chưa thể hoàn tất yêu cầu này. Chi tiết lỗi đã được ghi ở terminal local."
 }
@@ -638,41 +675,6 @@ type slackApprovalMetadata struct {
 	SessionID  string `json:"sessionId"`
 	ChannelID  string `json:"channelId"`
 	MessageTS  string `json:"messageTs"`
-}
-
-func slackApprovalBlocks(text, approvalID, sessionID string) []slack.Block {
-	approve := slack.NewButtonBlockElement(
-		slackApprovalApproveActionID,
-		slackApprovalValue("approve", approvalID, sessionID),
-		slack.NewTextBlockObject(slack.PlainTextType, "Yes", false, false),
-	).WithStyle(slack.StylePrimary)
-	reject := slack.NewButtonBlockElement(
-		slackApprovalRejectActionID,
-		slackApprovalValue("reject", approvalID, sessionID),
-		slack.NewTextBlockObject(slack.PlainTextType, "No", false, false),
-	).WithStyle(slack.StyleDanger)
-	revise := slack.NewButtonBlockElement(
-		slackApprovalReviseActionID,
-		slackApprovalValue("revise", approvalID, sessionID),
-		slack.NewTextBlockObject(slack.PlainTextType, "Revise", false, false),
-	)
-	sectionText := slack.NewTextBlockObject(slack.MarkdownType, slackMrkdwn(text), false, false)
-	return []slack.Block{
-		slack.NewSectionBlock(sectionText, nil, nil),
-		slack.NewActionBlock("vclaw_approval_actions", approve, reject, revise),
-	}
-}
-
-func slackApprovalValue(action, approvalID, sessionID string) string {
-	data, err := json.Marshal(slackApprovalPayload{
-		Action:     strings.TrimSpace(action),
-		ApprovalID: strings.TrimSpace(approvalID),
-		SessionID:  strings.TrimSpace(sessionID),
-	})
-	if err != nil {
-		return "{}"
-	}
-	return string(data)
 }
 
 func parseSlackApprovalValue(value string) (action, approvalID, sessionID string, ok bool) {

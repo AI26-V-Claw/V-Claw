@@ -261,7 +261,7 @@ func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 		&UpdateEventTool{service: service},
 		&DeleteEventTool{service: service},
 	} {
-		if err := registry.RegisterWithEntry(t, tools.ToolRegistryEntry{Owner: "integration"}); err != nil {
+		if err := registry.RegisterWithEntry(t, tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
 	}
