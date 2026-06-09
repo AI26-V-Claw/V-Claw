@@ -11,6 +11,9 @@ import (
 type Store interface {
 	LoadTranscript(ctx context.Context, sessionID string) ([]providers.Message, error)
 	AppendMessage(ctx context.Context, sessionID string, message providers.Message) error
+	// SetTranscript replaces the full transcript for a session.
+	// Used by the compactor to truncate history after summarization.
+	SetTranscript(ctx context.Context, sessionID string, messages []providers.Message) error
 	ClearSession(ctx context.Context, sessionID string) error
 }
 
@@ -66,6 +69,14 @@ func (s *InMemoryStore) AppendMessage(_ context.Context, sessionID string, messa
 	defer s.mu.Unlock()
 
 	s.transcript[sessionID] = append(s.transcript[sessionID], cloneMessage(message))
+	return nil
+}
+
+func (s *InMemoryStore) SetTranscript(_ context.Context, sessionID string, messages []providers.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.transcript[sessionID] = cloneMessages(messages)
 	return nil
 }
 

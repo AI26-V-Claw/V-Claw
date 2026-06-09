@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"vclaw/internal/agent"
@@ -21,14 +22,15 @@ import (
 const longPollTimeout = 30
 
 type Bot struct {
-	token         string
-	allowedUserID int64
-	dataDir       string
-	offsetPath    string
-	client        *http.Client
-	handler       messageHandler
-	logger        *slog.Logger
-	apiBase       string
+	token          string
+	allowedUserID  int64
+	dataDir        string
+	offsetPath     string
+	client         *http.Client
+	handler        messageHandler
+	logger         *slog.Logger
+	apiBase        string
+	awaitingRevise sync.Map // map[int64]bool — chatIDs waiting for revise input after clicking Revise button
 }
 
 type messageHandler interface {
@@ -132,6 +134,9 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 			b.handler.RecordIgnored(inbound, "ignored_unauthorized")
 		}
 		return true, nil
+	}
+	if _, waiting := b.awaitingRevise.LoadAndDelete(update.Message.Chat.ID); waiting && strings.TrimSpace(inbound.Text) != "" {
+		inbound.Text = "revise " + inbound.Text
 	}
 	attachments, err := b.downloadMessageAttachments(ctx, update.Message)
 	if err != nil {
@@ -252,12 +257,9 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 		return true, nil
 	}
 	if action == "revise" {
-		_ = b.answerCallbackQuery(ctx, callback.ID, "Reply with your revision comment.")
-		text := "Bạn muốn chỉnh gì? Hãy gửi tin nhắn theo mẫu:\n\nrevise <nội dung muốn chỉnh>"
-		if approvalID != "" {
-			text += "\n\nApproval ID: " + approvalID
-		}
-		if err := b.editMessageText(ctx, callback.Message.Chat.ID, callback.Message.MessageID, text); err != nil {
+		_ = b.answerCallbackQuery(ctx, callback.ID, "Nhập nội dung muốn chỉnh.")
+		b.awaitingRevise.Store(callback.Message.Chat.ID, true)
+		if err := b.editMessageText(ctx, callback.Message.Chat.ID, callback.Message.MessageID, "Bạn muốn chỉnh gì? Hãy nhập nội dung cần thay đổi:"); err != nil {
 			return false, err
 		}
 		return true, nil
