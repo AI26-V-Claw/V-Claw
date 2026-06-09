@@ -544,18 +544,27 @@ func telegramRenderHTML(text string) string {
 		codeStart := strings.Index(text, telegramCodeBlockOpen)
 		preStart := strings.Index(text, telegramPreBlockOpen)
 		fieldStart := strings.Index(text, telegramFieldOpen)
+		textFieldStart := strings.Index(text, telegramTextFieldOpen)
 		start := -1
 		blockType := ""
 		switch {
-		case codeStart >= 0 && (preStart < 0 || codeStart < preStart) && (fieldStart < 0 || codeStart < fieldStart):
+		case codeStart >= 0 &&
+			(preStart < 0 || codeStart < preStart) &&
+			(fieldStart < 0 || codeStart < fieldStart) &&
+			(textFieldStart < 0 || codeStart < textFieldStart):
 			start = codeStart
 			blockType = "code"
-		case preStart >= 0 && (fieldStart < 0 || preStart < fieldStart):
+		case preStart >= 0 &&
+			(fieldStart < 0 || preStart < fieldStart) &&
+			(textFieldStart < 0 || preStart < textFieldStart):
 			start = preStart
 			blockType = "pre"
-		case fieldStart >= 0:
+		case fieldStart >= 0 && (textFieldStart < 0 || fieldStart < textFieldStart):
 			start = fieldStart
 			blockType = "field"
+		case textFieldStart >= 0:
+			start = textFieldStart
+			blockType = "textField"
 		}
 		if start < 0 {
 			builder.WriteString(html.EscapeString(text))
@@ -598,6 +607,30 @@ func telegramRenderHTML(text string) string {
 				builder.WriteString("</code>")
 			}
 			text = remaining[end+len(telegramFieldClose):]
+			continue
+		}
+		if blockType == "textField" {
+			remaining := text[start+len(telegramTextFieldOpen):]
+			end := strings.Index(remaining, telegramTextFieldClose)
+			if end < 0 {
+				builder.WriteString(html.EscapeString(text[start:]))
+				break
+			}
+			field := remaining[:end]
+			label := field
+			value := ""
+			if separator := strings.Index(field, telegramFieldSeparator); separator >= 0 {
+				label = strings.TrimSpace(field[:separator])
+				value = strings.TrimSpace(field[separator+len(telegramFieldSeparator):])
+			}
+			builder.WriteString("<b>")
+			builder.WriteString(html.EscapeString(label))
+			builder.WriteString("</b>")
+			if value != "" {
+				builder.WriteString(" ")
+				builder.WriteString(html.EscapeString(value))
+			}
+			text = remaining[end+len(telegramTextFieldClose):]
 			continue
 		}
 		remaining := text[start+len(telegramCodeBlockOpen):]

@@ -227,6 +227,46 @@ func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
 	}
 }
 
+func TestSlackApprovalTextShowsCalendarEventDetails(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_calendar",
+			Summary:    "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "calendar.createEvent",
+				Input: map[string]any{
+					"title":       "Họp",
+					"start":       "2026-06-10T08:00:00+07:00",
+					"end":         "2026-06-10T09:30:00+07:00",
+					"attendees":   []any{"a@test.com", "b@test.com"},
+					"location":    "Phòng A",
+					"description": "Chuẩn bị số liệu bán hàng.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"*Tiêu đề:* Họp",
+		"*Bắt đầu:* 10/06/2026, 08:00 (+07:00)",
+		"*Kết thúc:* 10/06/2026, 09:30 (+07:00)",
+		"*Thời lượng:* 1 giờ 30 phút",
+		"*Người tham gia:* a@test.com, b@test.com",
+		"*Địa điểm:* Phòng A",
+		"Ghi chú:", "Chuẩn bị số liệu bán hàng.", "```",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected calendar approval text to contain %q, got %q", want, text)
+		}
+	}
+	for _, forbidden := range []string{"Start: 2026-06-10T08:00:00+07:00", "End: 2026-06-10T09:30:00+07:00"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected calendar approval text to avoid raw time field %q, got %q", forbidden, text)
+		}
+	}
+}
+
 func TestSlackApprovalTextUsesGenericFallbackForUnknownTool(t *testing.T) {
 	text := slackTextFromResponse(contracts.AgentResponse{
 		Status: contracts.AgentStatusApprovalRequired,

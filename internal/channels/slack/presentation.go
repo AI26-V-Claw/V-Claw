@@ -306,6 +306,10 @@ func slackApprovalDetailText(approval contracts.ApprovalRequest) string {
 		if detail := slackDraftApprovalDetailText(input); detail != "" {
 			return detail
 		}
+	case "calendar.createEvent", "calendar.updateEvent":
+		if detail := slackCalendarApprovalDetailText(input); detail != "" {
+			return detail
+		}
 	case "gmail.sendDraft":
 		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
 	}
@@ -345,6 +349,38 @@ func slackDraftApprovalDetailText(input map[string]any) string {
 	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
 		lines = append(lines, "", slackField("Tệp đính kèm", strings.Join(attachments, ", ")))
 	}
+	return formatSlackUserText(lines...)
+}
+
+func slackCalendarApprovalDetailText(input map[string]any) string {
+	lines := []string{}
+
+	if title := firstNonEmptyStringMapValue(input, "title", "name", "subject"); title != "" {
+		lines = append(lines, slackTextField("Tiêu đề", title))
+	}
+
+	startRaw := firstNonEmptyStringMapValue(input, "start", "startTime", "startDate", "date")
+	endRaw := firstNonEmptyStringMapValue(input, "end", "endTime", "endDate", "dueDate", "dueTime")
+	if start := slackFormatApprovalDateTime(startRaw); start != "" {
+		lines = append(lines, slackTextField("Bắt đầu", start))
+	}
+	if end := slackFormatApprovalDateTime(endRaw); end != "" {
+		lines = append(lines, slackTextField("Kết thúc", end))
+	}
+	if duration := approvalDurationText(startRaw, endRaw); duration != "" {
+		lines = append(lines, slackTextField("Thời lượng", duration))
+	}
+
+	if attendees := stringSliceMapValue(input, "attendees"); len(attendees) > 0 {
+		lines = append(lines, slackTextField("Người tham gia", strings.Join(attendees, ", ")))
+	}
+	if location := stringMapValue(input, "location"); location != "" {
+		lines = append(lines, slackTextField("Địa điểm", location))
+	}
+	if description := firstNonEmptyStringMapValue(input, "description"); description != "" {
+		lines = append(lines, "", "Ghi chú:", "", slackPreBlock(description))
+	}
+
 	return formatSlackUserText(lines...)
 }
 
@@ -453,6 +489,44 @@ func slackPreBlock(text string) string {
 	return "```" + strings.ReplaceAll(text, "```", "``\u200b`") + "```"
 }
 
+func slackFormatApprovalDateTime(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.Format("02/01/2006, 15:04") + " (" + utcOffsetText(parsed) + ")"
+	}
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		return parsed.Format("02/01/2006")
+	}
+	return value
+}
+
+func approvalDurationText(start string, end string) string {
+	startTime, err := time.Parse(time.RFC3339, strings.TrimSpace(start))
+	if err != nil {
+		return ""
+	}
+	endTime, err := time.Parse(time.RFC3339, strings.TrimSpace(end))
+	if err != nil || !endTime.After(startTime) {
+		return ""
+	}
+
+	totalMinutes := int(endTime.Sub(startTime).Minutes())
+	hours := totalMinutes / 60
+	minutes := totalMinutes % 60
+
+	switch {
+	case hours > 0 && minutes > 0:
+		return fmt.Sprintf("%d giờ %d phút", hours, minutes)
+	case hours > 0:
+		return fmt.Sprintf("%d giờ", hours)
+	default:
+		return fmt.Sprintf("%d phút", minutes)
+	}
+}
+
 func slackField(label string, value string) string {
 	label = strings.TrimSpace(label)
 	value = strings.TrimSpace(value)
@@ -463,6 +537,30 @@ func slackField(label string, value string) string {
 		return "*" + label + ":*"
 	}
 	return "*" + label + ":* `" + strings.ReplaceAll(value, "`", "ˋ") + "`"
+}
+
+func slackTextField(label string, value string) string {
+	label = strings.TrimSpace(label)
+	value = strings.TrimSpace(value)
+	if label == "" {
+		return value
+	}
+	if value == "" {
+		return "*" + label + ":*"
+	}
+	return "*" + label + ":* " + value
+}
+
+func utcOffsetText(value time.Time) string {
+	_, offsetSeconds := value.Zone()
+	sign := "+"
+	if offsetSeconds < 0 {
+		sign = "-"
+		offsetSeconds = -offsetSeconds
+	}
+	hours := offsetSeconds / 3600
+	minutes := (offsetSeconds % 3600) / 60
+	return fmt.Sprintf("%s%02d:%02d", sign, hours, minutes)
 }
 
 func slackApprovalBlocks(text, approvalID, sessionID string) []slack.Block {

@@ -22,6 +22,8 @@ const (
 	telegramFieldOpen      = "\uE004"
 	telegramFieldClose     = "\uE005"
 	telegramFieldSeparator = "\uE006"
+	telegramTextFieldOpen  = "\uE007"
+	telegramTextFieldClose = "\uE008"
 )
 
 var telegramSensitiveTextPattern = regexp.MustCompile(`(?i)(authorization:|bearer\s+[a-z0-9._\-]+|xox[baprs]-|xapp-|sk-[a-z0-9]|telegram-token|stack trace|traceback|panic:|provider chat failed|client secret|refresh token|access token|api[_ -]?key)`)
@@ -366,6 +368,10 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		if detail := telegramDraftApprovalDetailText(input); detail != "" {
 			return detail
 		}
+	case "calendar.createEvent", "calendar.updateEvent":
+		if detail := telegramCalendarApprovalDetailText(input); detail != "" {
+			return detail
+		}
 	case "gmail.sendDraft":
 		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
 	}
@@ -405,6 +411,38 @@ func telegramDraftApprovalDetailText(input map[string]any) string {
 	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
 		lines = append(lines, "", telegramField("Tệp đính kèm", strings.Join(attachments, ", ")))
 	}
+	return formatTelegramUserText(lines...)
+}
+
+func telegramCalendarApprovalDetailText(input map[string]any) string {
+	lines := []string{}
+
+	if title := firstNonEmptyStringMapValue(input, "title", "name", "subject"); title != "" {
+		lines = append(lines, telegramTextField("Tiêu đề", title))
+	}
+
+	startRaw := firstNonEmptyStringMapValue(input, "start", "startTime", "startDate", "date")
+	endRaw := firstNonEmptyStringMapValue(input, "end", "endTime", "endDate", "dueDate", "dueTime")
+	if start := telegramFormatApprovalDateTime(startRaw); start != "" {
+		lines = append(lines, telegramTextField("Bắt đầu", start))
+	}
+	if end := telegramFormatApprovalDateTime(endRaw); end != "" {
+		lines = append(lines, telegramTextField("Kết thúc", end))
+	}
+	if duration := approvalDurationText(startRaw, endRaw); duration != "" {
+		lines = append(lines, telegramTextField("Thời lượng", duration))
+	}
+
+	if attendees := stringSliceMapValue(input, "attendees"); len(attendees) > 0 {
+		lines = append(lines, telegramTextField("Người tham gia", strings.Join(attendees, ", ")))
+	}
+	if location := stringMapValue(input, "location"); location != "" {
+		lines = append(lines, telegramTextField("Địa điểm", location))
+	}
+	if description := firstNonEmptyStringMapValue(input, "description"); description != "" {
+		lines = append(lines, "", "Ghi chú:", "", telegramPreBlock(description))
+	}
+
 	return formatTelegramUserText(lines...)
 }
 
@@ -489,6 +527,60 @@ func telegramPreBlock(text string) string {
 
 func telegramField(label string, value string) string {
 	return telegramFieldOpen + strings.TrimSpace(label) + ":" + telegramFieldSeparator + strings.TrimSpace(value) + telegramFieldClose
+}
+
+func telegramTextField(label string, value string) string {
+	return telegramTextFieldOpen + strings.TrimSpace(label) + ":" + telegramFieldSeparator + strings.TrimSpace(value) + telegramTextFieldClose
+}
+
+func telegramFormatApprovalDateTime(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.Format("02/01/2006, 15:04") + " (" + utcOffsetText(parsed) + ")"
+	}
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		return parsed.Format("02/01/2006")
+	}
+	return value
+}
+
+func approvalDurationText(start string, end string) string {
+	startTime, err := time.Parse(time.RFC3339, strings.TrimSpace(start))
+	if err != nil {
+		return ""
+	}
+	endTime, err := time.Parse(time.RFC3339, strings.TrimSpace(end))
+	if err != nil || !endTime.After(startTime) {
+		return ""
+	}
+
+	totalMinutes := int(endTime.Sub(startTime).Minutes())
+	hours := totalMinutes / 60
+	minutes := totalMinutes % 60
+
+	switch {
+	case hours > 0 && minutes > 0:
+		return fmt.Sprintf("%d giờ %d phút", hours, minutes)
+	case hours > 0:
+		return fmt.Sprintf("%d giờ", hours)
+	default:
+		return fmt.Sprintf("%d phút", minutes)
+	}
+}
+
+func utcOffsetText(value time.Time) string {
+	_, offsetSeconds := value.Zone()
+	sign := "+"
+	if offsetSeconds < 0 {
+		sign = "-"
+		offsetSeconds = -offsetSeconds
+	}
+	hours := offsetSeconds / 3600
+	minutes := (offsetSeconds % 3600) / 60
+	return fmt.Sprintf("%s%02d:%02d", sign, hours, minutes)
 }
 
 func stringMapValue(input map[string]any, keys ...string) string {
