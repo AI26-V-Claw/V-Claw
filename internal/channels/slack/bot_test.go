@@ -172,8 +172,10 @@ func TestSlackApprovalTextOmitsTechnicalFields(t *testing.T) {
 			t.Fatalf("slack approval text leaked %q: %q", forbidden, text)
 		}
 	}
-	if !strings.Contains(text, "Hành động: Gửi email") {
-		t.Fatalf("expected human-friendly approval action, got %q", text)
+	for _, forbidden := range []string{"Cần bạn xác nhận trước khi thực hiện.", "Hành động:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("slack approval text should omit %q: %q", forbidden, text)
+		}
 	}
 }
 
@@ -201,6 +203,7 @@ func TestSlackApprovalTextShowsSandboxPythonCode(t *testing.T) {
 }
 
 func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
+	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := slackTextFromResponse(contracts.AgentResponse{
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
@@ -211,13 +214,13 @@ func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
 				Input: map[string]any{
 					"to":       []any{"vmkqa2@gmail.com"},
 					"subject":  "Mời họp chiều nay",
-					"textBody": "Chào bạn,\nMời bạn tham dự cuộc họp chiều nay.",
+					"textBody": body,
 				},
 			},
 		},
 	})
 
-	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay."} {
+	for _, want := range []string{"*Người nhận:*", "`vmkqa2@gmail.com`", "*Tiêu đề:*", "`Mời họp chiều nay`", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", "```"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
 		}

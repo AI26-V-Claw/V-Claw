@@ -167,17 +167,15 @@ func slackIsUserCancelledApproval(response contracts.AgentResponse) bool {
 }
 
 func slackApprovalText(approval contracts.ApprovalRequest) string {
-	action := slackActionLabel(approval.ToolCall.ToolName)
-	lines := []string{
-		"Cần bạn xác nhận trước khi thực hiện.",
-		"",
-		"Hành động: " + action,
-	}
+	lines := []string{}
 	if summary := sanitizeSlackResponseText(approval.Summary); summary != "" && !strings.EqualFold(summary, "Mình cần bạn xác nhận trước khi thực hiện hành động này.") {
 		lines = append(lines, summary)
 	}
 	if detail := slackApprovalDetailText(approval); detail != "" {
-		lines = append(lines, "", detail)
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, detail)
 	}
 	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy. Nếu muốn thay đổi, cứ nhắn thêm cho mình.")
 	return formatSlackUserText(lines...)
@@ -330,22 +328,22 @@ func slackApprovalDetailText(approval contracts.ApprovalRequest) string {
 func slackDraftApprovalDetailText(input map[string]any) string {
 	lines := []string{}
 	if recipients := stringSliceMapValue(input, "to"); len(recipients) > 0 {
-		lines = append(lines, "Người nhận: "+strings.Join(recipients, ", "))
+		lines = append(lines, slackField("Người nhận", strings.Join(recipients, ", ")))
 	}
 	if cc := stringSliceMapValue(input, "cc"); len(cc) > 0 {
-		lines = append(lines, "CC: "+strings.Join(cc, ", "))
+		lines = append(lines, slackField("CC", strings.Join(cc, ", ")))
 	}
 	if bcc := stringSliceMapValue(input, "bcc"); len(bcc) > 0 {
-		lines = append(lines, "BCC: "+strings.Join(bcc, ", "))
+		lines = append(lines, slackField("BCC", strings.Join(bcc, ", ")))
 	}
 	if subject := stringMapValue(input, "subject"); subject != "" {
-		lines = append(lines, "Tiêu đề: "+subject)
+		lines = append(lines, slackField("Tiêu đề", subject))
 	}
 	if body := firstNonEmptyStringMapValue(input, "textBody", "body", "content", "message", "text", "htmlBody"); body != "" {
-		lines = append(lines, "", "Nội dung email:", "", body)
+		lines = append(lines, "", "Nội dung email:", "", slackPreBlock(body))
 	}
 	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
-		lines = append(lines, "", "Tệp đính kèm: "+strings.Join(attachments, ", "))
+		lines = append(lines, "", slackField("Tệp đính kèm", strings.Join(attachments, ", ")))
 	}
 	return formatSlackUserText(lines...)
 }
@@ -445,6 +443,26 @@ func formatSlackUserText(lines ...string) string {
 		previousBlank = false
 	}
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func slackPreBlock(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return "```" + strings.ReplaceAll(text, "```", "``\u200b`") + "```"
+}
+
+func slackField(label string, value string) string {
+	label = strings.TrimSpace(label)
+	value = strings.TrimSpace(value)
+	if label == "" {
+		return value
+	}
+	if value == "" {
+		return "*" + label + ":*"
+	}
+	return "*" + label + ":* `" + strings.ReplaceAll(value, "`", "ˋ") + "`"
 }
 
 func slackApprovalBlocks(text, approvalID, sessionID string) []slack.Block {

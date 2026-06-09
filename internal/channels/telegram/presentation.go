@@ -17,6 +17,11 @@ const telegramApprovalStateTTL = 30 * time.Minute
 const (
 	telegramCodeBlockOpen  = "\uE000"
 	telegramCodeBlockClose = "\uE001"
+	telegramPreBlockOpen   = "\uE002"
+	telegramPreBlockClose  = "\uE003"
+	telegramFieldOpen      = "\uE004"
+	telegramFieldClose     = "\uE005"
+	telegramFieldSeparator = "\uE006"
 )
 
 var telegramSensitiveTextPattern = regexp.MustCompile(`(?i)(authorization:|bearer\s+[a-z0-9._\-]+|xox[baprs]-|xapp-|sk-[a-z0-9]|telegram-token|stack trace|traceback|panic:|provider chat failed|client secret|refresh token|access token|api[_ -]?key)`)
@@ -222,17 +227,15 @@ func telegramIsUserCancelledApproval(response contracts.AgentResponse) bool {
 }
 
 func telegramApprovalText(approval contracts.ApprovalRequest) string {
-	action := telegramActionLabel(approval.ToolCall.ToolName)
-	lines := []string{
-		"Cần bạn xác nhận trước khi thực hiện.",
-		"",
-		"Hành động: " + action,
-	}
+	lines := []string{}
 	if summary := sanitizeTelegramResponseText(approval.Summary); summary != "" && !strings.EqualFold(summary, "Mình cần bạn xác nhận trước khi thực hiện hành động này.") {
 		lines = append(lines, summary)
 	}
 	if detail := telegramApprovalDetailText(approval); detail != "" {
-		lines = append(lines, "", detail)
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, detail)
 	}
 	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy. Nếu muốn thay đổi, cứ nhắn thêm cho mình.")
 	return formatTelegramUserText(lines...)
@@ -385,22 +388,22 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 func telegramDraftApprovalDetailText(input map[string]any) string {
 	lines := []string{}
 	if recipients := stringSliceMapValue(input, "to"); len(recipients) > 0 {
-		lines = append(lines, "Người nhận: "+strings.Join(recipients, ", "))
+		lines = append(lines, telegramField("Người nhận", strings.Join(recipients, ", ")))
 	}
 	if cc := stringSliceMapValue(input, "cc"); len(cc) > 0 {
-		lines = append(lines, "CC: "+strings.Join(cc, ", "))
+		lines = append(lines, telegramField("CC", strings.Join(cc, ", ")))
 	}
 	if bcc := stringSliceMapValue(input, "bcc"); len(bcc) > 0 {
-		lines = append(lines, "BCC: "+strings.Join(bcc, ", "))
+		lines = append(lines, telegramField("BCC", strings.Join(bcc, ", ")))
 	}
 	if subject := stringMapValue(input, "subject"); subject != "" {
-		lines = append(lines, "Tiêu đề: "+subject)
+		lines = append(lines, telegramField("Tiêu đề", subject))
 	}
 	if body := firstNonEmptyStringMapValue(input, "textBody", "body", "content", "message", "text", "htmlBody"); body != "" {
-		lines = append(lines, "", "Nội dung email:", "", body)
+		lines = append(lines, "", "Nội dung email:", "", telegramPreBlock(body))
 	}
 	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
-		lines = append(lines, "", "Tệp đính kèm: "+strings.Join(attachments, ", "))
+		lines = append(lines, "", telegramField("Tệp đính kèm", strings.Join(attachments, ", ")))
 	}
 	return formatTelegramUserText(lines...)
 }
@@ -478,6 +481,14 @@ func telegramGenericApprovalDetailText(input map[string]any) string {
 
 func telegramCodeBlock(language string, code string) string {
 	return telegramCodeBlockOpen + strings.TrimSpace(language) + "\n" + strings.TrimSpace(code) + telegramCodeBlockClose
+}
+
+func telegramPreBlock(text string) string {
+	return telegramPreBlockOpen + strings.TrimSpace(text) + telegramPreBlockClose
+}
+
+func telegramField(label string, value string) string {
+	return telegramFieldOpen + strings.TrimSpace(label) + ":" + telegramFieldSeparator + strings.TrimSpace(value) + telegramFieldClose
 }
 
 func stringMapValue(input map[string]any, keys ...string) string {
