@@ -406,7 +406,7 @@ func telegramDraftApprovalDetailText(input map[string]any) string {
 		lines = append(lines, telegramField("Tiêu đề", subject))
 	}
 	if body := firstNonEmptyStringMapValue(input, "textBody", "body", "content", "message", "text", "htmlBody"); body != "" {
-		lines = append(lines, "", "Nội dung email:", "", telegramPreBlock(body))
+		lines = append(lines, "", telegramPreBlock(body))
 	}
 	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
 		lines = append(lines, "", telegramField("Tệp đính kèm", strings.Join(attachments, ", ")))

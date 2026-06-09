@@ -220,10 +220,13 @@ func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
 		},
 	})
 
-	for _, want := range []string{"*Người nhận:*", "`vmkqa2@gmail.com`", "*Tiêu đề:*", "`Mời họp chiều nay`", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", "```"} {
+	for _, want := range []string{"*Người nhận:*", "`vmkqa2@gmail.com`", "*Tiêu đề:*", "`Mời họp chiều nay`", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", "```"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
 		}
+	}
+	if strings.Contains(text, "Nội dung email:") {
+		t.Fatalf("expected email approval text to omit body label, got %q", text)
 	}
 }
 

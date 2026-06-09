@@ -480,10 +480,13 @@ func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 		},
 	})
 
-	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", telegramPreBlockOpen, telegramPreBlockClose, telegramFieldOpen, telegramFieldClose} {
+	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", telegramPreBlockOpen, telegramPreBlockClose, telegramFieldOpen, telegramFieldClose} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
 		}
+	}
+	if strings.Contains(text, "Nội dung email:") {
+		t.Fatalf("expected email approval text to omit body label, got %q", text)
 	}
 }
 
@@ -893,7 +896,7 @@ func TestTelegramRenderHTMLConvertsCodeBlockMarkers(t *testing.T) {
 }
 
 func TestTelegramRenderHTMLConvertsPreBlockMarkers(t *testing.T) {
-	rendered := telegramRenderHTML("Nội dung email:\n\n" + telegramPreBlock("Chào bạn,\n\nThân mến,\nV-Claw"))
+	rendered := telegramRenderHTML(telegramPreBlock("Chào bạn,\n\nThân mến,\nV-Claw"))
 
 	if !strings.Contains(rendered, "<blockquote>") {
 		t.Fatalf("expected html blockquote, got %q", rendered)

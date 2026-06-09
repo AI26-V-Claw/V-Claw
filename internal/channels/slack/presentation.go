@@ -344,7 +344,7 @@ func slackDraftApprovalDetailText(input map[string]any) string {
 		lines = append(lines, slackField("Tiêu đề", subject))
 	}
 	if body := firstNonEmptyStringMapValue(input, "textBody", "body", "content", "message", "text", "htmlBody"); body != "" {
-		lines = append(lines, "", "Nội dung email:", "", slackPreBlock(body))
+		lines = append(lines, "", slackPreBlock(body))
 	}
 	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
 		lines = append(lines, "", slackField("Tệp đính kèm", strings.Join(attachments, ", ")))
