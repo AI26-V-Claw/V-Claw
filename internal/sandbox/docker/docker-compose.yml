@@ -1,4 +1,4 @@
-# V-Claw Sandbox - Docker Compose
+docker history vclaw-sandbox:latest# V-Claw Sandbox - Docker Compose
 #
 # Dùng để:
 #   1. Build image: docker compose build

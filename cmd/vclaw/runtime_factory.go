@@ -52,9 +52,10 @@ type agentRuntimeOptions struct {
 }
 
 type agentRuntimeBundle struct {
-	Runtime  *agent.Runtime
-	Registry *tools.ToolRegistry
-	Model    string
+	Runtime     *agent.Runtime
+	Registry    *tools.ToolRegistry
+	Model       string
+	PolicyStore *policies.UserPolicyStore
 }
 
 func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRuntimeBundle, error) {
@@ -98,6 +99,10 @@ func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRun
 	if err != nil {
 		return agentRuntimeBundle{}, fmt.Errorf("create session store: %w", err)
 	}
+	userPolicy, policyStore, err := loadToolPolicy(options.Logger)
+	if err != nil {
+		return agentRuntimeBundle{}, fmt.Errorf("load user policy config: %w", err)
+	}
 
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
 		Provider:         openAI,
@@ -105,11 +110,12 @@ func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRun
 		IntentClassifier: intentClassifier,
 		TaskPlanner:      agent.NewLLMTaskPlanner(openAI, model),
 		SessionStore:     sessionStore,
+		Policy:           userPolicy,
 		MaxIterations:    options.MaxIterations,
 		Model:            model,
 		Logger:           options.Logger,
 	})
-	return agentRuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
+	return agentRuntimeBundle{Runtime: runtime, Registry: registry, Model: model, PolicyStore: policyStore}, nil
 }
 
 func newSandboxToolConfig() (sandboxtools.Config, error) {
@@ -263,6 +269,39 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, opti
 		return err
 	}
 	return nil
+}
+
+func loadToolPolicy(logger *slog.Logger) (policies.ToolPolicy, *policies.UserPolicyStore, error) {
+	dataDir := envOrDefault("DATA_DIR", "./data")
+	path := envOrDefault("VCLAW_USER_POLICY_PATH", policies.DefaultUserPolicyPath(dataDir))
+	missing := false
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		missing = true
+	}
+	store, err := policies.NewUserPolicyStore(path)
+	if err != nil {
+		return policies.ToolPolicy{}, nil, err
+	}
+	cfg := store.Snapshot()
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if missing && len(cfg.AutoAllow) == 0 && len(cfg.RequireApproval) == 0 && len(cfg.AlwaysBlock) == 0 {
+		logger.Warn("user policy config missing; using empty policy defaults",
+			"path", path,
+			"auto_allow", cfg.AutoAllow,
+			"require_approval", cfg.RequireApproval,
+			"always_block", cfg.AlwaysBlock,
+		)
+	} else {
+		logger.Info("loaded user policy config",
+			"path", path,
+			"auto_allow", cfg.AutoAllow,
+			"require_approval", cfg.RequireApproval,
+			"always_block", cfg.AlwaysBlock,
+		)
+	}
+	return policies.NewToolPolicyWithStore(store), store, nil
 }
 
 func fileExists(path string) bool {

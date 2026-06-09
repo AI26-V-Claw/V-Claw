@@ -570,6 +570,15 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = err.Message
 					return base, nil
 				}
+				r.logger.Info("agent loop exited after proposing approval-required tool",
+					"request_id", message.RequestID,
+					"session_id", message.SessionID,
+					"tool_call_id", providerToolCall.ID,
+					"tool_name", providerToolCall.Name,
+					"approval_id", approval.ApprovalID,
+					"risk_level", approval.RiskLevel,
+					"waiting_for_approval", true,
+				)
 				return contracts.AgentResponse{
 					RequestID:       message.RequestID,
 					SessionID:       message.SessionID,
@@ -607,13 +616,14 @@ If required information is missing, ask one concise clarification question inste
 					return base, nil
 				}
 				base.ToolResults = toolResults
+				base.Status = contracts.AgentStatusBlocked
+				base.Message = "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại."
 				base.Error = &contracts.ErrorShape{
 					Code:      policyErrorCode(found),
-					Message:   reason,
+					Message:   base.Message,
 					Source:    contracts.ErrorSourcePolicy,
 					Retryable: false,
 				}
-				base.Message = base.Error.Message
 				return base, nil
 			}
 		}
@@ -647,8 +657,18 @@ func (r *Runtime) HasPendingApproval(sessionID string) bool {
 }
 
 func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decision contracts.ApprovalDecision) (contracts.AgentResponse, error) {
+	switch decision.Decision {
+	case contracts.ApprovalDecisionRevised:
+		return r.ReviseApproval(ctx, sessionID, decision.RequestID, decision.ApprovalID, decision.Comment)
+	}
+
 	pending, ok := r.takePendingApproval(sessionID, decision.ApprovalID)
 	if !ok {
+		r.logger.Info("approval request lookup failed or was already resolved",
+			"request_id", decision.RequestID,
+			"session_id", sessionID,
+			"approval_id", strings.TrimSpace(decision.ApprovalID),
+		)
 		return contracts.AgentResponse{
 			RequestID: decision.RequestID,
 			SessionID: sessionID,
@@ -664,6 +684,14 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 	}
 
 	if pending.request.ExpiresAt.Before(r.now()) {
+		r.logger.Info("approval decision received for expired request",
+			"request_id", decision.RequestID,
+			"session_id", sessionID,
+			"approval_id", pending.request.ApprovalID,
+			"tool_call_id", pending.request.ToolCallID,
+			"old_status", pending.request.Status,
+			"new_status", contracts.ApprovalStatusExpired,
+		)
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
 			SessionID: pending.message.SessionID,
@@ -680,6 +708,20 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 
 	switch decision.Decision {
 	case contracts.ApprovalDecisionApproved:
+		r.logger.Info("approval request status updated",
+			"request_id", pending.message.RequestID,
+			"session_id", pending.message.SessionID,
+			"approval_id", pending.request.ApprovalID,
+			"tool_call_id", pending.request.ToolCallID,
+			"old_status", pending.request.Status,
+			"new_status", contracts.ApprovalStatusApproved,
+		)
+		r.logger.Info("runtime resuming pending tool after approval",
+			"request_id", pending.message.RequestID,
+			"session_id", pending.message.SessionID,
+			"approval_id", pending.request.ApprovalID,
+			"tool_call_id", pending.request.ToolCallID,
+		)
 		result := r.executeAllowedTool(ctx, pending.toolCall, pending.definition)
 		if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
 			return contracts.AgentResponse{
@@ -716,12 +758,26 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 		// to detect and execute any tasks from the original request not yet done.
 		if result.Success {
 			continuation := buildApprovalContinuationMessage(pending, result, r.now())
+			r.logger.Info("runtime received resume signal for continuation after approval",
+				"request_id", pending.message.RequestID,
+				"session_id", pending.message.SessionID,
+				"approval_id", pending.request.ApprovalID,
+				"tool_call_id", pending.request.ToolCallID,
+			)
 			if continuationResp, err := r.Run(ctx, continuation); err == nil {
 				return continuationResp, nil
 			}
 		}
 		return response, nil
 	case contracts.ApprovalDecisionRejected:
+		r.logger.Info("approval request status updated",
+			"request_id", pending.message.RequestID,
+			"session_id", pending.message.SessionID,
+			"approval_id", pending.request.ApprovalID,
+			"tool_call_id", pending.request.ToolCallID,
+			"old_status", pending.request.Status,
+			"new_status", contracts.ApprovalStatusRejected,
+		)
 		comment := strings.TrimSpace(decision.Comment)
 		if comment != "" {
 			return contracts.AgentResponse{
@@ -753,7 +809,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			Message:   "Quyết định xác nhận không hợp lệ.",
 			Error: &contracts.ErrorShape{
 				Code:      contracts.ErrorInvalidInput,
-				Message:   "approval decision must be approved or rejected",
+				Message:   "approval decision must be approved, rejected, or revised",
 				Source:    contracts.ErrorSourceAgent,
 				Retryable: false,
 			},
@@ -766,8 +822,13 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 	if comment == "" {
 		comment = "Tôi muốn chỉnh lại yêu cầu đang chờ xác nhận."
 	}
-	pending, ok := r.peekPendingApproval(sessionID, approvalID)
+	pending, ok := r.takePendingApproval(sessionID, approvalID)
 	if !ok {
+		r.logger.Info("approval request lookup failed",
+			"request_id", requestID,
+			"session_id", sessionID,
+			"approval_id", strings.TrimSpace(approvalID),
+		)
 		return contracts.AgentResponse{
 			RequestID: requestID,
 			SessionID: sessionID,
@@ -782,7 +843,14 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 		}, nil
 	}
 	if pending.request.ExpiresAt.Before(r.now()) {
-		r.takePendingApproval(sessionID, approvalID)
+		r.logger.Info("approval decision received for expired request",
+			"request_id", requestID,
+			"session_id", sessionID,
+			"approval_id", pending.request.ApprovalID,
+			"tool_call_id", pending.request.ToolCallID,
+			"old_status", pending.request.Status,
+			"new_status", contracts.ApprovalStatusExpired,
+		)
 		return contracts.AgentResponse{
 			RequestID: requestID,
 			SessionID: sessionID,
@@ -809,7 +877,16 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 		revisionMessage.Metadata = map[string]any{}
 	}
 	revisionMessage.Metadata["approvalId"] = pending.request.ApprovalID
+	revisionMessage.Metadata["parentApprovalId"] = pending.request.ApprovalID
 	revisionMessage.Metadata["revisionComment"] = comment
+	r.logger.Info("approval request status updated",
+		"request_id", pending.message.RequestID,
+		"session_id", pending.message.SessionID,
+		"approval_id", pending.request.ApprovalID,
+		"tool_call_id", pending.request.ToolCallID,
+		"old_status", pending.request.Status,
+		"new_status", contracts.ApprovalStatusRevised,
+	)
 
 	return r.Run(ctx, revisionMessage)
 }
@@ -1672,7 +1749,6 @@ func (r *Runtime) storePendingClarification(ctx context.Context, sessionID strin
 	memory.PendingClarification = clonePendingClarification(pending)
 	return r.saveSessionMemory(ctx, sessionID, memory)
 }
-
 
 func pendingClarificationFromToolCall(originalRequest string, question string, toolCall providers.ToolCall, missing []string) *sessions.PendingClarification {
 	return &sessions.PendingClarification{
@@ -2971,19 +3047,38 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		Input:      cloneArguments(toolCall.Arguments),
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
-	return contracts.ApprovalRequest{
-		ApprovalID: "appr_" + safeID(toolCall.ID),
-		RequestID:  message.RequestID,
-		SessionID:  message.SessionID,
-		ToolCallID: toolCall.ID,
-		Status:     contracts.ApprovalStatusPending,
-		RiskLevel:  decision.RiskLevel,
-		Summary:    summary,
-		Details:    decision.Reason,
-		ToolCall:   contractCall,
-		CreatedAt:  now,
-		ExpiresAt:  now.Add(approvalTTL),
+	parentApprovalID := ""
+	if message.Metadata != nil {
+		if value, ok := message.Metadata["parentApprovalId"].(string); ok && strings.TrimSpace(value) != "" {
+			parentApprovalID = strings.TrimSpace(value)
+		} else if value, ok := message.Metadata["approvalId"].(string); ok && strings.TrimSpace(value) != "" {
+			parentApprovalID = strings.TrimSpace(value)
+		}
 	}
+	approval := contracts.ApprovalRequest{
+		ApprovalID:       "appr_" + safeID(toolCall.ID),
+		ParentApprovalID: parentApprovalID,
+		RequestID:        message.RequestID,
+		SessionID:        message.SessionID,
+		ToolCallID:       toolCall.ID,
+		Status:           contracts.ApprovalStatusPending,
+		RiskLevel:        decision.RiskLevel,
+		Summary:          summary,
+		Details:          decision.Reason,
+		ToolCall:         contractCall,
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(approvalTTL),
+	}
+	r.logger.Info("approval request created",
+		"request_id", message.RequestID,
+		"session_id", message.SessionID,
+		"approval_id", approval.ApprovalID,
+		"tool_call_id", toolCall.ID,
+		"tool_name", toolCall.Name,
+		"risk_level", approval.RiskLevel,
+		"parent_approval_id", approval.ParentApprovalID,
+	)
+	return approval
 }
 
 func (r *Runtime) storePendingApproval(pending pendingApproval) {
@@ -2999,6 +3094,13 @@ func (r *Runtime) storePendingApproval(pending pendingApproval) {
 	}
 	r.pendingApprovals[approvalID] = pending
 	r.pendingBySession[sessionID] = approvalID
+	r.logger.Info("approval request persisted",
+		"request_id", pending.message.RequestID,
+		"session_id", sessionID,
+		"approval_id", approvalID,
+		"tool_call_id", pending.request.ToolCallID,
+		"tool_name", pending.request.ToolCall.ToolName,
+	)
 }
 
 func (r *Runtime) takePendingApproval(sessionID string, approvalID string) (pendingApproval, bool) {
@@ -3009,11 +3111,19 @@ func (r *Runtime) takePendingApproval(sessionID string, approvalID string) (pend
 	if approvalID == "" {
 		approvalID = r.pendingBySession[sessionID]
 	}
+	r.logger.Info("approval request lookup attempted",
+		"session_id", sessionID,
+		"approval_id", approvalID,
+	)
 	if approvalID == "" {
 		return pendingApproval{}, false
 	}
 	pending, ok := r.pendingApprovals[approvalID]
 	if !ok {
+		r.logger.Info("approval request lookup failed or was already resolved",
+			"session_id", sessionID,
+			"approval_id", approvalID,
+		)
 		return pendingApproval{}, false
 	}
 	delete(r.pendingApprovals, approvalID)

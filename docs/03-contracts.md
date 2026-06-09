@@ -297,6 +297,7 @@ Safety / Agent Core -> Channel / User
 ```json
 {
   "approvalId": "appr_001",
+  "parentApprovalId": "appr_root",
   "requestId": "req_001",
   "sessionId": "sess_001",
   "toolCallId": "toolcall_001",
@@ -323,6 +324,7 @@ Status:
 pending
 approved
 rejected
+revised
 expired
 cancelled
 ```
@@ -353,6 +355,7 @@ Decision:
 ```text
 approved
 rejected
+revised
 ```
 
 ---
@@ -583,6 +586,7 @@ tool.call.failed
 approval.requested
 approval.approved
 approval.rejected
+approval.cancelled
 approval.expired
 approval.resolved
 
@@ -657,6 +661,71 @@ Must not happen:
 
 ```text
 file deletion or command execution before approval
+```
+
+## 6.3. Approval Revision Flow
+
+Input:
+
+```text
+Hãy tạo lịch họp chiều mai, nhưng đổi sang 10h30 và thêm Minh vào người tham gia.
+```
+
+Expected:
+
+```text
+UserMessage
+-> Turn Router: tool_enabled
+-> Agent Loop
+-> calendar.createEvent proposed
+-> RiskDecision: external_write, requires_approval
+-> ApprovalRequest(pending)
+-> ApprovalDecision: revised
+-> original ApprovalRequest marked revised
+-> Agent updates tool input from revision comment
+-> new ApprovalRequest(parentApprovalId=original)
+-> ApprovalDecision: approved
+-> calendar.createEvent executed
+-> AgentResponse: completed
+```
+
+Must not happen:
+
+```text
+calendar.createEvent executed before the revised request is approved
+```
+
+## 6.4. Auto-Allow Risk Policy
+
+Input:
+
+```text
+Đọc danh sách email gần đây và tóm tắt giúp tôi.
+```
+
+Precondition:
+
+```text
+UserPolicyConfig.auto_allow includes safe_read
+```
+
+Expected:
+
+```text
+UserMessage
+-> Turn Router: tool_enabled
+-> Agent Loop
+-> gmail.listEmails proposed
+-> RiskDecision: safe_read, allow
+-> no ApprovalRequest
+-> gmail.getEmail / follow-up read tools execute if needed
+-> AgentResponse: completed
+```
+
+Must not happen:
+
+```text
+ApprovalRequest created for a risk level already auto-allowed by user policy
 ```
 
 ---

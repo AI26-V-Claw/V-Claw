@@ -67,9 +67,11 @@ func runTelegramRun(ctx context.Context, args []string) error {
 
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	stopPolicyReload := startPolicyReloadWatcher(runCtx, logger, bundle.PolicyStore)
+	defer stopPolicyReload()
 
 	logger.Info("starting vclaw telegram runtime", "model", bundle.Model, "google_tools", *googleToolsMode, "web_tools", *webToolsMode)
-	bot := telegram.New(*botToken, *allowedUserID, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime), logger)
+	bot := telegram.New(*botToken, *allowedUserID, *dataDir, bundle.PolicyStore, agent.NewRuntimeMessenger(bundle.Runtime), logger)
 	if err := bot.Run(runCtx); err != nil && err != context.Canceled {
 		return fmt.Errorf("telegram bot stopped: %w", err)
 	}

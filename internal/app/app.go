@@ -51,7 +51,7 @@ func New() (*App, error) {
 
 	runners := make([]channelRunner, 0, 2)
 	if cfg.TelegramEnabled {
-		runners = append(runners, telegram.New(cfg.TelegramBotToken, cfg.AllowedTelegramUserID, cfg.DataDir, messenger, logger))
+		runners = append(runners, telegram.New(cfg.TelegramBotToken, cfg.AllowedTelegramUserID, cfg.DataDir, nil, messenger, logger))
 	}
 	if cfg.SlackEnabled {
 		slackBot, err := slackchannel.New(slackchannel.Config{
@@ -59,6 +59,7 @@ func New() (*App, error) {
 			AppToken:          cfg.SlackAppToken,
 			OwnerUserID:       cfg.SlackOwnerUserID,
 			AllowedChannelIDs: cfg.SlackAllowedChannelIDs,
+			PolicyStore:       nil,
 		}, messenger, logger)
 		if err != nil {
 			return nil, err

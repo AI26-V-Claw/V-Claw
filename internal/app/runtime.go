@@ -80,6 +80,10 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 			return nil, fmt.Errorf("create session store: %w", err)
 		}
 	}
+	userPolicy, _, err := loadToolPolicy(config.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("load user policy config: %w", err)
+	}
 
 	return agent.NewRuntime(agent.RuntimeConfig{
 		Provider: provider,
@@ -89,6 +93,7 @@ func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Run
 			reference.NewHeuristicResolver(),
 		),
 		SessionStore:  sessionStore,
+		Policy:        userPolicy,
 		Logger:        config.Logger,
 		MaxIterations: config.MaxIterations,
 		Model:         model,
@@ -208,4 +213,45 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 		Guard:               guard,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
+}
+
+func loadToolPolicy(logger *slog.Logger) (policies.ToolPolicy, *policies.UserPolicyStore, error) {
+	dataDir := envOrDefault("DATA_DIR", "./data")
+	path := envOrDefault("VCLAW_USER_POLICY_PATH", policies.DefaultUserPolicyPath(dataDir))
+	missing := false
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		missing = true
+	}
+	store, err := policies.NewUserPolicyStore(path)
+	if err != nil {
+		return policies.ToolPolicy{}, nil, err
+	}
+	cfg := store.Snapshot()
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if missing && len(cfg.AutoAllow) == 0 && len(cfg.RequireApproval) == 0 && len(cfg.AlwaysBlock) == 0 {
+		logger.Warn("user policy config missing; using empty policy defaults",
+			"path", path,
+			"auto_allow", cfg.AutoAllow,
+			"require_approval", cfg.RequireApproval,
+			"always_block", cfg.AlwaysBlock,
+		)
+	} else {
+		logger.Info("loaded user policy config",
+			"path", path,
+			"auto_allow", cfg.AutoAllow,
+			"require_approval", cfg.RequireApproval,
+			"always_block", cfg.AlwaysBlock,
+		)
+	}
+	return policies.NewToolPolicyWithStore(store), store, nil
+}
+
+func envOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }

@@ -192,6 +192,11 @@ func TestNewHITLEvents(t *testing.T) {
 	if rejected.EventType != audit.EventHITLRejected || rejected.Status != audit.StatusRejected {
 		t.Errorf("unexpected rejected event: type=%s status=%s", rejected.EventType, rejected.Status)
 	}
+
+	cancelled := audit.NewHITLCancelledEvent(base, "hitl_001")
+	if cancelled.EventType != audit.EventHITLCancelled || cancelled.Status != audit.StatusCancelled {
+		t.Errorf("unexpected cancelled event: type=%s status=%s", cancelled.EventType, cancelled.Status)
+	}
 }
 
 func TestNewBlockedEvent(t *testing.T) {

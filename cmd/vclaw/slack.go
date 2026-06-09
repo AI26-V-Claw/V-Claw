@@ -68,6 +68,8 @@ func runSlackRun(ctx context.Context, args []string) error {
 
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	stopPolicyReload := startPolicyReloadWatcher(runCtx, logger, bundle.PolicyStore)
+	defer stopPolicyReload()
 
 	logger.Info("starting vclaw slack runtime", "model", bundle.Model, "google_tools", *googleToolsMode)
 	bot, err := slack.New(slack.Config{
@@ -75,6 +77,7 @@ func runSlackRun(ctx context.Context, args []string) error {
 		AppToken:          *appToken,
 		OwnerUserID:       *ownerUserID,
 		AllowedChannelIDs: splitCSV(*allowedChannels),
+		PolicyStore:       bundle.PolicyStore,
 	}, agent.NewRuntimeMessenger(bundle.Runtime), logger)
 	if err != nil {
 		return err

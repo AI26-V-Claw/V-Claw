@@ -314,15 +314,21 @@ func CreateSpace(ctx context.Context, client *http.Client, input CreateSpaceInpu
 	if spaceType == "" {
 		spaceType = "SPACE"
 	}
+	displayName := strings.TrimSpace(input.DisplayName)
+	if spaceType == "DIRECT_MESSAGE" {
+		displayName = ""
+	}
 	request := &chatapi.SetUpSpaceRequest{
 		RequestId: strings.TrimSpace(input.RequestID),
 		Space: &chatapi.Space{
-			DisplayName: strings.TrimSpace(input.DisplayName),
-			SpaceType:   spaceType,
+			SpaceType: spaceType,
 		},
 		Memberships: membershipsFromUsers(input.MemberUsers),
 	}
-	if spaceType == "SPACE" && strings.TrimSpace(input.DisplayName) == "" {
+	if displayName != "" {
+		request.Space.DisplayName = displayName
+	}
+	if spaceType == "SPACE" && displayName == "" {
 		return Space{}, errors.New("displayName is required for SPACE")
 	}
 

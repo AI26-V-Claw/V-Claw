@@ -3,13 +3,19 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/socketmode"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/contracts"
+	"vclaw/internal/policies"
 )
 
 func TestHandleSlackMessageIgnoresBotOwnMessages(t *testing.T) {
@@ -83,6 +89,36 @@ func TestSlackTextFromFailedResponseHidesDetails(t *testing.T) {
 	}
 }
 
+func TestSlackTextFromBlockedByPolicyResponseShowsPolicyMessage(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusFailed,
+		Error: &contracts.ErrorShape{
+			Code:      contracts.ErrorActionBlockedByPolicy,
+			Message:   "tool blocked by policy: gmail.trashMessage",
+			Source:    contracts.ErrorSourcePolicy,
+			Retryable: false,
+		},
+	})
+	if text != "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại." {
+		t.Fatalf("unexpected policy block text: %q", text)
+	}
+}
+
+func TestSlackTextFromApprovalExpiredResponseShowsExpiredMessage(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusFailed,
+		Error: &contracts.ErrorShape{
+			Code:      contracts.ErrorApprovalExpired,
+			Message:   "approval expired",
+			Source:    contracts.ErrorSourcePolicy,
+			Retryable: false,
+		},
+	})
+	if text != "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại." {
+		t.Fatalf("unexpected approval expired text: %q", text)
+	}
+}
+
 func TestSlackApprovalValueRoundTrip(t *testing.T) {
 	value := slackApprovalValue("approve", "appr_123", "slack_channel_C1")
 	action, approvalID, sessionID, ok := parseSlackApprovalValue(value)
@@ -140,6 +176,199 @@ func TestSlackReviseCommentReadsModalState(t *testing.T) {
 	}
 	if got := slackReviseComment(callback); got != "đổi giờ sang 10:00" {
 		t.Fatalf("unexpected revise comment: %q", got)
+	}
+}
+
+func TestSlackPolicySettingsActionValueRoundTrip(t *testing.T) {
+	raw := slackPolicySettingsActionValue(slackPolicySettingsOpenAction)
+	action, ok := parseSlackPolicySettingsActionValue(raw)
+	if !ok {
+		t.Fatalf("expected action value to parse: %q", raw)
+	}
+	if action != slackPolicySettingsOpenAction {
+		t.Fatalf("unexpected action: %q", action)
+	}
+}
+
+func TestSlackPolicySettingsTriggerTextMatchesStandaloneKeywords(t *testing.T) {
+	for _, input := range []string{
+		"settings",
+		"cài đặt",
+		"policy",
+		"please settings",
+		"nhờ mở cài đặt giúp",
+		"mở policy nhé",
+		"(settings)",
+	} {
+		if !isSlackPolicySettingsTriggerText(input) {
+			t.Fatalf("expected %q to match policy settings trigger", input)
+		}
+	}
+	for _, input := range []string{
+		"settings-based",
+		"policy-based",
+		"deployment policying",
+		"cài_đặt",
+		"mysettings",
+	} {
+		if isSlackPolicySettingsTriggerText(input) {
+			t.Fatalf("expected %q to not match policy settings trigger", input)
+		}
+	}
+}
+
+func TestSlackPolicySettingsTriggerMessagePostsSingleButtonPrompt(t *testing.T) {
+	var requestBody struct {
+		Channel  string           `json:"channel"`
+		Text     string           `json:"text"`
+		ThreadTS string           `json:"thread_ts"`
+		Blocks   []map[string]any `json:"blocks"`
+	}
+
+	client := &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path != "/chat.postMessage" {
+				t.Fatalf("unexpected slack api path: %s", r.URL.Path)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			values, err := url.ParseQuery(string(body))
+			if err != nil {
+				t.Fatalf("parse request body: %v", err)
+			}
+			requestBody.Channel = values.Get("channel")
+			requestBody.Text = values.Get("text")
+			requestBody.ThreadTS = values.Get("thread_ts")
+			if err := json.Unmarshal([]byte(values.Get("blocks")), &requestBody.Blocks); err != nil {
+				t.Fatalf("decode blocks: %v", err)
+			}
+			return jsonResponse(http.StatusOK, `{"ok":true,"channel":"C123","ts":"123.45"}`), nil
+		}),
+	}
+
+	bot := &Bot{
+		api:         slack.New("test-token", slack.OptionAPIURL("http://slack.local/"), slack.OptionHTTPClient(client)),
+		ownerUserID: "U123",
+		botUserID:   "B123",
+	}
+
+	err := bot.handleEvent(context.Background(), socketmode.Event{
+		Type: socketmode.EventTypeEventsAPI,
+		Data: slackevents.EventsAPIEvent{
+			Type: slackevents.CallbackEvent,
+			InnerEvent: slackevents.EventsAPIInnerEvent{
+				Type: "message",
+				Data: &slackevents.MessageEvent{
+					User:            "U123",
+					Text:            "policy",
+					TimeStamp:       "123.45",
+					ThreadTimeStamp: "987.65",
+					Channel:         "C123",
+					ChannelType:     "channel",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if requestBody.Channel != "C123" {
+		t.Fatalf("unexpected channel: %q", requestBody.Channel)
+	}
+	if requestBody.ThreadTS != "987.65" {
+		t.Fatalf("unexpected thread ts: %q", requestBody.ThreadTS)
+	}
+	if len(requestBody.Blocks) != 2 {
+		t.Fatalf("expected two blocks, got %d", len(requestBody.Blocks))
+	}
+	actionBlock, ok := requestBody.Blocks[1]["elements"].([]any)
+	if !ok {
+		t.Fatalf("expected action elements, got %#v", requestBody.Blocks[1]["elements"])
+	}
+	if len(actionBlock) != 1 {
+		t.Fatalf("expected one button, got %d", len(actionBlock))
+	}
+	button, ok := actionBlock[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected button object, got %#v", actionBlock[0])
+	}
+	text, ok := button["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected button text object, got %#v", button["text"])
+	}
+	if got := text["text"]; got != "⚙️ Cài đặt chính sách" {
+		t.Fatalf("unexpected button label: %v", got)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func jsonResponse(statusCode int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestSlackPolicySettingsModalBlocksContainAllRiskLevels(t *testing.T) {
+	blocks := slackPolicySettingsModalBlocks(policies.EffectivePolicyConfig(policies.UserPolicyConfig{}))
+	if len(blocks) != 8 {
+		t.Fatalf("expected section plus seven input blocks, got %d", len(blocks))
+	}
+	seen := map[string]bool{}
+	for _, block := range blocks[1:] {
+		input, ok := block.(*slack.InputBlock)
+		if !ok {
+			t.Fatalf("expected input block, got %T", block)
+		}
+		seen[input.BlockID] = true
+	}
+	for _, level := range []string{
+		"vclaw_policy_safe_read",
+		"vclaw_policy_safe_compute",
+		"vclaw_policy_sensitive_read",
+		"vclaw_policy_external_write",
+		"vclaw_policy_local_write",
+		"vclaw_policy_code_execution",
+		"vclaw_policy_destructive",
+	} {
+		if !seen[level] {
+			t.Fatalf("missing policy block %q", level)
+		}
+	}
+	for _, block := range blocks[1:] {
+		input := block.(*slack.InputBlock)
+		if strings.Contains(input.Label.Text, "safe_") || strings.Contains(input.Label.Text, "auto_") {
+			t.Fatalf("expected translated label, got %q", input.Label.Text)
+		}
+	}
+	for _, want := range []string{
+		"Đọc email, lịch họp, tin nhắn",
+		"Tóm tắt nội dung, dịch văn bản",
+		"Mở và đọc chi tiết email, tài liệu",
+		"Gửi email, đặt lịch họp, nhắn tin",
+		"Tải file đính kèm, lưu tài liệu",
+		"Thực thi script hoặc lệnh hệ thống",
+		"Xóa email, file, lịch họp",
+	} {
+		found := false
+		for _, block := range blocks[1:] {
+			input := block.(*slack.InputBlock)
+			if input.Label.Text == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing translated label %q", want)
+		}
 	}
 }
 

@@ -105,3 +105,45 @@ func TestToolPolicyDecideToolCallBlocksDisabledOrUnknownTool(t *testing.T) {
 		t.Fatalf("expected unknown tool riskLevel=destructive, got %#v", unknown)
 	}
 }
+
+func TestToolPolicyDecideToolCallHonorsUserPolicyConfig(t *testing.T) {
+	policy := NewToolPolicyWithConfig(UserPolicyConfig{
+		AutoAllow:       []contracts.RiskLevel{contracts.RiskLevelExternalWrite},
+		RequireApproval: []contracts.RiskLevel{contracts.RiskLevelSafeRead},
+		AlwaysBlock:     []contracts.RiskLevel{contracts.RiskLevelLocalWrite},
+	})
+
+	allow := policy.DecideToolCall("call_allow", tools.ToolDefinition{
+		Name:             "calendar.createEvent",
+		Capability:       tools.CapabilityMutating,
+		RiskLevel:        tools.RiskLevelExternalWrite,
+		RequiresApproval: true,
+		Enabled:          true,
+	}, true, time.Now())
+	if allow.Decision != contracts.RiskDecisionAllow {
+		t.Fatalf("expected auto-allow, got %#v", allow)
+	}
+	if allow.RequiresApproval {
+		t.Fatalf("auto-allow should skip approval, got %#v", allow)
+	}
+
+	block := policy.DecideToolCall("call_block", tools.ToolDefinition{
+		Name:       "file.write",
+		Capability: tools.CapabilityReadOnly,
+		RiskLevel:  tools.RiskLevelLocalWrite,
+		Enabled:    true,
+	}, true, time.Now())
+	if block.Decision != contracts.RiskDecisionBlock {
+		t.Fatalf("expected always_block, got %#v", block)
+	}
+
+	approve := policy.DecideToolCall("call_approval", tools.ToolDefinition{
+		Name:       "gmail.listEmails",
+		Capability: tools.CapabilityReadOnly,
+		RiskLevel:  tools.RiskLevelSafeRead,
+		Enabled:    true,
+	}, true, time.Now())
+	if approve.Decision != contracts.RiskDecisionRequiresApproval {
+		t.Fatalf("expected require_approval override, got %#v", approve)
+	}
+}

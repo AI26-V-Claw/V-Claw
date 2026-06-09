@@ -27,6 +27,8 @@ Không tạo sequence diagram riêng cho mọi connector, mọi use case, hoặc
 | Read-only Gmail summary | Mẫu Google Workspace read-only, không HITL | 1/2 | `gmail.listEmails`, `gmail.getEmail`, `safe_read` | [02-gmail-read-summary.md](scenarios/02-gmail-read-summary.md) |
 | Calendar create with HITL | Mẫu external write bắt buộc approval | 2 | `calendar.createEvent`, `RiskDecision`, `ApprovalRequest` | [03-calendar-create-hitl.md](scenarios/03-calendar-create-hitl.md) |
 | Sandbox command with HITL | Mẫu code execution/local action bắt buộc approval | 2 | `sandbox.runShell` / `sandbox.runPython`, `code_execution` | [04-sandbox-command-hitl.md](scenarios/04-sandbox-command-hitl.md) |
+| Approval revision flow | Mẫu revised request tạo approval mới theo comment | 2 | `ApprovalDecision=revised`, `parentApprovalId` | [05-approval-revision-hitl.md](scenarios/05-approval-revision-hitl.md) |
+| Auto-allow policy | Mẫu user policy auto-allow risk thấp | 2 | `UserPolicyConfig`, `auto_allow`, `RiskDecision=allow` | [06-auto-allow-policy.md](scenarios/06-auto-allow-policy.md) |
 
 ---
 
