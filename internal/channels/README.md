@@ -118,6 +118,14 @@ hãy liệt kê 10 tin nhắn tôi nhắn với Bao
 
 Detailed tool/provider errors are logged in the local terminal. Telegram should receive a short user-friendly failure message instead of raw tokens, IDs, stack traces, or provider errors.
 
+### Policy Settings In Telegram
+
+Send `/policy` in the same chat to open the policy menu.
+
+- Tap a risk-level button to cycle it between `Tự động cho phép`, `Cần phê duyệt`, and `Luôn chặn`.
+- Tap `Lưu` to save the policy and reload it locally.
+- If destructive actions are placed in `Tự động cho phép`, Telegram shows a short validation warning and keeps the menu open.
+
 ## Slack Setup
 
 Slack uses Socket Mode, so V-Claw can run locally without exposing a public HTTP endpoint.
@@ -234,6 +242,14 @@ Or invite the app to a channel and mention it:
 ```
 
 Workspace users may see the Slack app, but only `VCLAW_SLACK_OWNER_USER_ID` is allowed to trigger agent runs in single-owner mode.
+
+### Policy Settings In Slack
+
+Send `policy`, `settings`, or `cài đặt` to the app to open the policy modal.
+
+- Each risk level shows the description text instead of the technical risk key.
+- Choose a group from the dropdown for each risk level, then submit the modal to save and reload the policy locally.
+- If destructive actions are placed in `Tự động cho phép`, Slack shows a validation error on the destructive field and keeps the modal open.
 
 ## Runtime Commands
 
