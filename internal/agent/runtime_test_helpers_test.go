@@ -59,6 +59,8 @@ type failingAssistantAppendSessionStore struct {
 	*sessions.InMemoryStore
 }
 
+type toolEnabledRouter struct{}
+
 func (blockingRuntimeTool) Name() string                 { return "test.blocking" }
 func (blockingRuntimeTool) Description() string          { return "Blocks until released." }
 func (blockingRuntimeTool) Parameters() tools.ToolSchema { return tools.ToolSchema{"type": "object"} }
@@ -320,4 +322,12 @@ func runtimeTestMessage() contracts.UserMessage {
 
 func fixedTestTime() time.Time {
 	return time.Date(2026, 5, 29, 9, 0, 0, 0, time.FixedZone("ICT", 7*60*60))
+}
+
+func testToolEnabledRouter() TurnRouter {
+	return toolEnabledRouter{}
+}
+
+func (toolEnabledRouter) RouteTurn(_ context.Context, _ TurnRouteInput) (TurnRoute, error) {
+	return TurnRoute{Mode: TurnModeToolEnabled, Reason: "test"}, nil
 }

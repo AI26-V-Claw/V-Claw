@@ -29,6 +29,10 @@ func (r *Runtime) HasPendingApproval(ctx context.Context, sessionID string) bool
 }
 
 func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decision contracts.ApprovalDecision) (contracts.AgentResponse, error) {
+	if decision.Decision == contracts.ApprovalDecisionRevised {
+		return r.ReviseApproval(ctx, sessionID, decision.RequestID, decision.ApprovalID, decision.Comment)
+	}
+
 	pending, ok := r.takePendingApproval(sessionID, decision.ApprovalID)
 	if !ok {
 		var errShape *contracts.ErrorShape
@@ -255,6 +259,7 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 		revisionMessage.Metadata = map[string]any{}
 	}
 	revisionMessage.Metadata["approvalId"] = pending.request.ApprovalID
+	revisionMessage.Metadata["parentApprovalId"] = pending.request.ApprovalID
 	revisionMessage.Metadata["revisionComment"] = comment
 
 	return r.Run(ctx, revisionMessage)
@@ -270,18 +275,27 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		Input:      cloneArguments(toolCall.Arguments),
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
+	parentApprovalID := ""
+	if message.Metadata != nil {
+		if value, ok := message.Metadata["parentApprovalId"].(string); ok && strings.TrimSpace(value) != "" {
+			parentApprovalID = strings.TrimSpace(value)
+		} else if value, ok := message.Metadata["approvalId"].(string); ok && strings.TrimSpace(value) != "" {
+			parentApprovalID = strings.TrimSpace(value)
+		}
+	}
 	return contracts.ApprovalRequest{
-		ApprovalID: "appr_" + safeID(toolCall.ID),
-		RequestID:  message.RequestID,
-		SessionID:  message.SessionID,
-		ToolCallID: toolCall.ID,
-		Status:     contracts.ApprovalStatusPending,
-		RiskLevel:  decision.RiskLevel,
-		Summary:    summary,
-		Details:    decision.Reason,
-		ToolCall:   contractCall,
-		CreatedAt:  now,
-		ExpiresAt:  now.Add(approvalTTL),
+		ApprovalID:       "appr_" + safeID(toolCall.ID),
+		ParentApprovalID: parentApprovalID,
+		RequestID:        message.RequestID,
+		SessionID:        message.SessionID,
+		ToolCallID:       toolCall.ID,
+		Status:           contracts.ApprovalStatusPending,
+		RiskLevel:        decision.RiskLevel,
+		Summary:          summary,
+		Details:          decision.Reason,
+		ToolCall:         contractCall,
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(approvalTTL),
 	}
 }
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
 	"vclaw/internal/policies"
@@ -36,6 +38,7 @@ type RuntimeConfig struct {
 	Policy                policies.ToolPolicy
 	SessionStore          sessions.Store
 	StateStore            RuntimeStateStore
+	TurnRouter            TurnRouter
 	Logger                *slog.Logger
 	MaxIterations         int
 	ToolTimeout           time.Duration
@@ -53,6 +56,7 @@ type Runtime struct {
 	policy                policies.ToolPolicy
 	sessionStore          sessions.Store
 	stateStore            RuntimeStateStore
+	turnRouter            TurnRouter
 	logger                *slog.Logger
 	approvalMu            sync.Mutex
 	pendingApprovals      map[string]pendingApproval
@@ -83,6 +87,32 @@ type pendingClarificationResolution struct {
 	ProvidedFields []string `json:"provided_fields"`
 	StillMissing   []string `json:"still_missing"`
 	Reason         string   `json:"reason"`
+}
+
+type TurnMode string
+
+const (
+	TurnModeNoTool      TurnMode = "no_tool"
+	TurnModeToolEnabled TurnMode = "tool_enabled"
+)
+
+type TurnRouteInput struct {
+	Message       string
+	RecentHistory []string
+	Now           time.Time
+}
+
+type TurnRoute struct {
+	Mode   TurnMode
+	Reason string
+}
+
+type TurnRouter interface {
+	RouteTurn(ctx context.Context, input TurnRouteInput) (TurnRoute, error)
+}
+
+type TaskPlanResult struct {
+	Plan contracts.Plan
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
@@ -132,6 +162,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		policy:                config.Policy,
 		sessionStore:          sessionStore,
 		stateStore:            stateStore,
+		turnRouter:            config.TurnRouter,
 		logger:                logger,
 		pendingApprovals:      make(map[string]pendingApproval),
 		pendingBySession:      make(map[string]string),
@@ -372,7 +403,7 @@ agentLoop:
 		}
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
+		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference, nil)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
@@ -753,7 +784,7 @@ If required information is missing, ask one concise clarification question inste
 	}, nil
 }
 
-func (r *Runtime) HasPendingApproval(sessionID string) bool {
+func (r *Runtime) legacyHasPendingApproval(_ context.Context, sessionID string) bool {
 	r.approvalMu.Lock()
 	defer r.approvalMu.Unlock()
 	approvalID := r.pendingBySession[strings.TrimSpace(sessionID)]
@@ -764,7 +795,7 @@ func (r *Runtime) HasPendingApproval(sessionID string) bool {
 	return ok
 }
 
-func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decision contracts.ApprovalDecision) (contracts.AgentResponse, error) {
+func (r *Runtime) legacyResolveApproval(ctx context.Context, sessionID string, decision contracts.ApprovalDecision) (contracts.AgentResponse, error) {
 	switch decision.Decision {
 	case contracts.ApprovalDecisionRevised:
 		return r.ReviseApproval(ctx, sessionID, decision.RequestID, decision.ApprovalID, decision.Comment)
@@ -925,7 +956,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 	}
 }
 
-func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestID string, approvalID string, comment string) (contracts.AgentResponse, error) {
+func (r *Runtime) legacyReviseApproval(ctx context.Context, sessionID string, requestID string, approvalID string, comment string) (contracts.AgentResponse, error) {
 	comment = strings.TrimSpace(comment)
 	if comment == "" {
 		comment = "Tôi muốn chỉnh lại yêu cầu đang chờ xác nhận."
@@ -1258,6 +1289,12 @@ func (r *Runtime) providerToolsForRoute(route *TurnRoute) []providers.ToolDefini
 	return definitions
 }
 
+func (r *Runtime) providerTools() []providers.ToolDefinition {
+	definitions := providers.ToolDefinitionsFromRegistry(r.registry.ListTools())
+	definitions = append(definitions, clarifyToolDefinition())
+	return definitions
+}
+
 func toolChoiceForRoute(route *TurnRoute) string {
 	if route == nil || route.Mode != TurnModeToolEnabled {
 		return "none"
@@ -1339,7 +1376,7 @@ func isSideEffectToolName(name string) bool {
 	}
 }
 
-func (r *Runtime) toolCallClarificationResponse(message contracts.UserMessage, toolCall providers.ToolCall, definition tools.ToolDefinition, found bool, activeClarification bool, evidenceText string) *contracts.AgentResponse {
+func (r *Runtime) legacyToolCallClarificationResponse(message contracts.UserMessage, toolCall providers.ToolCall, definition tools.ToolDefinition, found bool, activeClarification bool, evidenceText string) *contracts.AgentResponse {
 	if !found {
 		return nil
 	}
@@ -1377,7 +1414,7 @@ func (r *Runtime) toolCallClarificationResponse(message contracts.UserMessage, t
 	return nil
 }
 
-func shouldResolveChatSpaceBeforeClarification(toolCall providers.ToolCall) bool {
+func legacyShouldResolveChatSpaceBeforeClarification(toolCall providers.ToolCall) bool {
 	if len(malformedToolArguments(toolCall)) == 0 {
 		return false
 	}
@@ -1390,7 +1427,7 @@ func shouldResolveChatSpaceBeforeClarification(toolCall providers.ToolCall) bool
 	}
 }
 
-func chatSpaceResolutionObservation(toolCall providers.ToolCall) string {
+func legacyChatSpaceResolutionObservation(toolCall providers.ToolCall) string {
 	target := strings.TrimSpace(fmt.Sprint(toolCall.Arguments["space"]))
 	if target == "" {
 		target = "(empty)"
@@ -1404,7 +1441,7 @@ After resolving exactly one target, retry %s with the matched spaces/... resourc
 If read-tool resolution returns no match or multiple plausible matches, then ask one concise clarification question.`, target, toolCall.Name)
 }
 
-func pendingMissingFieldsForToolCall(toolCall providers.ToolCall, definition tools.ToolDefinition, found bool, activeClarification bool, evidenceText string) []string {
+func legacyPendingMissingFieldsForToolCall(toolCall providers.ToolCall, definition tools.ToolDefinition, found bool, activeClarification bool, evidenceText string) []string {
 	if !found {
 		return nil
 	}
@@ -1420,7 +1457,7 @@ func pendingMissingFieldsForToolCall(toolCall providers.ToolCall, definition too
 	return missingCurrentRequestEvidence(evidenceText, toolCall)
 }
 
-func sanitizeUnsupportedOptionalArguments(toolCall providers.ToolCall, evidenceText string) providers.ToolCall {
+func legacySanitizeUnsupportedOptionalArguments(toolCall providers.ToolCall, evidenceText string) providers.ToolCall {
 	if toolCall.Name != "calendar.createEvent" {
 		return toolCall
 	}
@@ -1437,7 +1474,7 @@ func sanitizeUnsupportedOptionalArguments(toolCall providers.ToolCall, evidenceT
 	return toolCall
 }
 
-func hasAttendeeEvidence(evidenceText string, attendees any) bool {
+func legacyHasAttendeeEvidence(evidenceText string, attendees any) bool {
 	lower := strings.ToLower(evidenceText)
 	for _, email := range attendeeStrings(attendees) {
 		email = strings.ToLower(strings.TrimSpace(email))
@@ -1455,7 +1492,7 @@ func hasAttendeeEvidence(evidenceText string, attendees any) bool {
 	return false
 }
 
-func attendeeStrings(value any) []string {
+func legacyAttendeeStrings(value any) []string {
 	switch typed := value.(type) {
 	case []string:
 		return append([]string(nil), typed...)
@@ -1473,7 +1510,7 @@ func attendeeStrings(value any) []string {
 	}
 }
 
-func missingRequiredArguments(schema tools.ToolSchema, args map[string]any) []string {
+func legacyMissingRequiredArguments(schema tools.ToolSchema, args map[string]any) []string {
 	required := requiredFieldsFromToolSchema(schema)
 	missing := make([]string, 0, len(required))
 	for _, field := range required {
@@ -1484,7 +1521,7 @@ func missingRequiredArguments(schema tools.ToolSchema, args map[string]any) []st
 	return missing
 }
 
-func malformedToolArguments(toolCall providers.ToolCall) []string {
+func legacyMalformedToolArguments(toolCall providers.ToolCall) []string {
 	switch toolCall.Name {
 	case "chat.sendMessage", "chat.listMessages", "chat.listMembers", "chat.addMember":
 		if value, ok := toolCall.Arguments["space"]; ok && !isEmptyArgument(value) && !containsSpaceResourceName(value) {
@@ -1496,7 +1533,7 @@ func malformedToolArguments(toolCall providers.ToolCall) []string {
 	return nil
 }
 
-func containsSpaceResourceName(value any) bool {
+func legacyContainsSpaceResourceName(value any) bool {
 	text := strings.TrimSpace(fmt.Sprint(value))
 	if text == "" {
 		return false
@@ -1516,7 +1553,7 @@ func containsSpaceResourceName(value any) bool {
 	return strings.TrimSpace(resource[:end]) != ""
 }
 
-func requiredFieldsFromToolSchema(schema tools.ToolSchema) []string {
+func legacyRequiredFieldsFromToolSchema(schema tools.ToolSchema) []string {
 	value, ok := schema["required"]
 	if !ok {
 		return nil
@@ -1538,7 +1575,7 @@ func requiredFieldsFromToolSchema(schema tools.ToolSchema) []string {
 	}
 }
 
-func isEmptyArgument(value any) bool {
+func legacyIsEmptyArgument(value any) bool {
 	if value == nil {
 		return true
 	}
@@ -1554,7 +1591,7 @@ func isEmptyArgument(value any) bool {
 	}
 }
 
-func missingCurrentRequestEvidence(userText string, toolCall providers.ToolCall) []string {
+func legacyMissingCurrentRequestEvidence(userText string, toolCall providers.ToolCall) []string {
 	switch toolCall.Name {
 	case "calendar.createEvent":
 		return missingCalendarCreateEventEvidence(userText, toolCall.Arguments)
@@ -1563,7 +1600,7 @@ func missingCurrentRequestEvidence(userText string, toolCall providers.ToolCall)
 	}
 }
 
-func missingCalendarCreateEventEvidence(userText string, args map[string]any) []string {
+func legacyMissingCalendarCreateEventEvidence(userText string, args map[string]any) []string {
 	lower := strings.ToLower(strings.TrimSpace(userText))
 	missing := []string{}
 	title := stringArgument(args, "title")
@@ -1579,7 +1616,7 @@ func missingCalendarCreateEventEvidence(userText string, args map[string]any) []
 	return missing
 }
 
-func hasCalendarTitleEvidence(lowerText string, title string) bool {
+func legacyHasCalendarTitleEvidence(lowerText string, title string) bool {
 	title = strings.ToLower(strings.TrimSpace(title))
 	if title != "" && strings.Contains(lowerText, title) {
 		return true
@@ -1590,7 +1627,7 @@ func hasCalendarTitleEvidence(lowerText string, title string) bool {
 	)
 }
 
-func hasCalendarStartEvidence(lowerText string) bool {
+func legacyHasCalendarStartEvidence(lowerText string) bool {
 	return hasTimeExpression(lowerText) ||
 		containsAnyText(lowerText,
 			"hôm nay", "hom nay", "ngày mai", "ngay mai",
@@ -1600,7 +1637,7 @@ func hasCalendarStartEvidence(lowerText string) bool {
 		)
 }
 
-func hasCalendarEndEvidence(lowerText string) bool {
+func legacyHasCalendarEndEvidence(lowerText string) bool {
 	if containsAnyText(lowerText,
 		"đến", "den", "tới", "toi", "kết thúc", "ket thuc",
 		"thời lượng", "thoi luong", "trong vòng", "trong vong",
@@ -1613,15 +1650,15 @@ func hasCalendarEndEvidence(lowerText string) bool {
 		(strings.Contains(lowerText, "-") && hasTimeExpression(lowerText))
 }
 
-func hasTimeExpression(text string) bool {
+func legacyHasTimeExpression(text string) bool {
 	return timeAnswerPattern.MatchString(text) || viTimeAnswerPattern.MatchString(text)
 }
 
-func countTimeExpressions(text string) int {
+func legacyCountTimeExpressions(text string) int {
 	return len(timeAnswerPattern.FindAllString(text, -1)) + len(viTimeAnswerPattern.FindAllString(text, -1))
 }
 
-func stringArgument(args map[string]any, key string) string {
+func legacyStringArgument(args map[string]any, key string) string {
 	value, ok := args[key].(string)
 	if !ok {
 		return ""
@@ -1629,7 +1666,7 @@ func stringArgument(args map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
-func missingToolArgumentQuestion(toolName string, missing []string) string {
+func legacyMissingToolArgumentQuestion(toolName string, missing []string) string {
 	if strings.HasPrefix(toolName, "chat.") && containsString(missing, "space") {
 		return "Bạn muốn thao tác với Google Chat space nào? Hãy gửi resource name dạng spaces/AAAA, hoặc nói rõ tên nhóm/người trong chat để tôi tìm space trước."
 	}
@@ -1650,7 +1687,7 @@ func missingToolArgumentQuestion(toolName string, missing []string) string {
 	return "Bạn có thể bổ sung thông tin còn thiếu cho " + toolName + ": " + strings.Join(missing, ", ") + "?"
 }
 
-func containsString(values []string, target string) bool {
+func legacyContainsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
 			return true
@@ -1659,7 +1696,7 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
-func (r *Runtime) resolvePendingClarification(ctx context.Context, pending sessions.PendingClarification, userAnswer string, recentHistory []string) pendingClarificationResolution {
+func (r *Runtime) legacyResolvePendingClarification(ctx context.Context, pending sessions.PendingClarification, userAnswer string, recentHistory []string) pendingClarificationResolution {
 	fallback := fallbackPendingClarificationResolution(pending, userAnswer)
 	if r == nil || r.provider == nil {
 		return fallback
@@ -1693,7 +1730,7 @@ func (r *Runtime) resolvePendingClarification(ctx context.Context, pending sessi
 	return resolved
 }
 
-func pendingClarificationResolverSystemPrompt() string {
+func legacyPendingClarificationResolverSystemPrompt() string {
 	return strings.TrimSpace(`<pending_clarification_resolver>
   <mission>Decide whether the latest user message answers an active clarification question in the same session.</mission>
   <rules>
@@ -1717,7 +1754,7 @@ func pendingClarificationResolverSystemPrompt() string {
 </pending_clarification_resolver>`)
 }
 
-func pendingClarificationResolverUserPrompt(pending sessions.PendingClarification, userAnswer string, recentHistory []string) string {
+func legacyPendingClarificationResolverUserPrompt(pending sessions.PendingClarification, userAnswer string, recentHistory []string) string {
 	partialInput := "{}"
 	if len(pending.PartialInput) > 0 {
 		if data, err := json.Marshal(pending.PartialInput); err == nil {
@@ -1743,7 +1780,7 @@ func pendingClarificationResolverUserPrompt(pending sessions.PendingClarificatio
 	))
 }
 
-func fallbackPendingClarificationResolution(pending sessions.PendingClarification, userAnswer string) pendingClarificationResolution {
+func legacyFallbackPendingClarificationResolution(pending sessions.PendingClarification, userAnswer string) pendingClarificationResolution {
 	trimmed := strings.TrimSpace(userAnswer)
 	if trimmed == "" {
 		return pendingClarificationResolution{}
@@ -1764,7 +1801,7 @@ func fallbackPendingClarificationResolution(pending sessions.PendingClarificatio
 	return pendingClarificationResolution{}
 }
 
-func contextualPendingClarificationText(pending sessions.PendingClarification, userAnswer string) string {
+func legacyContextualPendingClarificationText(pending sessions.PendingClarification, userAnswer string) string {
 	partialInput := "{}"
 	if len(pending.PartialInput) > 0 {
 		if data, err := json.Marshal(pending.PartialInput); err == nil {
@@ -1795,7 +1832,7 @@ current_user_answer:
 %s`, pending.OriginalRequest, pending.Question, pending.ToolName, partialInput, strings.Join(pending.MissingFields, ", "), strings.TrimSpace(userAnswer)))
 }
 
-func historyWithPendingClarification(pending sessions.PendingClarification, history []string) []string {
+func legacyHistoryWithPendingClarification(pending sessions.PendingClarification, history []string) []string {
 	enriched := make([]string, 0, len(history)+2)
 	if strings.TrimSpace(pending.OriginalRequest) != "" {
 		enriched = append(enriched, "pending_original_request: "+truncateToolContentForLLM(pending.OriginalRequest))
@@ -1807,7 +1844,7 @@ func historyWithPendingClarification(pending sessions.PendingClarification, hist
 	return enriched
 }
 
-func pendingClarificationTranscript(pending sessions.PendingClarification) []providers.Message {
+func legacyPendingClarificationTranscript(pending sessions.PendingClarification) []providers.Message {
 	messages := []providers.Message{}
 	if strings.TrimSpace(pending.OriginalRequest) != "" {
 		messages = append(messages, providers.Message{Role: providers.MessageRoleUser, Content: pending.OriginalRequest})
@@ -1818,12 +1855,12 @@ func pendingClarificationTranscript(pending sessions.PendingClarification) []pro
 	return messages
 }
 
-func isUsablePendingClarification(pending *sessions.PendingClarification) bool {
+func legacyIsUsablePendingClarification(pending *sessions.PendingClarification) bool {
 	return pending != nil &&
 		(strings.TrimSpace(pending.OriginalRequest) != "" || strings.TrimSpace(pending.Question) != "")
 }
 
-func clonePendingClarification(pending *sessions.PendingClarification) *sessions.PendingClarification {
+func legacyClonePendingClarification(pending *sessions.PendingClarification) *sessions.PendingClarification {
 	if pending == nil {
 		return nil
 	}
@@ -1840,7 +1877,7 @@ func clonePendingClarification(pending *sessions.PendingClarification) *sessions
 	return &cloned
 }
 
-func (r *Runtime) storePendingClarification(ctx context.Context, sessionID string, pending *sessions.PendingClarification) *contracts.ErrorShape {
+func (r *Runtime) legacyStorePendingClarification(ctx context.Context, sessionID string, pending *sessions.PendingClarification) *contracts.ErrorShape {
 	if pending == nil {
 		return nil
 	}
@@ -1858,8 +1895,9 @@ func (r *Runtime) storePendingClarification(ctx context.Context, sessionID strin
 	return r.saveSessionMemory(ctx, sessionID, memory)
 }
 
-func pendingClarificationFromToolCall(originalRequest string, question string, toolCall providers.ToolCall, missing []string) *sessions.PendingClarification {
+func legacyPendingClarificationFromToolCall(runID string, originalRequest string, question string, toolCall providers.ToolCall, missing []string) *sessions.PendingClarification {
 	return &sessions.PendingClarification{
+		RunID:           strings.TrimSpace(runID),
 		OriginalRequest: strings.TrimSpace(originalRequest),
 		Question:        strings.TrimSpace(question),
 		ToolName:        strings.TrimSpace(toolCall.Name),
@@ -1868,7 +1906,7 @@ func pendingClarificationFromToolCall(originalRequest string, question string, t
 	}
 }
 
-func cloneAnyMap(values map[string]any) map[string]any {
+func legacyCloneAnyMap(values map[string]any) map[string]any {
 	if len(values) == 0 {
 		return nil
 	}
@@ -1931,7 +1969,25 @@ func responsePlan(planResult *TaskPlanResult) *contracts.Plan {
 	return &plan
 }
 
-func (r *Runtime) traceData(classification *agentintent.ClassificationOutput, planResult *TaskPlanResult, resolution *reference.Resolution, routes ...*TurnRoute) map[string]any {
+func (r *Runtime) traceData(parts ...any) map[string]any {
+	var classification *agentintent.ClassificationOutput
+	var planResult *TaskPlanResult
+	var resolution *reference.Resolution
+	var routes []*TurnRoute
+	for _, part := range parts {
+		switch typed := part.(type) {
+		case *agentintent.ClassificationOutput:
+			classification = typed
+		case *TaskPlanResult:
+			planResult = typed
+		case *reference.Resolution:
+			resolution = typed
+		case *TurnRoute:
+			if typed != nil {
+				routes = append(routes, typed)
+			}
+		}
+	}
 	data := map[string]any{
 		"model": r.model,
 	}
@@ -3145,7 +3201,7 @@ func containsAnyText(text string, needles ...string) bool {
 	return false
 }
 
-func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision) contracts.ApprovalRequest {
+func (r *Runtime) legacyApprovalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision) contracts.ApprovalRequest {
 	now := r.now()
 	contractCall := contracts.ToolCall{
 		ToolCallID: toolCall.ID,
@@ -3189,7 +3245,7 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 	return approval
 }
 
-func (r *Runtime) storePendingApproval(pending pendingApproval) {
+func (r *Runtime) legacyStorePendingApproval(pending pendingApproval) {
 	r.approvalMu.Lock()
 	defer r.approvalMu.Unlock()
 	approvalID := strings.TrimSpace(pending.request.ApprovalID)
@@ -3211,7 +3267,7 @@ func (r *Runtime) storePendingApproval(pending pendingApproval) {
 	)
 }
 
-func (r *Runtime) takePendingApproval(sessionID string, approvalID string) (pendingApproval, bool) {
+func (r *Runtime) legacyTakePendingApproval(sessionID string, approvalID string) (pendingApproval, bool) {
 	r.approvalMu.Lock()
 	defer r.approvalMu.Unlock()
 	sessionID = strings.TrimSpace(sessionID)
@@ -3244,7 +3300,7 @@ func (r *Runtime) takePendingApproval(sessionID string, approvalID string) (pend
 	return pending, true
 }
 
-func (r *Runtime) peekPendingApproval(sessionID string, approvalID string) (pendingApproval, bool) {
+func (r *Runtime) legacyPeekPendingApproval(sessionID string, approvalID string) (pendingApproval, bool) {
 	r.approvalMu.Lock()
 	defer r.approvalMu.Unlock()
 	sessionID = strings.TrimSpace(sessionID)
@@ -3259,7 +3315,7 @@ func (r *Runtime) peekPendingApproval(sessionID string, approvalID string) (pend
 	return pending, ok
 }
 
-func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
+func legacyBuildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
 	if len(pending.remainingToolCalls) > 0 {
 		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
@@ -3313,7 +3369,7 @@ Do not repeat the tool that was just executed.`,
 	return msg
 }
 
-func buildRevisionRequest(pending pendingApproval, comment string) string {
+func legacyBuildRevisionRequest(pending pendingApproval, comment string) string {
 	input := "{}"
 	if len(pending.request.ToolCall.Input) > 0 {
 		if data, err := json.MarshalIndent(pending.request.ToolCall.Input, "", "  "); err == nil {
@@ -3340,7 +3396,7 @@ Ghi chú chỉnh sửa:
 %s`, pending.message.Text, pending.request.ToolCall.ToolName, input, comment))
 }
 
-func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
+func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 	switch toolName {
 	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft":
 		return "Tôi cần bạn xác nhận trước khi tạo hoặc sửa Gmail draft."
@@ -3381,7 +3437,7 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 	}
 }
 
-func approvalExecutionMessage(result tools.ToolResult, contractResult contracts.ToolResult) string {
+func legacyApprovalExecutionMessage(result tools.ToolResult, contractResult contracts.ToolResult) string {
 	if rendered := renderToolResultForUser(contractResult); rendered != "" {
 		return rendered
 	}

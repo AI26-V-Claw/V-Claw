@@ -274,7 +274,11 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 }
 
 func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.InteractionCallback) error {
-	b.logger.Info("slack interaction received",
+	logger := b.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("slack interaction received",
 		"callback_type", callback.Type,
 		"callback_id", callback.CallbackID,
 		"user_id", callback.User.ID,
@@ -308,7 +312,7 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 	if !ok {
 		return nil
 	}
-	b.logger.Info("approval decision received and parsed",
+	logger.Info("approval decision received and parsed",
 		"request_id", "slack_interaction_"+normalizeSlackTimestamp(callback.ActionTs),
 		"session_id", sessionID,
 		"approval_id", approvalID,
@@ -737,39 +741,6 @@ func slackProgressText(event agent.ProgressEvent) string {
 	}
 }
 
-func slackTextFromResponse(response contracts.AgentResponse) string {
-	if response.Error != nil && response.Error.Code == contracts.ErrorActionBlockedByPolicy {
-		return "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại."
-	}
-	if response.Error != nil && response.Error.Code == contracts.ErrorApprovalExpired {
-		return "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại."
-	}
-	if strings.EqualFold(string(response.Status), "failed") {
-		return slackGenericErrorText()
-	}
-	if strings.TrimSpace(response.Message) != "" {
-		return response.Message
-	}
-	if response.ApprovalRequest != nil && strings.TrimSpace(response.ApprovalRequest.Summary) != "" {
-		return response.ApprovalRequest.Summary
-	}
-	switch response.Status {
-	case contracts.AgentStatusApprovalRequired:
-		return "Tôi cần bạn xác nhận trước khi thực hiện hành động này."
-	case contracts.AgentStatusCompleted:
-		return "Đã hoàn tất."
-	case contracts.AgentStatusNeedClarification:
-		if response.Data != nil {
-			if clarifyQuestion, ok := response.Data["clarifyQuestion"].(string); ok && strings.TrimSpace(clarifyQuestion) != "" {
-				return clarifyQuestion
-			}
-		}
-		return "Bạn muốn tôi làm gì cụ thể hơn?"
-	default:
-		return "Agent chưa có phản hồi."
-	}
-}
-
 func slackGenericErrorText() string {
 	return "Mình chưa thể hoàn tất yêu cầu này. Chi tiết lỗi đã được ghi ở terminal local."
 }
@@ -1039,7 +1010,7 @@ func slackPolicySettingsModalBlocks(cfg policies.UserPolicyConfig) []slack.Block
 func slackPolicySettingsRiskLabel(level contracts.RiskLevel) string {
 	switch level {
 	case contracts.RiskLevelSafeRead:
-		return "Đọc danh sách email, lịch họp, tin nhắn"
+		return "Đọc email, lịch họp, tin nhắn"
 	case contracts.RiskLevelSafeCompute:
 		return "Tóm tắt nội dung, dịch văn bản"
 	case contracts.RiskLevelSensitiveRead:

@@ -44,7 +44,21 @@ type messageHandler interface {
 	RecordIgnored(msg contracts.UserMessage, actionTaken string)
 }
 
-func New(token string, allowedUserID int64, dataDir string, policyStore *policies.UserPolicyStore, handler messageHandler, logger *slog.Logger) *Bot {
+func New(token string, allowedUserID int64, dataDir string, args ...any) *Bot {
+	var policyStore *policies.UserPolicyStore
+	var handler messageHandler
+	var logger *slog.Logger
+	switch len(args) {
+	case 2:
+		handler, _ = args[0].(messageHandler)
+		logger, _ = args[1].(*slog.Logger)
+	case 3:
+		policyStore, _ = args[0].(*policies.UserPolicyStore)
+		handler, _ = args[1].(messageHandler)
+		logger, _ = args[2].(*slog.Logger)
+	default:
+		panic("telegram.New expects handler/logger or policyStore/handler/logger")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -61,7 +75,7 @@ func New(token string, allowedUserID int64, dataDir string, policyStore *policie
 		apiBase:      "https://api.telegram.org",
 		policyStore:  policyStore,
 		policyDrafts: make(map[int64]map[contracts.RiskLevel]policies.PolicyGroup),
-		state:   newTelegramChannelState(),
+		state:        newTelegramChannelState(),
 	}
 }
 
@@ -982,39 +996,6 @@ func telegramProgressText(event agent.ProgressEvent) string {
 	}
 }
 
-func telegramTextFromResponse(response contracts.AgentResponse) string {
-	if response.Error != nil && response.Error.Code == contracts.ErrorActionBlockedByPolicy {
-		return "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại."
-	}
-	if response.Error != nil && response.Error.Code == contracts.ErrorApprovalExpired {
-		return "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại."
-	}
-	if strings.EqualFold(string(response.Status), "failed") {
-		return telegramGenericErrorText()
-	}
-	if strings.TrimSpace(response.Message) != "" {
-		return response.Message
-	}
-	if response.ApprovalRequest != nil && strings.TrimSpace(response.ApprovalRequest.Summary) != "" {
-		return response.ApprovalRequest.Summary
-	}
-	switch response.Status {
-	case contracts.AgentStatusApprovalRequired:
-		return "Tôi cần bạn xác nhận trước khi thực hiện hành động này."
-	case contracts.AgentStatusCompleted:
-		return "Đã hoàn tất."
-	case contracts.AgentStatusNeedClarification:
-		if response.Data != nil {
-			if clarifyQuestion, ok := response.Data["clarifyQuestion"].(string); ok && strings.TrimSpace(clarifyQuestion) != "" {
-				return clarifyQuestion
-			}
-		}
-		return "Bạn muốn tôi làm gì cụ thể hơn?"
-	default:
-		return "Agent chưa có phản hồi."
-	}
-}
-
 func telegramGenericErrorText() string {
 	return "Mình chưa thể hoàn tất yêu cầu này. Chi tiết lỗi đã được ghi ở terminal local."
 }
@@ -1247,7 +1228,7 @@ func telegramPolicySettingsButtonText(level contracts.RiskLevel, group policies.
 func telegramPolicyRiskLevelLabel(level contracts.RiskLevel) string {
 	switch level {
 	case contracts.RiskLevelSafeRead:
-		return "Đọc danh sách email, lịch họp, tin nhắn"
+		return "Đọc email, lịch họp, tin nhắn"
 	case contracts.RiskLevelSafeCompute:
 		return "Tóm tắt nội dung, dịch văn bản"
 	case contracts.RiskLevelSensitiveRead:
