@@ -36,6 +36,7 @@ type ActionResult struct {
 }
 
 type PendingClarification struct {
+	RunID           string         `json:"runId,omitempty"`
 	OriginalRequest string         `json:"originalRequest,omitempty"`
 	Question        string         `json:"question,omitempty"`
 	ToolName        string         `json:"toolName,omitempty"`
