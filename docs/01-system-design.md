@@ -85,7 +85,6 @@ flowchart LR
   subgraph STORE["Storage"]
     direction TB
     PG[("PostgreSQL")]
-    REDIS[("Redis")]
     VDB[("Vector DB")]
   end
 
@@ -94,7 +93,6 @@ flowchart LR
 
   LOOP --> MROUTER
   LOOP --> PG
-  LOOP --> REDIS
   LOOP --> VDB
 
   TR --> ROUTER

@@ -35,17 +35,21 @@ func TestRenderAgentResponseFormatsApprovalForChat(t *testing.T) {
 	got := renderAgentResponse(response)
 	for _, want := range []string{
 		"Cần xác nhận trước khi thực hiện.",
-		"Tóm tắt: Send a Google Chat message.",
-		"Tool: chat.sendMessage",
-		"Risk: external_write",
-		"Approval ID: appr_1",
+		"Send a Google Chat message.",
+		"Tin nhắn: Hello",
 		"approve",
 		"reject",
 		"revise <nội dung muốn chỉnh>",
-		"Input:",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected rendered approval to contain %q, got:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{
+		"Tool:", "Risk:", "Approval ID:", "Input:", "spaces/AAAA",
+	} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("expected rendered approval NOT to contain %q, got:\n%s", notWant, got)
 		}
 	}
 }
