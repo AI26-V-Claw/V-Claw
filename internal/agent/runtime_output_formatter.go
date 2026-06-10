@@ -287,6 +287,8 @@ func renderDrivePayload(toolName string, payload map[string]any) []string {
 		title = "Đã tạo file Google Drive."
 	case "drive.updateTextFile":
 		title = "Đã cập nhật file Google Drive."
+	case "drive.renameFile":
+		title = "Đã đổi tên file Google Drive."
 	case "drive.shareFile":
 		title = "Đã cập nhật quyền chia sẻ Google Drive."
 	case "drive.downloadFile":

@@ -347,6 +347,12 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "content", Type: "string", Required: false, Description: "File content"}},
 	},
+	"drive.renameFile": {
+		Name: "drive.renameFile", Category: CategoryDangerousWrite,
+		Description: "Rename a Google Drive file by updating metadata only",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "name", Type: "string", Required: true, Description: "New file name"}},
+	},
 	"drive.shareFile": {
 		Name: "drive.shareFile", Category: CategoryDangerousWrite,
 		Description: "Share a Google Drive file",

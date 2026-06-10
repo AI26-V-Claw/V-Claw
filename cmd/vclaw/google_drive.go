@@ -113,6 +113,21 @@ func runGoogleDrive(ctx context.Context, args []string) error {
 		output, toolErr := service.UpdateTextFile(ctx, drivetool.UpdateTextFileInput{FileID: *fileID, Name: *name, Content: *content, MimeType: *mimeType})
 		return printDriveToolOutput(output, toolErr)
 
+	case "rename":
+		fs := newGoogleFlagSet("drive rename")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		fileID := fs.String("id", "", "Drive file ID")
+		name := fs.String("name", "", "new file name")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleDriveService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.RenameFile(ctx, drivetool.RenameFileInput{FileID: *fileID, Name: *name})
+		return printDriveToolOutput(output, toolErr)
+
 	case "share":
 		fs := newGoogleFlagSet("drive share")
 		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
@@ -186,6 +201,9 @@ func printGoogleDriveUsage() {
 
   vclaw google drive update-text -id FILE_ID -content "Updated" [-name notes.txt]
       Update text-like Drive file content.
+
+  vclaw google drive rename -id FILE_ID -name "New name"
+      Rename a Drive file or Google Docs/Sheets file.
 
   vclaw google drive share -id FILE_ID -role reader -type user -email user@example.com
       Share a Drive file by creating a permission.`)

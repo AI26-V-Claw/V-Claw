@@ -16,6 +16,7 @@ const (
 	ScopeDirectoryReadonly    = "https://www.googleapis.com/auth/directory.readonly"
 	ScopeDriveReadonly        = "https://www.googleapis.com/auth/drive.readonly"
 	ScopeDriveFile            = "https://www.googleapis.com/auth/drive.file"
+	ScopeDrive                = "https://www.googleapis.com/auth/drive"
 	ScopeDocumentsReadonly    = "https://www.googleapis.com/auth/documents.readonly"
 	ScopeDocuments            = "https://www.googleapis.com/auth/documents"
 	ScopeSpreadsheetsReadonly = "https://www.googleapis.com/auth/spreadsheets.readonly"
@@ -38,6 +39,7 @@ var G1Scopes = []string{
 	ScopeDirectoryReadonly,
 	ScopeDriveReadonly,
 	ScopeDriveFile,
+	ScopeDrive,
 	ScopeDocumentsReadonly,
 	ScopeDocuments,
 	ScopeSpreadsheetsReadonly,

@@ -59,6 +59,8 @@ var toolNameAliases = map[string]string{
 	"download_drive":    "drive.downloadFile",
 	"create_drive_file": "drive.createTextFile",
 	"update_drive_file": "drive.updateTextFile",
+	"rename_drive_file": "drive.renameFile",
+	"rename_file":       "drive.renameFile",
 	"share_drive_file":  "drive.shareFile",
 
 	// Docs tools

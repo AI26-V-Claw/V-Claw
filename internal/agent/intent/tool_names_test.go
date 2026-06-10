@@ -61,6 +61,8 @@ func TestNormalizeToolName(t *testing.T) {
 		{"drive_search", "drive.searchFiles"},
 		{"download_drive", "drive.downloadFile"},
 		{"create_drive_file", "drive.createTextFile"},
+		{"rename_drive_file", "drive.renameFile"},
+		{"rename_file", "drive.renameFile"},
 		{"share_drive_file", "drive.shareFile"},
 		{"read_doc", "docs.getDocument"},
 		{"create_doc", "docs.createDocument"},

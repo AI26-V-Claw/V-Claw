@@ -297,6 +297,16 @@ func telegramActionLabel(toolName string) string {
 		return "Thêm thành viên vào Google Chat"
 	case "chat.removeMember":
 		return "Xóa thành viên khỏi Google Chat"
+	case "drive.renameFile":
+		return "Đổi tên file Google Drive"
+	case "drive.createTextFile":
+		return "Tạo file Google Drive"
+	case "drive.updateTextFile":
+		return "Cập nhật file Google Drive"
+	case "drive.shareFile":
+		return "Chia sẻ file Google Drive"
+	case "drive.downloadFile":
+		return "Tải file Google Drive"
 	case "sandbox.runPython":
 		return "Chạy mã Python trong sandbox"
 	case "sandbox.runShell":

@@ -91,7 +91,7 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 | `internal/tools/office/gmail/` | Integration | Agent-callable Gmail tools, ví dụ `listEmails`, `getEmail`, `listThreads`, `getThread`, draft tools, attachment download, `modifyMessage`. |
 | `internal/tools/office/calendar/` | Integration | Agent-callable Calendar tools, ví dụ `listEvents`, `createEvent`, `deleteEvent`. |
 | `internal/tools/office/chat/` | Integration | Agent-callable Google Chat tools theo roadmap Google Workspace. |
-| `internal/tools/office/drive/` | Integration | Agent-callable Drive tools, ví dụ `searchFiles`, `getFileMetadata`, `exportFile`, `downloadFile`, `createTextFile`, `updateTextFile`, `shareFile`. |
+| `internal/tools/office/drive/` | Integration | Agent-callable Drive tools, ví dụ `searchFiles`, `getFileMetadata`, `exportFile`, `downloadFile`, `createTextFile`, `updateTextFile`, `renameFile`, `shareFile`. |
 | `internal/tools/office/docs/` | Integration | Agent-callable Google Docs tools, ví dụ `getDocument`, `createDocument`, `appendText`. |
 | `internal/tools/office/sheets/` | Integration | Agent-callable Google Sheets tools, ví dụ `getSpreadsheet`, `listSheets`, `readRange`, `createSpreadsheet`, `updateRange`, `appendRows`. |
 | `internal/tools/system/` | Agent Core | Agent-callable local/system tools đi qua sandbox/safety. |

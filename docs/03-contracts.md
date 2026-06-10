@@ -548,12 +548,14 @@ Rules:
 | `drive.downloadFile` | Integration | `local_write` | Yes |
 | `drive.createTextFile` | Integration | `external_write` | Yes |
 | `drive.updateTextFile` | Integration | `external_write` | Yes |
+| `drive.renameFile` | Integration | `external_write` | Yes |
 | `drive.shareFile` | Integration | `external_write` | Yes |
 
 > Drive MVP is read-first: search, metadata, and export are read-only.
 > Downloading writes a local file and must pass approval.
-> Creating/updating files and sharing permissions mutate external Google Drive state and must pass approval.
+> Creating/updating/renaming files and sharing permissions mutate external Google Drive state and must pass approval.
 > MVP create/update supports text-like content only; richer binary upload can be added later with explicit contract updates.
+> `drive.renameFile` updates metadata only and is the preferred tool when the user asks to rename an existing Drive, Docs, or Sheets file.
 
 ### Docs
 

@@ -190,6 +190,20 @@ func (c *Client) UpdateTextFile(ctx context.Context, fileID string, input TextFi
 	return metadataFromAPI(updated), nil
 }
 
+func (c *Client) RenameFile(ctx context.Context, fileID string, name string) (FileMetadata, error) {
+	if c == nil || c.srv == nil {
+		return FileMetadata{}, errors.New("drive service is not configured")
+	}
+	updated, err := c.srv.Files.Update(fileID, &gdrive.File{Name: strings.TrimSpace(name)}).
+		Context(ctx).
+		Fields("id,name,mimeType,webViewLink,iconLink,modifiedTime,size,owners(emailAddress,displayName),parents,shared,trashed").
+		Do()
+	if err != nil {
+		return FileMetadata{}, err
+	}
+	return metadataFromAPI(updated), nil
+}
+
 func (c *Client) ShareFile(ctx context.Context, input PermissionInput) (string, error) {
 	if c == nil || c.srv == nil {
 		return "", errors.New("drive service is not configured")

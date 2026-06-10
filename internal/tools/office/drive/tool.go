@@ -23,6 +23,7 @@ const (
 	ToolNameDownloadFile    = "drive.downloadFile"
 	ToolNameCreateTextFile  = "drive.createTextFile"
 	ToolNameUpdateTextFile  = "drive.updateTextFile"
+	ToolNameRenameFile      = "drive.renameFile"
 	ToolNameShareFile       = "drive.shareFile"
 
 	defaultMaxResults  = int64(10)
@@ -45,6 +46,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameDownloadFile, Owner: "integration", Description: "Download a Drive file to a local directory.", DefaultRiskLevel: "local_write", RequiresApproval: true},
 	{Name: ToolNameCreateTextFile, Owner: "integration", Description: "Create a text-like file in Drive.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateTextFile, Owner: "integration", Description: "Update text-like content in a Drive file.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameRenameFile, Owner: "integration", Description: "Rename a Drive file by updating metadata only.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameShareFile, Owner: "integration", Description: "Share a Drive file by creating a permission.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 }
 
@@ -55,6 +57,7 @@ type Connector interface {
 	DownloadFile(ctx context.Context, fileID string) (driveconnector.FileContent, error)
 	CreateTextFile(ctx context.Context, input driveconnector.TextFileInput) (driveconnector.FileMetadata, error)
 	UpdateTextFile(ctx context.Context, fileID string, input driveconnector.TextFileInput) (driveconnector.FileMetadata, error)
+	RenameFile(ctx context.Context, fileID string, name string) (driveconnector.FileMetadata, error)
 	ShareFile(ctx context.Context, input driveconnector.PermissionInput) (string, error)
 }
 
@@ -111,6 +114,11 @@ type UpdateTextFileInput struct {
 	Name     string
 	MimeType string
 	Content  string
+}
+
+type RenameFileInput struct {
+	FileID string
+	Name   string
 }
 
 type ShareFileInput struct {
@@ -240,6 +248,23 @@ func (s *Service) UpdateTextFile(ctx context.Context, input UpdateTextFileInput)
 	return output, nil
 }
 
+func (s *Service) RenameFile(ctx context.Context, input RenameFileInput) (driveconnector.FileMetadata, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return driveconnector.FileMetadata{}, errShape
+	}
+	if strings.TrimSpace(input.FileID) == "" {
+		return driveconnector.FileMetadata{}, invalidInput("fileId is required")
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return driveconnector.FileMetadata{}, invalidInput("name is required")
+	}
+	output, err := s.connector.RenameFile(ctx, strings.TrimSpace(input.FileID), strings.TrimSpace(input.Name))
+	if err != nil {
+		return driveconnector.FileMetadata{}, MapError(err)
+	}
+	return output, nil
+}
+
 func (s *Service) ShareFile(ctx context.Context, input ShareFileInput) (ShareFileOutput, *ErrorShape) {
 	if errShape := s.validateConnector(); errShape != nil {
 		return ShareFileOutput{}, errShape
@@ -310,6 +335,8 @@ func (t driveTool) Description() string {
 		return "Create a text-like file in Google Drive. This external write requires approval."
 	case ToolNameUpdateTextFile:
 		return "Update text-like content in an existing Google Drive file. This external write requires approval."
+	case ToolNameRenameFile:
+		return "Rename an existing Google Drive file or Google-native file such as Docs/Sheets. This updates metadata only and requires approval."
 	case ToolNameShareFile:
 		return "Share a Google Drive file by creating a permission. This external write requires approval."
 	default:
@@ -333,6 +360,8 @@ func (t driveTool) Parameters() tools.ToolSchema {
 		schema := textFileSchema([]string{"fileId"})
 		schema["properties"].(map[string]any)["fileId"] = map[string]any{"type": "string"}
 		return schema
+	case ToolNameRenameFile:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"fileId": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}}, "required": []string{"fileId", "name"}, "additionalProperties": false}
 	case ToolNameShareFile:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{"fileId": map[string]any{"type": "string"}, "role": map[string]any{"type": "string", "enum": []string{"reader", "commenter", "writer"}}, "type": map[string]any{"type": "string", "enum": []string{"user", "group", "domain"}}, "emailAddress": map[string]any{"type": "string"}, "domain": map[string]any{"type": "string"}}, "required": []string{"fileId", "role", "type"}, "additionalProperties": false}
 	default:
@@ -380,6 +409,9 @@ func (t driveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	case ToolNameUpdateTextFile:
 		output, errShape := t.service.UpdateTextFile(ctx, UpdateTextFileInput{FileID: stringArg(call.Arguments, "fileId"), Name: stringArg(call.Arguments, "name"), MimeType: stringArg(call.Arguments, "mimeType"), Content: stringArg(call.Arguments, "content")})
 		return outputToolResult(call, output, errShape)
+	case ToolNameRenameFile:
+		output, errShape := t.service.RenameFile(ctx, RenameFileInput{FileID: stringArg(call.Arguments, "fileId"), Name: stringArg(call.Arguments, "name")})
+		return outputToolResult(call, output, errShape)
 	case ToolNameShareFile:
 		output, errShape := t.service.ShareFile(ctx, ShareFileInput{FileID: stringArg(call.Arguments, "fileId"), Role: stringArg(call.Arguments, "role"), Type: stringArg(call.Arguments, "type"), EmailAddress: stringArg(call.Arguments, "emailAddress"), Domain: stringArg(call.Arguments, "domain")})
 		return outputToolResult(call, output, errShape)
@@ -389,7 +421,7 @@ func (t driveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	for _, name := range []string{ToolNameSearchFiles, ToolNameGetFileMetadata, ToolNameExportFile, ToolNameDownloadFile, ToolNameCreateTextFile, ToolNameUpdateTextFile, ToolNameShareFile} {
+	for _, name := range []string{ToolNameSearchFiles, ToolNameGetFileMetadata, ToolNameExportFile, ToolNameDownloadFile, ToolNameCreateTextFile, ToolNameUpdateTextFile, ToolNameRenameFile, ToolNameShareFile} {
 		if err := registry.RegisterWithEntry(newTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
