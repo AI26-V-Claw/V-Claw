@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/connectors/google"
@@ -95,12 +97,15 @@ func newAgentRuntime(ctx context.Context, options agentRuntimeOptions) (agentRun
 	}
 
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
-		Provider:      openAI,
-		Registry:      registry,
-		SessionStore:  sessionStore,
-		MaxIterations: options.MaxIterations,
-		Model:         model,
-		Logger:        options.Logger,
+		Provider:                  openAI,
+		Registry:                  registry,
+		SessionStore:              sessionStore,
+		MaxIterations:             options.MaxIterations,
+		Model:                     model,
+		Logger:                    options.Logger,
+		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
+		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
+		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),
 	})
 	return agentRuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
 }
@@ -243,4 +248,28 @@ func fileExists(path string) bool {
 	}
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func envIntOrDefault(key string, defaultValue int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+	return parsed
+}
+
+func envDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return defaultValue
+	}
+	return parsed
 }

@@ -39,6 +39,9 @@ type RuntimeConfig struct {
 	Logger                *slog.Logger
 	MaxIterations         int
 	ToolTimeout           time.Duration
+	ParallelExecutionEnabled   bool
+	ParallelMaxWorkers         int
+	ParallelToolTimeoutDefault time.Duration
 	Model                 string
 	Now                   func() time.Time
 	Compactor             *sessions.Compactor
@@ -59,6 +62,9 @@ type Runtime struct {
 	pendingBySession      map[string]string
 	maxIterations         int
 	toolTimeout           time.Duration
+	parallelExecutionEnabled   bool
+	parallelMaxWorkers         int
+	parallelToolTimeoutDefault time.Duration
 	model                 string
 	now                   func() time.Time
 	compactor             *sessions.Compactor
@@ -93,6 +99,17 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	toolTimeout := config.ToolTimeout
 	if toolTimeout <= 0 {
 		toolTimeout = DefaultToolTimeout
+	}
+	parallelMaxWorkers := config.ParallelMaxWorkers
+	if parallelMaxWorkers < 1 {
+		parallelMaxWorkers = 1
+	}
+	if parallelMaxWorkers > 8 {
+		parallelMaxWorkers = 8
+	}
+	parallelToolTimeoutDefault := config.ParallelToolTimeoutDefault
+	if parallelToolTimeoutDefault <= 0 {
+		parallelToolTimeoutDefault = toolTimeout
 	}
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
@@ -137,6 +154,9 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		pendingBySession:      make(map[string]string),
 		maxIterations:         maxIterations,
 		toolTimeout:           toolTimeout,
+		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
+		parallelMaxWorkers:         parallelMaxWorkers,
+		parallelToolTimeoutDefault: parallelToolTimeoutDefault,
 		model:                 config.Model,
 		now:                   now,
 		compactor:             config.Compactor,
@@ -446,6 +466,41 @@ If required information is missing, ask one concise clarification question inste
 				Data:        r.traceData(referenceResolution),
 				ToolResults: toolResults,
 			}, nil
+		}
+
+		// Attempt parallel execution if all tool calls are safe and parallel is enabled
+		if definitions, ok := r.canBatchRunInParallel(assistantMessage.ToolCalls, r.parallelExecutionEnabled); ok {
+			batchResults := r.executeParallelBatch(ctx, assistantMessage.ToolCalls, definitions, ParallelConfig{
+				MaxWorkers:         r.parallelMaxWorkers,
+				ToolTimeoutDefault: r.parallelToolTimeoutDefault,
+			})
+			for i, result := range batchResults {
+				call := assistantMessage.ToolCalls[i]
+				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, call, result, 0); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				toolResults = append(toolResults, contractToolResult(result))
+				toolMessage := providers.Message{
+					Role:       providers.MessageRoleTool,
+					ToolCallID: call.ID,
+					Content:    truncateToolContentForLLM(result.ContentForLLM),
+				}
+				transcript = append(transcript, toolMessage)
+				providerTranscript = append(providerTranscript, toolMessage)
+				if err := r.sessionStore.AppendMessage(ctx, message.SessionID, toolMessage); err != nil {
+					base.Error = internalError("append tool message: "+err.Error(), contracts.ErrorSourceSession)
+					base.Message = base.Error.Message
+					return base, nil
+				}
+			}
+			continue agentLoop
 		}
 
 		for index, providerToolCall := range assistantMessage.ToolCalls {
