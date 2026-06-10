@@ -12,6 +12,8 @@ package python
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -83,6 +85,14 @@ type Output struct {
 	// ErrorMessage holds a human-readable error if the tool itself failed
 	// (as opposed to the user code failing).
 	ErrorMessage string `json:"error_message,omitempty"`
+
+	// WorkspaceDir is the absolute host path to the session workspace.
+	WorkspaceDir string `json:"workspace_dir,omitempty"`
+
+	// WorkspaceFiles lists the absolute host paths of all files currently in
+	// the workspace. Use these paths directly as attachments or file arguments
+	// for other tools — do NOT construct paths manually from workspace_dir.
+	WorkspaceFiles []string `json:"workspace_files,omitempty"`
 }
 
 // ─── Tool Handler ─────────────────────────────────────────────────────────────
@@ -123,7 +133,32 @@ func RunPython(ctx context.Context, input Input, runner runtime.Runner) (Output,
 		}, fmt.Errorf("sandbox.runPython: runner error: %w", err)
 	}
 
-	return toOutput(result), nil
+	out := toOutput(result)
+	out.WorkspaceDir = input.WorkspaceDir
+	out.WorkspaceFiles = listWorkspaceFiles(input.WorkspaceDir)
+	for i, a := range out.Artifacts {
+		if !filepath.IsAbs(a) {
+			out.Artifacts[i] = filepath.Join(input.WorkspaceDir, a)
+		}
+	}
+	return out, nil
+}
+
+func listWorkspaceFiles(dir string) []string {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			paths = append(paths, filepath.Join(dir, e.Name()))
+		}
+	}
+	return paths
 }
 
 // ─── Input validation ────────────────────────────────────────────────────────
