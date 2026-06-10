@@ -19,6 +19,7 @@ type fakeHandler struct {
 	ignored      int
 	finalized    int
 	received     contracts.UserMessage
+	receivedAll  []contracts.UserMessage
 	outbound     contracts.AgentResponse
 	progress     []agent.ProgressEvent
 	handleErr    error
@@ -119,6 +120,7 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 func (f *fakeHandler) HandleMessage(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
 	f.calls++
 	f.received = message
+	f.receivedAll = append(f.receivedAll, message)
 	for _, event := range f.progress {
 		agent.ReportProgress(ctx, event)
 	}
@@ -753,7 +755,7 @@ func TestTelegramNewMessageDismissesExistingApprovalKeyboard(t *testing.T) {
 		Message: &telegramMessage{
 			From: &telegramUser{ID: 123},
 			Chat: telegramChat{ID: 55},
-			Text: "chạy tiếp nhé",
+			Text: "chay tiep nhe",
 		},
 	})
 	if err != nil {
@@ -762,7 +764,19 @@ func TestTelegramNewMessageDismissesExistingApprovalKeyboard(t *testing.T) {
 	if !processed {
 		t.Fatal("expected update to be processed")
 	}
-	if handler.received.Text != "revise chạy tiếp nhé" {
+	if handler.calls != 2 {
+		t.Fatalf("expected auto-reject plus the new user turn, got %d handler calls", handler.calls)
+	}
+	if len(handler.receivedAll) != 2 {
+		t.Fatalf("expected two handler messages, got %#v", handler.receivedAll)
+	}
+	if handler.receivedAll[0].Text != "reject appr_existing" {
+		t.Fatalf("expected first handler message to reject the pending approval, got %q", handler.receivedAll[0].Text)
+	}
+	if handler.receivedAll[1].Text != "chay tiep nhe" {
+		t.Fatalf("expected second handler message to preserve the new user text, got %q", handler.receivedAll[1].Text)
+	}
+	if handler.received.Text != "chay tiep nhe" {
 		t.Fatalf("unexpected user text routed to handler: %q", handler.received.Text)
 	}
 	if _, ok := bot.state.lookupApproval("appr_existing", 55, 42); ok {

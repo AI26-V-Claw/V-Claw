@@ -169,20 +169,38 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		return true, nil
 	}
 	if approvalContext, ok := b.state.approvalForChat(update.Message.Chat.ID); ok {
-		if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
-			b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
-		}
-		b.state.deleteApproval(approvalContext.ApprovalID)
-		inbound.SessionID = approvalContext.SessionID
-		inbound.Metadata["approvalId"] = approvalContext.ApprovalID
 		action := telegramApprovalTextAction(inbound.Text)
 		switch action {
 		case "approve", "reject":
+			if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
+				b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
+			}
+			b.state.deleteApproval(approvalContext.ApprovalID)
+			inbound.SessionID = approvalContext.SessionID
+			inbound.Metadata["approvalId"] = approvalContext.ApprovalID
 			inbound.Text = action + " " + approvalContext.ApprovalID
 			inbound.Metadata["telegramCallback"] = action
-		default:
+		case "revise":
+			if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
+				b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
+			}
+			b.state.deleteApproval(approvalContext.ApprovalID)
+			inbound.SessionID = approvalContext.SessionID
+			inbound.Metadata["approvalId"] = approvalContext.ApprovalID
 			inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
 			inbound.Metadata["telegramCallback"] = "revise"
+		default:
+			if err := b.rejectPendingApprovalForNewMessage(ctx, update.UpdateID, approvalContext); err != nil {
+				if b.handler != nil {
+					b.handler.FinalizeAudit(inbound, err)
+				}
+				return false, err
+			}
+			if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
+				b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
+			}
+			b.state.deleteApproval(approvalContext.ApprovalID)
+			inbound.SessionID = approvalContext.SessionID
 		}
 	} else if revision, ok := b.state.consumeRevision(update.Message.Chat.ID); ok {
 		inbound.SessionID = revision.SessionID
@@ -276,6 +294,32 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 
 	b.handler.FinalizeAudit(inbound, nil)
 	return true, nil
+}
+
+func (b *Bot) rejectPendingApprovalForNewMessage(ctx context.Context, updateID int, approvalContext telegramApprovalContext) error {
+	if b.handler == nil {
+		return fmt.Errorf("message handler is not configured")
+	}
+	rejectMsg := contracts.UserMessage{
+		RequestID: fmt.Sprintf("telegram_update_%d_auto_reject", updateID),
+		SessionID: approvalContext.SessionID,
+		Channel:   "telegram",
+		Text:      "reject " + approvalContext.ApprovalID,
+		Timestamp: time.Now().UTC(),
+		Metadata: map[string]any{
+			"telegramUpdateId":            updateID,
+			"telegramChatId":              approvalContext.ChatID,
+			"source":                      "telegram",
+			"approvalId":                  approvalContext.ApprovalID,
+			"autoRejectedPendingApproval": true,
+		},
+	}
+	_, err := b.handler.HandleMessage(ctx, rejectMsg)
+	b.handler.FinalizeAudit(rejectMsg, err)
+	if err != nil {
+		b.logger.Error("telegram auto-reject failed", "approval_id", approvalContext.ApprovalID, "session_id", approvalContext.SessionID, "error", err)
+	}
+	return err
 }
 
 func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (bool, error) {
