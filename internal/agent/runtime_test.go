@@ -1010,6 +1010,88 @@ func TestRuntimeExecutesReadOnlyToolAndContinuesToFinalAnswer(t *testing.T) {
 	}
 }
 
+func TestRuntimeExecutesParallelBatchForSafeReadTools(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{
+			Role:    providers.MessageRoleAssistant,
+			Content: "checking two things",
+			ToolCalls: []providers.ToolCall{
+				{ID: "call_1", Name: "get_current_time"},
+				{ID: "call_2", Name: "get_current_time"},
+			},
+		}},
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "done"}},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(tools.NewCurrentTimeToolWithClock(fixedTestTime)); err != nil {
+		t.Fatalf("register current time: %v", err)
+	}
+	store := sessions.NewInMemoryStore()
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:                 provider,
+		Registry:                 registry,
+		SessionStore:             store,
+		ParallelExecutionEnabled: true,
+		ParallelMaxWorkers:       2,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed, got %#v", response)
+	}
+	if len(response.ToolResults) != 2 {
+		t.Fatalf("expected 2 tool results, got %d", len(response.ToolResults))
+	}
+	for i, r := range response.ToolResults {
+		if !r.Success {
+			t.Fatalf("tool result %d not successful: %#v", i, r)
+		}
+	}
+	// Parallel path skips sequential loop: provider called exactly twice (batch + final answer)
+	if len(provider.calls) != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", len(provider.calls))
+	}
+}
+
+func TestRuntimeDoesNotBatchWhenParallelDisabled(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{
+			Role:    providers.MessageRoleAssistant,
+			Content: "checking two things",
+			ToolCalls: []providers.ToolCall{
+				{ID: "call_1", Name: "get_current_time"},
+				{ID: "call_2", Name: "get_current_time"},
+			},
+		}},
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "done"}},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(tools.NewCurrentTimeToolWithClock(fixedTestTime)); err != nil {
+		t.Fatalf("register current time: %v", err)
+	}
+	store := sessions.NewInMemoryStore()
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:                 provider,
+		Registry:                 registry,
+		SessionStore:             store,
+		ParallelExecutionEnabled: false,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed, got %#v", response)
+	}
+	if len(response.ToolResults) != 2 {
+		t.Fatalf("expected 2 tool results, got %d", len(response.ToolResults))
+	}
+}
+
 func TestRuntimeEmitsProgressForToolExecution(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		{Message: providers.Message{
