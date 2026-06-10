@@ -33,6 +33,7 @@ func (p ToolPolicy) CanExecute(tool tools.Tool) bool {
 
 // CanRunInParallel reports whether a tool is safe to execute in a parallel batch.
 // Only read-only tools with safe-read or safe-compute risk levels are allowed.
+// RequiresApproval is checked by the caller via ToolDefinition before this is called.
 func (p ToolPolicy) CanRunInParallel(tool tools.Tool) bool {
 	if tool == nil {
 		return false
@@ -40,7 +41,6 @@ func (p ToolPolicy) CanRunInParallel(tool tools.Tool) bool {
 	if tool.Capability() != tools.CapabilityReadOnly {
 		return false
 	}
-
 	switch tool.RiskLevel() {
 	case tools.RiskLevelSafeRead, tools.RiskLevelSafeCompute:
 		return true
