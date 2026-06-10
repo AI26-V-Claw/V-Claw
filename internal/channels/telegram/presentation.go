@@ -204,7 +204,6 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 		return "Mình cần bạn xác nhận trước khi thực hiện hành động này."
 	}
 
-<<<<<<< HEAD
 	if text := telegramDownloadAttachmentsResultText(response.ToolResults); text != "" {
 		return text
 	}
@@ -212,11 +211,6 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	text := strings.TrimSpace(response.Message)
 	if text == "" && response.Output != nil {
 		text = strings.TrimSpace(response.Output.Text)
-=======
-	text := response.Message
-	if strings.TrimSpace(text) == "" && response.Output != nil {
-		text = response.Output.Text
->>>>>>> master
 	}
 	text = sanitizeTelegramResponseText(text)
 	if text != "" {

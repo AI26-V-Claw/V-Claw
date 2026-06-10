@@ -67,9 +67,10 @@ type AgentRuntimeConfig struct {
 }
 
 type RuntimeBundle struct {
-	Runtime  *agent.Runtime
-	Registry *tools.ToolRegistry
-	Model    string
+	Runtime     *agent.Runtime
+	Registry    *tools.ToolRegistry
+	Model       string
+	PolicyStore *policies.UserPolicyStore
 }
 
 func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle, error) {
@@ -117,9 +118,9 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			return RuntimeBundle{}, fmt.Errorf("create runtime state store: %w", err)
 		}
 	}
-	userPolicy, _, err := loadToolPolicy(config.Logger)
+	userPolicy, policyStore, err := loadToolPolicy(config.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("load user policy config: %w", err)
+		return RuntimeBundle{}, fmt.Errorf("load user policy config: %w", err)
 	}
 
 	compactorModel := strings.TrimSpace(config.CompactorModel)
@@ -138,18 +139,15 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			reference.NewHeuristicResolver(),
 		),
 		SessionStore:          sessionStore,
-<<<<<<< HEAD
-		Policy:        userPolicy,
-=======
+		Policy:                userPolicy,
 		StateStore:            stateStore,
->>>>>>> master
 		Logger:                config.Logger,
 		MaxIterations:         config.MaxIterations,
 		Model:                 model,
 		Compactor:             compactor,
 		MemoryClassifierModel: compactorModel,
 	})
-	return RuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
+	return RuntimeBundle{Runtime: runtime, Registry: registry, Model: model, PolicyStore: policyStore}, nil
 }
 
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {
@@ -284,7 +282,6 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 	}, nil
 }
 
-<<<<<<< HEAD
 func loadToolPolicy(logger *slog.Logger) (policies.ToolPolicy, *policies.UserPolicyStore, error) {
 	dataDir := envOrDefault("DATA_DIR", "./data")
 	path := envOrDefault("VCLAW_USER_POLICY_PATH", policies.DefaultUserPolicyPath(dataDir))
@@ -324,7 +321,8 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
-=======
+}
+
 func normalizeToolMode(mode string) (string, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
@@ -344,5 +342,4 @@ func fileExists(path string) bool {
 	}
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
->>>>>>> master
 }
