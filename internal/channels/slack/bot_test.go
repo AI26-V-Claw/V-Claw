@@ -205,6 +205,19 @@ func TestSlackApprovalTextShowsSandboxPythonCode(t *testing.T) {
 	}
 }
 
+func TestSlackTextFromResponsePreservesMultilineFormatting(t *testing.T) {
+	message := "Đây là một bộ khung mục lục:\n\nCHƯƠNG 2\n2.1 Cơ sở lý thuyết\n  2.1.1 Khái niệm hệ thống thông tin\n  2.1.2 Khái niệm cơ sở dữ liệu\n\n- Mục 1\n- Mục 2"
+
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+	})
+
+	if text != message {
+		t.Fatalf("expected response formatting to be preserved, got %q want %q", text, message)
+	}
+}
+
 func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
 	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := slackTextFromResponse(contracts.AgentResponse{
@@ -387,6 +400,14 @@ func TestSlackRenderTextConvertsRawFencedCodeBlock(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "```\nif True:\n    print('hello')\n```") {
 		t.Fatalf("expected fenced code block to be preserved as a Slack code block, got %q", rendered)
+	}
+}
+
+func TestSlackRenderTextFormatsMarkdownHeading(t *testing.T) {
+	rendered := slackRenderText("## Giới thiệu")
+
+	if rendered != "*GIỚI THIỆU*" {
+		t.Fatalf("expected markdown heading to render as bold uppercase, got %q", rendered)
 	}
 }
 

@@ -134,9 +134,9 @@ func slackTextFromResponse(response contracts.AgentResponse) string {
 		return "Mình cần bạn xác nhận trước khi thực hiện hành động này."
 	}
 
-	text := strings.TrimSpace(response.Message)
-	if text == "" && response.Output != nil {
-		text = strings.TrimSpace(response.Output.Text)
+	text := response.Message
+	if strings.TrimSpace(text) == "" && response.Output != nil {
+		text = response.Output.Text
 	}
 	text = sanitizeSlackResponseText(text)
 	if text != "" {
@@ -254,21 +254,19 @@ func slackActionLabel(toolName string) string {
 }
 
 func sanitizeSlackResponseText(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	if looksLikeSlackMachinePayload(text) {
+	text = formatting.NormalizeLineEndings(text)
+	if looksLikeSlackMachinePayload(strings.TrimSpace(text)) {
 		return ""
 	}
 
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	lines := strings.Split(text, "\n")
 	filtered := make([]string, 0, len(lines))
-	skipJSONBlock := false
 	inFence := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		lower := strings.ToLower(trimmed)
 
 		if inFence {
 			filtered = append(filtered, line)
@@ -278,34 +276,24 @@ func sanitizeSlackResponseText(text string) string {
 			continue
 		}
 		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
-			filtered = append(filtered, trimmed)
+			filtered = append(filtered, line)
 			inFence = true
-			continue
-		}
-		if skipJSONBlock {
-			if trimmed == "" {
-				skipJSONBlock = false
-			}
 			continue
 		}
 		switch {
 		case trimmed == "":
 			filtered = append(filtered, "")
-		case strings.HasPrefix(lower, "approval id:"),
-			strings.HasPrefix(lower, "tool:"),
-			strings.HasPrefix(lower, "risk:"):
-			continue
-		case strings.HasPrefix(lower, "input:"):
-			skipJSONBlock = true
-			continue
 		case slackSensitiveTextPattern.MatchString(trimmed):
 			continue
 		default:
-			filtered = append(filtered, trimmed)
+			filtered = append(filtered, line)
 		}
 	}
 
-	clean := formatSlackUserText(filtered...)
+	clean := strings.Join(filtered, "\n")
+	if strings.TrimSpace(clean) == "" {
+		return ""
+	}
 	if slackSensitiveTextPattern.MatchString(clean) {
 		return ""
 	}
@@ -426,8 +414,7 @@ func slackGenericApprovalDetailText(input map[string]any) string {
 		lines = append(lines, label+": "+text)
 	}
 	appendMultiline := func(label string, value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
+		if strings.TrimSpace(value) == "" {
 			return
 		}
 		lines = append(lines, label+":", "", value)
@@ -503,7 +490,7 @@ func formatSlackUserText(lines ...string) string {
 			continue
 		}
 		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
-			out = append(out, strings.TrimSpace(line))
+			out = append(out, line)
 			inFence = true
 			previousBlank = false
 			continue
@@ -516,14 +503,13 @@ func formatSlackUserText(lines ...string) string {
 			previousBlank = true
 			continue
 		}
-		out = append(out, trimmed)
+		out = append(out, line)
 		previousBlank = false
 	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
+	return strings.Join(out, "\n")
 }
 
 func slackCodeBlock(_ string, code string) string {
-	code = strings.Trim(code, "\r\n")
 	if code == "" {
 		return ""
 	}
@@ -531,10 +517,10 @@ func slackCodeBlock(_ string, code string) string {
 }
 
 func slackPreBlock(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
+	text = formatting.NormalizeLineEndings(text)
 	return "```" + strings.ReplaceAll(text, "```", "``\u200b`") + "```"
 }
 
@@ -652,8 +638,7 @@ func stringMapValue(input map[string]any, keys ...string) string {
 			continue
 		}
 		if text, ok := value.(string); ok {
-			text = strings.TrimSpace(text)
-			if text != "" {
+			if strings.TrimSpace(text) != "" {
 				return text
 			}
 		}

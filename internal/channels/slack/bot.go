@@ -601,8 +601,7 @@ func newSlackProgressEditor(bot *Bot, channelID, timestamp string) *slackProgres
 }
 
 func (e *slackProgressEditor) Update(ctx context.Context, text string) error {
-	text = strings.TrimSpace(text)
-	if text == "" || text == e.lastText {
+	if strings.TrimSpace(text) == "" || text == e.lastText {
 		return nil
 	}
 	if err := e.bot.updateMessage(ctx, e.channelID, e.timestamp, text); err != nil {
@@ -613,8 +612,7 @@ func (e *slackProgressEditor) Update(ctx context.Context, text string) error {
 }
 
 func (e *slackProgressEditor) UpdateApproval(ctx context.Context, text, approvalID, sessionID, toolName string) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	if err := e.bot.updateApprovalMessage(ctx, e.channelID, e.timestamp, text, approvalID, sessionID, toolName); err != nil {
@@ -736,11 +734,34 @@ func slackMrkdwn(text string) string {
 }
 
 func slackRenderText(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	return formatting.ReplaceFencedCodeBlocks(text, func(_ string, code string) string {
+	text = formatting.NormalizeLineEndings(text)
+	text = formatting.ReplaceFencedCodeBlocks(text, func(_ string, code string) string {
 		return slackCodeBlock("", code)
 	})
+	lines := strings.Split(text, "\n")
+	rendered := make([]string, 0, len(lines))
+	inFence := false
+	for _, line := range lines {
+		if inFence {
+			rendered = append(rendered, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
+			}
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			rendered = append(rendered, line)
+			inFence = true
+			continue
+		}
+		if _, title, ok := formatting.ParseMarkdownHeading(line); ok {
+			rendered = append(rendered, "*"+strings.ToUpper(title)+"*")
+			continue
+		}
+		rendered = append(rendered, line)
+	}
+	return strings.Join(rendered, "\n")
 }
