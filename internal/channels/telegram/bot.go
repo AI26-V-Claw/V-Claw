@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 )
 
@@ -554,6 +555,7 @@ func telegramRenderHTML(text string) string {
 	if text == "" {
 		return ""
 	}
+	text = formatting.ReplaceFencedCodeBlocks(text, telegramCodeBlock)
 
 	var builder strings.Builder
 	for {

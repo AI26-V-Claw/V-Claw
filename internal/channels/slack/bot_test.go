@@ -200,6 +200,9 @@ func TestSlackApprovalTextShowsSandboxPythonCode(t *testing.T) {
 	if !strings.Contains(text, "print('hello')") || !strings.Contains(text, "print('world')") {
 		t.Fatalf("expected full sandbox code in approval text, got %q", text)
 	}
+	if !strings.Contains(text, "```") {
+		t.Fatalf("expected sandbox code block markup, got %q", text)
+	}
 }
 
 func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
@@ -373,6 +376,17 @@ func TestSlackRevisionPromptIncludesPendingContext(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "print('hello')") {
 		t.Fatalf("expected prompt to include pending code, got %q", prompt)
+	}
+}
+
+func TestSlackRenderTextConvertsRawFencedCodeBlock(t *testing.T) {
+	rendered := slackRenderText("Vi du:\n```python\nif True:\n    print('hello')\n```")
+
+	if strings.Contains(rendered, "```python") {
+		t.Fatalf("expected language marker to be normalized away, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "```\nif True:\n    print('hello')\n```") {
+		t.Fatalf("expected fenced code block to be preserved as a Slack code block, got %q", rendered)
 	}
 }
 

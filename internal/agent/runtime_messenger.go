@@ -459,29 +459,30 @@ func renderToolFallback(toolName string, content string) string {
 }
 
 func formatOutboundText(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
+	// text = strings.ReplaceAll(text, "\r\n", "\n")
+	// text = strings.ReplaceAll(text, "\r", "\n")
 
-	lines := strings.Split(text, "\n")
-	formatted := make([]string, 0, len(lines))
-	previousBlank := false
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		line = strings.TrimPrefix(line, "### ")
-		line = strings.TrimPrefix(line, "## ")
-		line = strings.TrimPrefix(line, "# ")
-		line = stripInlineMarkdownMarkers(line)
-		if line == "" {
-			if len(formatted) > 0 && !previousBlank {
-				formatted = append(formatted, "")
-			}
-			previousBlank = true
-			continue
-		}
-		formatted = append(formatted, line)
-		previousBlank = false
-	}
-	return strings.TrimSpace(strings.Join(formatted, "\n"))
+	// lines := strings.Split(text, "\n")
+	// formatted := make([]string, 0, len(lines))
+	// previousBlank := false
+	// for _, line := range lines {
+	// 	line = strings.TrimSpace(line)
+	// 	line = strings.TrimPrefix(line, "### ")
+	// 	line = strings.TrimPrefix(line, "## ")
+	// 	line = strings.TrimPrefix(line, "# ")
+	// 	line = stripInlineMarkdownMarkers(line)
+	// 	if line == "" {
+	// 		if len(formatted) > 0 && !previousBlank {
+	// 			formatted = append(formatted, "")
+	// 		}
+	// 		previousBlank = true
+	// 		continue
+	// 	}
+	// 	formatted = append(formatted, line)
+	// 	previousBlank = false
+	// }
+	// return strings.TrimSpace(strings.Join(formatted, "\n"))
+	return text
 }
 
 func stripInlineMarkdownMarkers(text string) string {

@@ -13,6 +13,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 )
 
@@ -410,7 +411,7 @@ func (b *Bot) handleSlackReviseSubmission(ctx context.Context, callback slack.In
 }
 
 func (b *Bot) sendMessage(ctx context.Context, channelID, text, threadTimestamp string) (string, error) {
-	options := []slack.MsgOption{slack.MsgOptionText(text, false)}
+	options := []slack.MsgOption{slack.MsgOptionText(slackRenderText(text), false)}
 	if strings.TrimSpace(threadTimestamp) != "" {
 		options = append(options, slack.MsgOptionPostMessageParameters(slack.PostMessageParameters{
 			ThreadTimestamp: threadTimestamp,
@@ -423,7 +424,7 @@ func (b *Bot) sendMessage(ctx context.Context, channelID, text, threadTimestamp 
 
 func (b *Bot) sendApprovalMessage(ctx context.Context, channelID, text, threadTimestamp, approvalID, sessionID, toolName string) (string, error) {
 	options := []slack.MsgOption{
-		slack.MsgOptionText(text, false),
+		slack.MsgOptionText(slackRenderText(text), false),
 		slack.MsgOptionBlocks(slackApprovalBlocks(text, approvalID, sessionID)...),
 	}
 	if strings.TrimSpace(threadTimestamp) != "" {
@@ -446,13 +447,13 @@ func (b *Bot) sendApprovalMessage(ctx context.Context, channelID, text, threadTi
 }
 
 func (b *Bot) updateMessage(ctx context.Context, channelID, timestamp, text string) error {
-	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp, slack.MsgOptionText(text, false))
+	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp, slack.MsgOptionText(slackRenderText(text), false))
 	return err
 }
 
 func (b *Bot) updateApprovalMessage(ctx context.Context, channelID, timestamp, text, approvalID, sessionID, toolName string) error {
 	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp,
-		slack.MsgOptionText(text, false),
+		slack.MsgOptionText(slackRenderText(text), false),
 		slack.MsgOptionBlocks(slackApprovalBlocks(text, approvalID, sessionID)...),
 	)
 	if err == nil {
@@ -470,7 +471,7 @@ func (b *Bot) updateApprovalMessage(ctx context.Context, channelID, timestamp, t
 
 func (b *Bot) updateMessageClearBlocks(ctx context.Context, channelID, timestamp, text string) error {
 	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp,
-		slack.MsgOptionText(text, false),
+		slack.MsgOptionText(slackRenderText(text), false),
 		slack.MsgOptionBlocks(),
 	)
 	return err
@@ -724,7 +725,7 @@ func slackReviseComment(callback slack.InteractionCallback) string {
 }
 
 func slackMrkdwn(text string) string {
-	text = strings.TrimSpace(text)
+	text = slackRenderText(text)
 	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	text = strings.ReplaceAll(text, ">", "&gt;")
@@ -732,4 +733,14 @@ func slackMrkdwn(text string) string {
 		return "Approval required."
 	}
 	return text
+}
+
+func slackRenderText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return formatting.ReplaceFencedCodeBlocks(text, func(_ string, code string) string {
+		return slackCodeBlock("", code)
+	})
 }

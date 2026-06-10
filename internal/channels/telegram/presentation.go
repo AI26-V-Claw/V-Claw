@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 )
 
@@ -326,10 +327,23 @@ func sanitizeTelegramResponseText(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	filtered := make([]string, 0, len(lines))
 	skipJSONBlock := false
+	inFence := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
 
+		if inFence {
+			filtered = append(filtered, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
+			}
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			filtered = append(filtered, trimmed)
+			inFence = true
+			continue
+		}
 		if skipJSONBlock {
 			if trimmed == "" {
 				skipJSONBlock = false
@@ -758,7 +772,22 @@ func looksLikeTelegramMachinePayload(text string) bool {
 func formatTelegramUserText(lines ...string) string {
 	out := make([]string, 0, len(lines))
 	previousBlank := false
+	inFence := false
 	for _, line := range lines {
+		if inFence {
+			out = append(out, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
+			}
+			previousBlank = false
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			out = append(out, strings.TrimSpace(line))
+			inFence = true
+			previousBlank = false
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			if len(out) > 0 && !previousBlank {

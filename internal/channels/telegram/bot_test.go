@@ -921,6 +921,20 @@ func TestTelegramRenderHTMLConvertsCodeBlockMarkers(t *testing.T) {
 	}
 }
 
+func TestTelegramRenderHTMLConvertsRawFencedCodeBlock(t *testing.T) {
+	rendered := telegramRenderHTML("Vi du:\n```python\nif True:\n    print('hello')\n```")
+
+	if !strings.Contains(rendered, "<pre><code") {
+		t.Fatalf("expected raw fenced code to render as html code block, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "language-python") {
+		t.Fatalf("expected raw fenced code to preserve the language class, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "    print(&#39;hello&#39;)") && !strings.Contains(rendered, "    print('hello')") {
+		t.Fatalf("expected raw fenced code indentation to be preserved, got %q", rendered)
+	}
+}
+
 func TestTelegramRenderHTMLConvertsPreBlockMarkers(t *testing.T) {
 	rendered := telegramRenderHTML(telegramPreBlock("Chào bạn,\n\nThân mến,\nV-Claw"))
 

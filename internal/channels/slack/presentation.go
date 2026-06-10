@@ -12,6 +12,7 @@ import (
 
 	"github.com/slack-go/slack"
 
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 )
 
@@ -264,10 +265,23 @@ func sanitizeSlackResponseText(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	filtered := make([]string, 0, len(lines))
 	skipJSONBlock := false
+	inFence := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
 
+		if inFence {
+			filtered = append(filtered, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
+			}
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			filtered = append(filtered, trimmed)
+			inFence = true
+			continue
+		}
 		if skipJSONBlock {
 			if trimmed == "" {
 				skipJSONBlock = false
@@ -320,14 +334,14 @@ func slackApprovalDetailText(approval contracts.ApprovalRequest) string {
 	switch strings.TrimSpace(approval.ToolCall.ToolName) {
 	case "sandbox.runPython":
 		if code := stringMapValue(input, "code"); code != "" {
-			return "Mã Python sẽ chạy:\n\n" + code
+			return "Mã Python sẽ chạy:\n\n" + slackCodeBlock("python", code)
 		}
 		if scriptPath := stringMapValue(input, "script_path", "scriptPath"); scriptPath != "" {
 			return "File Python sẽ chạy: " + scriptPath
 		}
 	case "sandbox.runShell":
 		if command := stringMapValue(input, "command"); command != "" {
-			return "Lệnh shell sẽ chạy:\n\n" + command
+			return "Lệnh shell sẽ chạy:\n\n" + slackCodeBlock("bash", command)
 		}
 	}
 	return slackGenericApprovalDetailText(input)
@@ -478,7 +492,22 @@ func looksLikeSlackMachinePayload(text string) bool {
 func formatSlackUserText(lines ...string) string {
 	out := make([]string, 0, len(lines))
 	previousBlank := false
+	inFence := false
 	for _, line := range lines {
+		if inFence {
+			out = append(out, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
+			}
+			previousBlank = false
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			out = append(out, strings.TrimSpace(line))
+			inFence = true
+			previousBlank = false
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			if len(out) > 0 && !previousBlank {
@@ -491,6 +520,14 @@ func formatSlackUserText(lines ...string) string {
 		previousBlank = false
 	}
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func slackCodeBlock(_ string, code string) string {
+	code = strings.Trim(code, "\r\n")
+	if code == "" {
+		return ""
+	}
+	return "```\n" + strings.ReplaceAll(code, "```", "``\u200b`") + "\n```"
 }
 
 func slackPreBlock(text string) string {
