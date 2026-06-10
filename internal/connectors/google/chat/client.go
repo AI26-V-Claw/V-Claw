@@ -89,12 +89,16 @@ type ListMembersOutput struct {
 }
 
 func (c *Client) ListSpaces(ctx context.Context, pageSize int64) ([]Space, error) {
-	output, err := ListSpaces(ctx, c.httpClient, pageSize, "")
+	output, err := ListSpaces(ctx, c.httpClient, pageSize, "", "")
 	return output.Spaces, err
 }
 
 func (c *Client) ListSpacesPage(ctx context.Context, pageSize int64, pageToken string) (ListSpacesOutput, error) {
-	return ListSpaces(ctx, c.httpClient, pageSize, pageToken)
+	return ListSpaces(ctx, c.httpClient, pageSize, pageToken, "")
+}
+
+func (c *Client) ListSpacesPageFiltered(ctx context.Context, pageSize int64, pageToken string, spaceTypeFilter string) (ListSpacesOutput, error) {
+	return ListSpaces(ctx, c.httpClient, pageSize, pageToken, spaceTypeFilter)
 }
 
 func (c *Client) ListMessages(ctx context.Context, parent string, pageSize int64, pageToken string, showDeleted bool) (ListMessagesOutput, error) {
@@ -137,7 +141,7 @@ func (c *Client) UploadAttachment(ctx context.Context, parent string, filename s
 	return UploadAttachment(ctx, c.httpClient, parent, filename, mediaType, reader)
 }
 
-func ListSpaces(ctx context.Context, client *http.Client, pageSize int64, pageToken string) (ListSpacesOutput, error) {
+func ListSpaces(ctx context.Context, client *http.Client, pageSize int64, pageToken string, spaceTypeFilter string) (ListSpacesOutput, error) {
 	service, err := serviceFromClient(ctx, client)
 	if err != nil {
 		return ListSpacesOutput{}, err
@@ -146,6 +150,9 @@ func ListSpaces(ctx context.Context, client *http.Client, pageSize int64, pageTo
 	call := service.Spaces.List().PageSize(pageSize)
 	if strings.TrimSpace(pageToken) != "" {
 		call = call.PageToken(pageToken)
+	}
+	if f := strings.TrimSpace(spaceTypeFilter); f != "" {
+		call = call.Filter(`spaceType = "` + f + `"`)
 	}
 	response, err := call.Do()
 	if err != nil {

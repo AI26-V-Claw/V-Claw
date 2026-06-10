@@ -196,6 +196,8 @@ func inferGroup(toolName string) string {
 		return "web"
 	case strings.HasPrefix(toolName, "sandbox."):
 		return "sandbox"
+	case strings.HasPrefix(toolName, "filesystem."):
+		return "filesystem"
 	default:
 		return "builtin"
 	}

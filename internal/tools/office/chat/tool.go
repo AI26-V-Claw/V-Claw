@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	googleconnector "vclaw/internal/connectors/google"
 	chatconnector "vclaw/internal/connectors/google/chat"
+	peopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/tools"
 
 	"google.golang.org/api/googleapi"
@@ -126,6 +128,7 @@ type ErrorShape struct {
 
 type Connector interface {
 	ListSpacesPage(ctx context.Context, pageSize int64, pageToken string) (chatconnector.ListSpacesOutput, error)
+	ListSpacesPageFiltered(ctx context.Context, pageSize int64, pageToken string, spaceTypeFilter string) (chatconnector.ListSpacesOutput, error)
 	ListMembers(ctx context.Context, parent string, pageSize int64, pageToken string) (chatconnector.ListMembersOutput, error)
 	ListMessages(ctx context.Context, parent string, pageSize int64, pageToken string, showDeleted bool) (chatconnector.ListMessagesOutput, error)
 	CreateTextMessage(ctx context.Context, parent string, text string, options chatconnector.MessageCreateOptions) (chatconnector.Message, error)
@@ -137,9 +140,19 @@ type Connector interface {
 	UploadAttachment(ctx context.Context, parent string, filename string, mediaType string, reader io.Reader) (string, error)
 }
 
+// PeopleEnricher resolves workspace user identities to email addresses.
+// Satisfied directly by *peopleconnector.Client.
+type PeopleEnricher interface {
+	// SearchDirectoryPeople searches by display name when a name is available.
+	SearchDirectoryPeople(ctx context.Context, query string, pageSize int64, pageToken string) (peopleconnector.SearchDirectoryOutput, error)
+	// GetPerson fetches a single person by People API resource name (e.g. "people/123456789").
+	GetPerson(ctx context.Context, resourceName string) (peopleconnector.DirectoryPerson, error)
+}
+
 type Service struct {
 	connector        Connector
 	workspaceDomains []string
+	peopleEnricher   PeopleEnricher // optional; enriches member emails via Directory API
 }
 
 func NewService(connector Connector) *Service {
@@ -151,6 +164,21 @@ func NewService(connector Connector) *Service {
 
 func NewServiceWithWorkspaceDomains(connector Connector, domains []string) *Service {
 	return &Service{connector: connector, workspaceDomains: cleanStrings(domains)}
+}
+
+// NewServiceWithPeople creates a Service that automatically enriches member email addresses
+// by querying the Google Workspace Directory via the provided PeopleEnricher.
+func NewServiceWithPeople(connector Connector, people PeopleEnricher) *Service {
+	svc := NewService(connector)
+	svc.peopleEnricher = people
+	return svc
+}
+
+// NewServiceWithPeopleAndDomains combines domain restrictions and people enrichment.
+func NewServiceWithPeopleAndDomains(connector Connector, people PeopleEnricher, domains []string) *Service {
+	svc := NewServiceWithWorkspaceDomains(connector, domains)
+	svc.peopleEnricher = people
+	return svc
 }
 
 type ListMessagesInput struct {
@@ -303,7 +331,55 @@ func (s *Service) ListMembers(ctx context.Context, input ListMembersInput) (List
 	if err != nil {
 		return ListMembersOutput{}, MapError(err)
 	}
-	return ListMembersOutput{Members: output.Members, NextPageToken: output.NextPageToken}, nil
+	members := output.Members
+	if s.peopleEnricher != nil {
+		members = s.enrichMembersWithEmails(ctx, members)
+	}
+	return ListMembersOutput{Members: members, NextPageToken: output.NextPageToken}, nil
+}
+
+// enrichMembersWithEmails resolves email addresses for members that have none.
+// Strategy (best-effort, falls through on any error):
+//  1. If MemberName is "users/<numericID>": call GetPerson("people/<numericID>") directly.
+//  2. If DisplayName is present: call SearchDirectoryPeople and match by CandidateUserName.
+func (s *Service) enrichMembersWithEmails(ctx context.Context, members []chatconnector.Membership) []chatconnector.Membership {
+	enriched := make([]chatconnector.Membership, len(members))
+	copy(enriched, members)
+	for i, member := range enriched {
+		if member.Email != "" {
+			continue
+		}
+		if email := s.resolveEmail(ctx, member); email != "" {
+			enriched[i].Email = email
+		}
+	}
+	return enriched
+}
+
+func (s *Service) resolveEmail(ctx context.Context, member chatconnector.Membership) string {
+	// Strategy 1: numeric user ID → People resource name "people/<id>"
+	if numericID, ok := strings.CutPrefix(member.MemberName, "users/"); ok {
+		if numericID != "" && !strings.Contains(numericID, "@") {
+			person, err := s.peopleEnricher.GetPerson(ctx, "people/"+numericID)
+			if err == nil && len(person.EmailAddresses) > 0 {
+				return person.EmailAddresses[0]
+			}
+		}
+	}
+
+	// Strategy 2: search by display name and match by CandidateUserName
+	if displayName := strings.TrimSpace(member.DisplayName); displayName != "" && strings.TrimSpace(member.MemberName) != "" {
+		result, err := s.peopleEnricher.SearchDirectoryPeople(ctx, displayName, 5, "")
+		if err != nil {
+			return ""
+		}
+		for _, person := range result.People {
+			if len(person.EmailAddresses) > 0 && slices.Contains(person.CandidateUserNames, member.MemberName) {
+				return person.EmailAddresses[0]
+			}
+		}
+	}
+	return ""
 }
 
 func (s *Service) FindSpacesByMembers(ctx context.Context, input FindSpacesByMembersInput) (FindSpacesByMembersOutput, *ErrorShape) {
@@ -321,7 +397,7 @@ func (s *Service) FindSpacesByMembers(ctx context.Context, input FindSpacesByMem
 		return FindSpacesByMembersOutput{}, errShape
 	}
 
-	spacesOutput, err := s.connector.ListSpacesPage(ctx, maxResults, input.PageToken)
+	spacesOutput, err := s.connector.ListSpacesPageFiltered(ctx, maxResults, input.PageToken, input.SpaceType)
 	if err != nil {
 		return FindSpacesByMembersOutput{}, MapError(err)
 	}
@@ -333,7 +409,7 @@ func (s *Service) FindSpacesByMembers(ctx context.Context, input FindSpacesByMem
 
 	var matches []MatchedSpace
 	for _, space := range spacesOutput.Spaces {
-		if strings.TrimSpace(input.SpaceType) != "" && !strings.EqualFold(space.SpaceType, input.SpaceType) {
+		if strings.TrimSpace(input.SpaceType) != "" && !spaceMatchesType(space, input.SpaceType) {
 			continue
 		}
 
@@ -710,7 +786,7 @@ func (FindSpacesByMembersTool) Name() string {
 }
 
 func (FindSpacesByMembersTool) Description() string {
-	return "Find Google Chat spaces by member user resource names. Use this after people.searchDirectory when the user says messages with a person, for example Bao, then pass Candidate Chat users like users/123 before calling chat.listMessages with the returned spaces/... name."
+	return "Find Google Chat spaces that include specific members. Use this after people.searchDirectory to resolve a person name to users/... resource names, then call this tool to find the space. When the user wants to send a message or file directly to a person (not a group), pass spaceType=DIRECT_MESSAGE to find the DM space. If the result is empty (no existing DM), call chat.createSpace with spaceType=DIRECT_MESSAGE and the person's email to create it, then use the returned space for chat.sendMessage."
 }
 
 func (FindSpacesByMembersTool) Parameters() tools.ToolSchema {
@@ -851,7 +927,7 @@ func (SendMessageTool) Name() string {
 }
 
 func (SendMessageTool) Description() string {
-	return "Send a Google Chat text message or attachment. The space input must be a spaces/... resource name; if the user names a person, group, or display name such as VClaw, first resolve it with chat.listSpaces or people.searchDirectory plus chat.findSpacesByMembers before calling this tool. This external write requires approval."
+	return "Send a Google Chat text message or attachment. The space input must be a spaces/... resource name. If the user names a group or space display name (e.g. VClaw), resolve it with chat.listSpaces. If the user names a specific person (e.g. Bao Le), use people.searchDirectory to get their users/... resource name, then chat.findSpacesByMembers with spaceType=DIRECT_MESSAGE to get the DM space — do NOT reuse a previously known group space. This external write requires approval."
 }
 
 func (SendMessageTool) Parameters() tools.ToolSchema {
@@ -1010,7 +1086,7 @@ func NewCreateSpaceTool(service *Service) CreateSpaceTool {
 func (CreateSpaceTool) Name() string { return ToolNameCreateSpace }
 
 func (CreateSpaceTool) Description() string {
-	return "Create or set up a Google Chat space, group chat, or direct message. This external write requires approval."
+	return "Create or set up a Google Chat space, group chat, or direct message. Use spaceType=DIRECT_MESSAGE with memberUsers=[email] to open a DM with a person when chat.findSpacesByMembers returns no result. This external write requires approval."
 }
 
 func (CreateSpaceTool) Parameters() tools.ToolSchema {
@@ -1321,6 +1397,22 @@ func normalizeMemberUserNames(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+// spaceMatchesType checks both SpaceType (new API field) and Type (legacy field)
+// so DM spaces returned with Type="DM" are matched by spaceType="DIRECT_MESSAGE".
+func spaceMatchesType(space chatconnector.Space, spaceType string) bool {
+	if strings.EqualFold(space.SpaceType, spaceType) {
+		return true
+	}
+	// Legacy field mapping: DM → DIRECT_MESSAGE, ROOM → SPACE
+	switch strings.ToUpper(spaceType) {
+	case "DIRECT_MESSAGE":
+		return strings.EqualFold(space.Type, "DM")
+	case "SPACE":
+		return strings.EqualFold(space.Type, "ROOM")
+	}
+	return false
 }
 
 func membershipsContainAll(members []chatconnector.Membership, required map[string]struct{}) bool {
