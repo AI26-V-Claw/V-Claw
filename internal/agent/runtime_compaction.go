@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"time"
 
 	"vclaw/internal/sessions"
@@ -44,9 +45,30 @@ func (r *Runtime) maybeCompactAsync(sessionID string) {
 		return
 	}
 
-	if err := r.sessionStore.SetTranscript(ctx, sessionID, result.KeptMessages); err != nil {
-		r.logger.Warn("compaction: set transcript failed", "session_id", sessionID, "error", err)
-		return
+	if store, ok := r.sessionStore.(sessions.CompareAndSetStore); ok {
+		replaced, err := store.ReplaceTranscriptIfUnchanged(ctx, sessionID, transcript, result.KeptMessages)
+		if err != nil {
+			r.logger.Warn("compaction: replace transcript failed", "session_id", sessionID, "error", err)
+			return
+		}
+		if !replaced {
+			r.logger.Debug("compaction skipped: transcript changed", "session_id", sessionID)
+			return
+		}
+	} else {
+		latestTranscript, err := r.sessionStore.LoadTranscript(ctx, sessionID)
+		if err != nil {
+			r.logger.Warn("compaction: reload transcript failed", "session_id", sessionID, "error", err)
+			return
+		}
+		if !reflect.DeepEqual(latestTranscript, transcript) {
+			r.logger.Debug("compaction skipped: transcript changed", "session_id", sessionID)
+			return
+		}
+		if err := r.sessionStore.SetTranscript(ctx, sessionID, result.KeptMessages); err != nil {
+			r.logger.Warn("compaction: set transcript failed", "session_id", sessionID, "error", err)
+			return
+		}
 	}
 
 	latest, errShape := r.loadSessionMemory(ctx, sessionID)

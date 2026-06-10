@@ -57,8 +57,7 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 | Module | Owner chính | Ghi chú |
 |---|---|---|
 | `cmd/` | Shared | Entry point mỏng, chỉ parse config/args và gọi app bootstrap. Không chứa business logic nặng. |
-| `internal/config/` | Shared | Load config tối giản cho local/dev. Không biến thành config framework phức tạp. |
-| `internal/app/` | Shared | Nếu cần, dùng để gom wiring/bootstrap. Tránh để `cmd/` phình to. |
+| `internal/app/` | Shared | Composition root duy nhất cho runtime, tool registry, persistence và provider wiring. |
 
 ### 3.2. Shared contracts & persistence
 
@@ -77,9 +76,7 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 | `internal/agent/intent/` | Agent Core | Intent classification tối giản. Không overfit bằng nhiều layer rule engine nếu chưa cần. |
 | `internal/agent/router/` | Agent Core | Tool routing: chọn tool dựa trên intent/context. |
 | `internal/providers/` | Agent Core | LLM provider interface hoặc implementation tối giản. |
-| `internal/memory/` | Agent Core | Short-term memory ở Sprint 2; long-term memory/Knowledge Graph theo Sprint 3. |
-| `internal/memory/session/` | Agent Core | Lưu/đọc context hội thoại hiện tại nếu cần. |
-| `internal/memory/longterm/` | Agent Core | Bộ nhớ dài hạn theo Sprint 3, ví dụ thói quen làm việc và danh sách người quen. |
+| `internal/sessions/` | Agent Core | Transcript, session summary và pending clarification được runtime sử dụng. |
 
 ### 3.4. Tools, connectors & channels
 
@@ -105,8 +102,7 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 | Module | Owner chính | Ghi chú |
 |---|---|---|
 | `internal/safety/` | Agent Core | Risk classification, allow/deny/approval decision. |
-| `internal/safety/risk/` | Agent Core | RiskLevel, policy mapping, side-effect classification. |
-| `internal/safety/policy/` | Agent Core | Policy check tối giản. Không tách rule engine phức tạp sớm. |
+| `internal/policies/` | Agent Core | Tool policy, risk mapping và approval requirement. |
 | `internal/approvals/` | Agent Core | Pending approval, approve/reject flow. |
 | `internal/approvals/pending/` | Agent Core | Lưu trạng thái action đang chờ duyệt nếu cần. |
 | `internal/audit/` | Agent Core | Log action, approval decision, tool execution result. |

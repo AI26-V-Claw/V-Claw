@@ -1248,8 +1248,15 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 
 func TestRuntimeApprovedActionSurvivesRestart(t *testing.T) {
 	executions := 0
-	stateStore := NewInMemoryRuntimeStateStore()
-	sessionStore := sessions.NewInMemoryStore()
+	dataDir := t.TempDir()
+	firstStateStore, err := NewFileRuntimeStateStore(dataDir)
+	if err != nil {
+		t.Fatalf("create first state store: %v", err)
+	}
+	firstSessionStore, err := sessions.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("create first session store: %v", err)
+	}
 	message := runtimeTestMessage()
 	registry := tools.NewToolRegistry()
 	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
@@ -1268,8 +1275,8 @@ func TestRuntimeApprovedActionSurvivesRestart(t *testing.T) {
 	firstRuntime := NewRuntime(RuntimeConfig{
 		Provider:     firstProvider,
 		Registry:     registry,
-		SessionStore: sessionStore,
-		StateStore:   stateStore,
+		SessionStore: firstSessionStore,
+		StateStore:   firstStateStore,
 		Now:          func() time.Time { return message.Timestamp },
 	})
 
@@ -1284,11 +1291,19 @@ func TestRuntimeApprovedActionSurvivesRestart(t *testing.T) {
 	secondProvider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Đã hoàn thành yêu cầu."},
 	}}}
+	secondStateStore, err := NewFileRuntimeStateStore(dataDir)
+	if err != nil {
+		t.Fatalf("reopen state store: %v", err)
+	}
+	secondSessionStore, err := sessions.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("reopen session store: %v", err)
+	}
 	secondRuntime := NewRuntime(RuntimeConfig{
 		Provider:     secondProvider,
 		Registry:     registry,
-		SessionStore: sessionStore,
-		StateStore:   stateStore,
+		SessionStore: secondSessionStore,
+		StateStore:   secondStateStore,
 		Now:          func() time.Time { return message.Timestamp.Add(time.Second) },
 	})
 	response, err := secondRuntime.ResolveApproval(context.Background(), message.SessionID, contracts.ApprovalDecision{
@@ -1307,7 +1322,7 @@ func TestRuntimeApprovedActionSurvivesRestart(t *testing.T) {
 	if executions != 1 {
 		t.Fatalf("expected exactly one execution after restart, got %d", executions)
 	}
-	action, err := stateStore.GetActionByApprovalID(context.Background(), pending.ApprovalID)
+	action, err := secondStateStore.GetActionByApprovalID(context.Background(), pending.ApprovalID)
 	if err != nil {
 		t.Fatalf("load action after restart approval: %v", err)
 	}
@@ -1318,8 +1333,15 @@ func TestRuntimeApprovedActionSurvivesRestart(t *testing.T) {
 
 func TestRuntimeNoIDApprovalAfterRestartUsesLatestPendingAction(t *testing.T) {
 	executions := 0
-	stateStore := NewInMemoryRuntimeStateStore()
-	sessionStore := sessions.NewInMemoryStore()
+	dataDir := t.TempDir()
+	firstStateStore, err := NewFileRuntimeStateStore(dataDir)
+	if err != nil {
+		t.Fatalf("create first state store: %v", err)
+	}
+	firstSessionStore, err := sessions.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("create first session store: %v", err)
+	}
 	message := runtimeTestMessage()
 	registry := tools.NewToolRegistry()
 	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
@@ -1338,8 +1360,8 @@ func TestRuntimeNoIDApprovalAfterRestartUsesLatestPendingAction(t *testing.T) {
 	firstRuntime := NewRuntime(RuntimeConfig{
 		Provider:     firstProvider,
 		Registry:     registry,
-		SessionStore: sessionStore,
-		StateStore:   stateStore,
+		SessionStore: firstSessionStore,
+		StateStore:   firstStateStore,
 		Now:          func() time.Time { return message.Timestamp },
 	})
 	pending, err := firstRuntime.Run(context.Background(), message)
@@ -1353,11 +1375,19 @@ func TestRuntimeNoIDApprovalAfterRestartUsesLatestPendingAction(t *testing.T) {
 	secondProvider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Đã hoàn thành yêu cầu."},
 	}}}
+	secondStateStore, err := NewFileRuntimeStateStore(dataDir)
+	if err != nil {
+		t.Fatalf("reopen state store: %v", err)
+	}
+	secondSessionStore, err := sessions.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("reopen session store: %v", err)
+	}
 	secondRuntime := NewRuntime(RuntimeConfig{
 		Provider:     secondProvider,
 		Registry:     registry,
-		SessionStore: sessionStore,
-		StateStore:   stateStore,
+		SessionStore: secondSessionStore,
+		StateStore:   secondStateStore,
 		Now:          func() time.Time { return message.Timestamp.Add(time.Second) },
 	})
 	response, err := secondRuntime.ResolveApproval(context.Background(), message.SessionID, contracts.ApprovalDecision{
@@ -1375,7 +1405,7 @@ func TestRuntimeNoIDApprovalAfterRestartUsesLatestPendingAction(t *testing.T) {
 	if executions != 1 {
 		t.Fatalf("expected exactly one execution after no-id approval, got %d", executions)
 	}
-	action, err := stateStore.GetActionByApprovalID(context.Background(), pending.ApprovalID)
+	action, err := secondStateStore.GetActionByApprovalID(context.Background(), pending.ApprovalID)
 	if err != nil {
 		t.Fatalf("load action after no-id approval: %v", err)
 	}
