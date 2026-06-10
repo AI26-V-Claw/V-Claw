@@ -9,7 +9,6 @@ import (
 	"text/tabwriter"
 
 	"vclaw/internal/tools"
-	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
 )
@@ -43,7 +42,6 @@ func runToolsList(args []string) error {
 	_ = tools.RegisterBuiltInTools(registry)
 	_ = sandboxtool.RegisterToolsWithConfig(registry, sandboxtool.Config{})
 	_ = webtool.RegisterTools(registry, webtool.NewService(nil))
-	_ = fstool.RegisterTools(registry, fstool.Config{})
 	// Note: Google Workspace tools require OAuth and are not listed here.
 	// Run with a live agent to see all registered tools.
 

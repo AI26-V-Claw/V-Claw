@@ -40,7 +40,7 @@ func NewRunPythonTool(cfg Config) RunPythonTool {
 func (RunPythonTool) Name() string { return ToolNameRunPython }
 
 func (RunPythonTool) Description() string {
-	return "Run Python code or a workspace-relative Python script inside the configured sandbox. The result includes workspace_dir — the absolute host path where files persist between runs. To reference a file created or found in the workspace (e.g. for chat.sendMessage attachments), use workspace_dir + filename. This code execution action requires approval."
+	return "Run Python code or a workspace-relative Python script inside the configured sandbox. This code execution action requires approval."
 }
 
 func (RunPythonTool) Parameters() tools.ToolSchema {
@@ -98,7 +98,7 @@ func NewRunShellTool(cfg Config) RunShellTool {
 func (RunShellTool) Name() string { return ToolNameRunShell }
 
 func (RunShellTool) Description() string {
-	return "Run a shell command inside the configured sandbox. The result includes workspace_dir — the absolute host path where files persist between runs. To reference a file created or found in the workspace (e.g. for chat.sendMessage attachments), use workspace_dir + filename. This code execution action requires approval."
+	return "Run a shell command inside the configured sandbox. This code execution action requires approval."
 }
 
 func (RunShellTool) Parameters() tools.ToolSchema {
@@ -363,7 +363,7 @@ func formatPythonOutput(output pytool.Output) string {
 	if err != nil {
 		return fmt.Sprintf("sandbox.runPython status=%s stdout=%q stderr=%q", output.Status, output.Stdout, output.Stderr)
 	}
-	return appendWorkspaceFilesNote(string(data), output.WorkspaceFiles)
+	return string(data)
 }
 
 func formatShellOutput(output shtool.Output) string {
@@ -371,25 +371,7 @@ func formatShellOutput(output shtool.Output) string {
 	if err != nil {
 		return fmt.Sprintf("sandbox.runShell status=%s stdout=%q stderr=%q", output.Status, output.Stdout, output.Stderr)
 	}
-	return appendWorkspaceFilesNote(string(data), output.WorkspaceFiles)
-}
-
-// appendWorkspaceFilesNote adds a plain-text section listing absolute host paths
-// of all workspace files. LLMs must use these exact paths when passing files to
-// other tools (e.g. chat.sendMessage attachments) — never construct paths manually.
-func appendWorkspaceFilesNote(base string, files []string) string {
-	if len(files) == 0 {
-		return base
-	}
-	var b strings.Builder
-	b.WriteString(base)
-	b.WriteString("\n\nFiles in workspace (use these exact absolute paths for attachments or other tools — do not modify them):\n")
-	for _, f := range files {
-		b.WriteString("  ")
-		b.WriteString(f)
-		b.WriteString("\n")
-	}
-	return b.String()
+	return string(data)
 }
 
 func userSummary(status, stdout, stderr string) string {

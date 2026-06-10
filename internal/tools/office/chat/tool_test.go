@@ -35,10 +35,6 @@ func (f fakeConnector) ListSpacesPage(context.Context, int64, string) (chatconne
 	return f.spacesOutput, nil
 }
 
-func (f fakeConnector) ListSpacesPageFiltered(ctx context.Context, pageSize int64, pageToken string, _ string) (chatconnector.ListSpacesOutput, error) {
-	return f.ListSpacesPage(ctx, pageSize, pageToken)
-}
-
 func (f *fakeConnector) ListMembers(_ context.Context, parent string, _ int64, _ string) (chatconnector.ListMembersOutput, error) {
 	f.seenParent = parent
 	if f.err != nil {

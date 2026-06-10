@@ -19,8 +19,6 @@ import (
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeople "vclaw/internal/connectors/google/people"
 	gsheets "vclaw/internal/connectors/google/sheets"
-	gpeople "vclaw/internal/connectors/google/people"
-	"vclaw/internal/connectors/tavily"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/safety"
@@ -35,95 +33,62 @@ import (
 	gmailtool "vclaw/internal/tools/office/gmail"
 	peopletool "vclaw/internal/tools/office/people"
 	sheetstool "vclaw/internal/tools/office/sheets"
-	fstool "vclaw/internal/tools/os/filesystem"
-	peopletool "vclaw/internal/tools/office/people"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
-	webtool "vclaw/internal/tools/web"
-)
-
-const (
-	ToolModeAuto     = "auto"
-	ToolModeRequired = "required"
-	ToolModeOff      = "off"
 )
 
 type AgentRuntimeConfig struct {
-	DataDir        string
-	OpenAIAPIKey   string
-	OpenAIModel    string
-	OpenAIBaseURL  string
-	CompactorModel string
-
-	Provider     providers.Provider
-	SessionStore sessions.Store
-	StateStore   agent.RuntimeStateStore
-
-	Logger        *slog.Logger
-	MaxIterations int
-
-	GoogleToolsMode       string
+	OpenAIAPIKey  string
+	OpenAIModel   string
+	OpenAIBaseURL string
+	// CompactorModel is the LLM model used for session summarization.
+	// Should be a cheaper model than OpenAIModel (e.g. "gpt-4o-mini").
+	// Defaults to OpenAIModel when empty.
+	CompactorModel        string
+	Provider              providers.Provider
+	SessionStore          sessions.Store
+	Logger                *slog.Logger
+	MaxIterations         int
+	EnableGoogleTools     bool
 	GoogleCredentialsPath string
 	GoogleTokenPath       string
-
-	WebToolsMode  string
-	TavilyAPIKey  string
-	TavilyBaseURL string
-
-	EnableSandboxTools  bool
-	SandboxWorkspaceDir string
-	SandboxImage        string
-	SandboxRunner       sandboxruntime.Runner
+	EnableSandboxTools    bool
+	SandboxWorkspaceDir   string
+	SandboxImage          string
+	SandboxRunner         sandboxruntime.Runner
 }
 
-type RuntimeBundle struct {
-	Runtime  *agent.Runtime
-	Registry *tools.ToolRegistry
-	Model    string
-}
-
-func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle, error) {
+func NewAgentRuntime(ctx context.Context, config AgentRuntimeConfig) (*agent.Runtime, error) {
 	provider := config.Provider
-	model := strings.TrimSpace(config.OpenAIModel)
-	if model == "" {
-		model = providers.DefaultOpenAIModel
-	}
 	if provider == nil {
 		apiKey := strings.TrimSpace(config.OpenAIAPIKey)
 		if apiKey == "" {
-			return RuntimeBundle{}, fmt.Errorf("OPENAI_API_KEY is required")
+			return nil, fmt.Errorf("OPENAI_API_KEY is required")
 		}
 		openAI, err := providers.NewOpenAIClient(providers.OpenAIConfig{
 			APIKey:  apiKey,
-			Model:   model,
+			Model:   config.OpenAIModel,
 			BaseURL: config.OpenAIBaseURL,
 		})
 		if err != nil {
-			return RuntimeBundle{}, err
+			return nil, err
 		}
 		provider = openAI
 	}
 
 	registry, err := NewAgentToolRegistry(ctx, config)
 	if err != nil {
-		return RuntimeBundle{}, err
+		return nil, err
 	}
 
-	dataDir := strings.TrimSpace(config.DataDir)
-	if dataDir == "" {
-		dataDir = "./data"
+	model := strings.TrimSpace(config.OpenAIModel)
+	if model == "" {
+		model = providers.DefaultOpenAIModel
 	}
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
-		sessionStore, err = sessions.NewFileStore(dataDir)
+		sessionStore, err = sessions.NewStoreFromEnv()
 		if err != nil {
-			return RuntimeBundle{}, fmt.Errorf("create session store: %w", err)
-		}
-	}
-	stateStore := config.StateStore
-	if stateStore == nil {
-		stateStore, err = agent.NewFileRuntimeStateStore(dataDir)
-		if err != nil {
-			return RuntimeBundle{}, fmt.Errorf("create runtime state store: %w", err)
+			return nil, fmt.Errorf("create session store: %w", err)
 		}
 	}
 
@@ -135,7 +100,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		SummarizeModel: compactorModel,
 	}, config.Logger)
 
-	runtime := agent.NewRuntime(agent.RuntimeConfig{
+	return agent.NewRuntime(agent.RuntimeConfig{
 		Provider: provider,
 		Registry: registry,
 		ReferenceResolver: reference.NewFallbackResolver(
@@ -143,26 +108,18 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			reference.NewHeuristicResolver(),
 		),
 		SessionStore:          sessionStore,
-		StateStore:            stateStore,
 		Logger:                config.Logger,
 		MaxIterations:         config.MaxIterations,
 		Model:                 model,
 		Compactor:             compactor,
 		MemoryClassifierModel: compactorModel,
-	})
-	return RuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
+	}), nil
 }
 
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {
 	registry := tools.NewToolRegistry()
 	if err := tools.RegisterBuiltInTools(registry); err != nil {
 		return nil, err
-	}
-	fstoolConfig := fstool.Config{
-		AllowedRoots: []string{strings.TrimSpace(config.SandboxWorkspaceDir)},
-	}
-	if err := fstool.RegisterTools(registry, fstoolConfig); err != nil {
-		return nil, fmt.Errorf("register filesystem tools: %w", err)
 	}
 	if config.EnableSandboxTools {
 		sandboxConfig, err := newSandboxToolConfig(config)
@@ -173,72 +130,25 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 			return nil, fmt.Errorf("register sandbox tools: %w", err)
 		}
 	}
-	if err := registerWebTools(registry, config); err != nil {
-		return nil, err
-	}
-	if err := registerGoogleTools(ctx, registry, config); err != nil {
-		return nil, err
-	}
-	return registry, nil
-}
-
-func registerWebTools(registry *tools.ToolRegistry, config AgentRuntimeConfig) error {
-	mode, err := normalizeToolMode(config.WebToolsMode)
-	if err != nil {
-		return fmt.Errorf("web tools mode: %w", err)
-	}
-	if mode == ToolModeOff {
-		return nil
-	}
-	apiKey := strings.TrimSpace(config.TavilyAPIKey)
-	if apiKey == "" {
-		if mode == ToolModeAuto {
-			return nil
-		}
-		return fmt.Errorf("TAVILY_API_KEY is required when web tools mode is required")
-	}
-	client, err := tavily.NewClient(tavily.Config{
-		APIKey:  apiKey,
-		BaseURL: strings.TrimSpace(config.TavilyBaseURL),
-	})
-	if err != nil {
-		return fmt.Errorf("configure web tools: %w", err)
-	}
-	return webtool.RegisterTools(registry, webtool.NewService(client))
-}
-
-func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, config AgentRuntimeConfig) error {
-	mode, err := normalizeToolMode(config.GoogleToolsMode)
-	if err != nil {
-		return fmt.Errorf("google tools mode: %w", err)
-	}
-	if mode == ToolModeOff {
-		return nil
-	}
-	credentialsPath := strings.TrimSpace(config.GoogleCredentialsPath)
-	tokenPath := strings.TrimSpace(config.GoogleTokenPath)
-	if mode == ToolModeAuto && (!fileExists(credentialsPath) || !fileExists(tokenPath)) {
-		return nil
+	if !config.EnableGoogleTools {
+		return registry, nil
 	}
 
 	httpClient, err := googleoauth.Client(ctx, googleoauth.Config{
-		CredentialsPath: credentialsPath,
-		TokenPath:       tokenPath,
+		CredentialsPath: config.GoogleCredentialsPath,
+		TokenPath:       config.GoogleTokenPath,
 		Scopes:          google.G1Scopes,
 	})
 	if err != nil {
-		return fmt.Errorf("configure Google tools: %w", err)
+		return nil, fmt.Errorf("google oauth: %w", err)
 	}
 
-	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient))); err != nil {
-		return err
-	}
 	calendarClient, err := gcal.NewClient(ctx, httpClient)
 	if err != nil {
-		return fmt.Errorf("create calendar connector: %w", err)
+		return nil, fmt.Errorf("calendar client: %w", err)
 	}
 	if err := calendartool.RegisterTools(registry, calendartool.NewService(calendarClient)); err != nil {
-		return err
+		return nil, fmt.Errorf("register calendar tools: %w", err)
 	}
 
 	chatService := chattool.NewService(gchat.NewClient(httpClient))
@@ -281,18 +191,14 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	}
 
 	return registry, nil
-	peopleClient := gpeople.NewClient(httpClient)
-	if err := chattool.RegisterTools(registry, chattool.NewServiceWithPeople(gchat.NewClient(httpClient), peopleClient)); err != nil {
-		return err
-	}
-	return peopletool.RegisterTools(registry, peopletool.NewService(peopleClient))
 }
 
 func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error) {
 	if config.SandboxRunner != nil {
+		workspaceDir := strings.TrimSpace(config.SandboxWorkspaceDir)
 		return sandboxtool.Config{
 			Runner:              config.SandboxRunner,
-			DefaultWorkspaceDir: strings.TrimSpace(config.SandboxWorkspaceDir),
+			DefaultWorkspaceDir: workspaceDir,
 		}, nil
 	}
 
@@ -323,32 +229,11 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 		Checker:          policies.DefaultChecker,
 		Detector:         safety.DefaultScanner,
 		Runner:           dockerRunner,
-		SkipApprovalGate: true,
+		SkipApprovalGate: true, // agent ToolPolicy HITL handles approval; gate enforces block only
 	})
 	return sandboxtool.Config{
 		Runner:              gatedRunner,
 		Guard:               guard,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
-}
-
-func normalizeToolMode(mode string) (string, error) {
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode == "" {
-		return ToolModeOff, nil
-	}
-	switch mode {
-	case ToolModeAuto, ToolModeRequired, ToolModeOff:
-		return mode, nil
-	default:
-		return "", fmt.Errorf("must be one of: auto, required, off")
-	}
-}
-
-func fileExists(path string) bool {
-	if strings.TrimSpace(path) == "" {
-		return false
-	}
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
 }

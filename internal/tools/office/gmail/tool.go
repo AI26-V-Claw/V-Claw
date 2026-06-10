@@ -1103,7 +1103,7 @@ func (t GmailTool) Description() string {
 	case ToolNameForwardDraft:
 		return "Create a Gmail forward draft. This external write requires approval."
 	case ToolNameDownloadAttachments:
-		return "Download attachments from a Gmail email message to a local directory. Only use this when the file comes from a Gmail email. Do NOT use this to access files already in the sandbox workspace — those are accessible via sandbox.runShell using workspace_dir."
+		return "Download Gmail attachments to a local directory. This local write requires approval."
 	case ToolNameModifyMessage:
 		return "Modify Gmail message labels such as read, unread, starred, archive, or inbox. This external write requires approval."
 	case ToolNameBatchModifyMessages:

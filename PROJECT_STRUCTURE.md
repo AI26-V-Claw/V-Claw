@@ -74,9 +74,11 @@ Key package groups:
 | `internal/approvals/` | Human-in-the-loop approval state and approve/reject flow. |
 | `internal/audit/` | Action logs and execution evidence. |
 | `internal/channels/` | User-facing message adapters such as Telegram or Slack. |
+| `internal/config/` | Runtime configuration loading and validation. |
 | `internal/connectors/` | Raw external API clients and adapters. |
 | `internal/connectors/google/` | Gmail, Calendar, Chat, OAuth, and related Google Workspace clients. |
 | `internal/contracts/` | Shared runtime objects when implemented: messages, tool calls, results, risk, approvals, and errors. |
+| `internal/memory/` | Short-term session context and future long-term memory. |
 | `internal/notifications/` | Outbound notifications for approvals, reminders, or alerts. |
 | `internal/policies/` | Tool policy and risk classification. |
 | `internal/providers/` | LLM provider abstractions and adapters. |

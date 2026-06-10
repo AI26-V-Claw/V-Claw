@@ -13,7 +13,6 @@ import (
 const (
 	defaultCompactionThresholdRatio = 0.80
 	defaultKeepLastMessages         = 10
-	defaultKeepTokenRatio           = 0.20
 	defaultContextWindow            = 128_000
 	defaultMaxSummaryTokens         = 2048
 )
@@ -29,14 +28,8 @@ type CompactorConfig struct {
 	// ContextWindow * ThresholdRatio. Default: 0.80.
 	ThresholdRatio float64
 
-	// KeepTokenRatio is the fraction of ContextWindow to preserve verbatim
-	// (walking backwards from the most recent message). Default: 0.20.
-	// When set, this takes precedence over KeepLastMessages.
-	// Example: 0.20 with a 128k context window keeps the last ~25,600 tokens.
-	KeepTokenRatio float64
-
-	// KeepLastMessages is the fallback number of recent messages to preserve
-	// verbatim when KeepTokenRatio is 0. Default: 10.
+	// KeepLastMessages is the number of recent messages preserved verbatim
+	// after truncation. Default: 6 (3 user+assistant turns).
 	KeepLastMessages int
 
 	// ContextWindow is the LLM context window size in tokens.
@@ -75,29 +68,6 @@ type CompactionResult struct {
 
 	// SkipReason explains why compaction was skipped when Compacted is false.
 	SkipReason string
-
-	// Stats holds token and message counts for observability. Always populated
-	// when Compacted is true — use these to compare token-based vs message-based
-	// compaction performance.
-	Stats CompactionStats
-}
-
-// CompactionStats holds observability data about a compaction run.
-type CompactionStats struct {
-	// Strategy is "token" or "message" depending on which KeepToken/KeepLastMessages was used.
-	Strategy string
-
-	// TokensBefore is the estimated total tokens of the transcript before compaction.
-	TokensBefore int
-
-	// KeptTokens is the estimated tokens of the messages preserved verbatim.
-	KeptTokens int
-
-	// SummarizedMessages is the number of messages that were fed to the summarizer.
-	SummarizedMessages int
-
-	// KeptMessageCount is the number of messages preserved verbatim.
-	KeptMessageCount int
 }
 
 // Compactor manages LLM-based session summarization and transcript truncation.
@@ -114,9 +84,6 @@ type Compactor struct {
 func NewCompactor(provider providers.Provider, config CompactorConfig, logger *slog.Logger) *Compactor {
 	if config.ThresholdRatio <= 0 {
 		config.ThresholdRatio = defaultCompactionThresholdRatio
-	}
-	if config.KeepTokenRatio <= 0 {
-		config.KeepTokenRatio = defaultKeepTokenRatio
 	}
 	if config.KeepLastMessages <= 0 {
 		config.KeepLastMessages = defaultKeepLastMessages
@@ -176,14 +143,13 @@ func (c *Compactor) MaybeCompact(
 	}
 	defer mu.Unlock()
 
-	// --- Split transcript into toSummarize and kept ---
-	splitIdx, strategy := c.splitTranscript(transcript)
-	if splitIdx <= 0 {
+	keepLast := c.config.KeepLastMessages
+	if len(transcript) <= keepLast {
 		return CompactionResult{SkipReason: "too_few_messages"}, nil
 	}
 
-	toSummarize := transcript[:splitIdx]
-	kept := cloneMessages(transcript[splitIdx:])
+	toSummarize := transcript[:len(transcript)-keepLast]
+	kept := cloneMessages(transcript[len(transcript)-keepLast:])
 
 	// --- Build prompt and call LLM ---
 	userPrompt := buildCompactionUserPrompt(toSummarize, memory)
@@ -210,72 +176,18 @@ func (c *Compactor) MaybeCompact(
 		newSummary = existing + "\n\n" + newSummary
 	}
 
-	stats := CompactionStats{
-		Strategy:           strategy,
-		TokensBefore:       estimated,
-		KeptTokens:         EstimateMessagesTokens(kept),
-		SummarizedMessages: len(toSummarize),
-		KeptMessageCount:   len(kept),
-	}
-
 	c.logger.Info("session compacted",
 		"session_id", sessionID,
-		"strategy", strategy,
 		"original_messages", len(transcript),
-		"summarized_messages", stats.SummarizedMessages,
-		"kept_messages", stats.KeptMessageCount,
-		"tokens_before", stats.TokensBefore,
-		"kept_tokens", stats.KeptTokens,
+		"kept_messages", len(kept),
+		"estimated_tokens_before", estimated,
 	)
 
 	return CompactionResult{
 		Compacted:    true,
 		Summary:      newSummary,
 		KeptMessages: kept,
-		Stats:        stats,
 	}, nil
-}
-
-// splitTranscript returns the index that divides transcript into
-// [toSummarize : kept] and the strategy name used.
-//
-// When KeepTokenRatio > 0, it walks backwards from the end accumulating
-// tokens until the budget (ContextWindow * KeepTokenRatio) is exhausted —
-// this is the "token" strategy.
-//
-// When KeepTokenRatio == 0, it falls back to keeping the last
-// KeepLastMessages messages — this is the "message" strategy.
-func (c *Compactor) splitTranscript(transcript []providers.Message) (splitIdx int, strategy string) {
-	if c.config.KeepTokenRatio > 0 {
-		budget := int(float64(c.config.ContextWindow) * c.config.KeepTokenRatio)
-		idx := keepByTokenBudget(transcript, budget)
-		if idx > 0 {
-			return idx, "token"
-		}
-		// Budget covers the whole transcript — fall through to message fallback.
-	}
-
-	keepLast := c.config.KeepLastMessages
-	if len(transcript) <= keepLast {
-		return 0, "message"
-	}
-	return len(transcript) - keepLast, "message"
-}
-
-// keepByTokenBudget walks backwards through messages, accumulating tokens
-// until budget is exhausted, and returns the split index such that
-// transcript[splitIdx:] fits within budget.
-// Returns 0 if even the whole transcript fits (nothing to summarize).
-func keepByTokenBudget(transcript []providers.Message, budget int) int {
-	accumulated := 0
-	for i := len(transcript) - 1; i >= 0; i-- {
-		accumulated += EstimateMessagesTokens(transcript[i : i+1])
-		if accumulated > budget {
-			// transcript[i+1:] is within budget; transcript[:i+1] gets summarized.
-			return i + 1
-		}
-	}
-	return 0
 }
 
 // compactionSystemPrompt returns the system instruction for the summarization LLM call.

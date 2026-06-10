@@ -499,6 +499,7 @@ func (pe *ProductionEvaluator) EvaluateProduction() {
 - [Intent Classification Spec](../../intent_classification_spec.md)
 - [System Prompt Design](../../docs/intent-classifier-prompt-design.md)
 - [Implementation Plan](../../implementation_plan.md)
+- [Prompt Template](../agent/prompts/intent_classifier_prompt.md)
 
 ## Contributing
 

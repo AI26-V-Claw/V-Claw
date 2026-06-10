@@ -54,24 +54,24 @@ func TestRenderAgentResponseFormatsApprovalForChat(t *testing.T) {
 	}
 }
 
-// func TestRenderAgentResponseCleansAndLimitsMessage(t *testing.T) {
-// 	longLine := strings.Repeat("x", maxOutboundTextRunes+20)
-// 	response := contracts.AgentResponse{
-// 		Status:  contracts.AgentStatusCompleted,
-// 		Message: "\n\n### Kết quả\n\n\n" + longLine,
-// 	}
+func TestRenderAgentResponseCleansAndLimitsMessage(t *testing.T) {
+	longLine := strings.Repeat("x", maxOutboundTextRunes+20)
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "\n\n### Kết quả\n\n\n" + longLine,
+	}
 
-// 	got := renderAgentResponse(response)
-// 	if strings.Contains(got, "###") {
-// 		t.Fatalf("expected heading markers to be removed, got %q", got)
-// 	}
-// 	if !strings.HasPrefix(got, "Kết quả") {
-// 		t.Fatalf("expected cleaned message prefix, got %q", got[:20])
-// 	}
-// 	if !strings.Contains(got, "...[đã rút gọn]") {
-// 		t.Fatalf("expected long message to be truncated, got length %d", len([]rune(got)))
-// 	}
-// }
+	got := renderAgentResponse(response)
+	if strings.Contains(got, "###") {
+		t.Fatalf("expected heading markers to be removed, got %q", got)
+	}
+	if !strings.HasPrefix(got, "Kết quả") {
+		t.Fatalf("expected cleaned message prefix, got %q", got[:20])
+	}
+	if !strings.Contains(got, "...[đã rút gọn]") {
+		t.Fatalf("expected long message to be truncated, got length %d", len([]rune(got)))
+	}
+}
 
 func TestRenderAgentResponseFormatsToolFallback(t *testing.T) {
 	response := contracts.AgentResponse{
@@ -195,30 +195,30 @@ func TestRenderAgentResponseFormatsCalendarAndChatJSON(t *testing.T) {
 	}
 }
 
-// func TestRenderAgentResponseStripsInlineMarkdownMarkers(t *testing.T) {
-// 	response := contracts.AgentResponse{
-// 		Status: contracts.AgentStatusCompleted,
-// 		Message: strings.Join([]string{
-// 			"Here are your recent emails:",
-// 			"",
-// 			"- **From:** Google",
-// 			"  **Subject:** Welcome",
-// 			"  `Date:` 29 May 2026",
-// 		}, "\n"),
-// 	}
+func TestRenderAgentResponseStripsInlineMarkdownMarkers(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status: contracts.AgentStatusCompleted,
+		Message: strings.Join([]string{
+			"Here are your recent emails:",
+			"",
+			"- **From:** Google",
+			"  **Subject:** Welcome",
+			"  `Date:` 29 May 2026",
+		}, "\n"),
+	}
 
-// 	got := renderAgentResponse(response)
-// 	for _, marker := range []string{"**", "`"} {
-// 		if strings.Contains(got, marker) {
-// 			t.Fatalf("expected markdown marker %q to be removed, got %q", marker, got)
-// 		}
-// 	}
-// 	for _, want := range []string{"From: Google", "Subject: Welcome", "Date: 29 May 2026"} {
-// 		if !strings.Contains(got, want) {
-// 			t.Fatalf("expected readable label %q, got %q", want, got)
-// 		}
-// 	}
-// }
+	got := renderAgentResponse(response)
+	for _, marker := range []string{"**", "`"} {
+		if strings.Contains(got, marker) {
+			t.Fatalf("expected markdown marker %q to be removed, got %q", marker, got)
+		}
+	}
+	for _, want := range []string{"From: Google", "Subject: Welcome", "Date: 29 May 2026"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected readable label %q, got %q", want, got)
+		}
+	}
+}
 
 func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 	t.Run("greeting", func(t *testing.T) {

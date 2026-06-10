@@ -18,8 +18,6 @@ evaluation_results.json
 # Logging and temporary files
 data/telegram_offset.txt
 data/sessions/
-data/telegram_attachments/
-data/
 logs/audit.jsonl
 .antigravity/
 .gotmp/

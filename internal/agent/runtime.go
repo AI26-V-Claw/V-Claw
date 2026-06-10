@@ -450,11 +450,6 @@ If required information is missing, ask one concise clarification question inste
 
 		for index, providerToolCall := range assistantMessage.ToolCalls {
 			evidenceText := providerTranscriptEvidenceText(providerTranscript)
-			// currentRequestText contains only the current user message for evidence checks
-			// that must verify the user explicitly stated information in *this* request.
-			// Using the full evidenceText causes false positives when historical tool results
-			// contain times, titles, or emails that the user never mentioned in the current turn.
-			currentRequestText := message.Text
 			providerToolCall = sanitizeUnsupportedOptionalArguments(providerToolCall, evidenceText)
 			if isClarifyToolCall(providerToolCall) {
 				clarification := clarificationFromToolCall(providerToolCall)
@@ -514,8 +509,8 @@ If required information is missing, ask one concise clarification question inste
 				"risk_level", decision.RiskLevel,
 				"arguments", logToolArguments(providerToolCall.Name, providerToolCall.Arguments),
 			)
-			toolCallMissingFields := pendingMissingFieldsForToolCall(providerToolCall, definition, found, activeClarification, currentRequestText)
-			if clarification := r.toolCallClarificationResponse(message, providerToolCall, definition, found, activeClarification, currentRequestText); clarification != nil {
+			toolCallMissingFields := pendingMissingFieldsForToolCall(providerToolCall, definition, found, activeClarification, evidenceText)
+			if clarification := r.toolCallClarificationResponse(message, providerToolCall, definition, found, activeClarification, evidenceText); clarification != nil {
 				if shouldResolveChatSpaceBeforeClarification(providerToolCall) {
 					toolMessage := providers.Message{
 						Role:       providers.MessageRoleTool,

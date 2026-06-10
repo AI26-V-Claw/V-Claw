@@ -137,7 +137,7 @@ func runGoogle(ctx context.Context, args []string) error {
 
 		fmt.Println()
 		fmt.Println("Google Chat spaces:")
-		spacesOutput, err := chat.ListSpaces(ctx, httpClient, 10, "", "")
+		spacesOutput, err := chat.ListSpaces(ctx, httpClient, 10, "")
 		if err != nil {
 			return fmt.Errorf("chat smoke test failed: %w", err)
 		}

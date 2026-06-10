@@ -2,7 +2,6 @@ package sessions
 
 import (
 	"context"
-	"reflect"
 	"sync"
 	"time"
 
@@ -21,10 +20,6 @@ type Store interface {
 type MemoryStore interface {
 	LoadMemory(ctx context.Context, sessionID string) (SessionMemory, error)
 	SaveMemory(ctx context.Context, sessionID string, memory SessionMemory) error
-}
-
-type CompareAndSetStore interface {
-	ReplaceTranscriptIfUnchanged(ctx context.Context, sessionID string, expected, replacement []providers.Message) (bool, error)
 }
 
 type SessionMemory struct {
@@ -84,16 +79,6 @@ func (s *InMemoryStore) SetTranscript(_ context.Context, sessionID string, messa
 
 	s.transcript[sessionID] = cloneMessages(messages)
 	return nil
-}
-
-func (s *InMemoryStore) ReplaceTranscriptIfUnchanged(_ context.Context, sessionID string, expected, replacement []providers.Message) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !reflect.DeepEqual(s.transcript[sessionID], expected) {
-		return false, nil
-	}
-	s.transcript[sessionID] = cloneMessages(replacement)
-	return true, nil
 }
 
 func (s *InMemoryStore) ClearSession(_ context.Context, sessionID string) error {
