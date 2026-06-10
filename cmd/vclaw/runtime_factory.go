@@ -224,12 +224,13 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, opti
 		return err
 	}
 
-	chatService := chattools.NewService(gchatconnector.NewClient(httpClient))
+	peopleClient := gpeopleconnector.NewClient(httpClient)
+	chatService := chattools.NewServiceWithPeople(gchatconnector.NewClient(httpClient), peopleClient)
 	if err := chattools.RegisterTools(registry, chatService); err != nil {
 		return err
 	}
 
-	peopleService := peopletools.NewService(gpeopleconnector.NewClient(httpClient))
+	peopleService := peopletools.NewService(peopleClient)
 	if err := peopletools.RegisterTools(registry, peopleService); err != nil {
 		return err
 	}
