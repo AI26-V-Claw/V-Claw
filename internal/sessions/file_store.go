@@ -2,10 +2,13 @@ package sessions
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"unicode"
@@ -18,8 +21,9 @@ import (
 // Writes are atomic (write-to-temp + rename) to prevent file corruption on crash.
 type FileStore struct {
 	baseDir string
-	mu      sync.Map // map[sanitized sessionID string] -> *sync.RWMutex
 }
+
+var fileStoreSessionLocks sync.Map
 
 // NewFileStore creates a FileStore rooted at {baseDir}/sessions.
 // The directory is created if it does not exist.
@@ -44,7 +48,8 @@ func (s *FileStore) memoryPath(sessionID string) string {
 }
 
 func (s *FileStore) sessionMu(sessionID string) *sync.RWMutex {
-	v, _ := s.mu.LoadOrStore(sanitizeSessionID(sessionID), &sync.RWMutex{})
+	key := filepath.Join(s.baseDir, sanitizeSessionID(sessionID))
+	v, _ := fileStoreSessionLocks.LoadOrStore(key, &sync.RWMutex{})
 	return v.(*sync.RWMutex)
 }
 
@@ -72,6 +77,23 @@ func (s *FileStore) SetTranscript(_ context.Context, sessionID string, messages 
 	mu.Lock()
 	defer mu.Unlock()
 	return atomicWriteJSON(s.transcriptPath(sessionID), messages)
+}
+
+func (s *FileStore) ReplaceTranscriptIfUnchanged(_ context.Context, sessionID string, expected, replacement []providers.Message) (bool, error) {
+	mu := s.sessionMu(sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+	current, err := s.readTranscript(sessionID)
+	if err != nil {
+		return false, err
+	}
+	if !reflect.DeepEqual(current, expected) {
+		return false, nil
+	}
+	if err := atomicWriteJSON(s.transcriptPath(sessionID), replacement); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *FileStore) ClearSession(_ context.Context, sessionID string) error {
@@ -131,27 +153,46 @@ func atomicWriteJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // sanitizeSessionID replaces characters unsafe for directory names with underscores,
 // keeping ASCII alphanumerics, hyphens, and underscores.
 func sanitizeSessionID(id string) string {
 	var b strings.Builder
+	changed := false
 	for _, r := range id {
 		if r <= 127 && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_') {
 			b.WriteRune(r)
 		} else {
 			b.WriteRune('_')
+			changed = true
 		}
 	}
 	result := b.String()
 	if result == "" {
 		return "_empty"
+	}
+	if changed {
+		hash := sha256.Sum256([]byte(id))
+		return fmt.Sprintf("%s-%x", result, hash[:6])
 	}
 	return result
 }
