@@ -23,7 +23,31 @@ func renderAssistantMessage(message string, results []contracts.ToolResult) stri
 			return rendered
 		}
 	}
+	message = sanitizeDeliveryClaimsForResults(message, results)
 	return formatOutboundText(message)
+}
+
+func sanitizeDeliveryClaimsForResults(message string, results []contracts.ToolResult) string {
+	if !hasSuccessfulToolResult(results, "gmail.sendDraft") {
+		return message
+	}
+	replacer := strings.NewReplacer(
+		"\u0111\u00e3 \u0111\u01b0\u1ee3c g\u1eedi th\u00e0nh c\u00f4ng", "\u0111\u00e3 \u0111\u01b0\u1ee3c chuy\u1ec3n cho Gmail \u0111\u1ec3 g\u1eedi",
+		"\u0110\u00e3 \u0111\u01b0\u1ee3c g\u1eedi th\u00e0nh c\u00f4ng", "\u0110\u00e3 \u0111\u01b0\u1ee3c chuy\u1ec3n cho Gmail \u0111\u1ec3 g\u1eedi",
+		"\u0111\u00e3 g\u1eedi th\u00e0nh c\u00f4ng", "\u0111\u00e3 chuy\u1ec3n email cho Gmail \u0111\u1ec3 g\u1eedi",
+		"\u0110\u00e3 g\u1eedi th\u00e0nh c\u00f4ng", "\u0110\u00e3 chuy\u1ec3n email cho Gmail \u0111\u1ec3 g\u1eedi",
+		"g\u1eedi th\u00e0nh c\u00f4ng", "chuy\u1ec3n cho Gmail \u0111\u1ec3 g\u1eedi",
+	)
+	return replacer.Replace(message)
+}
+
+func hasSuccessfulToolResult(results []contracts.ToolResult, toolName string) bool {
+	for _, result := range results {
+		if result.Success && strings.TrimSpace(result.ToolName) == toolName {
+			return true
+		}
+	}
+	return false
 }
 
 func renderToolResultForUser(result contracts.ToolResult) string {
@@ -153,7 +177,7 @@ func renderGmailPayload(toolName string, payload map[string]any) []string {
 	if message, ok := payloadMap(payload, "Message"); ok {
 		title := "Đã xử lý email."
 		if toolName == "gmail.sendDraft" {
-			title = "Đã gửi email."
+			title = "Email \u0111\u00e3 \u0111\u01b0\u1ee3c chuy\u1ec3n cho Gmail \u0111\u1ec3 g\u1eedi."
 		}
 		return append([]string{title}, payloadBullets(message, []fieldLabel{
 			{"ID", "Message ID"},

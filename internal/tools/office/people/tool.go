@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	googleconnector "vclaw/internal/connectors/google"
 	peopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/tools"
 
@@ -202,6 +203,9 @@ func emptyList(values []string) string {
 func MapError(err error) *ErrorShape {
 	if err == nil {
 		return nil
+	}
+	if googleconnector.IsNetworkError(err) {
+		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "network error contacting People API: " + err.Error(), Retryable: true}
 	}
 	gerr, ok := err.(*googleapi.Error)
 	if !ok {

@@ -45,6 +45,19 @@ func Client(ctx context.Context, cfg Config) (*http.Client, error) {
 		}
 	}
 
+	// Inject a base transport with IdleConnTimeout shorter than Google's server-side 90s
+	// idle timeout. This prevents the "connection forcibly closed" error that occurs when
+	// a keepalive connection is reused after the server has already closed it.
+	baseTransport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       60 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Transport: baseTransport})
 	return oauthConfig.Client(ctx, token), nil
 }
 

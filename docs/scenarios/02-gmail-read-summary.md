@@ -20,7 +20,6 @@ sequenceDiagram
     participant Channel as Message Channel
     participant Adapter as Channel Adapter
     participant Agent as Agent Core
-    participant TurnRouter as Turn Router
     participant Policy as Tool Policy
     participant Router as Tool Router
     participant GmailTool as Gmail Tool
@@ -33,9 +32,8 @@ sequenceDiagram
     Channel->>Adapter: Deliver message
     Adapter->>Agent: UserMessage
 
-    Agent->>TurnRouter: Route turn for tool exposure only
-    TurnRouter-->>Agent: tool_enabled
-    Agent->>LLM: Decide whether a Gmail tool is needed
+    Agent->>LLM: Request with runtime-filtered tools
+    LLM-->>Agent: Decide whether a Gmail tool is needed
     LLM-->>Agent: ToolCall gmail.listEmails(query=today)
     Agent->>Policy: Check gmail.listEmails
     Policy-->>Agent: RiskDecision(safe_read, allow)

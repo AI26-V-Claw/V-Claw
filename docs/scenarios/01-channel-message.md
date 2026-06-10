@@ -22,7 +22,6 @@ sequenceDiagram
     participant Channel as Message Channel<br/>(Telegram / Slack)
     participant Adapter as Channel Adapter
     participant Agent as Agent Core
-    participant Router as Turn Router
     participant LLM as LLM Provider
     participant Memory as Session Memory
 
@@ -41,17 +40,14 @@ sequenceDiagram
         Agent->>Memory: Load session context
         Memory-->>Agent: Recent messages / context
 
-        Agent->>Router: Route turn for tool exposure only
-        Router-->>Agent: no_tool / tool_enabled / blocked_prompt_injection
-
-        alt Tool-enabled nhưng thiếu thông tin bắt buộc
-            Agent->>LLM: Tool-enabled request with clarify tool
+        alt Thiếu thông tin bắt buộc
+            Agent->>LLM: Request with runtime-filtered tools and clarify tool
             LLM-->>Agent: clarify(question)
             Agent-->>Adapter: AgentResponse(status=need_clarification)
             Adapter-->>Channel: Send reply
             Channel-->>User: Hỏi lại thông tin còn thiếu
         else Có thể trả lời trực tiếp
-            Agent->>LLM: Generate answer without tools
+            Agent->>LLM: Decide answer vs tool call
             LLM-->>Agent: Response text
             Agent->>Memory: Save user message + response
             Agent-->>Adapter: AgentResponse(status=completed)

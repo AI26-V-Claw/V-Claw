@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	googleconnector "vclaw/internal/connectors/google"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	"vclaw/internal/tools"
 
@@ -732,6 +733,9 @@ func BuildSearchQuery(input ListEmailsInput) (string, error) {
 }
 
 func MapError(err error) *ErrorShape {
+	if googleconnector.IsNetworkError(err) {
+		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "network error contacting Gmail API: " + err.Error(), Retryable: true}
+	}
 	var gerr *googleapi.Error
 	if !asGoogleError(err, &gerr) {
 		return internalError(err.Error())

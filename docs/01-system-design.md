@@ -44,8 +44,6 @@ flowchart LR
   subgraph CORE["Agent Core"]
     direction TB
     LOOP["Agent Loop"]
-    TR["Turn Router"]
-    LOOP --> TR
   end
 
   subgraph TOOLS["Tool Layer"]

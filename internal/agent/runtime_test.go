@@ -4,248 +4,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 )
-
-type fakeProvider struct {
-	responses []providers.ChatResponse
-	err       error
-	calls     []providers.ChatRequest
-}
-
-type blockingRuntimeTool struct {
-	release chan struct{}
-}
-
-type calendarCreateRuntimeTool struct {
-	executions *int
-}
-
-type chatListSpacesRuntimeTool struct {
-	executions *int
-}
-
-type chatSendRuntimeTool struct {
-	executions *int
-}
-
-type stubIntentClassifier struct {
-	output       *agentintent.ClassificationOutput
-	err          error
-	calls        int
-	historyCalls int
-	lastHistory  []string
-}
-
-type stubTaskPlanner struct {
-	result    *TaskPlanResult
-	err       error
-	calls     int
-	lastInput TaskPlanningInput
-}
-
-type stubTurnRouter struct {
-	route     TurnRoute
-	err       error
-	calls     int
-	lastInput TurnRouteInput
-}
-
-func (c *stubIntentClassifier) Classify(context.Context, string) (*agentintent.ClassificationOutput, error) {
-	c.calls++
-	return c.output, c.err
-}
-
-func (c *stubIntentClassifier) ClassifyWithMemoryIsolation(_ context.Context, _ string, recentHistory []string) (*agentintent.ClassificationOutput, error) {
-	c.historyCalls++
-	c.lastHistory = append([]string(nil), recentHistory...)
-	return c.output, c.err
-}
-
-func (p *stubTaskPlanner) Plan(_ context.Context, input TaskPlanningInput) (*TaskPlanResult, error) {
-	p.calls++
-	p.lastInput = input
-	return p.result, p.err
-}
-
-func (r *stubTurnRouter) RouteTurn(_ context.Context, input TurnRouteInput) (TurnRoute, error) {
-	r.calls++
-	r.lastInput = input
-	if r.err != nil {
-		return TurnRoute{}, r.err
-	}
-	if r.route.Mode == "" {
-		r.route.Mode = TurnModeToolEnabled
-	}
-	return r.route, nil
-}
-
-func testToolEnabledRouter() TurnRouter {
-	return &stubTurnRouter{route: TurnRoute{Mode: TurnModeToolEnabled, Reason: "test"}}
-}
-
-func testNoToolRouter() TurnRouter {
-	return &stubTurnRouter{route: TurnRoute{Mode: TurnModeNoTool, Reason: "test"}}
-}
-
-func (blockingRuntimeTool) Name() string                 { return "test.blocking" }
-func (blockingRuntimeTool) Description() string          { return "Blocks until released." }
-func (blockingRuntimeTool) Parameters() tools.ToolSchema { return tools.ToolSchema{"type": "object"} }
-func (blockingRuntimeTool) Capability() tools.Capability { return tools.CapabilityReadOnly }
-func (blockingRuntimeTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelSafeCompute }
-func (t blockingRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
-	<-t.release
-	return tools.ToolResult{
-		ToolCallID:     call.ID,
-		ToolName:       call.Name,
-		Success:        true,
-		ContentForLLM:  "released",
-		ContentForUser: "released",
-	}
-}
-
-func (calendarCreateRuntimeTool) Name() string { return "calendar.createEvent" }
-func (calendarCreateRuntimeTool) Description() string {
-	return "Create a new event in Google Calendar."
-}
-func (calendarCreateRuntimeTool) Parameters() tools.ToolSchema {
-	return tools.ToolSchema{
-		"type": "object",
-		"properties": map[string]any{
-			"title": map[string]any{"type": "string"},
-			"start": map[string]any{"type": "string"},
-			"end":   map[string]any{"type": "string"},
-		},
-		"required": []string{"title", "start", "end"},
-	}
-}
-func (calendarCreateRuntimeTool) Capability() tools.Capability { return tools.CapabilityMutating }
-func (calendarCreateRuntimeTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelExternalWrite }
-func (t calendarCreateRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
-	if t.executions != nil {
-		(*t.executions)++
-	}
-	return tools.ToolResult{
-		ToolCallID:     call.ID,
-		ToolName:       call.Name,
-		Success:        true,
-		ContentForLLM:  "created",
-		ContentForUser: "created",
-	}
-}
-
-func (chatListSpacesRuntimeTool) Name() string        { return "chat.listSpaces" }
-func (chatListSpacesRuntimeTool) Description() string { return "List Google Chat spaces." }
-func (chatListSpacesRuntimeTool) Parameters() tools.ToolSchema {
-	return tools.ToolSchema{"type": "object", "properties": map[string]any{}}
-}
-func (chatListSpacesRuntimeTool) Capability() tools.Capability { return tools.CapabilityReadOnly }
-func (chatListSpacesRuntimeTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelSafeRead }
-func (t chatListSpacesRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
-	if t.executions != nil {
-		(*t.executions)++
-	}
-	content := "- spaces/A | VClaw | GROUP_CHAT | https://chat.google.com/room/A"
-	return tools.ToolResult{
-		ToolCallID:     call.ID,
-		ToolName:       call.Name,
-		Success:        true,
-		ContentForLLM:  content,
-		ContentForUser: content,
-	}
-}
-
-func (chatSendRuntimeTool) Name() string        { return "chat.sendMessage" }
-func (chatSendRuntimeTool) Description() string { return "Send a Google Chat message." }
-func (chatSendRuntimeTool) Parameters() tools.ToolSchema {
-	return tools.ToolSchema{
-		"type": "object",
-		"properties": map[string]any{
-			"space": map[string]any{"type": "string"},
-			"text":  map[string]any{"type": "string"},
-		},
-		"required": []string{"space", "text"},
-	}
-}
-func (chatSendRuntimeTool) Capability() tools.Capability { return tools.CapabilityMutating }
-func (chatSendRuntimeTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelExternalWrite }
-func (t chatSendRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
-	if t.executions != nil {
-		(*t.executions)++
-	}
-	return tools.ToolResult{
-		ToolCallID:     call.ID,
-		ToolName:       call.Name,
-		Success:        true,
-		ContentForLLM:  "sent",
-		ContentForUser: "sent",
-	}
-}
-
-func (p *fakeProvider) Chat(_ context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
-	p.calls = append(p.calls, request)
-	if p.err != nil {
-		return providers.ChatResponse{}, p.err
-	}
-	if len(p.responses) == 0 {
-		return providers.ChatResponse{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "fallback"}}, nil
-	}
-	response := p.responses[0]
-	p.responses = p.responses[1:]
-	return response, nil
-}
-
-func (p *fakeProvider) Generate(ctx context.Context, req *providers.GenerateRequest) (*providers.GenerateResponse, error) {
-	resp, err := p.Chat(ctx, providers.ChatRequest{
-		Model: req.Model,
-		Messages: []providers.Message{
-			{Role: providers.MessageRoleSystem, Content: req.SystemPrompt},
-			{Role: providers.MessageRoleUser, Content: req.UserPrompt},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &providers.GenerateResponse{Text: resp.Message.Content, Model: req.Model}, nil
-}
-
-func (p *fakeProvider) Name() string { return "fake" }
-
-func (p *fakeProvider) Close() error { return nil }
-
-func providerMessagesContent(messages []providers.Message) string {
-	parts := make([]string, 0, len(messages))
-	for _, message := range messages {
-		parts = append(parts, message.Content)
-	}
-	return strings.Join(parts, "\n")
-}
-
-func transcriptContains(messages []providers.Message, needle string) bool {
-	for _, message := range messages {
-		if strings.Contains(message.Content, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func runtimeTestMessage() contracts.UserMessage {
-	return contracts.UserMessage{
-		RequestID: "req_001",
-		SessionID: "sess_001",
-		Channel:   "dev",
-		Text:      "hello",
-		Timestamp: time.Date(2026, 5, 29, 9, 0, 0, 0, time.FixedZone("ICT", 7*60*60)),
-	}
-}
 
 func TestRuntimeCompletesNormalChat(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
@@ -253,9 +20,8 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}}}
 	registry := tools.NewToolRegistry()
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   registry,
-		TurnRouter: testNoToolRouter(),
+		Provider: provider,
+		Registry: registry,
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -277,20 +43,9 @@ func TestRuntimeBypassesIntentClarificationForSafeChat(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Tôi là V-Claw."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.4,
-			Reasoning:  "Yêu cầu chưa rõ.",
-		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Bạn muốn tôi tra cứu thông tin gì?",
-	}}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		TurnRouter:       testNoToolRouter(),
+		Provider: provider,
+		Registry: tools.NewToolRegistry(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -303,14 +58,14 @@ func TestRuntimeBypassesIntentClarificationForSafeChat(t *testing.T) {
 	if response.Message != "Tôi là V-Claw." {
 		t.Fatalf("unexpected message: %q", response.Message)
 	}
-	if classifier.calls != 0 {
-		t.Fatalf("intent classifier should be bypassed, got %d calls", classifier.calls)
-	}
 	if len(provider.calls) != 1 {
 		t.Fatalf("provider chat should be called once, got %d calls", len(provider.calls))
 	}
-	if len(provider.calls[0].Tools) != 0 || provider.calls[0].ToolChoice != "none" {
-		t.Fatalf("safe chat must run no-tool, got tools=%#v choice=%q", provider.calls[0].Tools, provider.calls[0].ToolChoice)
+	if provider.calls[0].ToolChoice != "auto" {
+		t.Fatalf("expected auto tool choice, got %q", provider.calls[0].ToolChoice)
+	}
+	if len(provider.calls[0].Tools) != 1 || provider.calls[0].Tools[0].Name != clarifyToolName {
+		t.Fatalf("expected clarify tool to be exposed, got %#v", provider.calls[0].Tools)
 	}
 }
 
@@ -319,9 +74,8 @@ func TestRuntimeIncludesAttachmentPathsInProviderUserMessage(t *testing.T) {
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "ok"},
 	}}}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   tools.NewToolRegistry(),
-		TurnRouter: testNoToolRouter(),
+		Provider: provider,
+		Registry: tools.NewToolRegistry(),
 	})
 	message := runtimeTestMessage()
 	message.Text = "gửi file này vào nhóm VClaw"
@@ -343,45 +97,6 @@ func TestRuntimeIncludesAttachmentPathsInProviderUserMessage(t *testing.T) {
 	}
 }
 
-func TestRuntimeBypassesTaskPlannerBeforeProviderChat(t *testing.T) {
-	provider := &fakeProvider{responses: []providers.ChatResponse{{
-		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "done"},
-	}}}
-	planner := &stubTaskPlanner{result: &TaskPlanResult{Plan: contracts.Plan{Steps: []contracts.PlanStep{{
-		ID:          "step_1",
-		Description: "gmail.listEmails: đọc email gần đây",
-		Status:      "pending",
-	}}}}}
-	runtime := NewRuntime(RuntimeConfig{
-		Provider:    provider,
-		Registry:    tools.NewToolRegistry(),
-		TaskPlanner: planner,
-		TurnRouter:  testNoToolRouter(),
-	})
-
-	response, err := runtime.Run(context.Background(), runtimeTestMessage())
-	if err != nil {
-		t.Fatalf("run runtime: %v", err)
-	}
-	if response.Status != contracts.AgentStatusCompleted {
-		t.Fatalf("expected completed, got %#v", response)
-	}
-	if planner.calls != 0 {
-		t.Fatalf("task planner should be bypassed by default, got %d calls", planner.calls)
-	}
-	if response.Plan != nil {
-		t.Fatalf("default runtime should not attach legacy planner output, got %#v", response.Plan)
-	}
-	if len(provider.calls) != 1 {
-		t.Fatalf("expected one provider call, got %d", len(provider.calls))
-	}
-	for _, msg := range provider.calls[0].Messages {
-		if msg.Role == providers.MessageRoleSystem && strings.Contains(msg.Content, "Task planner result") {
-			t.Fatalf("planner context should not be injected by default, got %#v", provider.calls[0].Messages)
-		}
-	}
-}
-
 func TestRuntimeReturnsClarificationFromClarifyTool(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{
@@ -396,15 +111,9 @@ func TestRuntimeReturnsClarificationFromClarifyTool(t *testing.T) {
 			}},
 		},
 	}}}
-	planner := &stubTaskPlanner{result: &TaskPlanResult{
-		NeedsClarification:   true,
-		ClarificationMessage: "Bạn muốn gửi email cho ai?",
-	}}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:    provider,
-		Registry:    tools.NewToolRegistry(),
-		TaskPlanner: planner,
-		TurnRouter:  testToolEnabledRouter(),
+		Provider: provider,
+		Registry: tools.NewToolRegistry(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -417,26 +126,15 @@ func TestRuntimeReturnsClarificationFromClarifyTool(t *testing.T) {
 	if response.Message != "Bạn muốn gửi email cho ai?" {
 		t.Fatalf("unexpected clarification message: %q", response.Message)
 	}
-	if planner.calls != 0 {
-		t.Fatalf("planner should be bypassed; clarify must come from clarify tool, got %d planner calls", planner.calls)
-	}
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected one provider call, got %d calls", len(provider.calls))
 	}
 }
 
-func TestRuntimePassesRecentSessionHistoryToTurnRouter(t *testing.T) {
+func TestRuntimeUsesRecentSessionHistoryForActiveFollowUp(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "ok"},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeDangerousAction,
-			Confidence: 0.95,
-		},
-	}}
-	planner := &stubTaskPlanner{result: &TaskPlanResult{}}
-	router := &stubTurnRouter{route: TurnRoute{Mode: TurnModeToolEnabled, Reason: "test"}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -452,12 +150,9 @@ func TestRuntimePassesRecentSessionHistoryToTurnRouter(t *testing.T) {
 		t.Fatalf("append prior assistant message: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		TaskPlanner:      planner,
-		SessionStore:     store,
-		TurnRouter:       router,
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "11am"
@@ -469,12 +164,9 @@ func TestRuntimePassesRecentSessionHistoryToTurnRouter(t *testing.T) {
 	if response.Status != contracts.AgentStatusCompleted {
 		t.Fatalf("expected completed, got %#v", response)
 	}
-	if classifier.historyCalls != 0 || planner.calls != 0 {
-		t.Fatalf("classifier/planner should be bypassed, classifier=%d planner=%d", classifier.historyCalls, planner.calls)
-	}
-	joinedHistory := strings.Join(router.lastInput.RecentHistory, "\n")
-	if !strings.Contains(joinedHistory, "10am") || !strings.Contains(joinedHistory, "meeting end") {
-		t.Fatalf("expected prior request and clarification in router history, got %#v", router.lastInput.RecentHistory)
+	joinedMessages := providerMessagesContent(provider.calls[0].Messages)
+	if !strings.Contains(joinedMessages, "10am") || !strings.Contains(joinedMessages, "meeting end") {
+		t.Fatalf("expected prior request and clarification in provider context, got %#v", provider.calls[0].Messages)
 	}
 }
 
@@ -494,7 +186,6 @@ func TestRuntimeStoresClarificationInSessionTranscript(t *testing.T) {
 		Provider:     provider,
 		Registry:     tools.NewToolRegistry(),
 		SessionStore: store,
-		TurnRouter:   testToolEnabledRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -533,14 +224,6 @@ func TestRuntimeActiveFollowUpBypassesClassifierClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.3,
-		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Please clarify the request.",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -556,11 +239,9 @@ func TestRuntimeActiveFollowUpBypassesClassifierClarification(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "11am"
@@ -575,23 +256,12 @@ func TestRuntimeActiveFollowUpBypassesClassifierClarification(t *testing.T) {
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected provider to receive active follow-up, got %d calls", len(provider.calls))
 	}
-	if classifier.historyCalls != 0 {
-		t.Fatalf("intent classifier should be bypassed, got %d history calls", classifier.historyCalls)
-	}
 }
 
 func TestRuntimeCalendarTimeRangeFollowUpBypassesClassifierClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.3,
-		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -607,11 +277,9 @@ func TestRuntimeCalendarTimeRangeFollowUpBypassesClassifierClarification(t *test
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "tu 17h00 den 18h00"
@@ -626,9 +294,6 @@ func TestRuntimeCalendarTimeRangeFollowUpBypassesClassifierClarification(t *test
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected provider to receive calendar time follow-up, got %d calls", len(provider.calls))
 	}
-	if classifier.historyCalls != 0 {
-		t.Fatalf("intent classifier should be bypassed, got %d history calls", classifier.historyCalls)
-	}
 	if !strings.Contains(providerMessagesContent(provider.calls[0].Messages), "17h00") {
 		t.Fatalf("expected provider transcript to include time range follow-up, got %#v", provider.calls[0].Messages)
 	}
@@ -641,14 +306,6 @@ func TestRuntimePendingClarificationPreservesOriginalRequestParams(t *testing.T)
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: `{"is_answer":true,"is_new_request":false,"updated_request":"Tao lich hop ngay mai luc 17h00, ket thuc 18h00","provided_fields":["start","end"],"still_missing":[],"reason":"Nguoi dung tra loi thoi gian hop."}`}},
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"}},
-	}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.3,
-		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Please clarify the request.",
 	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
@@ -663,11 +320,9 @@ func TestRuntimePendingClarificationPreservesOriginalRequestParams(t *testing.T)
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "luc tan hoc"
@@ -700,20 +355,10 @@ func TestRuntimePendingClarificationPreservesOriginalRequestParams(t *testing.T)
 	}
 }
 
-func TestRuntimeActiveFollowUpBypassesPlannerClarification(t *testing.T) {
+func TestRuntimeActiveFollowUpIgnoresClassifierClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeDangerousAction,
-			Confidence: 0.9,
-		},
-	}}
-	planner := &stubTaskPlanner{result: &TaskPlanResult{
-		NeedsClarification:   true,
-		ClarificationMessage: "Please clarify the request.",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -729,12 +374,9 @@ func TestRuntimeActiveFollowUpBypassesPlannerClarification(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		TaskPlanner:      planner,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "no"
@@ -749,9 +391,6 @@ func TestRuntimeActiveFollowUpBypassesPlannerClarification(t *testing.T) {
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected provider to receive active follow-up, got %d calls", len(provider.calls))
 	}
-	if planner.calls != 0 {
-		t.Fatalf("task planner should be bypassed, got %d calls", planner.calls)
-	}
 	if !strings.Contains(providerMessagesContent(provider.calls[0].Messages), "current_user_answer") {
 		t.Fatalf("expected contextual follow-up text for provider, got %#v", provider.calls[0].Messages)
 	}
@@ -761,13 +400,6 @@ func TestRuntimeDoesNotReuseOldWriteDetailsForNewRequest(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Bạn muốn tạo lịch vào thời gian nào?"},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeDangerousAction,
-			Confidence: 0.9,
-		},
-	}}
-	planner := &stubTaskPlanner{result: &TaskPlanResult{}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.SaveMemory(ctx, "sess_001", sessions.SessionMemory{
@@ -793,12 +425,9 @@ func TestRuntimeDoesNotReuseOldWriteDetailsForNewRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		TaskPlanner:      planner,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "Tạo lịch họp cho tôi"
@@ -809,12 +438,6 @@ func TestRuntimeDoesNotReuseOldWriteDetailsForNewRequest(t *testing.T) {
 	}
 	if response.Status != contracts.AgentStatusCompleted {
 		t.Fatalf("expected completed, got %#v", response)
-	}
-	if classifier.historyCalls != 0 {
-		t.Fatalf("new write request must not use classifier history, got %d history calls", classifier.historyCalls)
-	}
-	if planner.calls != 0 {
-		t.Fatalf("task planner should be bypassed, got %d calls", planner.calls)
 	}
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected one provider call, got %d", len(provider.calls))
@@ -849,9 +472,8 @@ func TestRuntimeClarifiesCalendarCreateEventWhenCurrentRequestIsUnderspecified(t
 		t.Fatalf("register calendar tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   registry,
-		TurnRouter: testToolEnabledRouter(),
+		Provider: provider,
+		Registry: registry,
 	})
 	message := runtimeTestMessage()
 	message.Text = "Tạo lịch họp cho tôi"
@@ -869,7 +491,7 @@ func TestRuntimeClarifiesCalendarCreateEventWhenCurrentRequestIsUnderspecified(t
 	if executions != 0 {
 		t.Fatalf("calendar create must not execute when underspecified, executions=%d", executions)
 	}
-	if runtime.HasPendingApproval(message.SessionID) {
+	if runtime.HasPendingApproval(context.Background(), message.SessionID) {
 		t.Fatal("underspecified calendar create must not create pending approval")
 	}
 }
@@ -925,7 +547,6 @@ func TestRuntimeRemovesStaleAttendeesFromActiveFollowUpApproval(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
-		TurnRouter:   testToolEnabledRouter(),
 	})
 	message := runtimeTestMessage()
 	message.Text = "Thời gian từ 10am đến 12am"
@@ -982,9 +603,8 @@ Xin vui lòng xác nhận để tôi tiến hành tạo sự kiện này.`,
 		t.Fatalf("register calendar tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   registry,
-		TurnRouter: testToolEnabledRouter(),
+		Provider: provider,
+		Registry: registry,
 	})
 	message := runtimeTestMessage()
 	message.Text = "Tạo lịch họp tiêu đề hoàn thành chức năng HITL vào ngày mai từ 10am đến 11am"
@@ -1059,7 +679,6 @@ func TestRuntimeRecordActionResultClearsPendingClarification(t *testing.T) {
 		Provider:     &fakeProvider{},
 		Registry:     tools.NewToolRegistry(),
 		SessionStore: store,
-		TurnRouter:   testNoToolRouter(),
 	})
 	errShape := runtime.recordActionResult(ctx, "sess_001", tools.ToolResult{
 		ToolCallID:    "call_001",
@@ -1143,10 +762,9 @@ func TestRuntimeResolvesNamedChatSpaceBeforeApproval(t *testing.T) {
 		t.Fatalf("register chat send: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   registry,
-		TurnRouter: testToolEnabledRouter(),
-		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 	message := runtimeTestMessage()
 	message.Text = "gui tin nhan vao nhom chat VClaw, thong bao ve cuoc hop Demo Sprint1"
@@ -1251,18 +869,6 @@ func TestNormalizeCalendarListEventsYesterday(t *testing.T) {
 	}
 	if normalized.Arguments["timeMax"] != "2026-06-05T00:00:00+07:00" {
 		t.Fatalf("unexpected timeMax: %#v", normalized.Arguments["timeMax"])
-	}
-}
-
-func TestForceToolEnabledForCalendarRelativeFollowUp(t *testing.T) {
-	route := &TurnRoute{Mode: TurnModeNoTool, Reason: "short follow-up"}
-	memory := sessions.SessionMemory{LastActionResults: []sessions.ActionResult{{
-		ToolName: "calendar.listEvents",
-		Content:  `Found events: [{"title":"Hoàn thành Demo Sprint1"}]`,
-	}}}
-
-	if !shouldForceToolEnabledForContextualDataFollowUp(route, "ngày mai thì sao", nil, memory) {
-		t.Fatalf("expected calendar relative follow-up to force tool-enabled route")
 	}
 }
 
@@ -1377,7 +983,6 @@ func TestRuntimeExecutesReadOnlyToolAndContinuesToFinalAnswer(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
-		TurnRouter:   testToolEnabledRouter(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -1394,17 +999,14 @@ func TestRuntimeExecutesReadOnlyToolAndContinuesToFinalAnswer(t *testing.T) {
 		t.Fatalf("expected 2 provider calls, got %d", len(provider.calls))
 	}
 	secondMessages := provider.calls[1].Messages
-	if len(secondMessages) != 5 {
-		t.Fatalf("expected system, router context, user, assistant tool call, tool result; got %#v", secondMessages)
+	if len(secondMessages) != 4 {
+		t.Fatalf("expected system, user, assistant tool call, tool result; got %#v", secondMessages)
 	}
 	if secondMessages[0].Role != providers.MessageRoleSystem {
 		t.Fatalf("expected system prompt first, got %#v", secondMessages[0])
 	}
-	if secondMessages[1].Role != providers.MessageRoleSystem || !strings.Contains(secondMessages[1].Content, "not an intent label") {
-		t.Fatalf("expected router context prompt second, got %#v", secondMessages[1])
-	}
-	if secondMessages[4].Role != providers.MessageRoleTool || secondMessages[4].ToolCallID != "call_time" {
-		t.Fatalf("unexpected tool observation message: %#v", secondMessages[4])
+	if secondMessages[3].Role != providers.MessageRoleTool || secondMessages[3].ToolCallID != "call_time" {
+		t.Fatalf("unexpected tool observation message: %#v", secondMessages[3])
 	}
 }
 
@@ -1423,7 +1025,7 @@ func TestRuntimeEmitsProgressForToolExecution(t *testing.T) {
 	if err := registry.Register(tools.NewCurrentTimeToolWithClock(fixedTestTime)); err != nil {
 		t.Fatalf("register current time: %v", err)
 	}
-	runtime := NewRuntime(RuntimeConfig{Provider: provider, Registry: registry, TurnRouter: testToolEnabledRouter()})
+	runtime := NewRuntime(RuntimeConfig{Provider: provider, Registry: registry})
 
 	events := []ProgressEvent{}
 	ctx := WithProgressSink(context.Background(), func(_ context.Context, event ProgressEvent) {
@@ -1471,10 +1073,9 @@ func TestRuntimeReturnsApprovalRequiredForSideEffectTool(t *testing.T) {
 		t.Fatalf("register dangerous tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   registry,
-		TurnRouter: testToolEnabledRouter(),
-		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -1495,8 +1096,66 @@ func TestRuntimeReturnsApprovalRequiredForSideEffectTool(t *testing.T) {
 	}
 }
 
+func TestRuntimeCreatesActionRecordBeforeApproval(t *testing.T) {
+	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
+	message := runtimeTestMessage()
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_write",
+				Name:      "danger.count",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:   provider,
+		Registry:   registry,
+		StateStore: stateStore,
+		Now:        func() time.Time { return message.Timestamp },
+	})
+
+	response, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", response)
+	}
+	action, err := stateStore.GetActionByApprovalID(context.Background(), response.ApprovalID)
+	if err != nil {
+		t.Fatalf("expected action record for approval: %v", err)
+	}
+	if action.Status != ActionStatusPendingApproval {
+		t.Fatalf("action status = %q, want %q", action.Status, ActionStatusPendingApproval)
+	}
+	if action.ToolName != "danger.count" || action.ToolCallID != "call_write" {
+		t.Fatalf("unexpected action record: %#v", action)
+	}
+	if action.Result != nil {
+		t.Fatalf("pending action must not have result before approval: %#v", action.Result)
+	}
+	runState, err := stateStore.GetRun(context.Background(), runIDForMessage(message))
+	if err != nil {
+		t.Fatalf("expected run state: %v", err)
+	}
+	if runState.Status != RuntimeRunStatusWaitingApproval || runState.PendingActionID != action.ActionID {
+		t.Fatalf("unexpected run state: %#v", runState)
+	}
+	if executions != 0 {
+		t.Fatalf("side-effect tool must not execute before approval, executions=%d", executions)
+	}
+}
+
 func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		{
 			Message: providers.Message{
@@ -1523,9 +1182,9 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	runtime := NewRuntime(RuntimeConfig{
 		Provider:     provider,
 		Registry:     registry,
-		TurnRouter:   testToolEnabledRouter(),
 		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
 		SessionStore: sessions.NewInMemoryStore(),
+		StateStore:   stateStore,
 	})
 
 	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -1556,9 +1215,13 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 		t.Fatalf("expected side-effect tool to execute once after approval, executions=%d", executions)
 	}
 	// After approval the runtime runs a continuation pass; the final response comes
-	// from that pass (a text summary). The tool result lives in the transcript.
+	// from that pass, but it must keep the approved tool result so follow-up logic
+	// such as Gmail bounce detection can observe the side effect.
 	if strings.TrimSpace(response.Message) == "" {
 		t.Fatalf("expected non-empty message from continuation response, got %#v", response)
+	}
+	if len(response.ToolResults) == 0 || response.ToolResults[0].ToolName != "danger.count" || !response.ToolResults[0].Success {
+		t.Fatalf("expected approved tool result to survive continuation, got %#v", response.ToolResults)
 	}
 	transcript, err := runtime.sessionStore.LoadTranscript(context.Background(), runtimeTestMessage().SessionID)
 	if err != nil {
@@ -1574,24 +1237,459 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	if len(memory.LastActionResults) != 1 || !strings.Contains(memory.LastActionResults[0].Content, "danger executed") {
 		t.Fatalf("expected approved tool result stored in memory, got %#v", memory)
 	}
+	runState, err := stateStore.GetRun(context.Background(), runIDForMessage(runtimeTestMessage()))
+	if err != nil {
+		t.Fatalf("load completed run state: %v", err)
+	}
+	if runState.Status != RuntimeRunStatusCompleted || runState.PendingActionID != "" || runState.PendingClarificationID != "" {
+		t.Fatalf("completed run retained pending state: %#v", runState)
+	}
+}
+
+func TestRuntimeApprovedActionSurvivesRestart(t *testing.T) {
+	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
+	sessionStore := sessions.NewInMemoryStore()
+	message := runtimeTestMessage()
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	firstProvider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_write",
+				Name:      "danger.count",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		},
+	}}}
+	firstRuntime := NewRuntime(RuntimeConfig{
+		Provider:     firstProvider,
+		Registry:     registry,
+		SessionStore: sessionStore,
+		StateStore:   stateStore,
+		Now:          func() time.Time { return message.Timestamp },
+	})
+
+	pending, err := firstRuntime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run first runtime: %v", err)
+	}
+	if pending.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", pending)
+	}
+
+	secondProvider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Đã hoàn thành yêu cầu."},
+	}}}
+	secondRuntime := NewRuntime(RuntimeConfig{
+		Provider:     secondProvider,
+		Registry:     registry,
+		SessionStore: sessionStore,
+		StateStore:   stateStore,
+		Now:          func() time.Time { return message.Timestamp.Add(time.Second) },
+	})
+	response, err := secondRuntime.ResolveApproval(context.Background(), message.SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval_restart",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  message.Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve approval after restart: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed after restart approval, got %#v", response)
+	}
+	if executions != 1 {
+		t.Fatalf("expected exactly one execution after restart, got %d", executions)
+	}
+	action, err := stateStore.GetActionByApprovalID(context.Background(), pending.ApprovalID)
+	if err != nil {
+		t.Fatalf("load action after restart approval: %v", err)
+	}
+	if action.Status != ActionStatusCompleted || action.Result == nil {
+		t.Fatalf("expected completed action with result, got %#v", action)
+	}
+}
+
+func TestRuntimeNoIDApprovalAfterRestartUsesLatestPendingAction(t *testing.T) {
+	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
+	sessionStore := sessions.NewInMemoryStore()
+	message := runtimeTestMessage()
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	firstProvider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_write",
+				Name:      "danger.count",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		},
+	}}}
+	firstRuntime := NewRuntime(RuntimeConfig{
+		Provider:     firstProvider,
+		Registry:     registry,
+		SessionStore: sessionStore,
+		StateStore:   stateStore,
+		Now:          func() time.Time { return message.Timestamp },
+	})
+	pending, err := firstRuntime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run first runtime: %v", err)
+	}
+	if pending.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", pending)
+	}
+
+	secondProvider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Đã hoàn thành yêu cầu."},
+	}}}
+	secondRuntime := NewRuntime(RuntimeConfig{
+		Provider:     secondProvider,
+		Registry:     registry,
+		SessionStore: sessionStore,
+		StateStore:   stateStore,
+		Now:          func() time.Time { return message.Timestamp.Add(time.Second) },
+	})
+	response, err := secondRuntime.ResolveApproval(context.Background(), message.SessionID, contracts.ApprovalDecision{
+		RequestID: "req_approval_no_id",
+		Decision:  contracts.ApprovalDecisionApproved,
+		DecidedBy: "owner",
+		DecidedAt: message.Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve no-id approval after restart: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed no-id approval after restart, got %#v", response)
+	}
+	if executions != 1 {
+		t.Fatalf("expected exactly one execution after no-id approval, got %d", executions)
+	}
+	action, err := stateStore.GetActionByApprovalID(context.Background(), pending.ApprovalID)
+	if err != nil {
+		t.Fatalf("load action after no-id approval: %v", err)
+	}
+	if action.Status != ActionStatusCompleted || action.Result == nil {
+		t.Fatalf("expected completed action with result, got %#v", action)
+	}
+}
+
+func TestRuntimeCompletedWriteActionIsNotRepeatedInContinuation(t *testing.T) {
+	executions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write",
+					Name:      "danger.count",
+					Arguments: map[string]any{"value": "x"},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write_again",
+					Name:      "danger.count",
+					Arguments: map[string]any{"value": "x"},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role:    providers.MessageRoleAssistant,
+				Content: "Đã hoàn thành yêu cầu.",
+			},
+		},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+		SessionStore: sessions.NewInMemoryStore(),
+		StateStore:   NewInMemoryRuntimeStateStore(),
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if pending.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", pending)
+	}
+	response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed after duplicate continuation guard, got %#v", response)
+	}
+	if executions != 1 {
+		t.Fatalf("expected duplicate write action to execute once, got %d", executions)
+	}
+	if len(provider.responses) != 0 {
+		t.Fatalf("expected provider to continue after duplicate observation and consume final response, remaining=%d", len(provider.responses))
+	}
+}
+
+func TestRuntimeWorkspaceGmailCalendarChatFlowUsesCascadingApprovals(t *testing.T) {
+	gmailExecutions := 0
+	calendarExecutions := 0
+	chatExecutions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_gmail",
+					Name:      "gmail.listEmails",
+					Arguments: map[string]any{"query": "newer:1d"},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:   "call_calendar",
+					Name: "calendar.createEvent",
+					Arguments: map[string]any{
+						"title": "Demo Sprint follow-up",
+						"start": "2026-06-04T10:00:00+07:00",
+						"end":   "2026-06-04T11:00:00+07:00",
+					},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_chat",
+					Name:      "chat.sendMessage",
+					Arguments: map[string]any{"space": "spaces/A", "text": "Đã lên lịch Demo Sprint follow-up."},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role:    providers.MessageRoleAssistant,
+				Content: "Đã đọc email, tạo lịch và gửi thông báo Chat.",
+			},
+		},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(gmailListEmailsRuntimeTool{executions: &gmailExecutions}); err != nil {
+		t.Fatalf("register gmail list: %v", err)
+	}
+	if err := registry.Register(calendarCreateRuntimeTool{executions: &calendarExecutions}); err != nil {
+		t.Fatalf("register calendar create: %v", err)
+	}
+	if err := registry.Register(chatSendRuntimeTool{executions: &chatExecutions}); err != nil {
+		t.Fatalf("register chat send: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		SessionStore: sessions.NewInMemoryStore(),
+		StateStore:   NewInMemoryRuntimeStateStore(),
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+	message := runtimeTestMessage()
+	message.Text = "Đọc email hôm nay, tạo lịch tiêu đề Demo Sprint follow-up 10h-11h ngày mai và báo vào Chat VClaw."
+
+	firstApproval, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run workspace flow: %v", err)
+	}
+	if firstApproval.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected first calendar approval, got %#v", firstApproval)
+	}
+	if gmailExecutions != 1 || calendarExecutions != 0 || chatExecutions != 0 {
+		t.Fatalf("unexpected executions before approval: gmail=%d calendar=%d chat=%d", gmailExecutions, calendarExecutions, chatExecutions)
+	}
+	if firstApproval.ApprovalRequest == nil || firstApproval.ApprovalRequest.ToolCall.ToolName != "calendar.createEvent" {
+		t.Fatalf("expected calendar approval request, got %#v", firstApproval.ApprovalRequest)
+	}
+
+	secondApproval, err := runtime.ResolveApproval(context.Background(), message.SessionID, contracts.ApprovalDecision{
+		ApprovalID: firstApproval.ApprovalID,
+		RequestID:  "req_calendar_approval",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  message.Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve calendar approval: %v", err)
+	}
+	if secondApproval.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected second chat approval, got %#v", secondApproval)
+	}
+	if calendarExecutions != 1 || chatExecutions != 0 {
+		t.Fatalf("unexpected executions after calendar approval: calendar=%d chat=%d", calendarExecutions, chatExecutions)
+	}
+	if secondApproval.ApprovalRequest == nil || secondApproval.ApprovalRequest.ToolCall.ToolName != "chat.sendMessage" {
+		t.Fatalf("expected chat approval request, got %#v", secondApproval.ApprovalRequest)
+	}
+
+	final, err := runtime.ResolveApproval(context.Background(), message.SessionID, contracts.ApprovalDecision{
+		ApprovalID: secondApproval.ApprovalID,
+		RequestID:  "req_chat_approval",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  message.Timestamp.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve chat approval: %v", err)
+	}
+	if final.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed workspace flow, got %#v", final)
+	}
+	if gmailExecutions != 1 || calendarExecutions != 1 || chatExecutions != 1 {
+		t.Fatalf("unexpected final executions: gmail=%d calendar=%d chat=%d", gmailExecutions, calendarExecutions, chatExecutions)
+	}
+}
+
+func TestRuntimeApprovalResumeIsAtomicUnderConcurrentRequests(t *testing.T) {
+	executions := 0
+	executionMu := &sync.Mutex{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write",
+					Name:      "danger.gated",
+					Arguments: map[string]any{"value": "x"},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Đã hoàn thành yêu cầu."},
+		},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(gatedDangerousRuntimeTool{
+		started:    started,
+		release:    release,
+		once:       &sync.Once{},
+		mu:         executionMu,
+		executions: &executions,
+	}); err != nil {
+		t.Fatalf("register gated tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if pending.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", pending)
+	}
+
+	type approvalResult struct {
+		response contracts.AgentResponse
+		err      error
+	}
+	firstDone := make(chan approvalResult, 1)
+	go func() {
+		response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+			ApprovalID: pending.ApprovalID,
+			RequestID:  "req_approval_1",
+			Decision:   contracts.ApprovalDecisionApproved,
+			DecidedBy:  "owner",
+			DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+		})
+		firstDone <- approvalResult{response: response, err: err}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first approval did not start executing gated tool")
+	}
+	second, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval_2",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve second approval: %v", err)
+	}
+	if second.Status != contracts.AgentStatusBlocked {
+		t.Fatalf("expected second concurrent approval to be blocked while executing, got %#v", second)
+	}
+	close(release)
+
+	first := <-firstDone
+	if first.err != nil {
+		t.Fatalf("resolve first approval: %v", first.err)
+	}
+	if first.response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected first approval completed, got %#v", first.response)
+	}
+	executionMu.Lock()
+	gotExecutions := executions
+	executionMu.Unlock()
+	if gotExecutions != 1 {
+		t.Fatalf("expected exactly one execution under concurrent approvals, got %d", gotExecutions)
+	}
+}
+
+func TestApprovalContinuationMessageWarnsGmailSendDraftDeliveryWording(t *testing.T) {
+	message := buildApprovalContinuationMessage(pendingApproval{
+		message:  runtimeTestMessage(),
+		toolCall: providers.ToolCall{Name: "gmail.sendDraft"},
+	}, tools.ToolResult{
+		ToolCallID:    "call_send",
+		ToolName:      "gmail.sendDraft",
+		Success:       true,
+		ContentForLLM: `{"Message":{"To":"baolnc@gmail.com"}}`,
+	}, runtimeTestMessage().Timestamp)
+
+	if !strings.Contains(message.Text, "handed to Gmail for sending") {
+		t.Fatalf("expected Gmail delivery wording caveat, got %q", message.Text)
+	}
+	if !strings.Contains(message.Text, "avoid wording like 'sent successfully'") {
+		t.Fatalf("expected warning against success wording, got %q", message.Text)
+	}
 }
 
 func TestRuntimeResultFollowUpUsesRecentApprovedActionContext(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Có. Calendar sẽ gửi email thông báo cho attendee nếu sự kiện được tạo với người tham gia."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.3,
-		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Bạn có thể nói rõ hơn bạn muốn tôi làm gì không?",
-	}}
-	planner := &stubTaskPlanner{result: &TaskPlanResult{
-		NeedsClarification:   true,
-		ClarificationMessage: "Bạn có thể nói rõ hơn bạn muốn tôi làm gì không?",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -1601,12 +1699,9 @@ func TestRuntimeResultFollowUpUsesRecentApprovedActionContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		TaskPlanner:      planner,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "Tạo lịch này có gửi mail thông báo cho người tham gia không"
@@ -1620,9 +1715,6 @@ func TestRuntimeResultFollowUpUsesRecentApprovedActionContext(t *testing.T) {
 	}
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected provider call, got %d", len(provider.calls))
-	}
-	if planner.calls != 0 {
-		t.Fatalf("task planner should be bypassed, got %d calls", planner.calls)
 	}
 	joined := providerMessagesContent(provider.calls[0].Messages)
 	if !strings.Contains(joined, "Reference resolver result") || !strings.Contains(joined, "calendar_event") {
@@ -1649,15 +1741,9 @@ func TestRuntimeResultFollowUpUsesLastActionResultMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: tools.NewToolRegistry(),
-		IntentClassifier: &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-			Intent:               &agentintent.Result{Type: agentintent.TypeUnknown, Confidence: 0.3},
-			NeedsClarification:   true,
-			ClarificationMessage: "Bạn có thể nói rõ hơn bạn muốn tôi làm gì không?",
-		}},
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
 		SessionStore: store,
-		TurnRouter:   testNoToolRouter(),
 	})
 	message := runtimeTestMessage()
 	message.Text = "Lịch này có gửi mail thông báo cho người tham gia không"
@@ -1682,14 +1768,6 @@ func TestRuntimeWriteRequestCanUseExplicitMeetingReferenceFromMemory(t *testing.
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Can tao email draft moi hop cuoc hop tren."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.3,
-		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.SaveMemory(ctx, "sess_001", sessions.SessionMemory{
@@ -1702,11 +1780,9 @@ func TestRuntimeWriteRequestCanUseExplicitMeetingReferenceFromMemory(t *testing.
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "viet email cho baolnc@vclaw.site moi tham du cuoc hop tren"
@@ -1733,14 +1809,6 @@ func TestRuntimeWriteRequestCanUseRecentGmailDraftReferenceFromMemory(t *testing
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Can gui draft vua tao bang gmail.sendDraft."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.3,
-		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.SaveMemory(ctx, "sess_001", sessions.SessionMemory{
@@ -1753,11 +1821,9 @@ func TestRuntimeWriteRequestCanUseRecentGmailDraftReferenceFromMemory(t *testing
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "hay gui mail ban draft vua tao di"
@@ -1788,14 +1854,6 @@ func TestRuntimeDraftReferenceIgnoresOtherRecentGmailResults(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Can gui draft bang gmail.sendDraft."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{
-			Type:       agentintent.TypeUnknown,
-			Confidence: 0.3,
-		},
-		NeedsClarification:   true,
-		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.SaveMemory(ctx, "sess_001", sessions.SessionMemory{
@@ -1815,11 +1873,9 @@ func TestRuntimeDraftReferenceIgnoresOtherRecentGmailResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "ban nhap ban vua tao do"
@@ -1846,11 +1902,6 @@ func TestRuntimeContextualTemporalFollowUpUsesRecentHistory(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Hom qua ban khong co lich nao."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent:               &agentintent.Result{Type: agentintent.TypeUnknown, Confidence: 0.3},
-		NeedsClarification:   true,
-		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -1866,11 +1917,9 @@ func TestRuntimeContextualTemporalFollowUpUsesRecentHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "hom qua thi sao"
@@ -1895,9 +1944,6 @@ func TestRuntimeStandaloneReadRequestDoesNotUseStaleTemporalHistory(t *testing.T
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Hom nay ban co mot lich."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent: &agentintent.Result{Type: agentintent.TypeReadInfo, Confidence: 0.9},
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -1913,11 +1959,9 @@ func TestRuntimeStandaloneReadRequestDoesNotUseStaleTemporalHistory(t *testing.T
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "trong calendar hom nay co cuoc hop nao khong"
@@ -1945,11 +1989,6 @@ func TestRuntimeStandaloneTomorrowCalendarQuestionDoesNotDependOnPriorCalendarAn
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Ngay mai ban co mot lich."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent:               &agentintent.Result{Type: agentintent.TypeUnknown, Confidence: 0.3},
-		NeedsClarification:   true,
-		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -1965,11 +2004,9 @@ func TestRuntimeStandaloneTomorrowCalendarQuestionDoesNotDependOnPriorCalendarAn
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "ngay mai thi co lich gi"
@@ -1997,11 +2034,6 @@ func TestRuntimeConversationMemoryMetaQuestionUsesRecentHistory(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Ban vua hoi lich hom nay trong Calendar."},
 	}}}
-	classifier := &stubIntentClassifier{output: &agentintent.ClassificationOutput{
-		Intent:               &agentintent.Result{Type: agentintent.TypeUnknown, Confidence: 0.3},
-		NeedsClarification:   true,
-		ClarificationMessage: "Ban co the noi ro hon ban muon toi lam gi khong?",
-	}}
 	store := sessions.NewInMemoryStore()
 	ctx := context.Background()
 	if err := store.AppendMessage(ctx, "sess_001", providers.Message{
@@ -2011,11 +2043,9 @@ func TestRuntimeConversationMemoryMetaQuestionUsesRecentHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:         provider,
-		Registry:         tools.NewToolRegistry(),
-		IntentClassifier: classifier,
-		SessionStore:     store,
-		TurnRouter:       testNoToolRouter(),
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
 	})
 	message := runtimeTestMessage()
 	message.Text = "toi vua nhan cai gi"
@@ -2038,6 +2068,7 @@ func TestRuntimeConversationMemoryMetaQuestionUsesRecentHistory(t *testing.T) {
 
 func TestRuntimeRejectsPendingApprovalWithoutExecutingTool(t *testing.T) {
 	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{
 			Role:      providers.MessageRoleAssistant,
@@ -2051,7 +2082,7 @@ func TestRuntimeRejectsPendingApprovalWithoutExecutingTool(t *testing.T) {
 	runtime := NewRuntime(RuntimeConfig{
 		Provider:   provider,
 		Registry:   registry,
-		TurnRouter: testToolEnabledRouter(),
+		StateStore: stateStore,
 		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
@@ -2075,6 +2106,245 @@ func TestRuntimeRejectsPendingApprovalWithoutExecutingTool(t *testing.T) {
 	if executions != 0 {
 		t.Fatalf("rejected tool must not execute, executions=%d", executions)
 	}
+	runState, err := stateStore.GetRun(context.Background(), runIDForMessage(runtimeTestMessage()))
+	if err != nil {
+		t.Fatalf("load rejected run state: %v", err)
+	}
+	if runState.Status != RuntimeRunStatusBlocked || runState.PendingActionID != "" || runState.CompletedAt == nil {
+		t.Fatalf("rejected run was not finalized: %#v", runState)
+	}
+}
+
+func TestRuntimeExpiredApprovalFinalizesRun(t *testing.T) {
+	stateStore := NewInMemoryRuntimeStateStore()
+	now := runtimeTestMessage().Timestamp
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role:      providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{ID: "call_expiring", Name: "danger.count"}},
+		},
+	}}}
+	executions := 0
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:   provider,
+		Registry:   registry,
+		StateStore: stateStore,
+		Now:        func() time.Time { return now },
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	now = now.Add(approvalTTL + time.Second)
+	response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_expired",
+		Decision:   contracts.ApprovalDecisionApproved,
+	})
+	if err != nil {
+		t.Fatalf("resolve expired approval: %v", err)
+	}
+	if response.Status != contracts.AgentStatusFailed || response.Error == nil || response.Error.Code != contracts.ErrorApprovalExpired {
+		t.Fatalf("expected expired approval failure, got %#v", response)
+	}
+	runState, err := stateStore.GetRun(context.Background(), runIDForMessage(runtimeTestMessage()))
+	if err != nil {
+		t.Fatalf("load expired run state: %v", err)
+	}
+	if runState.Status != RuntimeRunStatusFailed || runState.PendingActionID != "" || runState.CompletedAt == nil {
+		t.Fatalf("expired run was not finalized: %#v", runState)
+	}
+	if executions != 0 {
+		t.Fatalf("expired approval executed tool %d times", executions)
+	}
+}
+
+func TestRuntimeApprovedToolFailureFinalizesRun(t *testing.T) {
+	stateStore := NewInMemoryRuntimeStateStore()
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role:      providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{ID: "call_failing", Name: "danger.fail"}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(failingDangerousTool{}); err != nil {
+		t.Fatalf("register failing tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:   provider,
+		Registry:   registry,
+		StateStore: stateStore,
+		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_failing_approval",
+		Decision:   contracts.ApprovalDecisionApproved,
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected failed tool response, got %#v", response)
+	}
+	runState, err := stateStore.GetRun(context.Background(), runIDForMessage(runtimeTestMessage()))
+	if err != nil {
+		t.Fatalf("load failed run state: %v", err)
+	}
+	if runState.Status != RuntimeRunStatusFailed || runState.PendingActionID != "" || runState.CompletedAt == nil {
+		t.Fatalf("failed action run was not finalized: %#v", runState)
+	}
+}
+
+func TestRuntimeSetupFailureFinalizesStartedRun(t *testing.T) {
+	stateStore := NewInMemoryRuntimeStateStore()
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     &fakeProvider{},
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: failingLoadSessionStore{},
+		StateStore:   stateStore,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected setup failure, got %#v", response)
+	}
+	runState, err := stateStore.GetRun(context.Background(), runIDForMessage(runtimeTestMessage()))
+	if err != nil {
+		t.Fatalf("load setup-failed run state: %v", err)
+	}
+	if runState.Status != RuntimeRunStatusFailed || runState.CompletedAt == nil {
+		t.Fatalf("setup-failed run was left active: %#v", runState)
+	}
+}
+
+func TestRuntimeReviseApprovalAfterRestartUsesPersistedAction(t *testing.T) {
+	stateStore := NewInMemoryRuntimeStateStore()
+	sessionStore := sessions.NewInMemoryStore()
+	executions := 0
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	firstRuntime := NewRuntime(RuntimeConfig{
+		Provider: &fakeProvider{responses: []providers.ChatResponse{{
+			Message: providers.Message{
+				Role:      providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{ID: "call_restart_revise", Name: "danger.count"}},
+			},
+		}}},
+		Registry:     registry,
+		SessionStore: sessionStore,
+		StateStore:   stateStore,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+	pending, err := firstRuntime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run first runtime: %v", err)
+	}
+
+	secondProvider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Đã lập lại kế hoạch."},
+	}}}
+	secondRuntime := NewRuntime(RuntimeConfig{
+		Provider:     secondProvider,
+		Registry:     registry,
+		SessionStore: sessionStore,
+		StateStore:   stateStore,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp.Add(time.Second) },
+	})
+	response, err := secondRuntime.ReviseApproval(
+		context.Background(),
+		runtimeTestMessage().SessionID,
+		"req_restart_revise",
+		pending.ApprovalID,
+		"đổi giờ sang 10:00",
+	)
+	if err != nil {
+		t.Fatalf("revise after restart: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected revision to reach provider after restart, got %#v", response)
+	}
+	revisionPrompt := providerMessagesContent(secondProvider.calls[0].Messages)
+	if len(secondProvider.calls) != 1 ||
+		!strings.Contains(revisionPrompt, "đổi giờ sang 10:00") ||
+		!strings.Contains(revisionPrompt, "Tool đang chờ:") {
+		t.Fatalf("persisted revision context was not sent to provider: %#v", secondProvider.calls)
+	}
+	if executions != 0 {
+		t.Fatalf("revision executed original action %d times", executions)
+	}
+}
+
+func TestRuntimeMessengerRoutesPersistedApprovalRevisionAfterRestart(t *testing.T) {
+	stateStore := NewInMemoryRuntimeStateStore()
+	sessionStore := sessions.NewInMemoryStore()
+	registry := tools.NewToolRegistry()
+	executions := 0
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	firstRuntime := NewRuntime(RuntimeConfig{
+		Provider: &fakeProvider{responses: []providers.ChatResponse{{
+			Message: providers.Message{
+				Role:      providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{ID: "call_restart_messenger", Name: "danger.count"}},
+			},
+		}}},
+		Registry:     registry,
+		SessionStore: sessionStore,
+		StateStore:   stateStore,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+	if _, err := firstRuntime.Run(context.Background(), runtimeTestMessage()); err != nil {
+		t.Fatalf("run first runtime: %v", err)
+	}
+
+	secondProvider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Đã lập lại kế hoạch."},
+	}}}
+	secondRuntime := NewRuntime(RuntimeConfig{
+		Provider:     secondProvider,
+		Registry:     registry,
+		SessionStore: sessionStore,
+		StateStore:   stateStore,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp.Add(time.Second) },
+	})
+	message := runtimeTestMessage()
+	message.RequestID = "req_restart_messenger_revise"
+	message.Text = "revise đổi giờ sang 10:00"
+	response, err := NewRuntimeMessenger(secondRuntime).HandleMessage(context.Background(), message)
+	if err != nil {
+		t.Fatalf("handle persisted revision: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected persisted revision to be routed, got %#v", response)
+	}
+	revisionPrompt := providerMessagesContent(secondProvider.calls[0].Messages)
+	if len(secondProvider.calls) != 1 ||
+		!strings.Contains(revisionPrompt, "đổi giờ sang 10:00") ||
+		!strings.Contains(revisionPrompt, "Tool đang chờ:") {
+		t.Fatalf("persisted revision context was not sent to provider: %#v", secondProvider.calls)
+	}
+	if executions != 0 {
+		t.Fatalf("revision executed original action %d times", executions)
+	}
 }
 
 func TestRuntimeRevisionCommentReturnsClarificationWithoutExecutingTool(t *testing.T) {
@@ -2090,10 +2360,9 @@ func TestRuntimeRevisionCommentReturnsClarificationWithoutExecutingTool(t *testi
 		t.Fatalf("register dangerous tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   registry,
-		TurnRouter: testToolEnabledRouter(),
-		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -2140,10 +2409,9 @@ func TestRuntimeReviseApprovalReplansWithoutExecutingOriginalTool(t *testing.T) 
 		t.Fatalf("register dangerous tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   registry,
-		TurnRouter: testToolEnabledRouter(),
-		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -2170,8 +2438,192 @@ func TestRuntimeReviseApprovalReplansWithoutExecutingOriginalTool(t *testing.T) 
 	if executions != 0 {
 		t.Fatalf("revision must not execute original tool, executions=%d", executions)
 	}
-	if !runtime.HasPendingApproval(runtimeTestMessage().SessionID) {
+	if !runtime.HasPendingApproval(context.Background(), runtimeTestMessage().SessionID) {
 		t.Fatal("revision should keep original approval pending until replaced by a new approval")
+	}
+}
+
+func TestRuntimeReviseApprovalSupersedesOriginalWhenNewApprovalIsCreated(t *testing.T) {
+	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write_old",
+					Name:      "danger.count",
+					Arguments: map[string]any{"value": "old"},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write_new",
+					Name:      "danger.count",
+					Arguments: map[string]any{"value": "new"},
+				}},
+			},
+		},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:   provider,
+		Registry:   registry,
+		StateStore: stateStore,
+		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	original, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run original request: %v", err)
+	}
+	if original.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected original approval_required, got %#v", original)
+	}
+	revised, err := runtime.ReviseApproval(context.Background(), runtimeTestMessage().SessionID, "req_revise", original.ApprovalID, "doi gia tri moi")
+	if err != nil {
+		t.Fatalf("revise approval: %v", err)
+	}
+	if revised.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected revised approval_required, got %#v", revised)
+	}
+
+	oldAction, err := stateStore.GetActionByApprovalID(context.Background(), original.ApprovalID)
+	if err != nil {
+		t.Fatalf("load original action: %v", err)
+	}
+	if oldAction.Status != ActionStatusSuperseded {
+		t.Fatalf("expected original action superseded, got %#v", oldAction)
+	}
+	newAction, err := stateStore.GetActionByApprovalID(context.Background(), revised.ApprovalID)
+	if err != nil {
+		t.Fatalf("load revised action: %v", err)
+	}
+	if newAction.Status != ActionStatusPendingApproval {
+		t.Fatalf("expected revised action pending approval, got %#v", newAction)
+	}
+	oldRun, err := stateStore.GetRun(context.Background(), oldAction.RunID)
+	if err != nil {
+		t.Fatalf("load original run: %v", err)
+	}
+	if oldRun.Status != RuntimeRunStatusBlocked || oldRun.PendingActionID != "" || oldRun.CompletedAt == nil {
+		t.Fatalf("expected superseded approval run to be finalized, got %#v", oldRun)
+	}
+
+	stale, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: original.ApprovalID,
+		RequestID:  "req_stale_approval",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve stale approval: %v", err)
+	}
+	if stale.Status != contracts.AgentStatusFailed || stale.Error == nil || stale.Error.Code != contracts.ErrorApprovalNotFound {
+		t.Fatalf("expected stale approval to be rejected as not found, got %#v", stale)
+	}
+	if executions != 0 {
+		t.Fatalf("stale revised approval must not execute original tool, executions=%d", executions)
+	}
+}
+
+func TestRuntimeClarificationReplyCompletesOriginalRun(t *testing.T) {
+	stateStore := NewInMemoryRuntimeStateStore()
+	message := runtimeTestMessage()
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:   "call_resume_clarification",
+					Name: clarifyToolName,
+					Arguments: map[string]any{
+						"question":       "Bạn muốn gửi email cho ai?",
+						"missing_fields": []any{"recipient"},
+					},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role:    providers.MessageRoleAssistant,
+				Content: `{"is_answer":true,"is_new_request":false,"updated_request":"Gửi email cho bao@example.com","provided_fields":["recipient"],"still_missing":[],"reason":"recipient provided"}`,
+			},
+		},
+		{
+			Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Đã hiểu người nhận."},
+		},
+	}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:   provider,
+		Registry:   tools.NewToolRegistry(),
+		StateStore: stateStore,
+		Now:        func() time.Time { return message.Timestamp },
+	})
+
+	first, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run clarification request: %v", err)
+	}
+	if first.Status != contracts.AgentStatusNeedClarification {
+		t.Fatalf("expected clarification, got %#v", first)
+	}
+	originalRunID := runIDForMessage(message)
+
+	followUp := message
+	followUp.RequestID = "req_clarification_answer"
+	followUp.Text = "bao@example.com"
+	second, err := runtime.Run(context.Background(), followUp)
+	if err != nil {
+		t.Fatalf("run clarification answer: %v", err)
+	}
+	if second.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed clarification continuation, got %#v", second)
+	}
+	originalRun, err := stateStore.GetRun(context.Background(), originalRunID)
+	if err != nil {
+		t.Fatalf("load original clarification run: %v", err)
+	}
+	if originalRun.Status != RuntimeRunStatusCompleted || originalRun.PendingClarificationID != "" || originalRun.CompletedAt == nil {
+		t.Fatalf("original clarification run was not completed: %#v", originalRun)
+	}
+}
+
+func TestRuntimeAssistantTranscriptFailureFinalizesRun(t *testing.T) {
+	stateStore := NewInMemoryRuntimeStateStore()
+	message := runtimeTestMessage()
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: &fakeProvider{responses: []providers.ChatResponse{{
+			Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "response"},
+		}}},
+		Registry: tools.NewToolRegistry(),
+		SessionStore: failingAssistantAppendSessionStore{
+			InMemoryStore: sessions.NewInMemoryStore(),
+		},
+		StateStore: stateStore,
+		Now:        func() time.Time { return message.Timestamp },
+	})
+
+	response, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected failed response, got %#v", response)
+	}
+	runState, err := stateStore.GetRun(context.Background(), runIDForMessage(message))
+	if err != nil {
+		t.Fatalf("load failed run: %v", err)
+	}
+	if runState.Status != RuntimeRunStatusFailed || runState.CompletedAt == nil {
+		t.Fatalf("assistant append failure left run active: %#v", runState)
 	}
 }
 
@@ -2196,7 +2648,6 @@ func TestRuntimeStoresToolObservationForApprovalRequiredTool(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
-		TurnRouter:   testToolEnabledRouter(),
 		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
@@ -2243,7 +2694,6 @@ func TestRuntimeStoresSkippedObservationsForRemainingToolCalls(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
-		TurnRouter:   testToolEnabledRouter(),
 		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
@@ -2311,9 +2761,8 @@ func TestSanitizeProviderTranscriptForToolProtocolPreservesAnsweredToolCalls(t *
 func TestRuntimeProviderErrorReturnsFailedErrorShape(t *testing.T) {
 	provider := &fakeProvider{err: fmt.Errorf("network down")}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   tools.NewToolRegistry(),
-		TurnRouter: testToolEnabledRouter(),
+		Provider: provider,
+		Registry: tools.NewToolRegistry(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -2331,9 +2780,8 @@ func TestRuntimeProviderErrorReturnsFailedErrorShape(t *testing.T) {
 func TestRuntimeRetryableProviderErrorReturnsUnavailableShape(t *testing.T) {
 	provider := &fakeProvider{err: providers.NewRetryableError(fmt.Errorf("connection reset"))}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   tools.NewToolRegistry(),
-		TurnRouter: testToolEnabledRouter(),
+		Provider: provider,
+		Registry: tools.NewToolRegistry(),
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -2364,9 +2812,8 @@ func TestRuntimeToolErrorReturnsFailedErrorShape(t *testing.T) {
 		t.Fatalf("register calculator: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:   provider,
-		Registry:   registry,
-		TurnRouter: testToolEnabledRouter(),
+		Provider: provider,
+		Registry: registry,
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
@@ -2395,7 +2842,6 @@ func TestRuntimeToolTimeoutReturnsFailedErrorShape(t *testing.T) {
 	runtime := NewRuntime(RuntimeConfig{
 		Provider:    provider,
 		Registry:    registry,
-		TurnRouter:  testToolEnabledRouter(),
 		ToolTimeout: time.Millisecond,
 	})
 
@@ -2423,7 +2869,6 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 	runtime := NewRuntime(RuntimeConfig{
 		Provider:      provider,
 		Registry:      registry,
-		TurnRouter:    testToolEnabledRouter(),
 		MaxIterations: 2,
 	})
 

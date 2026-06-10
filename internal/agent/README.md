@@ -55,45 +55,42 @@ package main
 import (
     "context"
     "fmt"
-    "vclaw/internal/agent"
+    "vclaw/internal/agent/intent"
 )
 
 func main() {
     // Create classifier with default config
-    classifier := agent.NewIntentClassifier(agent.DefaultConfidenceConfig)
+    classifier := intent.NewClassifier(intent.DefaultConfig)
     
     // Classify user input
-    result, err := classifier.Classify(context.Background(), "Xóa file config.json")
+    result, err := intent.Classify(context.Background(), classifier, "Xóa file config.json")
     if err != nil {
         panic(err)
     }
     
     // Check if clarification is needed
     if result.NeedsClarification {
-        fmt.Println("Question:", result.ClarificationOptions.Question)
-        for _, opt := range result.ClarificationOptions.Options {
-            fmt.Printf("%s) %s\n", opt.ID, opt.Label)
-        }
+        fmt.Println("Question:", result.ClarificationMessage)
         return
     }
     
     // Check intent type
-    intent := result.Intent
-    fmt.Printf("Intent: %s (confidence: %.2f)\n", intent.Type, intent.Confidence)
+    classified := result.Intent
+    fmt.Printf("Intent: %s (confidence: %.2f)\n", classified.Type, classified.Confidence)
     
     // Check if confirmation is needed
-    if intent.NeedsConfirm {
+    if classified.NeedsConfirm {
         fmt.Println("⚠️  This action requires confirmation!")
     }
     
     // Check for missing parameters
-    if len(intent.MissingParams) > 0 {
-        fmt.Printf("Missing parameters: %v\n", intent.MissingParams)
+    if len(classified.MissingParams) > 0 {
+        fmt.Printf("Missing parameters: %v\n", classified.MissingParams)
         return
     }
     
     // Execute tool calls
-    for _, toolCall := range intent.ToolCalls {
+    for _, toolCall := range classified.ToolCalls {
         fmt.Printf("Tool: %s, Params: %v\n", toolCall.Name, toolCall.Parameters)
     }
 }
@@ -149,7 +146,7 @@ go test ./internal/agent/... -v
 
 Run specific test:
 ```bash
-go test ./internal/agent -run TestIntentClassifier_Classify_Greeting -v
+go test ./internal/agent/intent -run TestClassify_Greeting -v
 ```
 
 Run with coverage:
