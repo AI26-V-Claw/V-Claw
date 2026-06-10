@@ -208,7 +208,7 @@ go test ./internal/agent/... -cover
 This module integrates with:
 - `internal/agent/intent/` - Intent classification and parameter validation
 - `internal/audit/` - Action logging (Phase 4)
-- `internal/memory/` - Session and long-term memory (Phase 2-3)
+- `internal/sessions/` - Transcript and session memory persistence
 - `internal/safety/` - Risk classification (Phase 2)
 
 ## References

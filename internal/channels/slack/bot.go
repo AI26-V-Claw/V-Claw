@@ -14,6 +14,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 	"vclaw/internal/policies"
 )
@@ -500,7 +501,7 @@ func (b *Bot) handleSlackReviseSubmission(ctx context.Context, callback slack.In
 }
 
 func (b *Bot) sendMessage(ctx context.Context, channelID, text, threadTimestamp string) (string, error) {
-	options := []slack.MsgOption{slack.MsgOptionText(text, false)}
+	options := []slack.MsgOption{slack.MsgOptionText(slackRenderText(text), false)}
 	if strings.TrimSpace(threadTimestamp) != "" {
 		options = append(options, slack.MsgOptionPostMessageParameters(slack.PostMessageParameters{
 			ThreadTimestamp: threadTimestamp,
@@ -513,7 +514,7 @@ func (b *Bot) sendMessage(ctx context.Context, channelID, text, threadTimestamp 
 
 func (b *Bot) sendApprovalMessage(ctx context.Context, channelID, text, threadTimestamp, approvalID, sessionID, toolName string) (string, error) {
 	options := []slack.MsgOption{
-		slack.MsgOptionText(text, false),
+		slack.MsgOptionText(slackRenderText(text), false),
 		slack.MsgOptionBlocks(slackApprovalBlocks(text, approvalID, sessionID)...),
 	}
 	if strings.TrimSpace(threadTimestamp) != "" {
@@ -536,13 +537,13 @@ func (b *Bot) sendApprovalMessage(ctx context.Context, channelID, text, threadTi
 }
 
 func (b *Bot) updateMessage(ctx context.Context, channelID, timestamp, text string) error {
-	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp, slack.MsgOptionText(text, false))
+	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp, slack.MsgOptionText(slackRenderText(text), false))
 	return err
 }
 
 func (b *Bot) updateApprovalMessage(ctx context.Context, channelID, timestamp, text, approvalID, sessionID, toolName string) error {
 	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp,
-		slack.MsgOptionText(text, false),
+		slack.MsgOptionText(slackRenderText(text), false),
 		slack.MsgOptionBlocks(slackApprovalBlocks(text, approvalID, sessionID)...),
 	)
 	if err == nil {
@@ -560,7 +561,7 @@ func (b *Bot) updateApprovalMessage(ctx context.Context, channelID, timestamp, t
 
 func (b *Bot) updateMessageClearBlocks(ctx context.Context, channelID, timestamp, text string) error {
 	_, _, _, err := b.api.UpdateMessageContext(ctx, channelID, timestamp,
-		slack.MsgOptionText(text, false),
+		slack.MsgOptionText(slackRenderText(text), false),
 		slack.MsgOptionBlocks(),
 	)
 	return err
@@ -690,8 +691,7 @@ func newSlackProgressEditor(bot *Bot, channelID, timestamp string) *slackProgres
 }
 
 func (e *slackProgressEditor) Update(ctx context.Context, text string) error {
-	text = strings.TrimSpace(text)
-	if text == "" || text == e.lastText {
+	if strings.TrimSpace(text) == "" || text == e.lastText {
 		return nil
 	}
 	if err := e.bot.updateMessage(ctx, e.channelID, e.timestamp, text); err != nil {
@@ -702,8 +702,7 @@ func (e *slackProgressEditor) Update(ctx context.Context, text string) error {
 }
 
 func (e *slackProgressEditor) UpdateApproval(ctx context.Context, text, approvalID, sessionID, toolName string) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	if err := e.bot.updateApprovalMessage(ctx, e.channelID, e.timestamp, text, approvalID, sessionID, toolName); err != nil {
@@ -814,7 +813,7 @@ func slackReviseComment(callback slack.InteractionCallback) string {
 }
 
 func slackMrkdwn(text string) string {
-	text = strings.TrimSpace(text)
+	text = slackRenderText(text)
 	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	text = strings.ReplaceAll(text, ">", "&gt;")
@@ -1081,4 +1080,37 @@ func parseSlackPolicySettingsActionValue(value string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func slackRenderText(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	text = formatting.NormalizeLineEndings(text)
+	text = formatting.ReplaceFencedCodeBlocks(text, func(_ string, code string) string {
+		return slackCodeBlock("", code)
+	})
+	lines := strings.Split(text, "\n")
+	rendered := make([]string, 0, len(lines))
+	inFence := false
+	for _, line := range lines {
+		if inFence {
+			rendered = append(rendered, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
+			}
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			rendered = append(rendered, line)
+			inFence = true
+			continue
+		}
+		if _, title, ok := formatting.ParseMarkdownHeading(line); ok {
+			rendered = append(rendered, "*"+strings.ToUpper(title)+"*")
+			continue
+		}
+		rendered = append(rendered, line)
+	}
+	return strings.Join(rendered, "\n")
 }

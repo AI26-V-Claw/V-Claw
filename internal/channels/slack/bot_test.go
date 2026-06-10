@@ -208,8 +208,10 @@ func TestSlackApprovalTextOmitsTechnicalFields(t *testing.T) {
 			t.Fatalf("slack approval text leaked %q: %q", forbidden, text)
 		}
 	}
-	if !strings.Contains(text, "Hành động: Gửi email") {
-		t.Fatalf("expected human-friendly approval action, got %q", text)
+	for _, forbidden := range []string{"Cần bạn xác nhận trước khi thực hiện.", "Hành động:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("slack approval text should omit %q: %q", forbidden, text)
+		}
 	}
 }
 
@@ -234,9 +236,26 @@ func TestSlackApprovalTextShowsSandboxPythonCode(t *testing.T) {
 	if !strings.Contains(text, "print('hello')") || !strings.Contains(text, "print('world')") {
 		t.Fatalf("expected full sandbox code in approval text, got %q", text)
 	}
+	if !strings.Contains(text, "```") {
+		t.Fatalf("expected sandbox code block markup, got %q", text)
+	}
+}
+
+func TestSlackTextFromResponsePreservesMultilineFormatting(t *testing.T) {
+	message := "Đây là một bộ khung mục lục:\n\nCHƯƠNG 2\n2.1 Cơ sở lý thuyết\n  2.1.1 Khái niệm hệ thống thông tin\n  2.1.2 Khái niệm cơ sở dữ liệu\n\n- Mục 1\n- Mục 2"
+
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+	})
+
+	if text != message {
+		t.Fatalf("expected response formatting to be preserved, got %q want %q", text, message)
+	}
 }
 
 func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
+	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := slackTextFromResponse(contracts.AgentResponse{
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
@@ -247,16 +266,85 @@ func TestSlackApprovalTextShowsEmailDraftDetails(t *testing.T) {
 				Input: map[string]any{
 					"to":       []any{"vmkqa2@gmail.com"},
 					"subject":  "Mời họp chiều nay",
-					"textBody": "Chào bạn,\nMời bạn tham dự cuộc họp chiều nay.",
+					"textBody": body,
 				},
 			},
 		},
 	})
 
-	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay."} {
+	for _, want := range []string{"*Người nhận:*", "`vmkqa2@gmail.com`", "*Tiêu đề:*", "`Mời họp chiều nay`", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", "```"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
 		}
+	}
+	if strings.Contains(text, "Nội dung email:") {
+		t.Fatalf("expected email approval text to omit body label, got %q", text)
+	}
+}
+
+func TestSlackApprovalTextShowsCalendarEventDetails(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_calendar",
+			Summary:    "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "calendar.createEvent",
+				Input: map[string]any{
+					"title":       "Họp",
+					"start":       "2026-06-10T08:00:00+07:00",
+					"end":         "2026-06-10T09:30:00+07:00",
+					"attendees":   []any{"a@test.com", "b@test.com"},
+					"location":    "Phòng A",
+					"description": "Chuẩn bị số liệu bán hàng.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"*Tiêu đề:* Họp",
+		"*Bắt đầu:* 10/06/2026, 08:00 (+07:00)",
+		"*Kết thúc:* 10/06/2026, 09:30 (+07:00)",
+		"*Thời lượng:* 1 giờ 30 phút",
+		"*Người tham gia:* a@test.com, b@test.com",
+		"*Địa điểm:* Phòng A",
+		"Ghi chú:", "Chuẩn bị số liệu bán hàng.", "```",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected calendar approval text to contain %q, got %q", want, text)
+		}
+	}
+	for _, forbidden := range []string{"Start: 2026-06-10T08:00:00+07:00", "End: 2026-06-10T09:30:00+07:00"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected calendar approval text to avoid raw time field %q, got %q", forbidden, text)
+		}
+	}
+}
+
+func TestSlackApprovalTextShowsChatMessageDetails(t *testing.T) {
+	text := slackTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_chat",
+			Summary:    "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "chat.sendMessage",
+				Input: map[string]any{
+					"space": "spaces/87bFdyAAAAE",
+					"text":  "Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{"Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.", "```"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected chat approval text to contain %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "Nội dung:") || strings.Contains(text, "Space:") || strings.Contains(text, "spaces/87bFdyAAAAE") {
+		t.Fatalf("expected chat approval text to omit raw space identifier, got %q", text)
 	}
 }
 
@@ -337,6 +425,25 @@ func TestSlackRevisionPromptIncludesPendingContext(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "print('hello')") {
 		t.Fatalf("expected prompt to include pending code, got %q", prompt)
+	}
+}
+
+func TestSlackRenderTextConvertsRawFencedCodeBlock(t *testing.T) {
+	rendered := slackRenderText("Vi du:\n```python\nif True:\n    print('hello')\n```")
+
+	if strings.Contains(rendered, "```python") {
+		t.Fatalf("expected language marker to be normalized away, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "```\nif True:\n    print('hello')\n```") {
+		t.Fatalf("expected fenced code block to be preserved as a Slack code block, got %q", rendered)
+	}
+}
+
+func TestSlackRenderTextFormatsMarkdownHeading(t *testing.T) {
+	rendered := slackRenderText("## Giới thiệu")
+
+	if rendered != "*GIỚI THIỆU*" {
+		t.Fatalf("expected markdown heading to render as bold uppercase, got %q", rendered)
 	}
 }
 

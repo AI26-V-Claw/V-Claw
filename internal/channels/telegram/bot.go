@@ -3,10 +3,12 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 	"vclaw/internal/policies"
 )
@@ -69,6 +72,15 @@ func New(token string, allowedUserID int64, dataDir string, args ...any) *Bot {
 		offsetPath:    filepath.Join(dataDir, "telegram_offset.txt"),
 		client: &http.Client{
 			Timeout: 65 * time.Second,
+			Transport: &http.Transport{
+				Proxy:                 http.ProxyFromEnvironment,
+				DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          100,
+				IdleConnTimeout:       60 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
 		},
 		handler:      handler,
 		logger:       logger,
@@ -646,23 +658,110 @@ func applyTelegramFormattedText(payload map[string]any, text string) {
 }
 
 func telegramRenderHTML(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
+	text = formatting.NormalizeLineEndings(text)
+	text = formatting.ReplaceFencedCodeBlocks(text, telegramCodeBlock)
 
 	var builder strings.Builder
 	for {
-		start := strings.Index(text, telegramCodeBlockOpen)
+		codeStart := strings.Index(text, telegramCodeBlockOpen)
+		preStart := strings.Index(text, telegramPreBlockOpen)
+		fieldStart := strings.Index(text, telegramFieldOpen)
+		textFieldStart := strings.Index(text, telegramTextFieldOpen)
+		start := -1
+		blockType := ""
+		switch {
+		case codeStart >= 0 &&
+			(preStart < 0 || codeStart < preStart) &&
+			(fieldStart < 0 || codeStart < fieldStart) &&
+			(textFieldStart < 0 || codeStart < textFieldStart):
+			start = codeStart
+			blockType = "code"
+		case preStart >= 0 &&
+			(fieldStart < 0 || preStart < fieldStart) &&
+			(textFieldStart < 0 || preStart < textFieldStart):
+			start = preStart
+			blockType = "pre"
+		case fieldStart >= 0 && (textFieldStart < 0 || fieldStart < textFieldStart):
+			start = fieldStart
+			blockType = "field"
+		case textFieldStart >= 0:
+			start = textFieldStart
+			blockType = "textField"
+		}
 		if start < 0 {
-			builder.WriteString(html.EscapeString(text))
+			builder.WriteString(telegramRenderPlainHTML(text))
 			break
 		}
-		builder.WriteString(html.EscapeString(text[:start]))
+		builder.WriteString(telegramRenderPlainHTML(text[:start]))
+		if blockType == "pre" {
+			remaining := text[start+len(telegramPreBlockOpen):]
+			end := strings.Index(remaining, telegramPreBlockClose)
+			if end < 0 {
+				builder.WriteString(telegramRenderPlainHTML(text[start:]))
+				break
+			}
+			builder.WriteString("<blockquote>")
+			builder.WriteString(telegramRenderPlainHTML(remaining[:end]))
+			builder.WriteString("</blockquote>")
+			text = remaining[end+len(telegramPreBlockClose):]
+			continue
+		}
+		if blockType == "field" {
+			remaining := text[start+len(telegramFieldOpen):]
+			end := strings.Index(remaining, telegramFieldClose)
+			if end < 0 {
+				builder.WriteString(telegramRenderPlainHTML(text[start:]))
+				break
+			}
+			field := remaining[:end]
+			label := field
+			value := ""
+			if separator := strings.Index(field, telegramFieldSeparator); separator >= 0 {
+				label = strings.TrimSpace(field[:separator])
+				value = strings.TrimSpace(field[separator+len(telegramFieldSeparator):])
+			}
+			builder.WriteString("<b>")
+			builder.WriteString(html.EscapeString(label))
+			builder.WriteString("</b>")
+			if value != "" {
+				builder.WriteString(" <code>")
+				builder.WriteString(html.EscapeString(value))
+				builder.WriteString("</code>")
+			}
+			text = remaining[end+len(telegramFieldClose):]
+			continue
+		}
+		if blockType == "textField" {
+			remaining := text[start+len(telegramTextFieldOpen):]
+			end := strings.Index(remaining, telegramTextFieldClose)
+			if end < 0 {
+				builder.WriteString(telegramRenderPlainHTML(text[start:]))
+				break
+			}
+			field := remaining[:end]
+			label := field
+			value := ""
+			if separator := strings.Index(field, telegramFieldSeparator); separator >= 0 {
+				label = strings.TrimSpace(field[:separator])
+				value = strings.TrimSpace(field[separator+len(telegramFieldSeparator):])
+			}
+			builder.WriteString("<b>")
+			builder.WriteString(html.EscapeString(label))
+			builder.WriteString("</b>")
+			if value != "" {
+				builder.WriteString(" ")
+				builder.WriteString(html.EscapeString(value))
+			}
+			text = remaining[end+len(telegramTextFieldClose):]
+			continue
+		}
 		remaining := text[start+len(telegramCodeBlockOpen):]
 		end := strings.Index(remaining, telegramCodeBlockClose)
 		if end < 0 {
-			builder.WriteString(html.EscapeString(text[start:]))
+			builder.WriteString(telegramRenderPlainHTML(text[start:]))
 			break
 		}
 		block := remaining[:end]
@@ -682,6 +781,57 @@ func telegramRenderHTML(text string) string {
 		builder.WriteString(html.EscapeString(code))
 		builder.WriteString("</code></pre>")
 		text = remaining[end+len(telegramCodeBlockClose):]
+	}
+	return builder.String()
+}
+
+func telegramRenderPlainHTML(text string) string {
+	if text == "" {
+		return ""
+	}
+
+	lines := strings.Split(text, "\n")
+	var builder strings.Builder
+	for index, line := range lines {
+		if index > 0 {
+			builder.WriteString("\n")
+		}
+		if _, title, ok := formatting.ParseMarkdownHeading(line); ok {
+			builder.WriteString("<b>")
+			builder.WriteString(html.EscapeString(strings.ToUpper(title)))
+			builder.WriteString("</b>")
+			continue
+		}
+		builder.WriteString(telegramEscapeHTMLPreservingSpaces(line))
+	}
+	return builder.String()
+}
+
+func telegramEscapeHTMLPreservingSpaces(text string) string {
+	if text == "" {
+		return ""
+	}
+	text = html.UnescapeString(text)
+	text = strings.ReplaceAll(text, "\u00a0", " ")
+
+	var builder strings.Builder
+	previousSpace := false
+	for position, r := range text {
+		switch r {
+		case ' ':
+			if position == 0 || previousSpace {
+				builder.WriteRune('\u00a0')
+			} else {
+				builder.WriteByte(' ')
+			}
+			previousSpace = true
+		case '\t':
+			builder.WriteString("\u00a0\u00a0\u00a0\u00a0")
+			previousSpace = true
+		default:
+			builder.WriteString(html.EscapeString(string(r)))
+			previousSpace = false
+		}
 	}
 	return builder.String()
 }
@@ -885,43 +1035,93 @@ func (b *Bot) writeOffset(offset int64) error {
 	return os.WriteFile(b.offsetPath, []byte(strconv.FormatInt(offset, 10)), 0o644)
 }
 
+const (
+	doJSONMaxRetries = 2
+	doJSONRetryDelay = 500 * time.Millisecond
+)
+
 func (b *Bot) doJSON(ctx context.Context, method, path string, body any, out any) ([]byte, error) {
-	var reader io.Reader
+	var jsonBytes []byte
 	if body != nil {
-		jsonBytes, err := json.Marshal(body)
+		var err error
+		jsonBytes, err = json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		reader = strings.NewReader(string(jsonBytes))
 	}
 
-	request, err := http.NewRequestWithContext(ctx, method, b.apiURL(path), reader)
-	if err != nil {
-		return nil, err
-	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
+	var lastErr error
+	for attempt := 0; attempt <= doJSONMaxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(doJSONRetryDelay):
+			}
+			b.logger.Debug("retrying telegram api call after network error",
+				"path", path, "attempt", attempt, "error", lastErr)
+		}
 
-	response, err := b.client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("telegram api request failed: %s", redactTelegramToken(err.Error(), b.token))
-	}
-	defer response.Body.Close()
-
-	responseBytes, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("telegram api status %d: %s", response.StatusCode, strings.TrimSpace(redactTelegramToken(string(responseBytes), b.token)))
-	}
-	if out != nil {
-		if err := json.Unmarshal(responseBytes, out); err != nil {
+		var reader io.Reader
+		if jsonBytes != nil {
+			reader = strings.NewReader(string(jsonBytes))
+		}
+		request, err := http.NewRequestWithContext(ctx, method, b.apiURL(path), reader)
+		if err != nil {
 			return nil, err
 		}
+		if jsonBytes != nil {
+			request.Header.Set("Content-Type", "application/json")
+		}
+
+		response, err := b.client.Do(request)
+		if err != nil {
+			if isTelegramNetworkError(err) {
+				lastErr = err
+				continue
+			}
+			return nil, fmt.Errorf("telegram api request failed: %s", redactTelegramToken(err.Error(), b.token))
+		}
+
+		responseBytes, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			if isTelegramNetworkError(err) {
+				lastErr = err
+				continue
+			}
+			return nil, err
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, fmt.Errorf("telegram api status %d: %s", response.StatusCode, strings.TrimSpace(redactTelegramToken(string(responseBytes), b.token)))
+		}
+		if out != nil {
+			if err := json.Unmarshal(responseBytes, out); err != nil {
+				return nil, err
+			}
+		}
+		return responseBytes, nil
 	}
-	return responseBytes, nil
+
+	return nil, fmt.Errorf("telegram api request failed: %s", redactTelegramToken(lastErr.Error(), b.token))
+}
+
+func isTelegramNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "forcibly closed") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "eof")
 }
 
 func (b *Bot) apiURL(path string) string {
@@ -945,8 +1145,7 @@ func newTelegramProgressEditor(bot *Bot, chatID int64, messageID int) *telegramP
 }
 
 func (e *telegramProgressEditor) Update(ctx context.Context, text string) error {
-	text = strings.TrimSpace(text)
-	if text == "" || text == e.lastText {
+	if strings.TrimSpace(text) == "" || text == e.lastText {
 		return nil
 	}
 	if err := e.bot.editMessageText(ctx, e.chatID, e.messageID, text); err != nil {
@@ -957,8 +1156,7 @@ func (e *telegramProgressEditor) Update(ctx context.Context, text string) error 
 }
 
 func (e *telegramProgressEditor) UpdateWithReplyMarkup(ctx context.Context, text string, replyMarkup any) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	if err := e.bot.editMessageTextWithReplyMarkup(ctx, e.chatID, e.messageID, text, replyMarkup); err != nil {

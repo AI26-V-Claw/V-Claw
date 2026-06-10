@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	googleconnector "vclaw/internal/connectors/google"
 	chatconnector "vclaw/internal/connectors/google/chat"
+	peopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/tools"
 
 	"google.golang.org/api/googleapi"
@@ -137,9 +139,19 @@ type Connector interface {
 	UploadAttachment(ctx context.Context, parent string, filename string, mediaType string, reader io.Reader) (string, error)
 }
 
+// PeopleEnricher resolves workspace user identities to email addresses.
+// Satisfied directly by *peopleconnector.Client.
+type PeopleEnricher interface {
+	// SearchDirectoryPeople searches by display name when a name is available.
+	SearchDirectoryPeople(ctx context.Context, query string, pageSize int64, pageToken string) (peopleconnector.SearchDirectoryOutput, error)
+	// GetPerson fetches a single person by People API resource name (e.g. "people/123456789").
+	GetPerson(ctx context.Context, resourceName string) (peopleconnector.DirectoryPerson, error)
+}
+
 type Service struct {
 	connector        Connector
 	workspaceDomains []string
+	peopleEnricher   PeopleEnricher // optional; enriches member emails via Directory API
 }
 
 func NewService(connector Connector) *Service {
@@ -151,6 +163,21 @@ func NewService(connector Connector) *Service {
 
 func NewServiceWithWorkspaceDomains(connector Connector, domains []string) *Service {
 	return &Service{connector: connector, workspaceDomains: cleanStrings(domains)}
+}
+
+// NewServiceWithPeople creates a Service that automatically enriches member email addresses
+// by querying the Google Workspace Directory via the provided PeopleEnricher.
+func NewServiceWithPeople(connector Connector, people PeopleEnricher) *Service {
+	svc := NewService(connector)
+	svc.peopleEnricher = people
+	return svc
+}
+
+// NewServiceWithPeopleAndDomains combines domain restrictions and people enrichment.
+func NewServiceWithPeopleAndDomains(connector Connector, people PeopleEnricher, domains []string) *Service {
+	svc := NewServiceWithWorkspaceDomains(connector, domains)
+	svc.peopleEnricher = people
+	return svc
 }
 
 type ListMessagesInput struct {
@@ -303,7 +330,55 @@ func (s *Service) ListMembers(ctx context.Context, input ListMembersInput) (List
 	if err != nil {
 		return ListMembersOutput{}, MapError(err)
 	}
-	return ListMembersOutput{Members: output.Members, NextPageToken: output.NextPageToken}, nil
+	members := output.Members
+	if s.peopleEnricher != nil {
+		members = s.enrichMembersWithEmails(ctx, members)
+	}
+	return ListMembersOutput{Members: members, NextPageToken: output.NextPageToken}, nil
+}
+
+// enrichMembersWithEmails resolves email addresses for members that have none.
+// Strategy (best-effort, falls through on any error):
+//  1. If MemberName is "users/<numericID>": call GetPerson("people/<numericID>") directly.
+//  2. If DisplayName is present: call SearchDirectoryPeople and match by CandidateUserName.
+func (s *Service) enrichMembersWithEmails(ctx context.Context, members []chatconnector.Membership) []chatconnector.Membership {
+	enriched := make([]chatconnector.Membership, len(members))
+	copy(enriched, members)
+	for i, member := range enriched {
+		if member.Email != "" {
+			continue
+		}
+		if email := s.resolveEmail(ctx, member); email != "" {
+			enriched[i].Email = email
+		}
+	}
+	return enriched
+}
+
+func (s *Service) resolveEmail(ctx context.Context, member chatconnector.Membership) string {
+	// Strategy 1: numeric user ID → People resource name "people/<id>"
+	if numericID, ok := strings.CutPrefix(member.MemberName, "users/"); ok {
+		if numericID != "" && !strings.Contains(numericID, "@") {
+			person, err := s.peopleEnricher.GetPerson(ctx, "people/"+numericID)
+			if err == nil && len(person.EmailAddresses) > 0 {
+				return person.EmailAddresses[0]
+			}
+		}
+	}
+
+	// Strategy 2: search by display name and match by CandidateUserName
+	if displayName := strings.TrimSpace(member.DisplayName); displayName != "" && strings.TrimSpace(member.MemberName) != "" {
+		result, err := s.peopleEnricher.SearchDirectoryPeople(ctx, displayName, 5, "")
+		if err != nil {
+			return ""
+		}
+		for _, person := range result.People {
+			if len(person.EmailAddresses) > 0 && slices.Contains(person.CandidateUserNames, member.MemberName) {
+				return person.EmailAddresses[0]
+			}
+		}
+	}
+	return ""
 }
 
 func (s *Service) FindSpacesByMembers(ctx context.Context, input FindSpacesByMembersInput) (FindSpacesByMembersOutput, *ErrorShape) {
