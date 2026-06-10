@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent"
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 )
 
@@ -561,10 +562,11 @@ func applyTelegramFormattedText(payload map[string]any, text string) {
 }
 
 func telegramRenderHTML(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
+	text = formatting.NormalizeLineEndings(text)
+	text = formatting.ReplaceFencedCodeBlocks(text, telegramCodeBlock)
 
 	var builder strings.Builder
 	for {
@@ -594,19 +596,19 @@ func telegramRenderHTML(text string) string {
 			blockType = "textField"
 		}
 		if start < 0 {
-			builder.WriteString(html.EscapeString(text))
+			builder.WriteString(telegramRenderPlainHTML(text))
 			break
 		}
-		builder.WriteString(html.EscapeString(text[:start]))
+		builder.WriteString(telegramRenderPlainHTML(text[:start]))
 		if blockType == "pre" {
 			remaining := text[start+len(telegramPreBlockOpen):]
 			end := strings.Index(remaining, telegramPreBlockClose)
 			if end < 0 {
-				builder.WriteString(html.EscapeString(text[start:]))
+				builder.WriteString(telegramRenderPlainHTML(text[start:]))
 				break
 			}
 			builder.WriteString("<blockquote>")
-			builder.WriteString(html.EscapeString(remaining[:end]))
+			builder.WriteString(telegramRenderPlainHTML(remaining[:end]))
 			builder.WriteString("</blockquote>")
 			text = remaining[end+len(telegramPreBlockClose):]
 			continue
@@ -615,7 +617,7 @@ func telegramRenderHTML(text string) string {
 			remaining := text[start+len(telegramFieldOpen):]
 			end := strings.Index(remaining, telegramFieldClose)
 			if end < 0 {
-				builder.WriteString(html.EscapeString(text[start:]))
+				builder.WriteString(telegramRenderPlainHTML(text[start:]))
 				break
 			}
 			field := remaining[:end]
@@ -640,7 +642,7 @@ func telegramRenderHTML(text string) string {
 			remaining := text[start+len(telegramTextFieldOpen):]
 			end := strings.Index(remaining, telegramTextFieldClose)
 			if end < 0 {
-				builder.WriteString(html.EscapeString(text[start:]))
+				builder.WriteString(telegramRenderPlainHTML(text[start:]))
 				break
 			}
 			field := remaining[:end]
@@ -663,7 +665,7 @@ func telegramRenderHTML(text string) string {
 		remaining := text[start+len(telegramCodeBlockOpen):]
 		end := strings.Index(remaining, telegramCodeBlockClose)
 		if end < 0 {
-			builder.WriteString(html.EscapeString(text[start:]))
+			builder.WriteString(telegramRenderPlainHTML(text[start:]))
 			break
 		}
 		block := remaining[:end]
@@ -683,6 +685,57 @@ func telegramRenderHTML(text string) string {
 		builder.WriteString(html.EscapeString(code))
 		builder.WriteString("</code></pre>")
 		text = remaining[end+len(telegramCodeBlockClose):]
+	}
+	return builder.String()
+}
+
+func telegramRenderPlainHTML(text string) string {
+	if text == "" {
+		return ""
+	}
+
+	lines := strings.Split(text, "\n")
+	var builder strings.Builder
+	for index, line := range lines {
+		if index > 0 {
+			builder.WriteString("\n")
+		}
+		if _, title, ok := formatting.ParseMarkdownHeading(line); ok {
+			builder.WriteString("<b>")
+			builder.WriteString(html.EscapeString(strings.ToUpper(title)))
+			builder.WriteString("</b>")
+			continue
+		}
+		builder.WriteString(telegramEscapeHTMLPreservingSpaces(line))
+	}
+	return builder.String()
+}
+
+func telegramEscapeHTMLPreservingSpaces(text string) string {
+	if text == "" {
+		return ""
+	}
+	text = html.UnescapeString(text)
+	text = strings.ReplaceAll(text, "\u00a0", " ")
+
+	var builder strings.Builder
+	previousSpace := false
+	for position, r := range text {
+		switch r {
+		case ' ':
+			if position == 0 || previousSpace {
+				builder.WriteRune('\u00a0')
+			} else {
+				builder.WriteByte(' ')
+			}
+			previousSpace = true
+		case '\t':
+			builder.WriteString("\u00a0\u00a0\u00a0\u00a0")
+			previousSpace = true
+		default:
+			builder.WriteString(html.EscapeString(string(r)))
+			previousSpace = false
+		}
 	}
 	return builder.String()
 }
@@ -996,8 +1049,7 @@ func newTelegramProgressEditor(bot *Bot, chatID int64, messageID int) *telegramP
 }
 
 func (e *telegramProgressEditor) Update(ctx context.Context, text string) error {
-	text = strings.TrimSpace(text)
-	if text == "" || text == e.lastText {
+	if strings.TrimSpace(text) == "" || text == e.lastText {
 		return nil
 	}
 	if err := e.bot.editMessageText(ctx, e.chatID, e.messageID, text); err != nil {
@@ -1008,8 +1060,7 @@ func (e *telegramProgressEditor) Update(ctx context.Context, text string) error 
 }
 
 func (e *telegramProgressEditor) UpdateWithReplyMarkup(ctx context.Context, text string, replyMarkup any) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	if err := e.bot.editMessageTextWithReplyMarkup(ctx, e.chatID, e.messageID, text, replyMarkup); err != nil {

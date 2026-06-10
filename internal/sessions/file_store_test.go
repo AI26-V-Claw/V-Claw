@@ -2,6 +2,8 @@ package sessions
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 
 	"vclaw/internal/providers"
@@ -94,19 +96,73 @@ func TestFileStoreClearSessionRemovesFiles(t *testing.T) {
 }
 
 func TestFileStoreSanitizeSessionID(t *testing.T) {
-	cases := []struct {
-		input string
-		want  string
-	}{
-		{"telegram_123", "telegram_123"},
-		{"slack-C0B80", "slack-C0B80"},
-		{"user/../../etc", "user_______etc"},
-		{"", "_empty"},
+	if got := sanitizeSessionID("telegram_123"); got != "telegram_123" {
+		t.Fatalf("safe session id changed: %q", got)
 	}
-	for _, c := range cases {
-		got := sanitizeSessionID(c.input)
-		if got != c.want {
-			t.Errorf("sanitizeSessionID(%q) = %q, want %q", c.input, got, c.want)
-		}
+	if got := sanitizeSessionID(""); got != "_empty" {
+		t.Fatalf("empty session id = %q", got)
+	}
+	got := sanitizeSessionID("user/../../etc")
+	if !strings.HasPrefix(got, "user_______etc-") {
+		t.Fatalf("unsafe session id missing readable prefix and hash: %q", got)
+	}
+	if sanitizeSessionID("a/b") == sanitizeSessionID("a?b") {
+		t.Fatal("distinct unsafe session ids collided")
+	}
+}
+
+func TestFileStoreConcurrentInstancesDoNotLoseAppends(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	first, _ := NewFileStore(dir)
+	second, _ := NewFileStore(dir)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, store := range []*FileStore{first, second} {
+		i, store := i, store
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := store.AppendMessage(ctx, "shared", providers.Message{
+				Role:    providers.MessageRoleUser,
+				Content: string(rune('a' + i)),
+			}); err != nil {
+				t.Errorf("AppendMessage: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	messages, err := first.LoadTranscript(ctx, "shared")
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages = %v, want two appends", messages)
+	}
+}
+
+func TestFileStoreCompareAndSetRejectsChangedTranscript(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	ctx := context.Background()
+	original := []providers.Message{{Role: providers.MessageRoleUser, Content: "old"}}
+	if err := store.SetTranscript(ctx, "sess", original); err != nil {
+		t.Fatalf("SetTranscript: %v", err)
+	}
+	if err := store.AppendMessage(ctx, "sess", providers.Message{Role: providers.MessageRoleUser, Content: "new"}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	replaced, err := store.ReplaceTranscriptIfUnchanged(ctx, "sess", original, nil)
+	if err != nil {
+		t.Fatalf("ReplaceTranscriptIfUnchanged: %v", err)
+	}
+	if replaced {
+		t.Fatal("changed transcript should not be replaced")
+	}
+	messages, _ := store.LoadTranscript(ctx, "sess")
+	if len(messages) != 2 || messages[1].Content != "new" {
+		t.Fatalf("new append was lost: %#v", messages)
 	}
 }
