@@ -240,7 +240,9 @@ func TestPathGuardBlocksOutsideWorkspace(t *testing.T) {
 	dir := tempWorkspace(t)
 	guard := NewPathGuard([]string{dir})
 
-	_, err := guard.Resolve("C:\\Windows\\System32\\cmd.exe")
+	// Use a sibling of the workspace — guaranteed absolute and outside on any OS
+	outsidePath := filepath.Join(filepath.Dir(dir), "outside-workspace", "secret.txt")
+	_, err := guard.Resolve(outsidePath)
 	if err == nil {
 		t.Fatal("expected error for path outside workspace")
 	}
