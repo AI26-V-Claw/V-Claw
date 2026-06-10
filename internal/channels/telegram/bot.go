@@ -695,12 +695,6 @@ func telegramRenderPlainHTML(text string) string {
 			builder.WriteString("</b>")
 			continue
 		}
-		if level, content, ok := formatting.ParseMarkdownDashListItem(line); ok {
-			builder.WriteString(strings.Repeat("\u00a0", level*4))
-			builder.WriteString("• ")
-			builder.WriteString(telegramEscapeHTMLPreservingSpaces(content))
-			continue
-		}
 		builder.WriteString(telegramEscapeHTMLPreservingSpaces(line))
 	}
 	return builder.String()
