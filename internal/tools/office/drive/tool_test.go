@@ -25,10 +25,16 @@ func (fakeConnector) DownloadFile(context.Context, string) (driveconnector.FileC
 func (fakeConnector) CreateTextFile(context.Context, driveconnector.TextFileInput) (driveconnector.FileMetadata, error) {
 	return driveconnector.FileMetadata{}, nil
 }
+func (fakeConnector) CreateFolder(context.Context, driveconnector.FolderInput) (driveconnector.FileMetadata, error) {
+	return driveconnector.FileMetadata{}, nil
+}
 func (fakeConnector) UpdateTextFile(context.Context, string, driveconnector.TextFileInput) (driveconnector.FileMetadata, error) {
 	return driveconnector.FileMetadata{}, nil
 }
 func (fakeConnector) RenameFile(context.Context, string, string) (driveconnector.FileMetadata, error) {
+	return driveconnector.FileMetadata{}, nil
+}
+func (fakeConnector) MoveFile(context.Context, string, string) (driveconnector.FileMetadata, error) {
 	return driveconnector.FileMetadata{}, nil
 }
 func (fakeConnector) ShareFile(context.Context, driveconnector.PermissionInput) (string, error) {
@@ -46,8 +52,11 @@ func TestRegisterToolsRiskMetadata(t *testing.T) {
 	assertTool(t, registry, ToolNameExportFile, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
 	assertTool(t, registry, ToolNameDownloadFile, tools.CapabilityMutating, tools.RiskLevelLocalWrite, true)
 	assertTool(t, registry, ToolNameCreateTextFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertTool(t, registry, ToolNameCreateFolder, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertTool(t, registry, ToolNameUpdateTextFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertTool(t, registry, ToolNameRenameFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertTool(t, registry, ToolNameMoveFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertTool(t, registry, ToolNameMoveFiles, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertTool(t, registry, ToolNameShareFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 }
 

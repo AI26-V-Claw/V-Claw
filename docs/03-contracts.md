@@ -547,15 +547,21 @@ Rules:
 | `drive.exportFile` | Integration | `safe_read` | No |
 | `drive.downloadFile` | Integration | `local_write` | Yes |
 | `drive.createTextFile` | Integration | `external_write` | Yes |
+| `drive.createFolder` | Integration | `external_write` | Yes |
 | `drive.updateTextFile` | Integration | `external_write` | Yes |
 | `drive.renameFile` | Integration | `external_write` | Yes |
+| `drive.moveFile` | Integration | `external_write` | Yes |
+| `drive.moveFiles` | Integration | `external_write` | Yes |
 | `drive.shareFile` | Integration | `external_write` | Yes |
 
 > Drive MVP is read-first: search, metadata, and export are read-only.
 > Downloading writes a local file and must pass approval.
-> Creating/updating/renaming files and sharing permissions mutate external Google Drive state and must pass approval.
+> Creating folders, creating/updating/renaming/moving files, and sharing permissions mutate external Google Drive state and must pass approval.
 > MVP create/update supports text-like content only; richer binary upload can be added later with explicit contract updates.
+> `drive.createFolder` creates a native Drive folder and must be used when the user asks to create a folder/directory in Google Drive.
 > `drive.renameFile` updates metadata only and is the preferred tool when the user asks to rename an existing Drive, Docs, or Sheets file.
+> `drive.moveFile` updates Drive parents and must be used when the user asks to move a file into a folder.
+> `drive.moveFiles` moves multiple Drive files into one folder and returns both moved files and per-file failures.
 
 ### Docs
 

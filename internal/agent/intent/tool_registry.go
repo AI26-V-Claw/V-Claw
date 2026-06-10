@@ -341,6 +341,12 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "name", Type: "string", Required: true, Description: "File name"}, {Name: "content", Type: "string", Required: false, Description: "File content"}},
 	},
+	"drive.createFolder": {
+		Name: "drive.createFolder", Category: CategoryDangerousWrite,
+		Description: "Create a folder in Google Drive",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "name", Type: "string", Required: true, Description: "Folder name"}, {Name: "parentId", Type: "string", Required: false, Description: "Optional parent folder ID"}},
+	},
 	"drive.updateTextFile": {
 		Name: "drive.updateTextFile", Category: CategoryDangerousWrite,
 		Description: "Update text-like content in a Drive file",
@@ -352,6 +358,18 @@ var Registry = map[string]ToolDefinition{
 		Description: "Rename a Google Drive file by updating metadata only",
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "name", Type: "string", Required: true, Description: "New file name"}},
+	},
+	"drive.moveFile": {
+		Name: "drive.moveFile", Category: CategoryDangerousWrite,
+		Description: "Move a Google Drive file into a folder by updating parents",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "folderId", Type: "string", Required: true, Description: "Destination folder ID"}},
+	},
+	"drive.moveFiles": {
+		Name: "drive.moveFiles", Category: CategoryDangerousWrite,
+		Description: "Move multiple Google Drive files into a folder by updating parents",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 120000,
+		Parameters: []ParamDef{{Name: "fileIds", Type: "string", Required: true, Description: "Drive file IDs"}, {Name: "folderId", Type: "string", Required: true, Description: "Destination folder ID"}},
 	},
 	"drive.shareFile": {
 		Name: "drive.shareFile", Category: CategoryDangerousWrite,

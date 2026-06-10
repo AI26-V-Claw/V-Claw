@@ -274,7 +274,7 @@ Scope usage:
 - Chat scopes: listing spaces/messages, sending text replies/attachments, updating/deleting messages, creating spaces, and adding/removing members.
 - `directory.readonly`: searching Workspace directory profiles so the agent can resolve names or emails before matching Google Chat members.
 - `drive.readonly`: searching Drive files, reading metadata, exporting Google-native files, and downloading file content.
-- `drive.file`: creating/updating files that V-Claw owns or that the user explicitly opens with the app; used for MVP text file writes and permission updates where allowed.
+- `drive.file`: creating folders/files and updating files that V-Claw owns or that the user explicitly opens with the app; used for MVP Drive writes and permission updates where allowed.
 - `drive`: renaming, updating metadata, and sharing existing Drive files that were not created/opened through V-Claw. This broad scope is required for owner-approved operations on arbitrary existing Docs/Sheets/Drive files and must remain behind HITL for writes.
 - `documents.readonly`: reading Google Docs document structure and text.
 - `documents`: creating documents and appending text after HITL approval.

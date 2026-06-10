@@ -279,16 +279,26 @@ func renderChatPayload(toolName string, payload map[string]any) []string {
 
 func renderDrivePayload(toolName string, payload map[string]any) []string {
 	if files, ok := payloadArrayAnyCase(payload, "files", "Files"); ok {
-		return renderPayloadList(toolName, "Danh sách file Google Drive", files)
+		title := "Danh sách file Google Drive"
+		if toolName == "drive.moveFiles" {
+			title = "Đã di chuyển các file Google Drive"
+		}
+		return renderPayloadList(toolName, title, files)
 	}
 	title := "Kết quả Google Drive."
 	switch toolName {
 	case "drive.createTextFile":
 		title = "Đã tạo file Google Drive."
+	case "drive.createFolder":
+		title = "Đã tạo folder Google Drive."
 	case "drive.updateTextFile":
 		title = "Đã cập nhật file Google Drive."
 	case "drive.renameFile":
 		title = "Đã đổi tên file Google Drive."
+	case "drive.moveFile":
+		title = "Đã di chuyển file Google Drive."
+	case "drive.moveFiles":
+		title = "Đã di chuyển các file Google Drive."
 	case "drive.shareFile":
 		title = "Đã cập nhật quyền chia sẻ Google Drive."
 	case "drive.downloadFile":

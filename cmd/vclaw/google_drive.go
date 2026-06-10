@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"vclaw/internal/connectors/google"
 	driveconnector "vclaw/internal/connectors/google/drive"
@@ -96,6 +97,21 @@ func runGoogleDrive(ctx context.Context, args []string) error {
 		output, toolErr := service.CreateTextFile(ctx, drivetool.CreateTextFileInput{Name: *name, Content: *content, MimeType: *mimeType, ParentID: *parentID})
 		return printDriveToolOutput(output, toolErr)
 
+	case "create-folder":
+		fs := newGoogleFlagSet("drive create-folder")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		name := fs.String("name", "", "Drive folder name")
+		parentID := fs.String("parent", "", "optional Drive parent folder ID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleDriveService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.CreateFolder(ctx, drivetool.CreateFolderInput{Name: *name, ParentID: *parentID})
+		return printDriveToolOutput(output, toolErr)
+
 	case "update-text":
 		fs := newGoogleFlagSet("drive update-text")
 		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
@@ -126,6 +142,36 @@ func runGoogleDrive(ctx context.Context, args []string) error {
 			return err
 		}
 		output, toolErr := service.RenameFile(ctx, drivetool.RenameFileInput{FileID: *fileID, Name: *name})
+		return printDriveToolOutput(output, toolErr)
+
+	case "move":
+		fs := newGoogleFlagSet("drive move")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		fileID := fs.String("id", "", "Drive file ID")
+		folderID := fs.String("folder", "", "destination Drive folder ID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleDriveService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.MoveFile(ctx, drivetool.MoveFileInput{FileID: *fileID, FolderID: *folderID})
+		return printDriveToolOutput(output, toolErr)
+
+	case "move-batch":
+		fs := newGoogleFlagSet("drive move-batch")
+		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
+		fileIDs := fs.String("ids", "", "comma separated Drive file IDs")
+		folderID := fs.String("folder", "", "destination Drive folder ID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		service, err := googleDriveService(ctx, *credentialsPath, *tokenPath)
+		if err != nil {
+			return err
+		}
+		output, toolErr := service.MoveFiles(ctx, drivetool.MoveFilesInput{FileIDs: splitCommaList(*fileIDs), FolderID: *folderID})
 		return printDriveToolOutput(output, toolErr)
 
 	case "share":
@@ -199,12 +245,32 @@ func printGoogleDriveUsage() {
   vclaw google drive create-text -name notes.txt -content "Hello" [-mime-type text/plain] [-parent FOLDER_ID]
       Create a text-like Drive file.
 
+  vclaw google drive create-folder -name "New folder" [-parent FOLDER_ID]
+      Create a Google Drive folder.
+
   vclaw google drive update-text -id FILE_ID -content "Updated" [-name notes.txt]
       Update text-like Drive file content.
 
   vclaw google drive rename -id FILE_ID -name "New name"
       Rename a Drive file or Google Docs/Sheets file.
 
+  vclaw google drive move -id FILE_ID -folder FOLDER_ID
+      Move a Drive file into a folder.
+
+  vclaw google drive move-batch -ids FILE_ID1,FILE_ID2 -folder FOLDER_ID
+      Move multiple Drive files into a folder.
+
   vclaw google drive share -id FILE_ID -role reader -type user -email user@example.com
       Share a Drive file by creating a permission.`)
+}
+
+func splitCommaList(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

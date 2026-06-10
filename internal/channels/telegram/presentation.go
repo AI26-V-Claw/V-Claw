@@ -299,8 +299,14 @@ func telegramActionLabel(toolName string) string {
 		return "Xóa thành viên khỏi Google Chat"
 	case "drive.renameFile":
 		return "Đổi tên file Google Drive"
+	case "drive.moveFile":
+		return "Di chuyển file Google Drive"
+	case "drive.moveFiles":
+		return "Di chuyển nhiều file Google Drive"
 	case "drive.createTextFile":
 		return "Tạo file Google Drive"
+	case "drive.createFolder":
+		return "Tạo folder Google Drive"
 	case "drive.updateTextFile":
 		return "Cập nhật file Google Drive"
 	case "drive.shareFile":
@@ -375,6 +381,8 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		}
 	case "gmail.sendDraft":
 		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
+	case "drive.moveFile", "drive.moveFiles":
+		return telegramDriveMoveApprovalDetailText(input)
 	}
 	switch strings.TrimSpace(approval.ToolCall.ToolName) {
 	case "sandbox.runPython":
@@ -390,6 +398,20 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		}
 	}
 	return telegramGenericApprovalDetailText(input)
+}
+
+func telegramDriveMoveApprovalDetailText(input map[string]any) string {
+	lines := []string{}
+	if fileID := stringMapValue(input, "fileId"); fileID != "" {
+		lines = append(lines, "File ID: "+fileID)
+	}
+	if fileIDs := stringSliceMapValue(input, "fileIds"); len(fileIDs) > 0 {
+		lines = append(lines, "File IDs: "+strings.Join(fileIDs, ", "))
+	}
+	if folderID := stringMapValue(input, "folderId"); folderID != "" {
+		lines = append(lines, "Folder đích: "+folderID)
+	}
+	return formatTelegramUserText(lines...)
 }
 
 func telegramDraftApprovalDetailText(input map[string]any) string {

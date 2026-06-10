@@ -22,8 +22,11 @@ const (
 	ToolNameExportFile      = "drive.exportFile"
 	ToolNameDownloadFile    = "drive.downloadFile"
 	ToolNameCreateTextFile  = "drive.createTextFile"
+	ToolNameCreateFolder    = "drive.createFolder"
 	ToolNameUpdateTextFile  = "drive.updateTextFile"
 	ToolNameRenameFile      = "drive.renameFile"
+	ToolNameMoveFile        = "drive.moveFile"
+	ToolNameMoveFiles       = "drive.moveFiles"
 	ToolNameShareFile       = "drive.shareFile"
 
 	defaultMaxResults  = int64(10)
@@ -45,8 +48,11 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameExportFile, Owner: "integration", Description: "Export a Google-native Drive file to text-like content.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameDownloadFile, Owner: "integration", Description: "Download a Drive file to a local directory.", DefaultRiskLevel: "local_write", RequiresApproval: true},
 	{Name: ToolNameCreateTextFile, Owner: "integration", Description: "Create a text-like file in Drive.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameCreateFolder, Owner: "integration", Description: "Create a folder in Drive.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateTextFile, Owner: "integration", Description: "Update text-like content in a Drive file.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameRenameFile, Owner: "integration", Description: "Rename a Drive file by updating metadata only.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameMoveFile, Owner: "integration", Description: "Move a Drive file into a folder by updating parents.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameMoveFiles, Owner: "integration", Description: "Move multiple Drive files into a folder by updating parents.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameShareFile, Owner: "integration", Description: "Share a Drive file by creating a permission.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 }
 
@@ -56,8 +62,10 @@ type Connector interface {
 	ExportFile(ctx context.Context, fileID string, mimeType string) (driveconnector.FileContent, error)
 	DownloadFile(ctx context.Context, fileID string) (driveconnector.FileContent, error)
 	CreateTextFile(ctx context.Context, input driveconnector.TextFileInput) (driveconnector.FileMetadata, error)
+	CreateFolder(ctx context.Context, input driveconnector.FolderInput) (driveconnector.FileMetadata, error)
 	UpdateTextFile(ctx context.Context, fileID string, input driveconnector.TextFileInput) (driveconnector.FileMetadata, error)
 	RenameFile(ctx context.Context, fileID string, name string) (driveconnector.FileMetadata, error)
+	MoveFile(ctx context.Context, fileID string, folderID string) (driveconnector.FileMetadata, error)
 	ShareFile(ctx context.Context, input driveconnector.PermissionInput) (string, error)
 }
 
@@ -109,6 +117,11 @@ type CreateTextFileInput struct {
 	Content  string
 }
 
+type CreateFolderInput struct {
+	Name     string
+	ParentID string
+}
+
 type UpdateTextFileInput struct {
 	FileID   string
 	Name     string
@@ -119,6 +132,27 @@ type UpdateTextFileInput struct {
 type RenameFileInput struct {
 	FileID string
 	Name   string
+}
+
+type MoveFileInput struct {
+	FileID   string
+	FolderID string
+}
+
+type MoveFilesInput struct {
+	FileIDs  []string
+	FolderID string
+}
+
+type MoveFilesFailure struct {
+	FileID  string `json:"fileId"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type MoveFilesOutput struct {
+	Files    []driveconnector.FileMetadata `json:"files"`
+	Failures []MoveFilesFailure            `json:"failures,omitempty"`
 }
 
 type ShareFileInput struct {
@@ -230,6 +264,23 @@ func (s *Service) CreateTextFile(ctx context.Context, input CreateTextFileInput)
 	return output, nil
 }
 
+func (s *Service) CreateFolder(ctx context.Context, input CreateFolderInput) (driveconnector.FileMetadata, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return driveconnector.FileMetadata{}, errShape
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return driveconnector.FileMetadata{}, invalidInput("name is required")
+	}
+	output, err := s.connector.CreateFolder(ctx, driveconnector.FolderInput{
+		Name:     strings.TrimSpace(input.Name),
+		ParentID: strings.TrimSpace(input.ParentID),
+	})
+	if err != nil {
+		return driveconnector.FileMetadata{}, MapError(err)
+	}
+	return output, nil
+}
+
 func (s *Service) UpdateTextFile(ctx context.Context, input UpdateTextFileInput) (driveconnector.FileMetadata, *ErrorShape) {
 	if errShape := s.validateConnector(); errShape != nil {
 		return driveconnector.FileMetadata{}, errShape
@@ -261,6 +312,50 @@ func (s *Service) RenameFile(ctx context.Context, input RenameFileInput) (drivec
 	output, err := s.connector.RenameFile(ctx, strings.TrimSpace(input.FileID), strings.TrimSpace(input.Name))
 	if err != nil {
 		return driveconnector.FileMetadata{}, MapError(err)
+	}
+	return output, nil
+}
+
+func (s *Service) MoveFile(ctx context.Context, input MoveFileInput) (driveconnector.FileMetadata, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return driveconnector.FileMetadata{}, errShape
+	}
+	if strings.TrimSpace(input.FileID) == "" {
+		return driveconnector.FileMetadata{}, invalidInput("fileId is required")
+	}
+	if strings.TrimSpace(input.FolderID) == "" {
+		return driveconnector.FileMetadata{}, invalidInput("folderId is required")
+	}
+	output, err := s.connector.MoveFile(ctx, strings.TrimSpace(input.FileID), strings.TrimSpace(input.FolderID))
+	if err != nil {
+		return driveconnector.FileMetadata{}, MapError(err)
+	}
+	return output, nil
+}
+
+func (s *Service) MoveFiles(ctx context.Context, input MoveFilesInput) (MoveFilesOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return MoveFilesOutput{}, errShape
+	}
+	fileIDs := cleanStringSlice(input.FileIDs)
+	if len(fileIDs) == 0 {
+		return MoveFilesOutput{}, invalidInput("fileIds is required")
+	}
+	if strings.TrimSpace(input.FolderID) == "" {
+		return MoveFilesOutput{}, invalidInput("folderId is required")
+	}
+	output := MoveFilesOutput{Files: make([]driveconnector.FileMetadata, 0, len(fileIDs))}
+	for _, fileID := range fileIDs {
+		moved, err := s.connector.MoveFile(ctx, fileID, strings.TrimSpace(input.FolderID))
+		if err != nil {
+			errShape := MapError(err)
+			output.Failures = append(output.Failures, MoveFilesFailure{FileID: fileID, Code: errShape.Code, Message: errShape.Message})
+			continue
+		}
+		output.Files = append(output.Files, moved)
+	}
+	if len(output.Files) == 0 && len(output.Failures) > 0 {
+		return output, &ErrorShape{Code: output.Failures[0].Code, Message: output.Failures[0].Message}
 	}
 	return output, nil
 }
@@ -333,10 +428,16 @@ func (t driveTool) Description() string {
 		return "Download a Drive file to a local output directory. This local write requires approval."
 	case ToolNameCreateTextFile:
 		return "Create a text-like file in Google Drive. This external write requires approval."
+	case ToolNameCreateFolder:
+		return "Create a folder in Google Drive. This external write requires approval."
 	case ToolNameUpdateTextFile:
 		return "Update text-like content in an existing Google Drive file. This external write requires approval."
 	case ToolNameRenameFile:
 		return "Rename an existing Google Drive file or Google-native file such as Docs/Sheets. This updates metadata only and requires approval."
+	case ToolNameMoveFile:
+		return "Move an existing Google Drive file into a folder by updating its parents. This external write requires approval."
+	case ToolNameMoveFiles:
+		return "Move multiple existing Google Drive files into a folder by updating their parents. This external write requires approval."
 	case ToolNameShareFile:
 		return "Share a Google Drive file by creating a permission. This external write requires approval."
 	default:
@@ -356,12 +457,18 @@ func (t driveTool) Parameters() tools.ToolSchema {
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{"fileId": map[string]any{"type": "string"}, "outputDir": map[string]any{"type": "string"}, "filename": map[string]any{"type": "string"}}, "required": []string{"fileId", "outputDir"}, "additionalProperties": false}
 	case ToolNameCreateTextFile:
 		return textFileSchema([]string{"name"})
+	case ToolNameCreateFolder:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "parentId": map[string]any{"type": "string"}}, "required": []string{"name"}, "additionalProperties": false}
 	case ToolNameUpdateTextFile:
 		schema := textFileSchema([]string{"fileId"})
 		schema["properties"].(map[string]any)["fileId"] = map[string]any{"type": "string"}
 		return schema
 	case ToolNameRenameFile:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{"fileId": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}}, "required": []string{"fileId", "name"}, "additionalProperties": false}
+	case ToolNameMoveFile:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"fileId": map[string]any{"type": "string"}, "folderId": map[string]any{"type": "string"}}, "required": []string{"fileId", "folderId"}, "additionalProperties": false}
+	case ToolNameMoveFiles:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"fileIds": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "folderId": map[string]any{"type": "string"}}, "required": []string{"fileIds", "folderId"}, "additionalProperties": false}
 	case ToolNameShareFile:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{"fileId": map[string]any{"type": "string"}, "role": map[string]any{"type": "string", "enum": []string{"reader", "commenter", "writer"}}, "type": map[string]any{"type": "string", "enum": []string{"user", "group", "domain"}}, "emailAddress": map[string]any{"type": "string"}, "domain": map[string]any{"type": "string"}}, "required": []string{"fileId", "role", "type"}, "additionalProperties": false}
 	default:
@@ -406,11 +513,20 @@ func (t driveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	case ToolNameCreateTextFile:
 		output, errShape := t.service.CreateTextFile(ctx, CreateTextFileInput{Name: stringArg(call.Arguments, "name"), MimeType: stringArg(call.Arguments, "mimeType"), ParentID: stringArg(call.Arguments, "parentId"), Content: stringArg(call.Arguments, "content")})
 		return outputToolResult(call, output, errShape)
+	case ToolNameCreateFolder:
+		output, errShape := t.service.CreateFolder(ctx, CreateFolderInput{Name: stringArg(call.Arguments, "name"), ParentID: stringArg(call.Arguments, "parentId")})
+		return outputToolResult(call, output, errShape)
 	case ToolNameUpdateTextFile:
 		output, errShape := t.service.UpdateTextFile(ctx, UpdateTextFileInput{FileID: stringArg(call.Arguments, "fileId"), Name: stringArg(call.Arguments, "name"), MimeType: stringArg(call.Arguments, "mimeType"), Content: stringArg(call.Arguments, "content")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameRenameFile:
 		output, errShape := t.service.RenameFile(ctx, RenameFileInput{FileID: stringArg(call.Arguments, "fileId"), Name: stringArg(call.Arguments, "name")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameMoveFile:
+		output, errShape := t.service.MoveFile(ctx, MoveFileInput{FileID: stringArg(call.Arguments, "fileId"), FolderID: stringArg(call.Arguments, "folderId")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameMoveFiles:
+		output, errShape := t.service.MoveFiles(ctx, MoveFilesInput{FileIDs: stringSliceArg(call.Arguments, "fileIds"), FolderID: stringArg(call.Arguments, "folderId")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameShareFile:
 		output, errShape := t.service.ShareFile(ctx, ShareFileInput{FileID: stringArg(call.Arguments, "fileId"), Role: stringArg(call.Arguments, "role"), Type: stringArg(call.Arguments, "type"), EmailAddress: stringArg(call.Arguments, "emailAddress"), Domain: stringArg(call.Arguments, "domain")})
@@ -421,7 +537,7 @@ func (t driveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	for _, name := range []string{ToolNameSearchFiles, ToolNameGetFileMetadata, ToolNameExportFile, ToolNameDownloadFile, ToolNameCreateTextFile, ToolNameUpdateTextFile, ToolNameRenameFile, ToolNameShareFile} {
+	for _, name := range []string{ToolNameSearchFiles, ToolNameGetFileMetadata, ToolNameExportFile, ToolNameDownloadFile, ToolNameCreateTextFile, ToolNameCreateFolder, ToolNameUpdateTextFile, ToolNameRenameFile, ToolNameMoveFile, ToolNameMoveFiles, ToolNameShareFile} {
 		if err := registry.RegisterWithEntry(newTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
@@ -536,6 +652,45 @@ func stringArg(args map[string]any, name string) string {
 	}
 	value, _ := args[name].(string)
 	return value
+}
+
+func stringSliceArg(args map[string]any, name string) []string {
+	if args == nil {
+		return nil
+	}
+	switch value := args[name].(type) {
+	case []string:
+		return cleanStringSlice(value)
+	case []any:
+		items := make([]string, 0, len(value))
+		for _, item := range value {
+			if text, ok := item.(string); ok {
+				items = append(items, text)
+			}
+		}
+		return cleanStringSlice(items)
+	case string:
+		return cleanStringSlice(strings.Split(value, ","))
+	default:
+		return nil
+	}
+}
+
+func cleanStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func int64Arg(args map[string]any, name string) int64 {

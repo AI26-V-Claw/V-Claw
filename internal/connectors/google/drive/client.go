@@ -14,6 +14,7 @@ import (
 )
 
 const defaultTextMimeType = "text/plain"
+const folderMimeType = "application/vnd.google-apps.folder"
 
 type Client struct {
 	srv *gdrive.Service
@@ -61,6 +62,11 @@ type TextFileInput struct {
 	MimeType string
 	ParentID string
 	Content  string
+}
+
+type FolderInput struct {
+	Name     string
+	ParentID string
 }
 
 type PermissionInput struct {
@@ -167,6 +173,24 @@ func (c *Client) CreateTextFile(ctx context.Context, input TextFileInput) (FileM
 	return metadataFromAPI(created), nil
 }
 
+func (c *Client) CreateFolder(ctx context.Context, input FolderInput) (FileMetadata, error) {
+	if c == nil || c.srv == nil {
+		return FileMetadata{}, errors.New("drive service is not configured")
+	}
+	file := &gdrive.File{Name: strings.TrimSpace(input.Name), MimeType: folderMimeType}
+	if strings.TrimSpace(input.ParentID) != "" {
+		file.Parents = []string{strings.TrimSpace(input.ParentID)}
+	}
+	created, err := c.srv.Files.Create(file).
+		Context(ctx).
+		Fields("id,name,mimeType,webViewLink,iconLink,modifiedTime,size,owners(emailAddress,displayName),parents,shared,trashed").
+		Do()
+	if err != nil {
+		return FileMetadata{}, err
+	}
+	return metadataFromAPI(created), nil
+}
+
 func (c *Client) UpdateTextFile(ctx context.Context, fileID string, input TextFileInput) (FileMetadata, error) {
 	if c == nil || c.srv == nil {
 		return FileMetadata{}, errors.New("drive service is not configured")
@@ -198,6 +222,31 @@ func (c *Client) RenameFile(ctx context.Context, fileID string, name string) (Fi
 		Context(ctx).
 		Fields("id,name,mimeType,webViewLink,iconLink,modifiedTime,size,owners(emailAddress,displayName),parents,shared,trashed").
 		Do()
+	if err != nil {
+		return FileMetadata{}, err
+	}
+	return metadataFromAPI(updated), nil
+}
+
+func (c *Client) MoveFile(ctx context.Context, fileID string, folderID string) (FileMetadata, error) {
+	if c == nil || c.srv == nil {
+		return FileMetadata{}, errors.New("drive service is not configured")
+	}
+	current, err := c.srv.Files.Get(fileID).
+		Context(ctx).
+		Fields("parents").
+		Do()
+	if err != nil {
+		return FileMetadata{}, err
+	}
+	update := c.srv.Files.Update(fileID, nil).
+		Context(ctx).
+		AddParents(strings.TrimSpace(folderID)).
+		Fields("id,name,mimeType,webViewLink,iconLink,modifiedTime,size,owners(emailAddress,displayName),parents,shared,trashed")
+	if len(current.Parents) > 0 {
+		update = update.RemoveParents(strings.Join(current.Parents, ","))
+	}
+	updated, err := update.Do()
 	if err != nil {
 		return FileMetadata{}, err
 	}
