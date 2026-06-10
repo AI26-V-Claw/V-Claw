@@ -45,10 +45,10 @@ type MessageSummary struct {
 }
 
 type Attachment struct {
-	Filename     string
-	MimeType     string
-	AttachmentID string
-	Size         int64
+	Filename     string `json:"filename"`
+	MimeType     string `json:"mimeType"`
+	AttachmentID string `json:"attachmentId"`
+	Size         int64  `json:"size"`
 }
 
 type MessageDetail struct {

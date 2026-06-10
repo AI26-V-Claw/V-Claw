@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -793,6 +795,96 @@ func TestRuntimeResolvesNamedChatSpaceBeforeApproval(t *testing.T) {
 	if !strings.Contains(secondCallMessages, "NEEDS_SPACE_RESOLUTION") ||
 		!strings.Contains(secondCallMessages, "chat.listSpaces") {
 		t.Fatalf("expected provider to receive space resolution guidance, got %#v", provider.calls[1].Messages)
+	}
+}
+
+func TestRuntimeDefaultsTelegramDownloadAttachmentsOutputDir(t *testing.T) {
+	homeDir := t.TempDir()
+	downloadsDir := filepath.Join(homeDir, "Downloads")
+	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+		t.Fatalf("mkdir downloads: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_download",
+				Name:      "gmail.downloadAttachments",
+				Arguments: map[string]any{"messageId": "m1", "outputDir": "./"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(gmailDownloadAttachmentsRuntimeTool{}); err != nil {
+		t.Fatalf("register gmail download: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	message := runtimeTestMessage()
+	message.Channel = "telegram"
+	message.Text = "tải file đính kèm"
+
+	response, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", response)
+	}
+	if response.ApprovalRequest == nil {
+		t.Fatal("expected approval request")
+	}
+	if got, want := response.ApprovalRequest.ToolCall.Input["outputDir"], filepath.Join(homeDir, "Downloads", "Vclaw"); got != want {
+		t.Fatalf("expected default outputDir %q, got %#v", want, got)
+	}
+}
+
+func TestRuntimeFallsBackTelegramDownloadAttachmentsOutputDir(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_download_fallback",
+				Name:      "gmail.downloadAttachments",
+				Arguments: map[string]any{"messageId": "m1"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(gmailDownloadAttachmentsRuntimeTool{}); err != nil {
+		t.Fatalf("register gmail download: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	message := runtimeTestMessage()
+	message.Channel = "telegram"
+	message.Text = "tải file đính kèm"
+
+	response, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", response)
+	}
+	if response.ApprovalRequest == nil {
+		t.Fatal("expected approval request")
+	}
+	if got, want := response.ApprovalRequest.ToolCall.Input["outputDir"], filepath.Join(homeDir, "Vclaw"); got != want {
+		t.Fatalf("expected fallback outputDir %q, got %#v", want, got)
 	}
 }
 
@@ -1684,6 +1776,25 @@ func TestApprovalContinuationMessageWarnsGmailSendDraftDeliveryWording(t *testin
 	}
 	if !strings.Contains(message.Text, "avoid wording like 'sent successfully'") {
 		t.Fatalf("expected warning against success wording, got %q", message.Text)
+	}
+}
+
+func TestApprovalContinuationMessageMapsDraftIDToSendDraftArgument(t *testing.T) {
+	message := buildApprovalContinuationMessage(pendingApproval{
+		message:  runtimeTestMessage(),
+		toolCall: providers.ToolCall{Name: "gmail.createDraft"},
+	}, tools.ToolResult{
+		ToolCallID:    "call_create",
+		ToolName:      "gmail.createDraft",
+		Success:       true,
+		ContentForLLM: `{"Draft":{"ID":"draft_123"}}`,
+	}, runtimeTestMessage().Timestamp)
+
+	if !strings.Contains(message.Text, "Draft.ID") {
+		t.Fatalf("expected continuation to mention Draft.ID, got %q", message.Text)
+	}
+	if !strings.Contains(message.Text, "draftId argument") {
+		t.Fatalf("expected continuation to map Draft.ID to draftId, got %q", message.Text)
 	}
 }
 

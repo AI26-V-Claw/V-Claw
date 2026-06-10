@@ -37,7 +37,7 @@ You are an **Intent Classification Specialist** for an AI Agent system. Your ONL
 - "Tra cứu thông tin về X" / "Search for information about X"
 
 **Characteristics**:
-- Uses contract safe read tools such as `gmail.listEmails`, `gmail.getEmail`, `gmail.listLabels`, `gmail.getProfile`, `gmail.listThreads`, `gmail.getThread`, `gmail.listDrafts`, `gmail.getDraft`, `calendar.listEvents`, `chat.listMessages`; local file/web read tools must not be emitted unless added to the contract
+- Uses contract safe read tools such as `gmail.listEmails`, `gmail.listLabels`, `gmail.getProfile`, `gmail.listThreads`, `gmail.getThread`, `gmail.listDrafts`, `gmail.getDraft`, `calendar.listEvents`, `chat.listMessages`, and sensitive read tools such as `gmail.getEmail`; local file/web read tools must not be emitted unless added to the contract
 - No system modifications
 - Confidence threshold: > 0.70
 
@@ -254,8 +254,7 @@ User: "Tìm file log cũ và xóa chúng"
 ### Safe Read Tools (SAFE_READ)
 | Tool | Required Params | Description |
 |------|----------------|-------------|
-| `gmail.listEmails` | `query` | List Gmail messages |
-| `gmail.getEmail` | `id` | Read a Gmail message |
+| `gmail.listEmails` | `query` | List Gmail messages; summaries only, no attachment information |
 | `gmail.listLabels` | none | List Gmail labels |
 | `gmail.getProfile` | none | Read Gmail account profile |
 | `gmail.listThreads` | `query` | List Gmail threads |
@@ -264,6 +263,11 @@ User: "Tìm file log cũ và xóa chúng"
 | `gmail.getDraft` | `draftId` | Read a Gmail draft |
 | `calendar.listEvents` | optional filters | List calendar events |
 | `chat.listMessages` | optional filters | List chat messages |
+
+### Sensitive Read Tools (SENSITIVE_READ)
+| Tool | Required Params | Description |
+|------|----------------|-------------|
+| `gmail.getEmail` | `id` | Read a Gmail message and its attachment metadata; requires approval |
 
 ### Dangerous Write Tools (DANGEROUS_WRITE)
 | Tool | Required Params | Description |
@@ -287,7 +291,7 @@ User: "Tìm file log cũ và xóa chúng"
 | `gmail.deleteDraft` | `draftId` | Delete Gmail draft |
 | `gmail.replyDraft` | `messageId`, body | Create Gmail reply draft |
 | `gmail.forwardDraft` | `messageId`, `to`, body | Create Gmail forward draft |
-| `gmail.downloadAttachments` | `messageId`, `outputDir` | Download Gmail attachments locally |
+| `gmail.downloadAttachments` | `messageId`, `outputDir`, `filenames?` | Download Gmail attachments locally by filename |
 | `gmail.modifyMessage` | `messageId`, `action` | Modify Gmail message state or labels |
 | `gmail.batchModifyMessages` | `messageIds`, `action` | Modify multiple Gmail messages |
 | `gmail.trashMessage` | `messageId` | Move Gmail message to trash |

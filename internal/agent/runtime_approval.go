@@ -627,7 +627,7 @@ Call each remaining tool exactly once. Do not call a tool that already appears i
 	} else {
 		pipelineHint := ""
 		if isDraftCreationTool(pending.toolCall.Name) {
-			pipelineHint = "\nIf the completed tool returned a draftId, call gmail.sendDraft with that draftId now to actually deliver the email."
+			pipelineHint = "\nIf the completed tool returned a Gmail draft object like Draft.ID, use Draft.ID as the draftId argument for gmail.sendDraft to actually deliver the email."
 		}
 		text = strings.TrimSpace(fmt.Sprintf(`An approved tool just completed as part of the user's original request.
 Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.

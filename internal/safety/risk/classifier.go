@@ -97,7 +97,7 @@ func (c *Classifier) generateReason(toolName string, riskLevel Level, decision D
 func buildDefaultPolicy() map[string]Level {
 	return map[string]Level{
 		"gmail.listEmails":          SafeRead,
-		"gmail.getEmail":            SafeRead,
+		"gmail.getEmail":            SensitiveRead,
 		"gmail.listLabels":          SafeRead,
 		"gmail.getProfile":          SafeRead,
 		"gmail.listThreads":         SafeRead,

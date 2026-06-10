@@ -26,6 +26,14 @@ func TestClassifier_Assess(t *testing.T) {
 			expectedApproval: false,
 		},
 		{
+			name:             "Sensitive read - gmail.getEmail",
+			toolName:         "gmail.getEmail",
+			intentType:       intent.TypeReadInfo,
+			expectedRisk:     SensitiveRead,
+			expectedDecision: RequiresApproval,
+			expectedApproval: true,
+		},
+		{
 			name:             "Safe read - gmail.listDrafts",
 			toolName:         "gmail.listDrafts",
 			intentType:       intent.TypeReadInfo,
@@ -218,6 +226,14 @@ func TestClassifier_GetPolicy(t *testing.T) {
 		t.Errorf("Expected SafeRead for gmail.listEmails, got %v", level)
 	}
 
+	level, ok = classifier.GetPolicy("gmail.getEmail")
+	if !ok {
+		t.Error("Expected gmail.getEmail to be in policy")
+	}
+	if level != SensitiveRead {
+		t.Errorf("Expected SensitiveRead for gmail.getEmail, got %v", level)
+	}
+
 	// Test unknown tool
 	_, ok = classifier.GetPolicy("unknown_tool")
 	if ok {
@@ -231,6 +247,7 @@ func TestRiskLevelCoverage(t *testing.T) {
 	// Ensure all risk levels are covered in the policy
 	riskLevels := map[Level]bool{
 		SafeRead:      false,
+		SensitiveRead: false,
 		SafeCompute:   false,
 		ExternalWrite: false,
 		LocalWrite:    false,
@@ -244,7 +261,7 @@ func TestRiskLevelCoverage(t *testing.T) {
 
 	// Check that we have at least one tool for each major risk level
 	// (SafeCompute may not have tools in the default policy)
-	requiredLevels := []Level{SafeRead, ExternalWrite, LocalWrite, CodeExecution, Destructive}
+	requiredLevels := []Level{SafeRead, SensitiveRead, ExternalWrite, LocalWrite, CodeExecution, Destructive}
 	for _, level := range requiredLevels {
 		if !riskLevels[level] {
 			t.Errorf("No tools found for risk level: %v", level)

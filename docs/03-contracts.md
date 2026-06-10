@@ -473,7 +473,7 @@ Rules:
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
 | `gmail.listEmails` | Integration | `safe_read` | No |
-| `gmail.getEmail` | Integration | `safe_read` | No |
+| `gmail.getEmail` | Integration | `sensitive_read` | Yes |
 | `gmail.listLabels` | Integration | `safe_read` | No |
 | `gmail.getProfile` | Integration | `safe_read` | No |
 | `gmail.listThreads` | Integration | `safe_read` | No |
@@ -492,7 +492,7 @@ Rules:
 | `gmail.trashMessage` | Integration | `destructive` | Yes |
 | `gmail.untrashMessage` | Integration | `external_write` | Yes |
 
-> `gmail.getEmail` trả dữ liệu raw từ connector (headers/body/attachments).  
+> `gmail.getEmail` trả dữ liệu raw từ connector (headers/body/attachments) và được coi là `sensitive_read`, nên phải qua approval boundary trước khi agent thực thi.  
 > Render text để hiển thị (ví dụ fallback từ HTML sang text) thuộc tool layer, không thuộc connector raw API boundary.
 
 > Draft/reply/forward tools create or send Gmail drafts and must pass the approval boundary before agent-triggered execution.
@@ -559,6 +559,16 @@ Rules:
 |---|---|---|---|
 | `sandbox.runPython` | Agent Core | `code_execution` | Yes |
 | `sandbox.runShell` | Agent Core | `code_execution` | Yes |
+
+### Built-in
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `calculator` | Agent Core | `safe_compute` | No |
+| `get_current_time` | Agent Core | `safe_read` | No |
+
+> `calculator` thực hiện phép toán số học đơn giản trong memory/local runtime và không truy cập dữ liệu ngoài hệ thống.
+> `get_current_time` trả về thời gian local hiện tại theo ISO-8601, không cần approval.
 
 ---
 
@@ -717,7 +727,7 @@ UserMessage
 -> gmail.listEmails proposed
 -> RiskDecision: safe_read, allow
 -> no ApprovalRequest
--> gmail.getEmail / follow-up read tools execute if needed
+-> gmail.getEmail requires approval if needed
 -> AgentResponse: completed
 ```
 

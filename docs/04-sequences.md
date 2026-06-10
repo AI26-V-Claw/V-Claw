@@ -24,7 +24,7 @@ Không tạo sequence diagram riêng cho mọi connector, mọi use case, hoặc
 | Scenario | Mục đích | Sprint | Contract / boundary chính | File |
 |---|---|---:|---|---|
 | Channel message to agent response | Luồng nhận tin cơ bản qua channel và trả phản hồi | 1 | `UserMessage`, `AgentResponse` | [01-channel-message.md](scenarios/01-channel-message.md) |
-| Read-only Gmail summary | Mẫu Google Workspace read-only, không HITL | 1/2 | `gmail.listEmails`, `gmail.getEmail`, `safe_read` | [02-gmail-read-summary.md](scenarios/02-gmail-read-summary.md) |
+| Gmail read summary | Mẫu Google Workspace đọc thông tin; `gmail.listEmails` an toàn còn `gmail.getEmail` là sensitive read | 1/2 | `gmail.listEmails`, `gmail.getEmail`, `safe_read`, `sensitive_read` | [02-gmail-read-summary.md](scenarios/02-gmail-read-summary.md) |
 | Calendar create with HITL | Mẫu external write bắt buộc approval | 2 | `calendar.createEvent`, `RiskDecision`, `ApprovalRequest` | [03-calendar-create-hitl.md](scenarios/03-calendar-create-hitl.md) |
 | Sandbox command with HITL | Mẫu code execution/local action bắt buộc approval | 2 | `sandbox.runShell` / `sandbox.runPython`, `code_execution` | [04-sandbox-command-hitl.md](scenarios/04-sandbox-command-hitl.md) |
 | Approval revision flow | Mẫu revised request tạo approval mới theo comment | 2 | `ApprovalDecision=revised`, `parentApprovalId` | [05-approval-revision-hitl.md](scenarios/05-approval-revision-hitl.md) |

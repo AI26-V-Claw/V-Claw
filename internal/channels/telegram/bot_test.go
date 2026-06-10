@@ -231,6 +231,30 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	}
 }
 
+func TestTelegramTextFromResponseFormatsDownloadAttachmentsResult(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	path := filepath.Join(homeDir, "Downloads", "Vclaw", "Google Workspace Message.png")
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "ignored generic message",
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "gmail.downloadAttachments",
+			Success:  true,
+			Data: map[string]any{
+				"contentForLLM": fmt.Sprintf(`{"files":[{"filename":"Google Workspace Message.png","path":%q}]}`, path),
+			},
+		}},
+	}
+
+	got := telegramTextFromResponse(response)
+	want := "Đã tải xuống: Google Workspace Message.png\nThư mục: ~/Downloads/Vclaw/"
+	if got != want {
+		t.Fatalf("telegramTextFromResponse() = %q, want %q", got, want)
+	}
+}
+
 func TestTelegramProgressTextHidesInternalRoutingStages(t *testing.T) {
 	for _, stage := range []agent.ProgressStage{
 		agent.ProgressStageClassifying,
@@ -821,6 +845,36 @@ func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
 		}
+	}
+}
+
+func TestTelegramApprovalTextResolvesDownloadDirectoryForGmailAttachments(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, "Downloads"), 0o755); err != nil {
+		t.Fatalf("mkdir downloads: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_download",
+			Summary:    "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "gmail.downloadAttachments",
+				Input: map[string]any{
+					"messageId": "msg-1",
+					"outputDir": "./",
+				},
+			},
+		},
+	})
+
+	if strings.Contains(text, "Output Dir: ./") {
+		t.Fatalf("expected approval text to resolve outputDir, got %q", text)
+	}
+	if !strings.Contains(text, "Output Dir: ~/Downloads/Vclaw/") {
+		t.Fatalf("expected approval text to show resolved download dir, got %q", text)
 	}
 }
 

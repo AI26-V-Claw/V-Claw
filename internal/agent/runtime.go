@@ -482,6 +482,7 @@ If required information is missing, ask one concise clarification question inste
 		for index, providerToolCall := range assistantMessage.ToolCalls {
 			evidenceText := providerTranscriptEvidenceText(providerTranscript)
 			providerToolCall = sanitizeUnsupportedOptionalArguments(providerToolCall, evidenceText)
+			providerToolCall = applyChannelToolDefaults(message, providerToolCall)
 			if isClarifyToolCall(providerToolCall) {
 				clarification := clarificationFromToolCall(providerToolCall)
 				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
@@ -1097,6 +1098,8 @@ For gmail.listEmails and gmail.listThreads:
 - Use after and before as date-only YYYY-MM-DD values, not RFC3339 datetimes.
 - "today" / "hôm nay" means after is today's local date and before is tomorrow's local date.
 - Do not put date words like "today", "this week", "hôm nay", or "tuần này" into query. Use query only for sender, subject, body, or Gmail search terms.
+- gmail.listEmails returns message summaries only. It does not include attachment metadata.
+- If you need to check whether an email has attachments or to get attachmentId values, call gmail.getEmail on the messageId first.
 Gmail date rules, restated in ASCII:
 - gmail.listEmails and gmail.listThreads after/before must be date-only YYYY-MM-DD, never RFC3339 datetime strings.
 - "today" / "hom nay" means after=today local date and before=tomorrow local date.

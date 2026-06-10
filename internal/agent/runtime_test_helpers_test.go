@@ -31,6 +31,10 @@ type gmailListEmailsRuntimeTool struct {
 	executions *int
 }
 
+type gmailDownloadAttachmentsRuntimeTool struct {
+	executions *int
+}
+
 type chatListSpacesRuntimeTool struct {
 	executions *int
 }
@@ -125,6 +129,40 @@ func (t gmailListEmailsRuntimeTool) Execute(_ context.Context, call tools.ToolCa
 		Success:        true,
 		ContentForLLM:  content,
 		ContentForUser: content,
+	}
+}
+
+func (gmailDownloadAttachmentsRuntimeTool) Name() string { return "gmail.downloadAttachments" }
+func (gmailDownloadAttachmentsRuntimeTool) Description() string {
+	return "Download Gmail attachments."
+}
+func (gmailDownloadAttachmentsRuntimeTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"messageId": map[string]any{"type": "string"},
+			"outputDir": map[string]any{"type": "string"},
+			"filenames": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+		"required": []string{"messageId", "outputDir"},
+	}
+}
+func (gmailDownloadAttachmentsRuntimeTool) Capability() tools.Capability {
+	return tools.CapabilityMutating
+}
+func (gmailDownloadAttachmentsRuntimeTool) RiskLevel() tools.RiskLevel {
+	return tools.RiskLevelLocalWrite
+}
+func (t gmailDownloadAttachmentsRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	if t.executions != nil {
+		(*t.executions)++
+	}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  "downloaded",
+		ContentForUser: "downloaded",
 	}
 }
 

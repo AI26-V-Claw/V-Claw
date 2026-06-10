@@ -41,7 +41,9 @@ sequenceDiagram
     GmailTool-->>Router: ToolResult(success=true)
     Router-->>Agent: ToolResult
 
-    Agent->>Router: ToolCall gmail.getEmail if needed
+    Agent->>Policy: Check gmail.getEmail if needed
+    Policy-->>Agent: RiskDecision(sensitive_read, requires_approval)
+    Agent->>Router: ToolCall gmail.getEmail
     Router->>GmailTool: Execute gmail.getEmail
     GmailTool->>GmailConnector: GetMessage
     GmailConnector->>Google: users.messages.get
@@ -60,4 +62,3 @@ sequenceDiagram
 - Nếu risk level nằm trong `auto_allow`, policy layer phải trả `allow`.
 - Không tạo `ApprovalRequest` cho risk level đã auto-allowed.
 - Luồng này vẫn phải ghi nhận `RiskDecision` để audit.
-
