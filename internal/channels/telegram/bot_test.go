@@ -462,6 +462,19 @@ func TestTelegramApprovalTextShowsSandboxPythonCode(t *testing.T) {
 	}
 }
 
+func TestTelegramTextFromResponsePreservesMultilineFormatting(t *testing.T) {
+	message := "Đây là một bộ khung mục lục:\n\nCHƯƠNG 2\n2.1 Cơ sở lý thuyết\n  2.1.1 Khái niệm hệ thống thông tin\n  2.1.2 Khái niệm cơ sở dữ liệu\n\n- Mục 1\n- Mục 2"
+
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+	})
+
+	if text != message {
+		t.Fatalf("expected response formatting to be preserved, got %q want %q", text, message)
+	}
+}
+
 func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := telegramTextFromResponse(contracts.AgentResponse{
@@ -918,6 +931,61 @@ func TestTelegramRenderHTMLConvertsCodeBlockMarkers(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "print(&#39;hello&#39;)") && !strings.Contains(rendered, "print('hello')") {
 		t.Fatalf("expected escaped code content, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLConvertsRawFencedCodeBlock(t *testing.T) {
+	rendered := telegramRenderHTML("Vi du:\n```python\nif True:\n    print('hello')\n```")
+
+	if !strings.Contains(rendered, "<pre><code") {
+		t.Fatalf("expected raw fenced code to render as html code block, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "language-python") {
+		t.Fatalf("expected raw fenced code to preserve the language class, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "    print(&#39;hello&#39;)") && !strings.Contains(rendered, "    print('hello')") {
+		t.Fatalf("expected raw fenced code indentation to be preserved, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLPreservesLeadingSpacesInPlainText(t *testing.T) {
+	rendered := telegramRenderHTML("  2.1.1 Khái niệm hệ thống thông tin")
+
+	if !strings.Contains(rendered, "\u00a0\u00a0"+"2.1.1 Khái niệm hệ thống thông tin") {
+		t.Fatalf("expected leading spaces to be preserved in plain text, got %q", rendered)
+	}
+}
+
+func XTestTelegramRenderHTMLConvertsNbspEntitiesToVisibleIndentation(t *testing.T) {
+	rendered := telegramRenderHTML("&nbsp;&nbsp;- số")
+
+	if strings.Contains(rendered, "&amp;nbsp;") {
+		t.Fatalf("expected nbsp entities to render as spacing, got %q", rendered)
+	}
+	if strings.Contains(rendered, "&nbsp;") {
+		t.Fatalf("expected nbsp entity text to be removed from output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "• số") {
+		t.Fatalf("expected nbsp entities to become a visible bullet item, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLFormatsMarkdownHeading(t *testing.T) {
+	rendered := telegramRenderHTML("## Giới thiệu")
+
+	if !strings.Contains(rendered, "<b>GIỚI THIỆU</b>") {
+		t.Fatalf("expected markdown heading to render as bold uppercase, got %q", rendered)
+	}
+}
+
+func XTestTelegramRenderHTMLConvertsDashListsToBullets(t *testing.T) {
+	rendered := telegramRenderHTML("- Mục lớn\n - Mục con")
+
+	if !strings.Contains(rendered, "• Mục lớn") {
+		t.Fatalf("expected top-level dash item to become a bullet, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "\u00a0\u00a0\u00a0\u00a0"+"• Mục con") {
+		t.Fatalf("expected nested dash item to become a deeper indented bullet, got %q", rendered)
 	}
 }
 

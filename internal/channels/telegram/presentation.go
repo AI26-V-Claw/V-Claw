@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 )
 
@@ -195,9 +196,9 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 		return "Mình cần bạn xác nhận trước khi thực hiện hành động này."
 	}
 
-	text := strings.TrimSpace(response.Message)
-	if text == "" && response.Output != nil {
-		text = strings.TrimSpace(response.Output.Text)
+	text := response.Message
+	if strings.TrimSpace(text) == "" && response.Output != nil {
+		text = response.Output.Text
 	}
 	text = sanitizeTelegramResponseText(text)
 	if text != "" {
@@ -315,45 +316,46 @@ func telegramActionLabel(toolName string) string {
 }
 
 func sanitizeTelegramResponseText(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	if looksLikeTelegramMachinePayload(text) {
+	text = formatting.NormalizeLineEndings(text)
+	if looksLikeTelegramMachinePayload(strings.TrimSpace(text)) {
 		return ""
 	}
 
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	lines := strings.Split(text, "\n")
 	filtered := make([]string, 0, len(lines))
-	skipJSONBlock := false
+	inFence := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		lower := strings.ToLower(trimmed)
 
-		if skipJSONBlock {
-			if trimmed == "" {
-				skipJSONBlock = false
+		if inFence {
+			filtered = append(filtered, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
 			}
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			filtered = append(filtered, line)
+			inFence = true
 			continue
 		}
 		switch {
 		case trimmed == "":
 			filtered = append(filtered, "")
-		case strings.HasPrefix(lower, "approval id:"),
-			strings.HasPrefix(lower, "tool:"),
-			strings.HasPrefix(lower, "risk:"):
-			continue
-		case strings.HasPrefix(lower, "input:"):
-			skipJSONBlock = true
-			continue
 		case telegramSensitiveTextPattern.MatchString(trimmed):
 			continue
 		default:
-			filtered = append(filtered, trimmed)
+			filtered = append(filtered, line)
 		}
 	}
 
-	clean := formatTelegramUserText(filtered...)
+	clean := strings.Join(filtered, "\n")
+	if strings.TrimSpace(clean) == "" {
+		return ""
+	}
 	if telegramSensitiveTextPattern.MatchString(clean) {
 		return ""
 	}
@@ -474,8 +476,7 @@ func telegramGenericApprovalDetailText(input map[string]any) string {
 		lines = append(lines, label+": "+text)
 	}
 	appendMultiline := func(label string, value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
+		if strings.TrimSpace(value) == "" {
 			return
 		}
 		lines = append(lines, label+":", "", value)
@@ -530,11 +531,14 @@ func telegramGenericApprovalDetailText(input map[string]any) string {
 }
 
 func telegramCodeBlock(language string, code string) string {
-	return telegramCodeBlockOpen + strings.TrimSpace(language) + "\n" + strings.TrimSpace(code) + telegramCodeBlockClose
+	return telegramCodeBlockOpen + strings.TrimSpace(language) + "\n" + code + telegramCodeBlockClose
 }
 
 func telegramPreBlock(text string) string {
-	return telegramPreBlockOpen + strings.TrimSpace(text) + telegramPreBlockClose
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return telegramPreBlockOpen + formatting.NormalizeLineEndings(text) + telegramPreBlockClose
 }
 
 func telegramField(label string, value string) string {
@@ -605,8 +609,7 @@ func stringMapValue(input map[string]any, keys ...string) string {
 			continue
 		}
 		if text, ok := value.(string); ok {
-			text = strings.TrimSpace(text)
-			if text != "" {
+			if strings.TrimSpace(text) != "" {
 				return text
 			}
 		}
@@ -758,7 +761,22 @@ func looksLikeTelegramMachinePayload(text string) bool {
 func formatTelegramUserText(lines ...string) string {
 	out := make([]string, 0, len(lines))
 	previousBlank := false
+	inFence := false
 	for _, line := range lines {
+		if inFence {
+			out = append(out, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
+			}
+			previousBlank = false
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			out = append(out, line)
+			inFence = true
+			previousBlank = false
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			if len(out) > 0 && !previousBlank {
@@ -767,10 +785,10 @@ func formatTelegramUserText(lines ...string) string {
 			previousBlank = true
 			continue
 		}
-		out = append(out, trimmed)
+		out = append(out, line)
 		previousBlank = false
 	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
+	return strings.Join(out, "\n")
 }
 
 func telegramApprovalTextAction(text string) string {
