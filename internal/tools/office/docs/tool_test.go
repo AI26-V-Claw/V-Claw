@@ -31,6 +31,24 @@ func TestRegisterToolsRiskMetadata(t *testing.T) {
 	assertTool(t, registry, ToolNameAppendText, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 }
 
+func TestOutputToolResultAddsDocsSourceAndArtifact(t *testing.T) {
+	result := outputToolResult(tools.ToolCall{ID: "call_1", Name: ToolNameGetDocument}, docsconnector.Document{
+		ID:         "doc_1",
+		Title:      "Report",
+		RevisionID: "rev_1",
+	}, nil)
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if len(result.SourceRefs) != 1 || result.SourceRefs[0].ID != "doc_1" {
+		t.Fatalf("expected docs source ref, got %#v", result.SourceRefs)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.ID != "doc_1" {
+		t.Fatalf("expected docs artifact ref, got %#v", result.ArtifactRef)
+	}
+}
+
 func assertTool(t *testing.T, registry *tools.ToolRegistry, name string, capability tools.Capability, risk tools.RiskLevel, approval bool) {
 	t.Helper()
 	def, ok := registry.GetDefinition(name)

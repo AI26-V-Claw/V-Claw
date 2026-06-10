@@ -2,8 +2,6 @@ package docs
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -242,18 +240,33 @@ func MapError(err error) *ErrorShape {
 
 func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) tools.ToolResult {
 	if errShape != nil {
-		return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: false, ContentForLLM: errShape.Code + ": " + errShape.Message, ContentForUser: errShape.Message, Error: &tools.ToolError{Code: errShape.Code, Message: errShape.Message}}
+		return tools.ErrorResult(call, errShape.Code, errShape.Message)
 	}
-	content := formatJSON(output)
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
+	return tools.SuccessResult(call, output, docsResultOptions(output)...)
 }
 
-func formatJSON(output any) string {
-	data, err := json.Marshal(output)
-	if err != nil {
-		return fmt.Sprintf("%#v", output)
+func docsResultOptions(output any) []tools.ResultOption {
+	options := []tools.ResultOption{tools.WithMetadata(map[string]any{"provider": "google_docs"})}
+	doc, ok := output.(docsconnector.Document)
+	if !ok {
+		return options
 	}
-	return string(data)
+	source := tools.SourceRef{
+		Kind:  "google_doc",
+		ID:    doc.ID,
+		Label: doc.Title,
+		URI:   "https://docs.google.com/document/d/" + doc.ID + "/edit",
+		Meta:  map[string]any{"revisionId": doc.RevisionID},
+	}
+	options = append(options, tools.WithSourceRefs(source))
+	options = append(options, tools.WithArtifactRef(tools.ArtifactRef{
+		Kind:  "google_doc",
+		ID:    doc.ID,
+		Label: doc.Title,
+		URI:   source.URI,
+		Meta:  map[string]any{"revisionId": doc.RevisionID},
+	}))
+	return options
 }
 
 func googleAPIErrorMessage(err *googleapi.Error) string {

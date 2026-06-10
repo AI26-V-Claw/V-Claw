@@ -60,6 +60,28 @@ func TestRegisterToolsRiskMetadata(t *testing.T) {
 	assertTool(t, registry, ToolNameShareFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 }
 
+func TestOutputToolResultAddsDriveSourceAndArtifact(t *testing.T) {
+	result := outputToolResult(tools.ToolCall{ID: "call_1", Name: ToolNameGetFileMetadata}, driveconnector.FileMetadata{
+		ID:          "file_1",
+		Name:        "Report",
+		MimeType:    "application/pdf",
+		WebViewLink: "https://drive.google.com/file/d/file_1",
+	}, nil)
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if len(result.SourceRefs) != 1 || result.SourceRefs[0].ID != "file_1" {
+		t.Fatalf("expected drive source ref, got %#v", result.SourceRefs)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.ID != "file_1" {
+		t.Fatalf("expected drive artifact ref, got %#v", result.ArtifactRef)
+	}
+	if result.Metadata["provider"] != "google_drive" {
+		t.Fatalf("expected google_drive metadata, got %#v", result.Metadata)
+	}
+}
+
 func assertTool(t *testing.T, registry *tools.ToolRegistry, name string, capability tools.Capability, risk tools.RiskLevel, approval bool) {
 	t.Helper()
 	def, ok := registry.GetDefinition(name)

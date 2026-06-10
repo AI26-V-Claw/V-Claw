@@ -219,14 +219,49 @@ Tool Layer -> Agent Core
 ```json
 {
   "toolCallId": "toolcall_001",
-  "toolName": "calendar.createEvent",
+  "toolName": "drive.getFileMetadata",
   "success": true,
+  "contentForLLM": "{\"id\":\"file_001\",\"name\":\"Report\"}",
+  "contentForUser": "{\"id\":\"file_001\",\"name\":\"Report\"}",
   "data": {
-    "eventId": "event_001"
+    "contentForLLM": "{\"id\":\"file_001\",\"name\":\"Report\"}",
+    "contentForUser": "{\"id\":\"file_001\",\"name\":\"Report\"}",
+    "payload": {
+      "id": "file_001",
+      "name": "Report"
+    },
+    "sourceRefs": [
+      {
+        "kind": "drive_file",
+        "id": "file_001",
+        "label": "Report",
+        "uri": "https://drive.google.com/file/d/file_001"
+      }
+    ],
+    "metadata": {
+      "provider": "google_drive"
+    }
+  },
+  "sourceRefs": [
+    {
+      "kind": "drive_file",
+      "id": "file_001",
+      "label": "Report",
+      "uri": "https://drive.google.com/file/d/file_001"
+    }
+  ],
+  "metadata": {
+    "provider": "google_drive"
   },
   "error": null
 }
 ```
+
+Required success fields: `toolCallId`, `toolName`, `success`, `contentForLLM`, `contentForUser`.
+
+`data.payload` carries the structured tool payload. `data.contentForUser` and `data.contentForLLM` remain present for older channel formatters. `sourceRefs` identifies external resources used or changed by the tool when applicable. `artifactRef` identifies a primary created/downloaded artifact when applicable. `metadata` carries non-sensitive provider or execution metadata.
+
+`contentForLLM`, `contentForUser`, logs, and audit previews must redact sensitive values such as access tokens, refresh tokens, client secrets, bearer tokens, API keys, and provider stack traces. Long output must be bounded; large read payloads should be truncated or summarized and point to `sourceRefs`/`artifactRef` instead.
 
 Error:
 
@@ -235,7 +270,12 @@ Error:
   "toolCallId": "toolcall_001",
   "toolName": "calendar.createEvent",
   "success": false,
-  "data": null,
+  "contentForLLM": "AUTH_EXPIRED: Google access token expired.",
+  "contentForUser": "Google access token expired.",
+  "data": {
+    "contentForLLM": "AUTH_EXPIRED: Google access token expired.",
+    "contentForUser": "Google access token expired."
+  },
   "error": {
     "code": "AUTH_EXPIRED",
     "message": "Google access token expired.",

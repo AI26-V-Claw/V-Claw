@@ -40,6 +40,24 @@ func TestRegisterToolsRiskMetadata(t *testing.T) {
 	assertTool(t, registry, ToolNameAppendRows, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 }
 
+func TestOutputToolResultAddsSheetsSourceAndArtifact(t *testing.T) {
+	result := outputToolResult(tools.ToolCall{ID: "call_1", Name: ToolNameGetSpreadsheet}, sheetsconnector.Spreadsheet{
+		ID:    "sheet_1",
+		Title: "Budget",
+		URL:   "https://docs.google.com/spreadsheets/d/sheet_1/edit",
+	}, nil)
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if len(result.SourceRefs) != 1 || result.SourceRefs[0].ID != "sheet_1" {
+		t.Fatalf("expected sheets source ref, got %#v", result.SourceRefs)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.ID != "sheet_1" {
+		t.Fatalf("expected sheets artifact ref, got %#v", result.ArtifactRef)
+	}
+}
+
 func assertTool(t *testing.T, registry *tools.ToolRegistry, name string, capability tools.Capability, risk tools.RiskLevel, approval bool) {
 	t.Helper()
 	def, ok := registry.GetDefinition(name)

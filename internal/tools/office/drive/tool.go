@@ -2,7 +2,6 @@ package drive
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -609,18 +608,72 @@ func MapError(err error) *ErrorShape {
 
 func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) tools.ToolResult {
 	if errShape != nil {
-		return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: false, ContentForLLM: errShape.Code + ": " + errShape.Message, ContentForUser: errShape.Message, Error: &tools.ToolError{Code: errShape.Code, Message: errShape.Message}}
+		return tools.ErrorResult(call, errShape.Code, errShape.Message)
 	}
-	content := formatJSON(output)
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
+	return tools.SuccessResult(call, output, driveResultOptions(call.Name, output)...)
 }
 
-func formatJSON(output any) string {
-	data, err := json.Marshal(output)
-	if err != nil {
-		return fmt.Sprintf("%#v", output)
+func driveResultOptions(toolName string, output any) []tools.ResultOption {
+	options := []tools.ResultOption{tools.WithMetadata(map[string]any{"provider": "google_drive"})}
+	switch typed := output.(type) {
+	case driveconnector.SearchFilesOutput:
+		options = append(options, tools.WithSourceRefs(fileSourceRefs(typed.Files)...))
+	case driveconnector.FileMetadata:
+		options = append(options, tools.WithSourceRefs(fileSourceRef(typed)))
+		if artifact := fileArtifactRef(typed); artifact != nil {
+			options = append(options, tools.WithArtifactRef(*artifact))
+		}
+	case driveconnector.FileContent:
+		options = append(options, tools.WithSourceRefs(fileSourceRef(typed.File)))
+	case DownloadFileOutput:
+		options = append(options, tools.WithSourceRefs(fileSourceRef(typed.File)))
+		options = append(options, tools.WithArtifactRef(tools.ArtifactRef{Kind: "local_file", ID: typed.File.ID, Label: typed.File.Name, URI: typed.Path, Meta: map[string]any{"size": typed.Size}}))
+	case MoveFilesOutput:
+		options = append(options, tools.WithSourceRefs(fileSourceRefs(typed.Files)...))
+		options = append(options, tools.WithMetadata(map[string]any{"provider": "google_drive", "failureCount": len(typed.Failures)}))
+	case ShareFileOutput:
+		options = append(options, tools.WithSourceRefs(tools.SourceRef{Kind: "drive_file", ID: typed.FileID, Meta: map[string]any{"permissionId": typed.PermissionID, "role": typed.Role, "type": typed.Type}}))
 	}
-	return string(data)
+	if toolName == ToolNameExportFile {
+		options = append(options, tools.WithMetadata(map[string]any{"provider": "google_drive", "operation": "export"}))
+	}
+	return options
+}
+
+func fileSourceRefs(files []driveconnector.FileMetadata) []tools.SourceRef {
+	refs := make([]tools.SourceRef, 0, len(files))
+	for _, file := range files {
+		refs = append(refs, fileSourceRef(file))
+	}
+	return refs
+}
+
+func fileSourceRef(file driveconnector.FileMetadata) tools.SourceRef {
+	return tools.SourceRef{
+		Kind:     "drive_file",
+		ID:       file.ID,
+		Label:    file.Name,
+		URI:      file.WebViewLink,
+		MimeType: file.MimeType,
+		Meta: map[string]any{
+			"parents": file.Parents,
+			"shared":  file.Shared,
+			"trashed": file.Trashed,
+		},
+	}
+}
+
+func fileArtifactRef(file driveconnector.FileMetadata) *tools.ArtifactRef {
+	if strings.TrimSpace(file.ID) == "" {
+		return nil
+	}
+	return &tools.ArtifactRef{
+		Kind:  "drive_file",
+		ID:    file.ID,
+		Label: file.Name,
+		URI:   file.WebViewLink,
+		Meta:  map[string]any{"mimeType": file.MimeType},
+	}
 }
 
 func googleAPIErrorMessage(err *googleapi.Error) string {

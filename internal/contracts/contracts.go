@@ -16,13 +16,13 @@ const (
 type UserOutputKind string
 
 const (
-	UserOutputKindMessage   UserOutputKind = "message"
-	UserOutputKindSuccess   UserOutputKind = "success"
-	UserOutputKindError     UserOutputKind = "error"
-	UserOutputKindClarify   UserOutputKind = "clarify"
-	UserOutputKindApproval  UserOutputKind = "approval"
-	UserOutputKindProgress  UserOutputKind = "progress"
-	UserOutputKindExpired   UserOutputKind = "expired"
+	UserOutputKindMessage  UserOutputKind = "message"
+	UserOutputKindSuccess  UserOutputKind = "success"
+	UserOutputKindError    UserOutputKind = "error"
+	UserOutputKindClarify  UserOutputKind = "clarify"
+	UserOutputKindApproval UserOutputKind = "approval"
+	UserOutputKindProgress UserOutputKind = "progress"
+	UserOutputKindExpired  UserOutputKind = "expired"
 )
 
 type RiskLevel string
@@ -106,11 +106,20 @@ type ArtifactRef struct {
 	Meta  map[string]any `json:"meta,omitempty"`
 }
 
+type SourceRef struct {
+	Kind     string         `json:"kind,omitempty"`
+	Label    string         `json:"label,omitempty"`
+	URI      string         `json:"uri,omitempty"`
+	ID       string         `json:"id,omitempty"`
+	MimeType string         `json:"mimeType,omitempty"`
+	Meta     map[string]any `json:"meta,omitempty"`
+}
+
 type UserOutput struct {
 	Kind        UserOutputKind `json:"kind"`
 	Text        string         `json:"text"`
 	ArtifactRef *ArtifactRef   `json:"artifactRef,omitempty"`
-	Meta        map[string]any  `json:"meta,omitempty"`
+	Meta        map[string]any `json:"meta,omitempty"`
 }
 
 type AgentResponse struct {
@@ -137,11 +146,16 @@ type ToolCall struct {
 }
 
 type ToolResult struct {
-	ToolCallID string      `json:"toolCallId"`
-	ToolName   string      `json:"toolName"`
-	Success    bool        `json:"success"`
-	Data       any         `json:"data,omitempty"`
-	Error      *ErrorShape `json:"error,omitempty"`
+	ToolCallID     string         `json:"toolCallId"`
+	ToolName       string         `json:"toolName"`
+	Success        bool           `json:"success"`
+	ContentForLLM  string         `json:"contentForLLM,omitempty"`
+	ContentForUser string         `json:"contentForUser,omitempty"`
+	Data           any            `json:"data,omitempty"`
+	ArtifactRef    *ArtifactRef   `json:"artifactRef,omitempty"`
+	SourceRefs     []SourceRef    `json:"sourceRefs,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	Error          *ErrorShape    `json:"error,omitempty"`
 }
 
 type RiskDecision struct {

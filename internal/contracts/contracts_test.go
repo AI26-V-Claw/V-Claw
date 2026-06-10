@@ -60,3 +60,35 @@ func TestRiskDecisionSerializesCheckedAt(t *testing.T) {
 		t.Fatalf("unexpected checkedAt: %s", decoded.CheckedAt.Format(time.RFC3339))
 	}
 }
+
+func TestToolResultSerializesContentAndReferences(t *testing.T) {
+	result := ToolResult{
+		ToolCallID:     "call_001",
+		ToolName:       "drive.getFileMetadata",
+		Success:        true,
+		ContentForLLM:  `{"id":"file_1"}`,
+		ContentForUser: "File: Report",
+		Data:           map[string]any{"payload": map[string]any{"id": "file_1"}},
+		ArtifactRef:    &ArtifactRef{Kind: "drive_file", ID: "file_1", Label: "Report", URI: "https://drive.google.com/file/d/file_1"},
+		SourceRefs:     []SourceRef{{Kind: "drive_file", ID: "file_1", Label: "Report"}},
+		Metadata:       map[string]any{"provider": "google_drive"},
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal tool result: %v", err)
+	}
+	var decoded ToolResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal tool result: %v", err)
+	}
+	if decoded.ContentForLLM == "" || decoded.ContentForUser == "" {
+		t.Fatalf("expected content fields to round-trip, got %#v", decoded)
+	}
+	if decoded.ArtifactRef == nil || decoded.ArtifactRef.ID != "file_1" {
+		t.Fatalf("expected artifact ref to round-trip, got %#v", decoded.ArtifactRef)
+	}
+	if len(decoded.SourceRefs) != 1 || decoded.SourceRefs[0].ID != "file_1" {
+		t.Fatalf("expected source refs to round-trip, got %#v", decoded.SourceRefs)
+	}
+}

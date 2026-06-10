@@ -2,8 +2,6 @@ package sheets
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -324,18 +322,42 @@ func MapError(err error) *ErrorShape {
 
 func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) tools.ToolResult {
 	if errShape != nil {
-		return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: false, ContentForLLM: errShape.Code + ": " + errShape.Message, ContentForUser: errShape.Message, Error: &tools.ToolError{Code: errShape.Code, Message: errShape.Message}}
+		return tools.ErrorResult(call, errShape.Code, errShape.Message)
 	}
-	content := formatJSON(output)
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
+	return tools.SuccessResult(call, output, sheetsResultOptions(output)...)
 }
 
-func formatJSON(output any) string {
-	data, err := json.Marshal(output)
-	if err != nil {
-		return fmt.Sprintf("%#v", output)
+func sheetsResultOptions(output any) []tools.ResultOption {
+	options := []tools.ResultOption{tools.WithMetadata(map[string]any{"provider": "google_sheets"})}
+	switch typed := output.(type) {
+	case sheetsconnector.Spreadsheet:
+		source := spreadsheetSourceRef(typed.ID, typed.Title, typed.URL, "")
+		options = append(options, tools.WithSourceRefs(source))
+		options = append(options, tools.WithArtifactRef(tools.ArtifactRef{Kind: "google_sheet", ID: typed.ID, Label: typed.Title, URI: typed.URL}))
+	case ListSheetsOutput:
+		options = append(options, tools.WithSourceRefs(spreadsheetSourceRef(typed.SpreadsheetID, typed.Title, "", "")))
+	case sheetsconnector.RangeValues:
+		options = append(options, tools.WithSourceRefs(spreadsheetSourceRef(typed.SpreadsheetID, "", "", typed.Range)))
+		options = append(options, tools.WithMetadata(map[string]any{"provider": "google_sheets", "range": typed.Range, "rowCount": len(typed.Values)}))
 	}
-	return string(data)
+	return options
+}
+
+func spreadsheetSourceRef(id string, title string, uri string, sheetRange string) tools.SourceRef {
+	if strings.TrimSpace(uri) == "" && strings.TrimSpace(id) != "" {
+		uri = "https://docs.google.com/spreadsheets/d/" + id + "/edit"
+	}
+	meta := map[string]any{}
+	if strings.TrimSpace(sheetRange) != "" {
+		meta["range"] = sheetRange
+	}
+	return tools.SourceRef{
+		Kind:  "google_sheet",
+		ID:    id,
+		Label: title,
+		URI:   uri,
+		Meta:  meta,
+	}
 }
 
 func googleAPIErrorMessage(err *googleapi.Error) string {

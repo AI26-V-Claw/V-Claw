@@ -126,17 +126,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 			ToolCallID: toolCall.ID,
 			Message:    toolCtx.Err().Error(),
 		})
-		return tools.ToolResult{
-			ToolCallID:     toolCall.ID,
-			ToolName:       toolCall.Name,
-			Success:        false,
-			ContentForLLM:  "Tool execution error for " + toolCall.Name + ": " + toolCtx.Err().Error(),
-			ContentForUser: "Tool lỗi khi chạy: " + toolCall.Name,
-			Error: &tools.ToolError{
-				Code:    tools.ErrorTimeout,
-				Message: toolCtx.Err().Error(),
-			},
-		}
+		return tools.ErrorResult(providerToolCallToToolCall(toolCall), tools.ErrorTimeout, toolCtx.Err().Error(), tools.WithLLMContent("Tool execution error for "+toolCall.Name+": "+toolCtx.Err().Error()), tools.WithUserContent("Tool lỗi khi chạy: "+toolCall.Name))
 	}
 }
 
@@ -202,6 +192,7 @@ func toolErrorCode(result tools.ToolResult) string {
 }
 
 func logPreview(text string, limit int) string {
+	text = tools.SanitizeContent(text, limit)
 	trimmed := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
 	if trimmed == "" {
 		return ""
@@ -536,19 +527,79 @@ func providerToolCallToToolCall(call providers.ToolCall) tools.ToolCall {
 }
 
 func contractToolResult(result tools.ToolResult) contracts.ToolResult {
+	data := map[string]any{
+		"contentForUser": result.ContentForUser,
+		"contentForLLM":  result.ContentForLLM,
+	}
+	if result.Data != nil {
+		data["payload"] = result.Data
+	}
+	if result.ArtifactRef != nil {
+		data["artifactRef"] = contractArtifactRef(result.ArtifactRef)
+	}
+	if len(result.SourceRefs) > 0 {
+		data["sourceRefs"] = contractSourceRefs(result.SourceRefs)
+	}
+	if len(result.Metadata) > 0 {
+		data["metadata"] = cloneToolResultMap(result.Metadata)
+	}
 	contractResult := contracts.ToolResult{
-		ToolCallID: result.ToolCallID,
-		ToolName:   result.ToolName,
-		Success:    result.Success,
-		Data: map[string]any{
-			"contentForUser": result.ContentForUser,
-			"contentForLLM":  result.ContentForLLM,
-		},
+		ToolCallID:     result.ToolCallID,
+		ToolName:       result.ToolName,
+		Success:        result.Success,
+		ContentForLLM:  result.ContentForLLM,
+		ContentForUser: result.ContentForUser,
+		Data:           data,
+		ArtifactRef:    contractArtifactRef(result.ArtifactRef),
+		SourceRefs:     contractSourceRefs(result.SourceRefs),
+		Metadata:       cloneToolResultMap(result.Metadata),
 	}
 	if result.Error != nil {
 		contractResult.Error = toolErrorShape(result)
 	}
 	return contractResult
+}
+
+func contractArtifactRef(ref *tools.ArtifactRef) *contracts.ArtifactRef {
+	if ref == nil {
+		return nil
+	}
+	return &contracts.ArtifactRef{
+		Kind:  ref.Kind,
+		Label: ref.Label,
+		URI:   ref.URI,
+		ID:    ref.ID,
+		Meta:  cloneToolResultMap(ref.Meta),
+	}
+}
+
+func contractSourceRefs(refs []tools.SourceRef) []contracts.SourceRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]contracts.SourceRef, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, contracts.SourceRef{
+			Kind:     ref.Kind,
+			Label:    ref.Label,
+			URI:      ref.URI,
+			ID:       ref.ID,
+			MimeType: ref.MimeType,
+			Meta:     cloneToolResultMap(ref.Meta),
+		})
+	}
+	return out
+}
+
+func cloneToolResultMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func prependToolResultIfMissing(results []contracts.ToolResult, result contracts.ToolResult) []contracts.ToolResult {

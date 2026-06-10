@@ -406,5 +406,21 @@ func cloneToolResultPtr(result *tools.ToolResult) *tools.ToolResult {
 		errCopy := *result.Error
 		cloned.Error = &errCopy
 	}
+	if data, ok := result.Data.(map[string]any); ok {
+		cloned.Data = cloneArguments(data)
+	}
+	if result.ArtifactRef != nil {
+		artifactCopy := *result.ArtifactRef
+		artifactCopy.Meta = cloneArguments(result.ArtifactRef.Meta)
+		cloned.ArtifactRef = &artifactCopy
+	}
+	if len(result.SourceRefs) > 0 {
+		cloned.SourceRefs = make([]tools.SourceRef, len(result.SourceRefs))
+		copy(cloned.SourceRefs, result.SourceRefs)
+		for i := range cloned.SourceRefs {
+			cloned.SourceRefs[i].Meta = cloneArguments(result.SourceRefs[i].Meta)
+		}
+	}
+	cloned.Metadata = cloneArguments(result.Metadata)
 	return &cloned
 }
