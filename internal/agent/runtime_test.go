@@ -990,6 +990,67 @@ func TestNormalizeGmailListEmailsTodayUsesDateOnlyRange(t *testing.T) {
 	}
 }
 
+func TestNormalizeGmailListEmailsDayBeforeYesterdayUsesDateOnlyRange(t *testing.T) {
+	now := time.Date(2026, 6, 10, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{Name: "gmail.listEmails", Arguments: map[string]any{}}
+
+	normalized := normalizeProviderToolCall(now, call, "xem email h\u00f4m kia")
+
+	if normalized.Arguments["after"] != "2026-06-08" {
+		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
+	}
+	if normalized.Arguments["before"] != "2026-06-09" {
+		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
+	}
+}
+
+func TestNormalizeGmailListEmailsTodayAndDayBeforeYesterdayUsesDisjointQuery(t *testing.T) {
+	now := time.Date(2026, 6, 10, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	userText := "xem trong h\u00f4m nay v\u00e0 h\u00f4m kia c\u00f3 nh\u1eefng ai g\u1eedi mail cho t\u00f4i"
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"query":  userText,
+			"after":  "2026-06-08",
+			"before": "2026-06-11",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, userText)
+
+	want := "((after:2026/06/10 before:2026/06/11) OR (after:2026/06/08 before:2026/06/09))"
+	if normalized.Arguments["query"] != want {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+	if _, ok := normalized.Arguments["after"]; ok {
+		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
+	}
+	if _, ok := normalized.Arguments["before"]; ok {
+		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
+	}
+	query := normalized.Arguments["query"].(string)
+	if strings.Contains(query, "after:2026/06/09 before:2026/06/10") {
+		t.Fatalf("disjoint query should not include yesterday: %q", query)
+	}
+}
+
+func TestNormalizeGmailListEmailsDisjointDatesKeepRealFilterQuery(t *testing.T) {
+	now := time.Date(2026, 6, 10, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"query": "from:alice@example.com",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "email from alice h\u00f4m nay v\u00e0 h\u00f4m kia")
+
+	want := "from:alice@example.com ((after:2026/06/10 before:2026/06/11) OR (after:2026/06/08 before:2026/06/09))"
+	if normalized.Arguments["query"] != want {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+}
+
 func TestNormalizeGmailListThreadsTodayUsesDateOnlyRange(t *testing.T) {
 	now := time.Date(2026, 6, 4, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
 	call := providers.ToolCall{

@@ -1128,7 +1128,7 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 	case ToolNameGetThread:
 		return getThreadSchema()
 	case ToolNameListDrafts:
-		return tools.ToolSchema{"type": "object", "properties": map[string]any{"maxResults": map[string]any{"type": "number"}, "pageToken": map[string]any{"type": "string"}}, "additionalProperties": false}
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"maxResults": maxResultsSchema(), "pageToken": map[string]any{"type": "string"}}, "additionalProperties": false}
 	case ToolNameGetDraft:
 		return getDraftSchema()
 	case ToolNameCreateDraft:
@@ -1202,7 +1202,7 @@ func (t GmailTool) RiskLevel() tools.RiskLevel {
 func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
 	switch t.name {
 	case ToolNameListEmails:
-		output, errShape := t.service.ListEmails(ctx, ListEmailsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: int64Arg(call.Arguments, "maxResults"), PageToken: stringArg(call.Arguments, "pageToken")})
+		output, errShape := t.service.ListEmails(ctx, ListEmailsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameListLabels:
 		output, errShape := t.service.ListLabels(ctx, ListLabelsInput{})
@@ -1214,13 +1214,13 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		output, errShape := t.service.GetEmail(ctx, GetEmailInput{MessageID: stringArg(call.Arguments, "messageId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameListThreads:
-		output, errShape := t.service.ListThreads(ctx, ListThreadsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: int64Arg(call.Arguments, "maxResults"), PageToken: stringArg(call.Arguments, "pageToken")})
+		output, errShape := t.service.ListThreads(ctx, ListThreadsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameGetThread:
 		output, errShape := t.service.GetThread(ctx, GetThreadInput{ThreadID: stringArg(call.Arguments, "threadId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameListDrafts:
-		output, errShape := t.service.ListDrafts(ctx, ListDraftsInput{MaxResults: int64Arg(call.Arguments, "maxResults"), PageToken: stringArg(call.Arguments, "pageToken")})
+		output, errShape := t.service.ListDrafts(ctx, ListDraftsInput{MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameGetDraft:
 		output, errShape := t.service.GetDraft(ctx, GetDraftInput{DraftID: stringArg(call.Arguments, "draftId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
@@ -1322,7 +1322,16 @@ func multilineStringArg(args map[string]any, name string) string {
 }
 
 func listSchema() tools.ToolSchema {
-	return tools.ToolSchema{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "from": map[string]any{"type": "string"}, "subject": map[string]any{"type": "string"}, "after": map[string]any{"type": "string"}, "before": map[string]any{"type": "string"}, "labelIds": arrayStringSchema(), "maxResults": map[string]any{"type": "number"}, "pageToken": map[string]any{"type": "string"}}, "additionalProperties": false}
+	return tools.ToolSchema{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "from": map[string]any{"type": "string"}, "subject": map[string]any{"type": "string"}, "after": map[string]any{"type": "string"}, "before": map[string]any{"type": "string"}, "labelIds": arrayStringSchema(), "maxResults": maxResultsSchema(), "pageToken": map[string]any{"type": "string"}}, "additionalProperties": false}
+}
+
+func maxResultsSchema() map[string]any {
+	return map[string]any{
+		"type":        "number",
+		"minimum":     1,
+		"maximum":     maxAllowedResults,
+		"description": "Omit to use default 10.",
+	}
 }
 
 func getEmailSchema() tools.ToolSchema {
@@ -1426,6 +1435,17 @@ func int64Arg(args map[string]any, name string) int64 {
 	default:
 		return 0
 	}
+}
+
+func boundedInt64Arg(args map[string]any, name string, fallback int64, max int64) int64 {
+	value := int64Arg(args, name)
+	if value < 1 {
+		return fallback
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func stringSliceArg(args map[string]any, name string) []string {

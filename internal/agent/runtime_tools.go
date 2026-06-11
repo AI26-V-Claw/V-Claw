@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"vclaw/internal/contracts"
@@ -36,16 +35,4 @@ func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall
 		return tools.PermissionDeniedResult(providerToolCallToToolCall(toolCall))
 	}
 	return r.executeAllowedTool(ctx, toolCall, definition)
-}
-
-func prependToolResultIfMissing(results []contracts.ToolResult, result contracts.ToolResult) []contracts.ToolResult {
-	for _, existing := range results {
-		if strings.TrimSpace(existing.ToolCallID) != "" && existing.ToolCallID == result.ToolCallID {
-			return results
-		}
-	}
-	merged := make([]contracts.ToolResult, 0, len(results)+1)
-	merged = append(merged, result)
-	merged = append(merged, results...)
-	return merged
 }
