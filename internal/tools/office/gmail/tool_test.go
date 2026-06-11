@@ -3,6 +3,7 @@ package gmail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -315,6 +316,67 @@ func TestGmailListToolBoundsMaxResults(t *testing.T) {
 				t.Fatalf("maxResults = %d, want %d", gotMaxResults, tt.want)
 			}
 		})
+	}
+}
+
+func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
+	longSnippet := strings.Repeat("long snippet should stay out of llm content ", 80)
+	messages := make([]gmailconnector.MessageSummary, 0, 12)
+	for i := 0; i < 12; i++ {
+		subject := fmt.Sprintf("Message %02d", i+1)
+		if i == 10 {
+			subject = "Thông báo tham gia sự kiện Test memory for Sprint2"
+		}
+		if i == 11 {
+			subject = "Re: thông tin lịch trình hôm nay"
+		}
+		messages = append(messages, gmailconnector.MessageSummary{
+			ID:              fmt.Sprintf("msg-%02d", i+1),
+			ThreadID:        fmt.Sprintf("thread-%02d", i+1),
+			From:            fmt.Sprintf("Sender %02d <sender%02d@example.com>", i+1, i+1),
+			To:              "baolnc@vclaw.site",
+			Subject:         subject,
+			Date:            "Tue, 9 Jun 2026 10:00:00 +0700",
+			Snippet:         longSnippet,
+			LabelIDs:        []string{"INBOX"},
+			InternalDate:    int64(1780970400000 + i),
+			MessageIDHeader: fmt.Sprintf("<msg-%02d@example.com>", i+1),
+			References:      "<old@example.com>",
+		})
+	}
+	service := NewService(&mockConnector{
+		listMessages: func(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error) {
+			return messages, "next-page", nil
+		},
+	})
+
+	result := NewTool(ToolNameListEmails, service).Execute(context.Background(), tools.ToolCall{
+		ID:   "call-list",
+		Name: ToolNameListEmails,
+		Arguments: map[string]any{
+			"query": "in:inbox",
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("Execute() failed: %#v", result.Error)
+	}
+	for _, subject := range []string{"Message 01", "Thông báo tham gia sự kiện Test memory for Sprint2", "Re: thông tin lịch trình hôm nay"} {
+		if !strings.Contains(result.ContentForLLM, subject) {
+			t.Fatalf("ContentForLLM missing subject %q: %s", subject, result.ContentForLLM)
+		}
+	}
+	if strings.Contains(result.ContentForLLM, "long snippet should stay out") {
+		t.Fatalf("ContentForLLM should not contain long snippets: %s", result.ContentForLLM)
+	}
+	if strings.Contains(result.ContentForLLM, "MessageIDHeader") || strings.Contains(result.ContentForLLM, "References") {
+		t.Fatalf("ContentForLLM should omit verbose message metadata: %s", result.ContentForLLM)
+	}
+	if !strings.Contains(result.ContentForUser, "long snippet should stay out") {
+		t.Fatalf("ContentForUser should keep full output, got: %s", result.ContentForUser)
+	}
+	if !strings.Contains(result.ContentForLLM, `"NextPageToken":"next-page"`) {
+		t.Fatalf("ContentForLLM should keep next page token, got: %s", result.ContentForLLM)
 	}
 }
 

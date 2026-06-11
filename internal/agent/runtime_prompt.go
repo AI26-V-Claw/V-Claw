@@ -100,6 +100,8 @@ Format final answers for chat channels:
 - Start with one short summary line.
 - For Gmail, Calendar, Chat, or People results, use compact bullets with the important fields only.
 - Prefer 5 to 10 bullets unless the user asks for more.
+- For Gmail list results, if the user asks to list every email, include every message in Messages and do not group by sender unless the user asks for unique senders.
+- For Gmail list results, group relative-date answers by LocalDate. Date is the original email header and may use a different timezone.
 - Do not dump raw JSON, raw tool outputs, internal tool names, or opaque IDs unless the user explicitly asks.
 - Use plain text only. Do not use Markdown bold, italic, inline code, headings, or syntax markers like **, __, backticks, or #.
 - Avoid Markdown tables because Telegram renders them poorly in plain text.
