@@ -97,14 +97,19 @@ func (p ToolPolicy) DecideToolCall(toolCallID string, definition tools.ToolDefin
 		decision.Reason = userPolicyReason(definition.Name, definition.RiskLevel, policyDecision)
 		return decision
 	}
-	if definition.RequiresApproval {
+	if definition.RequiresApproval || requiresApproval(definition.Capability, definition.RiskLevel) {
 		decision.Decision = contracts.RiskDecisionRequiresApproval
 		decision.RequiresApproval = true
 		decision.Reason = fmt.Sprintf("tool %s requires approval for risk %s", definition.Name, definition.RiskLevel)
 		return decision
 	}
-	decision.Decision = contracts.RiskDecisionAllow
-	decision.Reason = "tool allowed by default policy"
+	if p.canUse(definition.Capability, definition.RiskLevel) {
+		decision.Decision = contracts.RiskDecisionAllow
+		decision.Reason = "safe read-only or compute tool"
+		return decision
+	}
+	decision.Decision = contracts.RiskDecisionBlock
+	decision.Reason = "tool blocked by policy"
 	return decision
 }
 
@@ -141,16 +146,25 @@ func (p ToolPolicy) currentUserConfig() UserPolicyConfig {
 }
 
 func userPolicyDecision(cfg UserPolicyConfig, riskLevel contracts.RiskLevel) (contracts.RiskDecisionStatus, bool) {
-	if containsRiskLevel(riskLevel, cfg.AutoAllow) {
-		return contracts.RiskDecisionAllow, true
-	}
 	if containsRiskLevel(riskLevel, cfg.AlwaysBlock) {
 		return contracts.RiskDecisionBlock, true
 	}
 	if containsRiskLevel(riskLevel, cfg.RequireApproval) {
 		return contracts.RiskDecisionRequiresApproval, true
 	}
+	if isLowRiskLevel(riskLevel) && containsRiskLevel(riskLevel, cfg.AutoAllow) {
+		return contracts.RiskDecisionAllow, true
+	}
 	return "", false
+}
+
+func isLowRiskLevel(riskLevel contracts.RiskLevel) bool {
+	switch riskLevel {
+	case contracts.RiskLevelSafeRead, contracts.RiskLevelSafeCompute:
+		return true
+	default:
+		return false
+	}
 }
 
 func userPolicyReason(toolName string, riskLevel tools.RiskLevel, decision contracts.RiskDecisionStatus) string {
