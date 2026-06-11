@@ -1015,6 +1015,29 @@ func TestTelegramRenderHTMLFormatsMarkdownHeading(t *testing.T) {
 	}
 }
 
+func TestTelegramRenderHTMLFormatsDriveFolderMarkdown(t *testing.T) {
+	rendered := telegramRenderHTML(strings.Join([]string{
+		"Dưới đây là các thư mục Google Drive bạn đang có:",
+		"",
+		"1. **Vclaw**",
+		"   - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)",
+		"   - Được chỉnh sửa lần cuối: 10 tháng 6, 2026",
+	}, "\n"))
+
+	for _, want := range []string{
+		"1. <b>Vclaw</b>",
+		"   • Link: <a href=\"https://drive.google.com/drive/folders/folder_1\">Mở thư mục</a>",
+		"   • Được chỉnh sửa lần cuối: 10 tháng 6, 2026",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered Drive markdown to contain %q, got %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "**Vclaw**") || strings.Contains(rendered, "[Mở thư mục]") {
+		t.Fatalf("expected markdown markers to be rendered away, got %q", rendered)
+	}
+}
+
 func XTestTelegramRenderHTMLConvertsDashListsToBullets(t *testing.T) {
 	rendered := telegramRenderHTML("- Mục lớn\n - Mục con")
 
