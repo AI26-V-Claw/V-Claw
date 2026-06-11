@@ -351,7 +351,77 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 	if err != nil {
 		data = []byte(fmt.Sprintf("%#v", output))
 	}
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: string(data), ContentForUser: string(data)}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  string(data),
+		ContentForUser: string(data),
+		ArtifactRef:    docsArtifactRef(output),
+		Metadata:       docsResultMetadata(output),
+		Truncated:      docsResultTruncated(output),
+	}
+}
+
+func docsArtifactRef(output any) *tools.ToolArtifactRef {
+	switch v := output.(type) {
+	case DocumentOutput:
+		return documentArtifactRef(v.Document.ID, v.Document.Title)
+	case gdocs.Document:
+		return documentArtifactRef(v.ID, v.Title)
+	case gdocs.AppendTextOutput:
+		return documentArtifactRef(v.DocumentID, v.Title)
+	case gdocs.EditTextOutput:
+		return documentArtifactRef(v.DocumentID, v.Title)
+	}
+	return nil
+}
+
+func documentArtifactRef(id string, title string) *tools.ToolArtifactRef {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	return &tools.ToolArtifactRef{
+		Kind:  "google.docs.document",
+		Label: firstNonEmpty(title, "Google Docs document"),
+		URI:   "https://docs.google.com/document/d/" + strings.TrimSpace(id) + "/edit",
+		ID:    strings.TrimSpace(id),
+	}
+}
+
+func docsResultMetadata(output any) map[string]any {
+	meta := map[string]any{}
+	switch v := output.(type) {
+	case DocumentOutput:
+		meta["text_chars"] = len([]rune(v.Text))
+		meta["preview_chars"] = v.PreviewChars
+		if strings.TrimSpace(v.Document.Revision) != "" {
+			meta["revision"] = v.Document.Revision
+		}
+	case gdocs.Document:
+		meta["text_chars"] = len([]rune(v.BodyText))
+		if strings.TrimSpace(v.Revision) != "" {
+			meta["revision"] = v.Revision
+		}
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
+}
+
+func docsResultTruncated(output any) bool {
+	document, ok := output.(DocumentOutput)
+	return ok && document.Truncated
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func mapError(err error) *ErrorShape {

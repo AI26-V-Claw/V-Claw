@@ -47,6 +47,28 @@ func (fakeSheetsConnector) DuplicateSheet(context.Context, string, int64, string
 	return gsheets.SpreadsheetSummary{}, nil
 }
 
+type artifactSheetsConnector struct {
+	fakeSheetsConnector
+}
+
+func (artifactSheetsConnector) GetSpreadsheet(context.Context, string) (gsheets.SpreadsheetSummary, error) {
+	return gsheets.SpreadsheetSummary{
+		ID:             "sheet_123",
+		Title:          "Metrics",
+		SpreadsheetURL: "https://docs.google.com/spreadsheets/d/sheet_123/edit",
+		Sheets:         []gsheets.SheetSummary{{ID: 1, Title: "Data"}},
+	}, nil
+}
+
+func (artifactSheetsConnector) ReadValues(context.Context, string, string) (gsheets.ValuesOutput, error) {
+	return gsheets.ValuesOutput{
+		SpreadsheetID:  "sheet_123",
+		Range:          "Data!A1:B2",
+		MajorDimension: "ROWS",
+		Values:         [][]any{{"Name", "Value"}, {"Smoke", "OK"}},
+	}, nil
+}
+
 func TestRegisterToolsMetadata(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	if err := RegisterTools(registry, NewService(fakeSheetsConnector{})); err != nil {
@@ -65,6 +87,34 @@ func TestRegisterToolsMetadata(t *testing.T) {
 	assertToolMetadata(t, registry, ToolNameRenameSheet, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameDeleteSheet, tools.CapabilityMutating, tools.RiskLevelDestructive, true)
 	assertToolMetadata(t, registry, ToolNameDuplicateSheet, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+}
+
+func TestSheetsToolResultIncludesArtifactAndSourceMetadata(t *testing.T) {
+	read := NewTool(ToolNameReadValues, NewService(artifactSheetsConnector{}))
+	result := read.Execute(context.Background(), tools.ToolCall{
+		ID:   "call_read_values",
+		Name: ToolNameReadValues,
+		Arguments: map[string]any{
+			"spreadsheetId": "sheet_123",
+			"range":         "Data!A1:B2",
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	if result.ArtifactRef == nil {
+		t.Fatal("expected artifact ref")
+	}
+	if result.ArtifactRef.Kind != "google.sheets.spreadsheet" || result.ArtifactRef.ID != "sheet_123" {
+		t.Fatalf("unexpected artifact ref: %#v", result.ArtifactRef)
+	}
+	if result.Metadata["range"] != "Data!A1:B2" {
+		t.Fatalf("expected range metadata, got %#v", result.Metadata)
+	}
+	if result.Metadata["row_count"] != 2 {
+		t.Fatalf("expected row_count metadata, got %#v", result.Metadata)
+	}
 }
 
 func assertToolMetadata(t *testing.T, registry *tools.ToolRegistry, name string, capability tools.Capability, risk tools.RiskLevel, approval bool) {

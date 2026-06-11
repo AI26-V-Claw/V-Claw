@@ -54,6 +54,24 @@ func (fakeDriveConnector) UntrashFile(context.Context, string) (gdrive.FileSumma
 	return gdrive.FileSummary{}, nil
 }
 
+type artifactDriveConnector struct {
+	fakeDriveConnector
+}
+
+func (artifactDriveConnector) GetFile(context.Context, string) (gdrive.FileSummary, error) {
+	return gdrive.FileSummary{ID: "file_123", Name: "Report", WebViewLink: "https://drive.google.com/file/d/file_123/view"}, nil
+}
+
+func (artifactDriveConnector) DownloadFile(context.Context, string, int64) (gdrive.FileContentOutput, error) {
+	return gdrive.FileContentOutput{
+		File:      gdrive.FileSummary{ID: "file_123", Name: "Report", WebViewLink: "https://drive.google.com/file/d/file_123/view"},
+		MimeType:  "text/plain",
+		Size:      2048,
+		Content:   "preview",
+		Truncated: true,
+	}, nil
+}
+
 func TestRegisterToolsMetadata(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	if err := RegisterTools(registry, NewService(fakeDriveConnector{})); err != nil {
@@ -82,6 +100,37 @@ func TestUpdateMetadataDescriptionRejectsMoveUse(t *testing.T) {
 		if !strings.Contains(description, want) {
 			t.Fatalf("expected update metadata description to contain %q, got %q", want, description)
 		}
+	}
+}
+
+func TestDriveToolResultIncludesArtifactMetadataAndTruncation(t *testing.T) {
+	download := NewTool(ToolNameDownloadFile, NewService(artifactDriveConnector{}))
+	result := download.Execute(context.Background(), tools.ToolCall{
+		ID:   "call_download",
+		Name: ToolNameDownloadFile,
+		Arguments: map[string]any{
+			"fileId":   "file_123",
+			"maxBytes": float64(1024),
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	if result.ArtifactRef == nil {
+		t.Fatal("expected artifact ref")
+	}
+	if result.ArtifactRef.Kind != "google.drive.file" || result.ArtifactRef.ID != "file_123" {
+		t.Fatalf("unexpected artifact ref: %#v", result.ArtifactRef)
+	}
+	if result.Metadata["mime_type"] != "text/plain" {
+		t.Fatalf("expected mime_type metadata, got %#v", result.Metadata)
+	}
+	if result.Metadata["size_bytes"] != int64(2048) {
+		t.Fatalf("expected size_bytes metadata, got %#v", result.Metadata)
+	}
+	if !result.Truncated {
+		t.Fatal("expected truncated result")
 	}
 }
 

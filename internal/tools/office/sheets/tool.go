@@ -516,7 +516,90 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 	if err != nil {
 		data = []byte(fmt.Sprintf("%#v", output))
 	}
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: string(data), ContentForUser: string(data)}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  string(data),
+		ContentForUser: string(data),
+		ArtifactRef:    sheetsArtifactRef(output),
+		Metadata:       sheetsResultMetadata(output),
+	}
+}
+
+func sheetsArtifactRef(output any) *tools.ToolArtifactRef {
+	switch v := output.(type) {
+	case gsheets.SpreadsheetSummary:
+		return spreadsheetArtifactRef(v.ID, v.Title, v.SpreadsheetURL)
+	case gsheets.ValuesOutput:
+		return spreadsheetArtifactRef(v.SpreadsheetID, "", "")
+	case gsheets.BatchValuesOutput:
+		return spreadsheetArtifactRef(v.SpreadsheetID, "", "")
+	case gsheets.WriteValuesOutput:
+		return spreadsheetArtifactRef(v.SpreadsheetID, "", "")
+	case gsheets.AppendValuesOutput:
+		return spreadsheetArtifactRef(v.SpreadsheetID, "", "")
+	case gsheets.ClearValuesOutput:
+		return spreadsheetArtifactRef(v.SpreadsheetID, "", "")
+	}
+	return nil
+}
+
+func spreadsheetArtifactRef(id string, title string, uri string) *tools.ToolArtifactRef {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		uri = "https://docs.google.com/spreadsheets/d/" + id + "/edit"
+	}
+	return &tools.ToolArtifactRef{
+		Kind:  "google.sheets.spreadsheet",
+		Label: firstNonEmpty(title, "Google Sheets spreadsheet"),
+		URI:   uri,
+		ID:    id,
+	}
+}
+
+func sheetsResultMetadata(output any) map[string]any {
+	meta := map[string]any{}
+	switch v := output.(type) {
+	case gsheets.SpreadsheetSummary:
+		meta["sheet_count"] = len(v.Sheets)
+	case gsheets.ValuesOutput:
+		meta["range"] = v.Range
+		meta["row_count"] = len(v.Values)
+		meta["major_dimension"] = v.MajorDimension
+	case gsheets.BatchValuesOutput:
+		meta["range_count"] = len(v.Ranges)
+	case gsheets.WriteValuesOutput:
+		meta["updated_range"] = v.UpdatedRange
+		meta["updated_rows"] = v.UpdatedRows
+		meta["updated_columns"] = v.UpdatedColumns
+		meta["updated_cells"] = v.UpdatedCells
+	case gsheets.AppendValuesOutput:
+		meta["table_range"] = v.TableRange
+		meta["updated_range"] = v.UpdatedRange
+		meta["updated_rows"] = v.UpdatedRows
+		meta["updated_columns"] = v.UpdatedColumns
+		meta["updated_cells"] = v.UpdatedCells
+	case gsheets.ClearValuesOutput:
+		meta["cleared_range"] = v.ClearedRange
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func mapError(err error) *ErrorShape {

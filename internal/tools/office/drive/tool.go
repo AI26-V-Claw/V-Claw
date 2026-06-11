@@ -587,7 +587,99 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 	if err != nil {
 		data = []byte(fmt.Sprintf("%#v", output))
 	}
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: string(data), ContentForUser: string(data)}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  string(data),
+		ContentForUser: string(data),
+		ArtifactRef:    driveArtifactRef(output),
+		Metadata:       driveResultMetadata(call, output),
+		Truncated:      driveResultTruncated(output),
+	}
+}
+
+func driveArtifactRef(output any) *tools.ToolArtifactRef {
+	switch v := output.(type) {
+	case gdrive.FileSummary:
+		return driveFileArtifactRef(v)
+	case gdrive.FileContentOutput:
+		return driveFileArtifactRef(v.File)
+	case map[string]any:
+		if file, ok := v["File"].(gdrive.FileSummary); ok {
+			return driveFileArtifactRef(file)
+		}
+		if permission, ok := v["Permission"].(gdrive.PermissionSummary); ok {
+			return drivePermissionArtifactRef(permission)
+		}
+	}
+	return nil
+}
+
+func driveFileArtifactRef(file gdrive.FileSummary) *tools.ToolArtifactRef {
+	if strings.TrimSpace(file.ID) == "" {
+		return nil
+	}
+	return &tools.ToolArtifactRef{
+		Kind:  "google.drive.file",
+		Label: firstNonEmpty(file.Name, "Google Drive file"),
+		URI:   file.WebViewLink,
+		ID:    file.ID,
+	}
+}
+
+func drivePermissionArtifactRef(permission gdrive.PermissionSummary) *tools.ToolArtifactRef {
+	if strings.TrimSpace(permission.ID) == "" {
+		return nil
+	}
+	return &tools.ToolArtifactRef{
+		Kind:  "google.drive.permission",
+		Label: firstNonEmpty(permission.EmailAddress, permission.Type),
+		ID:    permission.ID,
+	}
+}
+
+func driveResultMetadata(call tools.ToolCall, output any) map[string]any {
+	meta := map[string]any{}
+	switch v := output.(type) {
+	case gdrive.ListFilesOutput:
+		meta["file_count"] = len(v.Files)
+		if strings.TrimSpace(v.NextPageToken) != "" {
+			meta["next_page_token"] = v.NextPageToken
+		}
+	case gdrive.FileContentOutput:
+		meta["mime_type"] = v.MimeType
+		meta["size_bytes"] = v.Size
+	case map[string]any:
+		if permissions, ok := v["Permissions"].([]gdrive.PermissionSummary); ok {
+			meta["permission_count"] = len(permissions)
+		}
+		if permission, ok := v["Permission"].(gdrive.PermissionSummary); ok {
+			meta["permission_type"] = permission.Type
+			meta["permission_role"] = permission.Role
+		}
+	}
+	if fileID := stringArg(call.Arguments, "fileId"); strings.TrimSpace(fileID) != "" {
+		meta["file_id"] = fileID
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
+}
+
+func driveResultTruncated(output any) bool {
+	content, ok := output.(gdrive.FileContentOutput)
+	return ok && content.Truncated
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func mapError(err error) *ErrorShape {
