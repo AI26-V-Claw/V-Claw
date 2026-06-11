@@ -28,6 +28,7 @@ import (
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
 	gmailtool "vclaw/internal/tools/office/gmail"
+	fstool "vclaw/internal/tools/os/filesystem"
 	peopletool "vclaw/internal/tools/office/people"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
@@ -156,6 +157,12 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	registry := tools.NewToolRegistry()
 	if err := tools.RegisterBuiltInTools(registry); err != nil {
 		return nil, err
+	}
+	fstoolConfig := fstool.Config{
+		AllowedRoots: []string{strings.TrimSpace(config.SandboxWorkspaceDir)},
+	}
+	if err := fstool.RegisterTools(registry, fstoolConfig); err != nil {
+		return nil, fmt.Errorf("register filesystem tools: %w", err)
 	}
 	if config.EnableSandboxTools {
 		sandboxConfig, err := newSandboxToolConfig(config)
