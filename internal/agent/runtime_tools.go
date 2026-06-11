@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
-	"sync"
 	"strings"
 	"time"
 
@@ -614,120 +612,13 @@ func safeID(id string) string {
 	return strings.NewReplacer(" ", "_", "/", "_", "\\", "_").Replace(id)
 }
 
-func (r *Runtime) executeParallelBatch(
-	ctx context.Context,
-	toolCalls []providers.ToolCall,
-	definitions map[string]tools.ToolDefinition,
-	cfg ParallelConfig,
-) []tools.ToolResult {
-	results := make([]tools.ToolResult, len(toolCalls))
-	if len(toolCalls) == 0 {
-		return results
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	toolRegistry := map[string]tools.Tool{}
-	if r != nil && r.registry != nil {
-		for _, definition := range r.registry.ListTools() {
-			if tool, ok := r.registry.GetTool(definition.Name); ok && tool != nil {
-				toolRegistry[definition.Name] = tool
-			}
-		}
-	}
-
-	workerCap := cfg.MaxWorkers
-	if workerCap < 1 {
-		workerCap = 1
-	}
-	if workerCap > len(toolCalls) {
-		workerCap = len(toolCalls)
-	}
-
-	sem := make(chan struct{}, workerCap)
-	var wg sync.WaitGroup
-
-	for i, call := range toolCalls {
-		i, call := i, call
-
-		tool, ok := toolRegistry[call.Name]
-		if !ok || tool == nil {
-			results[i] = tools.ToolNotFoundResult(providerToolCallToToolCall(call))
-			continue
-		}
-		if r != nil && !r.policy.CanRunInParallel(tool) {
-			results[i] = tools.PermissionDeniedResult(providerToolCallToToolCall(call))
-			if r != nil && r.logger != nil {
-				r.logger.Warn("parallel tool blocked",
-					"tool_call_id", call.ID,
-					"tool_name", call.Name,
-					"reason", "tool is not parallel-safe",
-				)
-			}
-			continue
-		}
-
-		definition := definitions[call.Name]
-		if definition.Name == "" {
-			definition.Name = call.Name
-		}
-		if definition.RequiresApproval {
-			results[i] = tools.PermissionDeniedResult(providerToolCallToToolCall(call))
-			if r != nil && r.logger != nil {
-				r.logger.Warn("parallel tool blocked",
-					"tool_call_id", call.ID,
-					"tool_name", call.Name,
-					"reason", "tool requires approval",
-				)
-			}
-			continue
-		}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			defer func() {
-				if rec := recover(); rec != nil {
-					if r != nil && r.logger != nil {
-						r.logger.Error("parallel tool panic",
-							"tool_call_id", call.ID,
-							"tool_name", call.Name,
-							"error", rec,
-						)
-					}
-					results[i] = tools.ExecutionErrorResult(
-						providerToolCallToToolCall(call),
-						fmt.Errorf("panic: %v", rec),
-					)
-				}
-			}()
-
-			timeout := definition.Timeout
-			if timeout <= 0 && r != nil {
-				timeout = r.toolTimeout
-			}
-			if timeout <= 0 {
-				timeout = DefaultToolTimeout
-			}
-
-			toolCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-
-			results[i] = r.executeAllowedTool(toolCtx, call, definition)
-		}()
-	}
-
-	wg.Wait()
-	return results
-}
-
-func (r *Runtime) canBatchRunInParallel(
+func (r *Runtime) prepareParallelBatch(
 	toolCalls []providers.ToolCall,
 	parallelEnabled bool,
-) (definitions map[string]tools.ToolDefinition, ok bool) {
+	userText string,
+	evidenceText string,
+	activeClarification bool,
+) ([]parallelToolCall, bool) {
 	if !parallelEnabled || len(toolCalls) <= 1 {
 		return nil, false
 	}
@@ -735,12 +626,15 @@ func (r *Runtime) canBatchRunInParallel(
 		return nil, false
 	}
 
-	definitions = make(map[string]tools.ToolDefinition, len(toolCalls))
+	batch := make([]parallelToolCall, 0, len(toolCalls))
 	now := time.Now()
 	if r.now != nil {
 		now = r.now()
 	}
-	for _, call := range toolCalls {
+	for _, originalCall := range toolCalls {
+		call := originalCall
+		call.Arguments = cloneArguments(originalCall.Arguments)
+		call = sanitizeUnsupportedOptionalArguments(call, evidenceText)
 		definition, found := r.registry.GetDefinition(call.Name)
 		if !found {
 			return nil, false
@@ -762,8 +656,16 @@ func (r *Runtime) canBatchRunInParallel(
 		if !r.policy.CanRunInParallel(tool) {
 			return nil, false
 		}
-		definitions[call.Name] = definition
+		call = normalizeProviderToolCall(now, call, userText)
+		if len(pendingMissingFieldsForToolCall(call, definition, true, activeClarification, userText)) > 0 {
+			return nil, false
+		}
+		batch = append(batch, parallelToolCall{
+			call:       call,
+			definition: definition,
+			tool:       tool,
+		})
 	}
 
-	return definitions, true
+	return batch, true
 }
