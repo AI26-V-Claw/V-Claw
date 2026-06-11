@@ -4,7 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -53,6 +55,15 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	if *allowedUserID == 0 {
 		return fmt.Errorf("ALLOWED_TELEGRAM_USER_ID or VCLAW_TELEGRAM_ALLOWED_USER_IDS is required")
 	}
+
+	// Prevent duplicate instances: bind a local TCP port derived from the bot
+	// token. The OS releases the port automatically when the process dies, so
+	// zombie processes from a previous go run are detected immediately.
+	lock, err := acquireTelegramLock(*botToken)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	bundle, err := app.BuildRuntime(ctx, app.AgentRuntimeConfig{
@@ -131,6 +142,30 @@ func firstCSV(value string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[0])
+}
+
+// acquireTelegramLock binds a local TCP port derived from the bot token.
+// If the port is already in use, another instance is running. The OS releases
+// the port automatically when the process exits, even if killed ungracefully.
+func acquireTelegramLock(token string) (net.Listener, error) {
+	port := telegramLockPort(token)
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return nil, fmt.Errorf(
+			"another vclaw telegram instance is already running for this bot token (port %d in use).\n"+
+				"Find and stop it with: Get-Process | Where-Object {$_.Name -like '*vclaw*'} | Stop-Process",
+			port,
+		)
+	}
+	return ln, nil
+}
+
+// telegramLockPort derives a stable port in the ephemeral range 49152–65534
+// from the bot token so that different tokens do not conflict.
+func telegramLockPort(token string) int {
+	h := fnv.New32a()
+	h.Write([]byte(token))
+	return 49152 + int(h.Sum32()%16382)
 }
 
 func printTelegramUsage() {
