@@ -9,10 +9,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/app"
 	"vclaw/internal/channels/slack"
+	"vclaw/internal/monitoring"
 )
 
 func runSlack(ctx context.Context, args []string) error {
@@ -58,6 +60,7 @@ func runSlackRun(ctx context.Context, args []string) error {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	metrics := monitoring.NewMetrics(time.Now())
 	bundle, err := app.BuildRuntime(ctx, app.AgentRuntimeConfig{
 		DataDir:               *dataDir,
 		OpenAIAPIKey:          envFirst("OPENAI_API_KEY", "LLM_API_KEY"),
@@ -75,6 +78,7 @@ func runSlackRun(ctx context.Context, args []string) error {
 		SandboxWorkspaceDir:   envOrDefault("VCLAW_SANDBOX_WORKSPACE_DIR", ".sandbox-workspace"),
 		SandboxImage:          envFirst("VCLAW_SANDBOX_IMAGE"),
 		Logger:                logger,
+		Observer:              metrics,
 	})
 	if err != nil {
 		return err
@@ -82,6 +86,9 @@ func runSlackRun(ctx context.Context, args []string) error {
 
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if err := startMetricsServer(runCtx, logger, bundle, metrics, "slack"); err != nil {
+		return err
+	}
 	stopPolicyReload := startPolicyReloadWatcher(runCtx, logger, bundle.PolicyStore)
 	defer stopPolicyReload()
 

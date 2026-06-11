@@ -47,6 +47,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 			Comment:    command.comment,
 		})
 		if err != nil {
+			m.runtime.recordRequestObservation(contracts.AgentResponse{}, err)
 			return contracts.AgentResponse{}, err
 		}
 		if output := renderUserOutput(response); output != nil {
@@ -56,11 +57,13 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 			response.Message = text
 		}
 		m.scheduleGmailBounceFollowUps(ctx, response)
+		m.runtime.recordRequestObservation(response, nil)
 		return response, nil
 	}
 
 	response, err := m.runtime.Run(ctx, msg)
 	if err != nil {
+		m.runtime.recordRequestObservation(contracts.AgentResponse{}, err)
 		return contracts.AgentResponse{}, err
 	}
 
@@ -71,6 +74,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 		response.Message = text
 	}
 	m.scheduleGmailBounceFollowUps(ctx, response)
+	m.runtime.recordRequestObservation(response, nil)
 	return response, nil
 }
 

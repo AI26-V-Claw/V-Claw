@@ -34,6 +34,7 @@ var (
 type RuntimeConfig struct {
 	Provider              providers.Provider
 	Registry              *tools.ToolRegistry
+	Observer              RuntimeObserver
 	ReferenceResolver     reference.Resolver
 	Policy                policies.ToolPolicy
 	SessionStore          sessions.Store
@@ -52,6 +53,7 @@ type RuntimeConfig struct {
 type Runtime struct {
 	provider              providers.Provider
 	registry              *tools.ToolRegistry
+	observer              RuntimeObserver
 	referenceResolver     reference.Resolver
 	policy                policies.ToolPolicy
 	sessionStore          sessions.Store
@@ -158,6 +160,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	return &Runtime{
 		provider:              config.Provider,
 		registry:              config.Registry,
+		observer:              config.Observer,
 		referenceResolver:     referenceResolver,
 		policy:                config.Policy,
 		sessionStore:          sessionStore,
@@ -686,6 +689,7 @@ If required information is missing, ask one concise clarification question inste
 					definition:         definition,
 					remainingToolCalls: cloneProviderToolCalls(assistantMessage.ToolCalls[index+1:]),
 				})
+				r.recordApprovalObservation(ActionStatusPendingApproval)
 				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,

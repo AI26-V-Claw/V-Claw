@@ -73,6 +73,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 					Error:     internalError("expire action: "+err.Error(), contracts.ErrorSourceAgent),
 				}, nil
 			}
+			r.recordApprovalObservation(ActionStatusExpired)
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
 			return contracts.AgentResponse{
@@ -117,6 +118,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				Error:     internalError("approve action: "+err.Error(), contracts.ErrorSourceAgent),
 			}, nil
 		}
+		r.recordApprovalObservation(ActionStatusApproved)
 		return r.resumeApprovedAction(ctx, pending)
 	case contracts.ApprovalDecisionRejected:
 		if pending.actionID != "" {
@@ -129,6 +131,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 					Error:     internalError("reject action: "+err.Error(), contracts.ErrorSourceAgent),
 				}, nil
 			}
+			r.recordApprovalObservation(ActionStatusRejected)
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked); errShape != nil {
 			return contracts.AgentResponse{
@@ -223,6 +226,7 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 					Error:     internalError("expire action: "+err.Error(), contracts.ErrorSourceAgent),
 				}, nil
 			}
+			r.recordApprovalObservation(ActionStatusExpired)
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
 			return contracts.AgentResponse{

@@ -52,6 +52,7 @@ type AgentRuntimeConfig struct {
 
 	Logger        *slog.Logger
 	MaxIterations int
+	Observer      agent.RuntimeObserver
 
 	GoogleToolsMode       string
 	GoogleCredentialsPath string
@@ -68,10 +69,13 @@ type AgentRuntimeConfig struct {
 }
 
 type RuntimeBundle struct {
-	Runtime     *agent.Runtime
-	Registry    *tools.ToolRegistry
-	Model       string
-	PolicyStore *policies.UserPolicyStore
+	Runtime               *agent.Runtime
+	Registry              *tools.ToolRegistry
+	Model                 string
+	PolicyStore           *policies.UserPolicyStore
+	Provider              providers.Provider
+	GoogleOAuthConfigured bool
+	TavilyConfigured      bool
 }
 
 func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle, error) {
@@ -135,6 +139,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
 		Provider: provider,
 		Registry: registry,
+		Observer: config.Observer,
 		ReferenceResolver: reference.NewFallbackResolver(
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),
@@ -148,7 +153,15 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		Compactor:             compactor,
 		MemoryClassifierModel: compactorModel,
 	})
-	return RuntimeBundle{Runtime: runtime, Registry: registry, Model: model, PolicyStore: policyStore}, nil
+	return RuntimeBundle{
+		Runtime:               runtime,
+		Registry:              registry,
+		Model:                 model,
+		PolicyStore:           policyStore,
+		Provider:              provider,
+		GoogleOAuthConfigured: googleOAuthConfigured(config),
+		TavilyConfigured:      strings.TrimSpace(config.TavilyAPIKey) != "",
+	}, nil
 }
 
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {
@@ -320,6 +333,19 @@ func loadToolPolicy(logger *slog.Logger) (policies.ToolPolicy, *policies.UserPol
 		)
 	}
 	return policies.NewToolPolicyWithStore(store), store, nil
+}
+
+func googleOAuthConfigured(config AgentRuntimeConfig) bool {
+	mode, err := normalizeToolMode(config.GoogleToolsMode)
+	if err != nil || mode == ToolModeOff {
+		return false
+	}
+	credentialsPath := strings.TrimSpace(config.GoogleCredentialsPath)
+	tokenPath := strings.TrimSpace(config.GoogleTokenPath)
+	if mode == ToolModeRequired {
+		return true
+	}
+	return fileExists(credentialsPath) && fileExists(tokenPath)
 }
 
 func envOrDefault(key, fallback string) string {
