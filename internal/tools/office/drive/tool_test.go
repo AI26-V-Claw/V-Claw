@@ -2,6 +2,7 @@ package drive
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	gdrive "vclaw/internal/connectors/google/drive"
@@ -25,6 +26,15 @@ func (fakeDriveConnector) UpdateFileMetadata(context.Context, string, gdrive.Upd
 func (fakeDriveConnector) ShareFile(context.Context, string, gdrive.ShareFileInput) (gdrive.PermissionSummary, error) {
 	return gdrive.PermissionSummary{}, nil
 }
+func (fakeDriveConnector) MoveFile(context.Context, string, string, []string) (gdrive.FileSummary, error) {
+	return gdrive.FileSummary{}, nil
+}
+func (fakeDriveConnector) TrashFile(context.Context, string) (gdrive.FileSummary, error) {
+	return gdrive.FileSummary{}, nil
+}
+func (fakeDriveConnector) UntrashFile(context.Context, string) (gdrive.FileSummary, error) {
+	return gdrive.FileSummary{}, nil
+}
 
 func TestRegisterToolsMetadata(t *testing.T) {
 	registry := tools.NewToolRegistry()
@@ -37,6 +47,18 @@ func TestRegisterToolsMetadata(t *testing.T) {
 	assertToolMetadata(t, registry, ToolNameCreateFolder, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameUpdateFileMetadata, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameShareFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameMoveFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameTrashFile, tools.CapabilityMutating, tools.RiskLevelDestructive, true)
+	assertToolMetadata(t, registry, ToolNameUntrashFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+}
+
+func TestUpdateMetadataDescriptionRejectsMoveUse(t *testing.T) {
+	description := NewTool(ToolNameUpdateFileMetadata, NewService(fakeDriveConnector{})).Description()
+	for _, want := range []string{"metadata only", "Do not use this tool to move", "drive.moveFile"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("expected update metadata description to contain %q, got %q", want, description)
+		}
+	}
 }
 
 func assertToolMetadata(t *testing.T, registry *tools.ToolRegistry, name string, capability tools.Capability, risk tools.RiskLevel, approval bool) {

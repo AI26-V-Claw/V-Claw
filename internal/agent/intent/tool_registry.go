@@ -286,7 +286,7 @@ var Registry = map[string]ToolDefinition{
 	},
 	"drive.updateFileMetadata": {
 		Name: "drive.updateFileMetadata", Category: CategoryDangerousWrite,
-		Description: "Update Google Drive file metadata",
+		Description: "Update Google Drive file metadata only; do not use for moving files or changing folders",
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}},
 	},
@@ -295,6 +295,25 @@ var Registry = map[string]ToolDefinition{
 		Description: "Share a Google Drive file",
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "role", Type: "string", Required: true, Description: "reader, commenter, or writer"}},
+	},
+	"drive.moveFile": {
+		Name: "drive.moveFile", Category: CategoryDangerousWrite,
+		Description: "Move a Google Drive file or folder into another Drive folder",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "targetParentId", Type: "string", Required: true, Description: "Destination folder ID"}},
+	},
+	"drive.trashFile": {
+		Name: "drive.trashFile", Category: CategoryDangerousWrite,
+		Description:      "Move a Google Drive file or folder to trash",
+		DefaultRiskLevel: contracts.RiskLevelDestructive,
+		Dangerous:        true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}},
+	},
+	"drive.untrashFile": {
+		Name: "drive.untrashFile", Category: CategoryDangerousWrite,
+		Description: "Restore a Google Drive file or folder from trash",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}},
 	},
 	"docs.createDocument": {
 		Name: "docs.createDocument", Category: CategoryDangerousWrite,
@@ -408,7 +427,7 @@ func riskLevelForCategory(category ToolCategory, name string) contracts.RiskLeve
 	case CategoryExecution:
 		return contracts.RiskLevelCodeExecution
 	case CategoryDangerousWrite, CategoryCommunication:
-		if name == "calendar.deleteEvent" || name == "gmail.deleteDraft" || name == "gmail.trashMessage" || name == "chat.deleteMessage" || name == "chat.removeMember" {
+		if name == "calendar.deleteEvent" || name == "gmail.deleteDraft" || name == "gmail.trashMessage" || name == "chat.deleteMessage" || name == "chat.removeMember" || name == "drive.trashFile" {
 			return contracts.RiskLevelDestructive
 		}
 		return contracts.RiskLevelExternalWrite

@@ -508,6 +508,9 @@ Rules:
 | `drive.createFolder` | Integration | `external_write` | Yes |
 | `drive.updateFileMetadata` | Integration | `external_write` | Yes |
 | `drive.shareFile` | Integration | `external_write` | Yes |
+| `drive.moveFile` | Integration | `external_write` | Yes |
+| `drive.trashFile` | Integration | `destructive` | Yes |
+| `drive.untrashFile` | Integration | `external_write` | Yes |
 
 ### Google Docs
 
@@ -527,7 +530,7 @@ Rules:
 | `sheets.updateValues` | Integration | `external_write` | Yes |
 | `sheets.appendValues` | Integration | `external_write` | Yes |
 
-> Drive/Docs/Sheets MVP is read-first: list/get/read tools are safe reads. Create/update/append/share tools are external writes and must pass the same HITL approval boundary before execution.
+> Drive/Docs/Sheets MVP is read-first: list/get/read tools are safe reads. Create/update/append/share/move/untrash tools are external writes and must pass the same HITL approval boundary before execution. `drive.trashFile` is treated as destructive because it removes the item from normal Drive views.
 
 ### Calendar
 

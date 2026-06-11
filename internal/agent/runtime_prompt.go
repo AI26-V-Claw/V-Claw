@@ -89,6 +89,10 @@ For Google Chat tools:
 - For requests like "gửi tin nhắn vào nhóm chat VClaw" or "gửi file này vào nhóm VClaw", call chat.listSpaces first, match the requested group/display name from the returned spaces, then call chat.sendMessage with the matched spaces/... resource.
 - Do not ask the user to provide spaces/AAAA until chat.listSpaces or member resolution has already failed or returned ambiguous matches.
 - If the target space is still ambiguous after read-tool resolution, ask one concise clarification question before calling a write tool.
+For Google Drive tools:
+- For requests like "move file X into folder Y", "di chuyển file X vào folder Y", or "chuyển file X vào thư mục Y", resolve the source file and target folder with drive.listFiles first, then call drive.moveFile with fileId and targetParentId.
+- Do not use drive.updateFileMetadata for moving files, changing folders, or changing parents. drive.updateFileMetadata is only for name, description, or starred metadata.
+- If a Drive file/folder name search returns multiple plausible matches, ask one concise clarification question before calling a write tool.
 For channel attachments:
 - If the user message contains "Attachment paths:", those are local files sent through the current channel.
 - If the user says "file này", "file tôi đã gửi", "ảnh này", or asks to attach/send/upload the current file, use those paths in tool arguments that accept attachments.
@@ -220,6 +224,7 @@ func shouldRetryTextualApprovalAsToolCall(content string) bool {
 		"gửi", "gui", "send",
 		"xóa", "xoa", "delete",
 		"cập nhật", "cap nhat", "update",
+		"di chuyển", "di chuyen", "chuyển", "chuyen", "move",
 	) {
 		return false
 	}
@@ -235,6 +240,8 @@ func shouldRetryTextualApprovalAsToolCall(content string) bool {
 		"tiến hành gửi", "tien hanh gui",
 		"tiến hành xóa", "tien hanh xoa",
 		"tiến hành cập nhật", "tien hanh cap nhat",
+		"tiến hành di chuyển", "tien hanh di chuyen",
+		"tiến hành chuyển", "tien hanh chuyen",
 		"please confirm",
 		"do you confirm",
 		"confirm to proceed",
@@ -263,6 +270,12 @@ func isSideEffectToolName(name string) bool {
 		"chat.createSpace",
 		"chat.addMember",
 		"chat.removeMember",
+		"drive.createFolder",
+		"drive.updateFileMetadata",
+		"drive.shareFile",
+		"drive.moveFile",
+		"drive.trashFile",
+		"drive.untrashFile",
 		"sandbox.runPython",
 		"sandbox.runShell":
 		return true

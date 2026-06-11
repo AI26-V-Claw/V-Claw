@@ -267,7 +267,7 @@ Scope usage:
 - Chat scopes: listing spaces/messages, sending text replies/attachments, updating/deleting messages, creating spaces, and adding/removing members.
 - `directory.readonly`: searching Workspace directory profiles so the agent can resolve names or emails before matching Google Chat members.
 - `drive.readonly`: listing/searching Drive files and reading Drive file metadata.
-- `drive`: creating Drive folders, updating metadata, and sharing files after HITL approval.
+- `drive`: creating Drive folders, updating metadata, sharing files, moving files/folders, trashing, and untrashing after HITL approval.
 - `documents.readonly`: reading Google Docs document structure/text.
 - `documents`: creating documents and appending text after HITL approval.
 - `spreadsheets.readonly`: reading spreadsheet metadata and values.
@@ -283,7 +283,7 @@ Examples of mutating actions:
 Gmail draft/send/modify/download attachment
 Google Chat send/update/delete/create space/add member/remove member
 Calendar create/update/delete
-Drive create folder/update metadata/share
+Drive create folder/update metadata/share/move/trash/untrash
 Docs create/append text
 Sheets create/update/append values
 ```

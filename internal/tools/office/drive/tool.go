@@ -18,6 +18,9 @@ const (
 	ToolNameCreateFolder       = "drive.createFolder"
 	ToolNameUpdateFileMetadata = "drive.updateFileMetadata"
 	ToolNameShareFile          = "drive.shareFile"
+	ToolNameMoveFile           = "drive.moveFile"
+	ToolNameTrashFile          = "drive.trashFile"
+	ToolNameUntrashFile        = "drive.untrashFile"
 
 	defaultMaxResults = int64(10)
 	maxResults        = int64(50)
@@ -37,6 +40,9 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameCreateFolder, Owner: "integration", Description: "Create a Google Drive folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateFileMetadata, Owner: "integration", Description: "Update Google Drive file metadata.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameShareFile, Owner: "integration", Description: "Share a Google Drive file.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameMoveFile, Owner: "integration", Description: "Move a Google Drive file or folder to another folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameTrashFile, Owner: "integration", Description: "Move a Google Drive file or folder to trash.", DefaultRiskLevel: "destructive", RequiresApproval: true},
+	{Name: ToolNameUntrashFile, Owner: "integration", Description: "Restore a Google Drive file or folder from trash.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 }
 
 type Connector interface {
@@ -45,6 +51,9 @@ type Connector interface {
 	CreateFolder(ctx context.Context, name string, parentIDs []string) (gdrive.FileSummary, error)
 	UpdateFileMetadata(ctx context.Context, fileID string, input gdrive.UpdateFileMetadataInput) (gdrive.FileSummary, error)
 	ShareFile(ctx context.Context, fileID string, input gdrive.ShareFileInput) (gdrive.PermissionSummary, error)
+	MoveFile(ctx context.Context, fileID string, targetParentID string, removeParentIDs []string) (gdrive.FileSummary, error)
+	TrashFile(ctx context.Context, fileID string) (gdrive.FileSummary, error)
+	UntrashFile(ctx context.Context, fileID string) (gdrive.FileSummary, error)
 }
 
 type Service struct {
@@ -91,6 +100,16 @@ type ShareFileInput struct {
 	EmailAddress          string
 	AllowFileDiscovery    bool
 	SendNotificationEmail bool
+}
+
+type MoveFileInput struct {
+	FileID          string
+	TargetParentID  string
+	RemoveParentIDs []string
+}
+
+type FileIDInput struct {
+	FileID string
 }
 
 func (s *Service) ListFiles(ctx context.Context, input ListFilesInput) (gdrive.ListFilesOutput, *ErrorShape) {
@@ -182,6 +201,51 @@ func (s *Service) ShareFile(ctx context.Context, input ShareFileInput) (gdrive.P
 	return permission, nil
 }
 
+func (s *Service) MoveFile(ctx context.Context, input MoveFileInput) (gdrive.FileSummary, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return gdrive.FileSummary{}, errShape
+	}
+	if strings.TrimSpace(input.FileID) == "" {
+		return gdrive.FileSummary{}, invalidInput("fileId is required")
+	}
+	if strings.TrimSpace(input.TargetParentID) == "" {
+		return gdrive.FileSummary{}, invalidInput("targetParentId is required")
+	}
+	file, err := s.connector.MoveFile(ctx, input.FileID, input.TargetParentID, input.RemoveParentIDs)
+	if err != nil {
+		return gdrive.FileSummary{}, mapError(err)
+	}
+	return file, nil
+}
+
+func (s *Service) TrashFile(ctx context.Context, input FileIDInput) (gdrive.FileSummary, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return gdrive.FileSummary{}, errShape
+	}
+	if strings.TrimSpace(input.FileID) == "" {
+		return gdrive.FileSummary{}, invalidInput("fileId is required")
+	}
+	file, err := s.connector.TrashFile(ctx, input.FileID)
+	if err != nil {
+		return gdrive.FileSummary{}, mapError(err)
+	}
+	return file, nil
+}
+
+func (s *Service) UntrashFile(ctx context.Context, input FileIDInput) (gdrive.FileSummary, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return gdrive.FileSummary{}, errShape
+	}
+	if strings.TrimSpace(input.FileID) == "" {
+		return gdrive.FileSummary{}, invalidInput("fileId is required")
+	}
+	file, err := s.connector.UntrashFile(ctx, input.FileID)
+	if err != nil {
+		return gdrive.FileSummary{}, mapError(err)
+	}
+	return file, nil
+}
+
 func (s *Service) validateConnector() *ErrorShape {
 	if s == nil || s.connector == nil {
 		return internalError("drive connector is not configured")
@@ -209,9 +273,15 @@ func (t DriveTool) Description() string {
 	case ToolNameCreateFolder:
 		return "Create a folder in Google Drive. Requires human approval before execution."
 	case ToolNameUpdateFileMetadata:
-		return "Update Google Drive file metadata such as name, description, or starred state. Requires human approval before execution."
+		return "Update Google Drive file metadata only: name, description, or starred state. Do not use this tool to move files or change folders/parents; use drive.moveFile for move requests. Requires human approval before execution."
 	case ToolNameShareFile:
 		return "Share a Google Drive file by creating a permission. Requires human approval before execution."
+	case ToolNameMoveFile:
+		return "Move a Google Drive file or folder into another Drive folder. Use this for requests like move/di chuyển/chuyển file X vào folder Y. Requires human approval before execution."
+	case ToolNameTrashFile:
+		return "Move a Google Drive file or folder to trash. Requires human approval before execution."
+	case ToolNameUntrashFile:
+		return "Restore a Google Drive file or folder from trash. Requires human approval before execution."
 	default:
 		return "Google Drive tool."
 	}
@@ -235,10 +305,10 @@ func (t DriveTool) Parameters() tools.ToolSchema {
 		}, "required": []string{"name"}, "additionalProperties": false}
 	case ToolNameUpdateFileMetadata:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{
-			"fileId":      map[string]any{"type": "string"},
-			"name":        map[string]any{"type": "string"},
-			"description": map[string]any{"type": "string"},
-			"starred":     map[string]any{"type": "boolean"},
+			"fileId":      map[string]any{"type": "string", "description": "File ID whose metadata should be changed. This does not move the file."},
+			"name":        map[string]any{"type": "string", "description": "New file name. For moving to another folder, use drive.moveFile instead."},
+			"description": map[string]any{"type": "string", "description": "New file description."},
+			"starred":     map[string]any{"type": "boolean", "description": "Whether the file is starred."},
 		}, "required": []string{"fileId"}, "additionalProperties": false}
 	case ToolNameShareFile:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{
@@ -249,6 +319,14 @@ func (t DriveTool) Parameters() tools.ToolSchema {
 			"allowFileDiscovery":    map[string]any{"type": "boolean"},
 			"sendNotificationEmail": map[string]any{"type": "boolean"},
 		}, "required": []string{"fileId", "type", "role"}, "additionalProperties": false}
+	case ToolNameMoveFile:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{
+			"fileId":          map[string]any{"type": "string", "description": "ID of the file or folder to move."},
+			"targetParentId":  map[string]any{"type": "string", "description": "Destination folder ID. Resolve folder names with drive.listFiles before calling this tool."},
+			"removeParentIds": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional current parent folder IDs to remove. Omit to let the connector remove existing parents."},
+		}, "required": []string{"fileId", "targetParentId"}, "additionalProperties": false}
+	case ToolNameTrashFile, ToolNameUntrashFile:
+		return idSchema("fileId")
 	default:
 		return tools.ToolSchema{"type": "object"}
 	}
@@ -267,6 +345,8 @@ func (t DriveTool) RiskLevel() tools.RiskLevel {
 	switch t.name {
 	case ToolNameListFiles, ToolNameGetFile:
 		return tools.RiskLevelSafeRead
+	case ToolNameTrashFile:
+		return tools.RiskLevelDestructive
 	default:
 		return tools.RiskLevelExternalWrite
 	}
@@ -279,23 +359,32 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		return outputToolResult(call, output, errShape)
 	case ToolNameGetFile:
 		output, errShape := t.service.GetFile(ctx, GetFileInput{FileID: stringArg(call.Arguments, "fileId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, map[string]any{"File": output}, errShape)
 	case ToolNameCreateFolder:
 		output, errShape := t.service.CreateFolder(ctx, CreateFolderInput{Name: stringArg(call.Arguments, "name"), ParentIDs: stringSliceArg(call.Arguments, "parentIds")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, map[string]any{"File": output}, errShape)
 	case ToolNameUpdateFileMetadata:
 		output, errShape := t.service.UpdateFileMetadata(ctx, UpdateFileMetadataInput{FileID: stringArg(call.Arguments, "fileId"), Name: stringArg(call.Arguments, "name"), Description: stringArg(call.Arguments, "description"), Starred: optionalBoolArg(call.Arguments, "starred")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, map[string]any{"File": output}, errShape)
 	case ToolNameShareFile:
 		output, errShape := t.service.ShareFile(ctx, ShareFileInput{FileID: stringArg(call.Arguments, "fileId"), Type: stringArg(call.Arguments, "type"), Role: stringArg(call.Arguments, "role"), EmailAddress: stringArg(call.Arguments, "emailAddress"), AllowFileDiscovery: boolArg(call.Arguments, "allowFileDiscovery"), SendNotificationEmail: boolArg(call.Arguments, "sendNotificationEmail")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, map[string]any{"Permission": output}, errShape)
+	case ToolNameMoveFile:
+		output, errShape := t.service.MoveFile(ctx, MoveFileInput{FileID: stringArg(call.Arguments, "fileId"), TargetParentID: stringArg(call.Arguments, "targetParentId"), RemoveParentIDs: stringSliceArg(call.Arguments, "removeParentIds")})
+		return outputToolResult(call, map[string]any{"File": output}, errShape)
+	case ToolNameTrashFile:
+		output, errShape := t.service.TrashFile(ctx, FileIDInput{FileID: stringArg(call.Arguments, "fileId")})
+		return outputToolResult(call, map[string]any{"File": output}, errShape)
+	case ToolNameUntrashFile:
+		output, errShape := t.service.UntrashFile(ctx, FileIDInput{FileID: stringArg(call.Arguments, "fileId")})
+		return outputToolResult(call, map[string]any{"File": output}, errShape)
 	default:
 		return tools.ToolNotFoundResult(call)
 	}
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	for _, name := range []string{ToolNameListFiles, ToolNameGetFile, ToolNameCreateFolder, ToolNameUpdateFileMetadata, ToolNameShareFile} {
+	for _, name := range []string{ToolNameListFiles, ToolNameGetFile, ToolNameCreateFolder, ToolNameUpdateFileMetadata, ToolNameShareFile, ToolNameMoveFile, ToolNameTrashFile, ToolNameUntrashFile} {
 		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}

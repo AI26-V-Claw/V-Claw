@@ -291,6 +291,12 @@ func telegramActionLabel(toolName string) string {
 		return "Cập nhật sự kiện Google Calendar"
 	case "calendar.deleteEvent":
 		return "Xóa sự kiện Google Calendar"
+	case "drive.moveFile":
+		return "Di chuyển tệp Google Drive"
+	case "drive.trashFile":
+		return "Chuyển tệp Google Drive vào thùng rác"
+	case "drive.untrashFile":
+		return "Khôi phục tệp Google Drive"
 	case "chat.sendMessage":
 		return "Gửi tin nhắn Google Chat"
 	case "chat.updateMessage":

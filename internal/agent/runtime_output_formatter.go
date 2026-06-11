@@ -318,7 +318,7 @@ func renderDrivePayload(toolName string, payload map[string]any) []string {
 		return renderPayloadList(toolName, title, files)
 	}
 	if file, ok := payloadMap(payload, "File"); ok {
-		return append([]string{"Tệp Google Drive."}, driveFileBullets(file)...)
+		return append([]string{driveFileTitle(toolName)}, driveFileBullets(file)...)
 	}
 	if permission, ok := payloadMap(payload, "Permission"); ok {
 		return append([]string{"Đã cập nhật chia sẻ Google Drive."}, payloadBullets(permission, []fieldLabel{
@@ -329,6 +329,23 @@ func renderDrivePayload(toolName string, payload map[string]any) []string {
 		})...)
 	}
 	return renderGenericPayload(payloadTitle(toolName, ""), payload)
+}
+
+func driveFileTitle(toolName string) string {
+	switch toolName {
+	case "drive.moveFile":
+		return "Đã di chuyển tệp Google Drive."
+	case "drive.trashFile":
+		return "Đã chuyển tệp Google Drive vào thùng rác."
+	case "drive.untrashFile":
+		return "Đã khôi phục tệp Google Drive."
+	case "drive.createFolder":
+		return "Đã tạo thư mục Google Drive."
+	case "drive.updateFileMetadata":
+		return "Đã cập nhật tệp Google Drive."
+	default:
+		return "Tệp Google Drive."
+	}
 }
 
 func driveFileBullets(file map[string]any) []string {

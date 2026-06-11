@@ -561,6 +561,23 @@ If required information is missing, ask one concise clarification question inste
 			// contain times, titles, or emails that the user never mentioned in the current turn.
 			currentRequestText := message.Text
 			providerToolCall = sanitizeUnsupportedOptionalArguments(providerToolCall, evidenceText)
+			if shouldRerouteDriveMetadataMove(providerToolCall, currentRequestText) {
+				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
+					Role:       providers.MessageRoleTool,
+					ToolCallID: providerToolCall.ID,
+					Content:    truncateToolContentForLLM("WRONG_TOOL_FOR_INTENT: drive.updateFileMetadata cannot move files or folders. Resolve the source file and destination folder with drive.listFiles if needed, then call drive.moveFile with fileId and targetParentId."),
+				}); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				if err := r.appendSkippedToolObservations(ctx, message.SessionID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the current Drive move request used the wrong tool"); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				continue agentLoop
+			}
 			if isClarifyToolCall(providerToolCall) {
 				clarification := clarificationFromToolCall(providerToolCall)
 				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
@@ -621,6 +638,30 @@ If required information is missing, ask one concise clarification question inste
 			)
 			toolCallMissingFields := pendingMissingFieldsForToolCall(providerToolCall, definition, found, activeClarification, currentRequestText)
 			if clarification := r.toolCallClarificationResponse(message, providerToolCall, definition, found, activeClarification, currentRequestText); clarification != nil {
+				if shouldResolveDriveMoveBeforeClarification(providerToolCall, currentRequestText, toolCallMissingFields) {
+					toolMessage := providers.Message{
+						Role:       providers.MessageRoleTool,
+						ToolCallID: providerToolCall.ID,
+						Content:    truncateToolContentForLLM(driveMoveResolutionObservation(toolCallMissingFields)),
+					}
+					transcript = append(transcript, toolMessage)
+					providerTranscript = append(providerTranscript, toolMessage)
+					if err := r.appendToolObservation(ctx, message.SessionID, transcript, toolMessage); err != nil {
+						base.Error = err
+						base.Message = err.Message
+						return base, nil
+					}
+					for _, skipped := range skippedToolObservationMessages(assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the current Google Drive move target must be resolved first") {
+						transcript = append(transcript, skipped)
+						providerTranscript = append(providerTranscript, skipped)
+						if err := r.appendToolObservation(ctx, message.SessionID, transcript, skipped); err != nil {
+							base.Error = err
+							base.Message = err.Message
+							return base, nil
+						}
+					}
+					continue agentLoop
+				}
 				if shouldResolveChatSpaceBeforeClarification(providerToolCall) {
 					toolMessage := providers.Message{
 						Role:       providers.MessageRoleTool,

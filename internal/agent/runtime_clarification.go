@@ -63,6 +63,37 @@ func shouldResolveChatSpaceBeforeClarification(toolCall providers.ToolCall) bool
 	}
 }
 
+func shouldResolveDriveMoveBeforeClarification(toolCall providers.ToolCall, requestText string, missing []string) bool {
+	if strings.TrimSpace(toolCall.Name) != "drive.moveFile" {
+		return false
+	}
+	if !containsString(missing, "fileId") && !containsString(missing, "targetParentId") {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(requestText))
+	if lower == "" {
+		return false
+	}
+	return containsAnyText(lower,
+		"di chuyển", "di chuyen",
+		"chuyển", "chuyen",
+		"move",
+		"vào folder", "vao folder",
+		"vào thư mục", "vao thu muc",
+		"sang folder", "sang thư mục", "sang thu muc",
+	)
+}
+
+func driveMoveResolutionObservation(missing []string) string {
+	return fmt.Sprintf(`NEEDS_DRIVE_MOVE_RESOLUTION: The current request is a Google Drive move request, but %s is not resolved to a Drive ID yet.
+Do not ask the user for fileId or targetParentId when they gave file/folder names.
+First call safe read tools to resolve names:
+- Call drive.listFiles to find the source file by its title/name. If the user says "docs" or "Google Docs", prefer the Google Docs MIME type.
+- Call drive.listFiles to find the destination folder by its title/name, with folder MIME type application/vnd.google-apps.folder.
+After resolving exactly one source file and one destination folder, retry drive.moveFile with fileId and targetParentId.
+If read-tool resolution returns no match or multiple plausible matches, then ask one concise clarification question.`, strings.Join(missing, ", "))
+}
+
 func chatSpaceResolutionObservation(toolCall providers.ToolCall) string {
 	target := strings.TrimSpace(fmt.Sprint(toolCall.Arguments["space"]))
 	if target == "" {
@@ -108,6 +139,24 @@ func sanitizeUnsupportedOptionalArguments(toolCall providers.ToolCall, evidenceT
 	delete(args, "attendees")
 	toolCall.Arguments = args
 	return toolCall
+}
+
+func shouldRerouteDriveMetadataMove(toolCall providers.ToolCall, requestText string) bool {
+	if strings.TrimSpace(toolCall.Name) != "drive.updateFileMetadata" {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(requestText))
+	if lower == "" {
+		return false
+	}
+	return containsAnyText(lower,
+		"di chuyển", "di chuyen",
+		"chuyển", "chuyen",
+		"move",
+		"vào folder", "vao folder",
+		"vào thư mục", "vao thu muc",
+		"sang folder", "sang thư mục", "sang thu muc",
+	)
 }
 
 func hasAttendeeEvidence(evidenceText string, attendees any) bool {

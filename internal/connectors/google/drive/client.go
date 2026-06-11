@@ -84,6 +84,18 @@ func (c *Client) ShareFile(ctx context.Context, fileID string, input ShareFileIn
 	return ShareFile(ctx, c.httpClient, fileID, input)
 }
 
+func (c *Client) MoveFile(ctx context.Context, fileID string, targetParentID string, removeParentIDs []string) (FileSummary, error) {
+	return MoveFile(ctx, c.httpClient, fileID, targetParentID, removeParentIDs)
+}
+
+func (c *Client) TrashFile(ctx context.Context, fileID string) (FileSummary, error) {
+	return SetFileTrashed(ctx, c.httpClient, fileID, true)
+}
+
+func (c *Client) UntrashFile(ctx context.Context, fileID string) (FileSummary, error) {
+	return SetFileTrashed(ctx, c.httpClient, fileID, false)
+}
+
 func ListFiles(ctx context.Context, client *http.Client, query, mimeType string, maxResults int64, pageToken string) (ListFilesOutput, error) {
 	service, err := serviceFromClient(ctx, client)
 	if err != nil {
@@ -207,6 +219,47 @@ func ShareFile(ctx context.Context, client *http.Client, fileID string, input Sh
 		Role:         created.Role,
 		EmailAddress: created.EmailAddress,
 	}, nil
+}
+
+func MoveFile(ctx context.Context, client *http.Client, fileID string, targetParentID string, removeParentIDs []string) (FileSummary, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return FileSummary{}, err
+	}
+	removeParentIDs = cleanStrings(removeParentIDs)
+	if len(removeParentIDs) == 0 {
+		file, err := service.Files.Get(fileID).Fields("parents").Do()
+		if err != nil {
+			return FileSummary{}, common.MapError(err)
+		}
+		removeParentIDs = cleanStrings(file.Parents)
+	}
+	updated, err := service.Files.Update(fileID, &drive.File{}).
+		AddParents(strings.TrimSpace(targetParentID)).
+		RemoveParents(strings.Join(removeParentIDs, ",")).
+		Fields("id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed").
+		Do()
+	if err != nil {
+		return FileSummary{}, common.MapError(err)
+	}
+	return fileSummaryFromAPI(updated), nil
+}
+
+func SetFileTrashed(ctx context.Context, client *http.Client, fileID string, trashed bool) (FileSummary, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return FileSummary{}, err
+	}
+	updated, err := service.Files.Update(fileID, &drive.File{
+		Trashed:         trashed,
+		ForceSendFields: []string{"Trashed"},
+	}).
+		Fields("id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed").
+		Do()
+	if err != nil {
+		return FileSummary{}, common.MapError(err)
+	}
+	return fileSummaryFromAPI(updated), nil
 }
 
 func serviceFromClient(ctx context.Context, client *http.Client) (*drive.Service, error) {
