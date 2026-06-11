@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"vclaw/internal/agent"
@@ -34,6 +35,8 @@ type Bot struct {
 	logger        *slog.Logger
 	apiBase       string
 	state         *telegramChannelState
+	workCh        chan telegramUpdate
+	busySessions  sync.Map // chat ID (int64) → struct{} while a message is being processed
 }
 
 type messageHandler interface {
@@ -51,6 +54,7 @@ func New(token string, allowedUserID int64, dataDir string, handler messageHandl
 		allowedUserID: allowedUserID,
 		dataDir:       dataDir,
 		offsetPath:    filepath.Join(dataDir, "telegram_offset.txt"),
+		workCh:        make(chan telegramUpdate, 64),
 		client: &http.Client{
 			Timeout: 65 * time.Second,
 			Transport: &http.Transport{
@@ -85,6 +89,11 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 	b.logger.Info("telegram bot ready", "username", me.Username, "bot_id", me.ID)
 
+	// A single worker goroutine processes updates sequentially. This ensures
+	// session state is never read/written concurrently while keeping the
+	// polling loop non-blocking even when the LLM is slow.
+	go b.processWorker(ctx)
+
 	offset := b.readOffset()
 	for {
 		if ctx.Err() != nil {
@@ -102,17 +111,51 @@ func (b *Bot) Run(ctx context.Context) error {
 		}
 
 		for _, update := range updates {
-			processed, err := b.processUpdate(ctx, update)
-			if err != nil {
-				b.logger.Error("telegram update failed", "update_id", update.UpdateID, "error", err)
-				continue
+			// Advance offset before dispatching so that a slow worker does not
+			// cause the same update to be re-delivered on the next poll.
+			offset = int64(update.UpdateID) + 1
+			if err := b.writeOffset(offset); err != nil {
+				b.logger.Error("failed to persist offset", "offset", offset, "error", err)
 			}
-			if processed {
-				offset = int64(update.UpdateID) + 1
-				if err := b.writeOffset(offset); err != nil {
-					b.logger.Error("failed to persist offset", "offset", offset, "error", err)
+
+			// Callback queries (approval buttons) always go through.
+			// For regular messages, drop and reply if the session is already busy.
+			if update.Message != nil {
+				chatID := update.Message.Chat.ID
+				if _, alreadyBusy := b.busySessions.LoadOrStore(chatID, struct{}{}); alreadyBusy {
+					go func(cid int64) {
+						if _, err := b.sendMessage(ctx, cid, "Mình đang xử lý tin nhắn trước của bạn, vui lòng đợi một chút."); err != nil {
+							b.logger.Error("telegram busy reply failed", "chat_id", cid, "error", err)
+						}
+					}(chatID)
+					continue
 				}
 			}
+
+			select {
+			case b.workCh <- update:
+			case <-ctx.Done():
+				if update.Message != nil {
+					b.busySessions.Delete(update.Message.Chat.ID)
+				}
+				return ctx.Err()
+			}
+		}
+	}
+}
+
+func (b *Bot) processWorker(ctx context.Context) {
+	for {
+		select {
+		case u := <-b.workCh:
+			if _, err := b.processUpdate(ctx, u); err != nil {
+				b.logger.Error("telegram update failed", "update_id", u.UpdateID, "error", err)
+			}
+			if u.Message != nil {
+				b.busySessions.Delete(u.Message.Chat.ID)
+			}
+		case <-ctx.Done():
+			return
 		}
 	}
 }
