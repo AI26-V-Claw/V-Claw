@@ -223,6 +223,9 @@ func approvalOutputFromResponse(response contracts.AgentResponse) *contracts.Use
 	if !approval.ExpiresAt.IsZero() {
 		meta["expiresAt"] = approval.ExpiresAt.Format(time.RFC3339)
 	}
+	if strings.TrimSpace(approval.ParentApprovalID) != "" {
+		meta["parentApprovalId"] = approval.ParentApprovalID
+	}
 	return &contracts.UserOutput{
 		Kind: contracts.UserOutputKindApproval,
 		Text: renderCLIApprovalRequest(*approval),

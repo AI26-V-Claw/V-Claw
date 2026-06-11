@@ -12,6 +12,8 @@
 //	                            │                                   │
 //	                 ┌──────────┴──────────┐                       │
 //	         EventHITLApproved    EventHITLRejected                │
+//	                            │                                   │
+//	                      EventHITLCancelled                       │
 //	                 │                    │                        │
 //	                 ▼                    ▼                        │
 //	         EventExecutionStart   (log & stop)                   │
@@ -55,6 +57,10 @@ const (
 	// EventHITLRejected is logged when the user rejects a HITL proposal.
 	EventHITLRejected EventType = "hitl_rejected"
 
+	// EventHITLCancelled is logged when a HITL proposal is cancelled before
+	// approval or rejection completes.
+	EventHITLCancelled EventType = "hitl_cancelled"
+
 	// EventExecutionStart is logged immediately before the sandbox container
 	// is dispatched.
 	EventExecutionStart EventType = "execution_start"
@@ -83,6 +89,9 @@ const (
 
 	// StatusRejected — user rejected the HITL proposal.
 	StatusRejected LifecycleStatus = "rejected"
+
+	// StatusCancelled — proposal was cancelled before resolution.
+	StatusCancelled LifecycleStatus = "cancelled"
 
 	// StatusBlocked — request blocked by policy; never executed.
 	StatusBlocked LifecycleStatus = "blocked"
@@ -199,7 +208,8 @@ type AuditEvent struct {
 	// ── HITL ───────────────────────────────────────────────────────────────
 
 	// HITLApprovalID is the unique ID of the HITL proposal, set when
-	// EventType is EventHITLProposal, EventHITLApproved, or EventHITLRejected.
+	// EventType is EventHITLProposal, EventHITLApproved, EventHITLRejected,
+	// or EventHITLCancelled.
 	HITLApprovalID string `json:"hitl_approval_id,omitempty"`
 
 	// HITLSummaryVI is the Vietnamese summary shown to the user in the
@@ -308,6 +318,17 @@ func NewHITLRejectedEvent(base AuditEvent, approvalID string) AuditEvent {
 	ev.EventType = EventHITLRejected
 	ev.Timestamp = time.Now().UTC()
 	ev.Status = StatusRejected
+	ev.HITLApprovalID = approvalID
+	return ev
+}
+
+// NewHITLCancelledEvent creates an AuditEvent when a proposal is cancelled.
+func NewHITLCancelledEvent(base AuditEvent, approvalID string) AuditEvent {
+	ev := base
+	ev.EventID = newEventID()
+	ev.EventType = EventHITLCancelled
+	ev.Timestamp = time.Now().UTC()
+	ev.Status = StatusCancelled
 	ev.HITLApprovalID = approvalID
 	return ev
 }

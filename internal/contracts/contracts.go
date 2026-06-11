@@ -19,13 +19,13 @@ const (
 type UserOutputKind string
 
 const (
-	UserOutputKindMessage   UserOutputKind = "message"
-	UserOutputKindSuccess   UserOutputKind = "success"
-	UserOutputKindError     UserOutputKind = "error"
-	UserOutputKindClarify   UserOutputKind = "clarify"
-	UserOutputKindApproval  UserOutputKind = "approval"
-	UserOutputKindProgress  UserOutputKind = "progress"
-	UserOutputKindExpired   UserOutputKind = "expired"
+	UserOutputKindMessage  UserOutputKind = "message"
+	UserOutputKindSuccess  UserOutputKind = "success"
+	UserOutputKindError    UserOutputKind = "error"
+	UserOutputKindClarify  UserOutputKind = "clarify"
+	UserOutputKindApproval UserOutputKind = "approval"
+	UserOutputKindProgress UserOutputKind = "progress"
+	UserOutputKindExpired  UserOutputKind = "expired"
 )
 
 type RiskLevel string
@@ -54,6 +54,7 @@ const (
 	ApprovalStatusPending   ApprovalStatus = "pending"
 	ApprovalStatusApproved  ApprovalStatus = "approved"
 	ApprovalStatusRejected  ApprovalStatus = "rejected"
+	ApprovalStatusRevised   ApprovalStatus = "revised"
 	ApprovalStatusExpired   ApprovalStatus = "expired"
 	ApprovalStatusCancelled ApprovalStatus = "cancelled"
 )
@@ -63,6 +64,7 @@ type ApprovalDecisionStatus string
 const (
 	ApprovalDecisionApproved ApprovalDecisionStatus = "approved"
 	ApprovalDecisionRejected ApprovalDecisionStatus = "rejected"
+	ApprovalDecisionRevised  ApprovalDecisionStatus = "revised"
 )
 
 type ErrorSource string
@@ -113,7 +115,7 @@ type UserOutput struct {
 	Kind        UserOutputKind `json:"kind"`
 	Text        string         `json:"text"`
 	ArtifactRef *ArtifactRef   `json:"artifactRef,omitempty"`
-	Meta        map[string]any  `json:"meta,omitempty"`
+	Meta        map[string]any `json:"meta,omitempty"`
 }
 
 type AgentResponse struct {
@@ -192,17 +194,18 @@ type RiskDecision struct {
 }
 
 type ApprovalRequest struct {
-	ApprovalID string         `json:"approvalId"`
-	RequestID  string         `json:"requestId"`
-	SessionID  string         `json:"sessionId"`
-	ToolCallID string         `json:"toolCallId"`
-	Status     ApprovalStatus `json:"status"`
-	RiskLevel  RiskLevel      `json:"riskLevel"`
-	Summary    string         `json:"summary"`
-	Details    string         `json:"details,omitempty"`
-	ToolCall   ToolCall       `json:"toolCall"`
-	CreatedAt  time.Time      `json:"createdAt"`
-	ExpiresAt  time.Time      `json:"expiresAt"`
+	ApprovalID       string         `json:"approvalId"`
+	ParentApprovalID string         `json:"parentApprovalId,omitempty"`
+	RequestID        string         `json:"requestId"`
+	SessionID        string         `json:"sessionId"`
+	ToolCallID       string         `json:"toolCallId"`
+	Status           ApprovalStatus `json:"status"`
+	RiskLevel        RiskLevel      `json:"riskLevel"`
+	Summary          string         `json:"summary"`
+	Details          string         `json:"details,omitempty"`
+	ToolCall         ToolCall       `json:"toolCall"`
+	CreatedAt        time.Time      `json:"createdAt"`
+	ExpiresAt        time.Time      `json:"expiresAt"`
 }
 
 type ApprovalDecision struct {

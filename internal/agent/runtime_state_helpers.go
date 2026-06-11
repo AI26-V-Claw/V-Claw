@@ -188,6 +188,7 @@ func (r *Runtime) appendRunEvent(ctx context.Context, runID string, eventType st
 }
 
 func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration) *contracts.ErrorShape {
+	r.recordToolCallObservation(toolCall.Name, result.Success)
 	if r.stateStore == nil {
 		return nil
 	}

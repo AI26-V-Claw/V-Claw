@@ -12,6 +12,7 @@ type ToolCategory string
 
 const (
 	CategorySafeRead       ToolCategory = "SAFE_READ"
+	CategorySensitiveRead  ToolCategory = "SENSITIVE_READ"
 	CategoryDangerousWrite ToolCategory = "DANGEROUS_WRITE"
 	CategoryExecution      ToolCategory = "EXECUTION"
 	CategoryCommunication  ToolCategory = "COMMUNICATION"
@@ -46,14 +47,15 @@ type ParamDef struct {
 var Registry = map[string]ToolDefinition{
 	"gmail.listEmails": {
 		Name: "gmail.listEmails", Category: CategorySafeRead,
-		Description: "List emails from Gmail",
+		Description: "List emails from Gmail. This returns message summaries only and does not include attachment information; call gmail.getEmail to inspect attachments.",
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "query", Type: "string", Required: false, Description: "Email search query"}},
 	},
 	"gmail.getEmail": {
-		Name: "gmail.getEmail", Category: CategorySafeRead,
-		Description: "Get an email from Gmail",
-		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Name: "gmail.getEmail", Category: CategorySensitiveRead,
+		Description:      "Get an email from Gmail, including attachment metadata and message content. This is a sensitive read and requires approval before execution.",
+		RequiresApproval: true,
+		Dangerous:        false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "id", Type: "string", Required: false, Description: "Email ID"}},
 	},
 	"gmail.listLabels": {
@@ -272,10 +274,10 @@ var Registry = map[string]ToolDefinition{
 	},
 	"gmail.downloadAttachments": {
 		Name: "gmail.downloadAttachments", Category: CategoryDangerousWrite,
-		Description:      "Download Gmail attachments to local files",
+		Description:      "Download Gmail attachments to local files using filenames from the current Gmail message.",
 		DefaultRiskLevel: contracts.RiskLevelLocalWrite,
 		Dangerous:        true, RequiresConfirm: true, TimeoutMs: 60000,
-		Parameters: []ParamDef{{Name: "id", Type: "string", Required: true, Description: "Message ID"}, {Name: "outputDir", Type: "path", Required: true, Description: "Local output directory"}},
+		Parameters: []ParamDef{{Name: "messageId", Type: "string", Required: true, Description: "Message ID"}, {Name: "outputDir", Type: "path", Required: true, Description: "Local output directory"}, {Name: "filenames", Type: "string", Required: false, Description: "Comma-separated attachment filenames to download"}},
 	},
 	"gmail.modifyMessage": {
 		Name: "gmail.modifyMessage", Category: CategoryDangerousWrite,
@@ -521,6 +523,8 @@ func riskLevelForCategory(category ToolCategory, name string) contracts.RiskLeve
 	switch category {
 	case CategorySafeRead:
 		return contracts.RiskLevelSafeRead
+	case CategorySensitiveRead:
+		return contracts.RiskLevelSensitiveRead
 	case CategoryExecution:
 		return contracts.RiskLevelCodeExecution
 	case CategoryDangerousWrite, CategoryCommunication:

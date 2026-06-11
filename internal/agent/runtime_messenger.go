@@ -29,21 +29,25 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 
 	msg.Text = strings.TrimSpace(msg.Text)
 	if command, ok := parseApprovalCommand(msg.Text, m.runtime.HasPendingApproval(ctx, msg.SessionID)); ok {
-		var response contracts.AgentResponse
-		var err error
-		if command.revise {
-			response, err = m.runtime.ReviseApproval(ctx, msg.SessionID, msg.RequestID, command.approvalID, command.comment)
-		} else {
-			response, err = m.runtime.ResolveApproval(ctx, msg.SessionID, contracts.ApprovalDecision{
-				ApprovalID: command.approvalID,
-				RequestID:  msg.RequestID,
-				Decision:   command.decision,
-				DecidedBy:  "owner",
-				DecidedAt:  time.Now().UTC(),
-				Comment:    command.comment,
-			})
+		if m.runtime != nil && m.runtime.logger != nil {
+			m.runtime.logger.Info("approval decision received and parsed",
+				"request_id", msg.RequestID,
+				"session_id", msg.SessionID,
+				"approval_id", strings.TrimSpace(command.approvalID),
+				"decision", command.decision,
+				"comment", strings.TrimSpace(command.comment),
+			)
 		}
+		response, err := m.runtime.ResolveApproval(ctx, msg.SessionID, contracts.ApprovalDecision{
+			ApprovalID: command.approvalID,
+			RequestID:  msg.RequestID,
+			Decision:   command.decision,
+			DecidedBy:  "owner",
+			DecidedAt:  time.Now().UTC(),
+			Comment:    command.comment,
+		})
 		if err != nil {
+			m.runtime.recordRequestObservation(contracts.AgentResponse{}, err)
 			return contracts.AgentResponse{}, err
 		}
 		if output := renderUserOutput(response); output != nil {
@@ -53,11 +57,13 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 			response.Message = text
 		}
 		m.scheduleGmailBounceFollowUps(ctx, response)
+		m.runtime.recordRequestObservation(response, nil)
 		return response, nil
 	}
 
 	response, err := m.runtime.Run(ctx, msg)
 	if err != nil {
+		m.runtime.recordRequestObservation(contracts.AgentResponse{}, err)
 		return contracts.AgentResponse{}, err
 	}
 
@@ -68,6 +74,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 		response.Message = text
 	}
 	m.scheduleGmailBounceFollowUps(ctx, response)
+	m.runtime.recordRequestObservation(response, nil)
 	return response, nil
 }
 
@@ -99,13 +106,17 @@ func renderAgentResponse(response contracts.AgentResponse) string {
 
 func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 	if response.ApprovalRequest != nil {
+		meta := map[string]any{
+			"approvalId": response.ApprovalRequest.ApprovalID,
+			"expiresAt":  response.ApprovalRequest.ExpiresAt.Format(time.RFC3339),
+		}
+		if strings.TrimSpace(response.ApprovalRequest.ParentApprovalID) != "" {
+			meta["parentApprovalId"] = response.ApprovalRequest.ParentApprovalID
+		}
 		return &contracts.UserOutput{
 			Kind: contracts.UserOutputKindApproval,
 			Text: limitOutboundText(renderApprovalRequest(*response.ApprovalRequest)),
-			Meta: map[string]any{
-				"approvalId": response.ApprovalRequest.ApprovalID,
-				"expiresAt":  response.ApprovalRequest.ExpiresAt.Format(time.RFC3339),
-			},
+			Meta: meta,
 		}
 	}
 
@@ -609,7 +620,6 @@ type approvalCommand struct {
 	decision   contracts.ApprovalDecisionStatus
 	approvalID string
 	comment    string
-	revise     bool
 }
 
 func parseApprovalCommand(text string, hasPending bool) (approvalCommand, bool) {
@@ -634,8 +644,8 @@ func parseApprovalCommand(text string, hasPending bool) (approvalCommand, bool) 
 			return approvalCommand{}, false
 		}
 		return approvalCommand{
-			revise:  true,
-			comment: strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0])),
+			decision: contracts.ApprovalDecisionRevised,
+			comment:  strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0])),
 		}, true
 	}
 

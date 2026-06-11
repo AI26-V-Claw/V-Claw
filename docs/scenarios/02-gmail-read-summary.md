@@ -1,14 +1,15 @@
-# Scenario 02: Read-Only Gmail Summary
+# Scenario 02: Gmail Read Summary
 
 ## Purpose
 
-Luồng chuẩn cho thao tác Google Workspace read-only: đọc email theo điều kiện, lấy nội dung cần thiết và tóm tắt cho người dùng.
+Luồng chuẩn cho thao tác Google Workspace đọc thông tin: `gmail.listEmails` dùng để lọc/tổng hợp, còn `gmail.getEmail` là sensitive read để đọc chi tiết email cần thiết trước khi tóm tắt cho người dùng.
 
 Scenario này đại diện cho:
 
 - Gmail read-only tools.
 - OAuth Google Workspace như external account link/refresh, không phải login của V-Claw.
-- Tool execution không cần HITL vì risk level là `safe_read`.
+- `gmail.listEmails` không cần HITL vì risk level là `safe_read`.
+- `gmail.getEmail` cần HITL vì risk level là `sensitive_read`.
 
 ## Sequence
 
@@ -67,6 +68,8 @@ sequenceDiagram
 
         loop Với email cần đọc chi tiết
             Agent->>Router: ToolCall gmail.getEmail(messageId)
+            Agent->>Policy: Check gmail.getEmail
+            Policy-->>Agent: RiskDecision(sensitive_read, requires_approval)
             Router->>GmailTool: Execute gmail.getEmail
             GmailTool->>GmailConnector: GetMessage(messageId)
             GmailConnector->>Google: users.messages.get
@@ -88,7 +91,7 @@ sequenceDiagram
 ## Implementation Checklist
 
 - Tool names phải là `gmail.listEmails` và `gmail.getEmail`.
-- Read-only Gmail flow không tạo `ApprovalRequest`.
+- `gmail.listEmails` không tạo `ApprovalRequest`; `gmail.getEmail` tạo `ApprovalRequest`.
 - OAuth failure trả lỗi theo `ErrorShape`, ví dụ `AUTH_EXPIRED` hoặc `AUTH_MISSING_SCOPE`.
 - Gmail connector chỉ gọi API và normalize response; không chứa agent reasoning.
 - Gmail tool chịu trách nhiệm render nội dung hiển thị an toàn cho Agent/User.

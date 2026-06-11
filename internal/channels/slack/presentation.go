@@ -123,6 +123,12 @@ func slackTextFromResponse(response contracts.AgentResponse) string {
 	if slackIsUserCancelledApproval(response) {
 		return "Đã hủy theo yêu cầu của bạn."
 	}
+	if response.Error != nil && response.Error.Code == contracts.ErrorActionBlockedByPolicy {
+		return "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại."
+	}
+	if response.Error != nil && response.Error.Code == contracts.ErrorApprovalExpired {
+		return "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại."
+	}
 
 	switch response.Status {
 	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusMaxIterationsReached:

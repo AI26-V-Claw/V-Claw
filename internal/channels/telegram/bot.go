@@ -22,6 +22,7 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
+	"vclaw/internal/policies"
 )
 
 const longPollTimeout = 30
@@ -35,6 +36,9 @@ type Bot struct {
 	handler       messageHandler
 	logger        *slog.Logger
 	apiBase       string
+	policyStore   *policies.UserPolicyStore
+	policyMu      sync.Mutex
+	policyDrafts  map[int64]map[contracts.RiskLevel]policies.PolicyGroup
 	state         *telegramChannelState
 	workCh        chan telegramUpdate
 	busySessions  sync.Map // chat ID (int64) → struct{} while a message is being processed
@@ -46,7 +50,21 @@ type messageHandler interface {
 	RecordIgnored(msg contracts.UserMessage, actionTaken string)
 }
 
-func New(token string, allowedUserID int64, dataDir string, handler messageHandler, logger *slog.Logger) *Bot {
+func New(token string, allowedUserID int64, dataDir string, args ...any) *Bot {
+	var policyStore *policies.UserPolicyStore
+	var handler messageHandler
+	var logger *slog.Logger
+	switch len(args) {
+	case 2:
+		handler, _ = args[0].(messageHandler)
+		logger, _ = args[1].(*slog.Logger)
+	case 3:
+		policyStore, _ = args[0].(*policies.UserPolicyStore)
+		handler, _ = args[1].(messageHandler)
+		logger, _ = args[2].(*slog.Logger)
+	default:
+		panic("telegram.New expects handler/logger or policyStore/handler/logger")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -68,10 +86,12 @@ func New(token string, allowedUserID int64, dataDir string, handler messageHandl
 				ExpectContinueTimeout: 1 * time.Second,
 			},
 		},
-		handler: handler,
-		logger:  logger,
-		apiBase: "https://api.telegram.org",
-		state:   newTelegramChannelState(),
+		handler:      handler,
+		logger:       logger,
+		apiBase:      "https://api.telegram.org",
+		policyStore:  policyStore,
+		policyDrafts: make(map[int64]map[contracts.RiskLevel]policies.PolicyGroup),
+		state:        newTelegramChannelState(),
 	}
 }
 
@@ -189,6 +209,13 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	if update.Message.From == nil || update.Message.From.ID != b.allowedUserID {
 		if b.handler != nil {
 			b.handler.RecordIgnored(inbound, "ignored_unauthorized")
+		}
+		return true, nil
+	}
+	if isTelegramPolicyCommand(messageText) {
+		if err := b.sendPolicySettingsMenu(ctx, update.Message.Chat.ID); err != nil {
+			b.logger.Error("telegram policy settings menu failed", "error", err)
+			return false, err
 		}
 		return true, nil
 	}
@@ -311,6 +338,13 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	}
 
 	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
+		b.logger.Info("approval request sent to channel",
+			"request_id", outbound.RequestID,
+			"session_id", outbound.SessionID,
+			"approval_id", outbound.ApprovalRequest.ApprovalID,
+			"tool_call_id", outbound.ApprovalRequest.ToolCallID,
+			"telegram_chat_id", update.Message.Chat.ID,
+		)
 		b.state.registerApproval(telegramApprovalContext{
 			ApprovalID: outbound.ApprovalID,
 			SessionID:  outbound.SessionID,
@@ -351,6 +385,18 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	return true, nil
 }
 
+func isTelegramPolicyCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "policy")
+}
+
 func (b *Bot) rejectPendingApprovalForNewMessage(ctx context.Context, updateID int, approvalContext telegramApprovalContext) error {
 	if b.handler == nil {
 		return fmt.Errorf("message handler is not configured")
@@ -379,6 +425,14 @@ func (b *Bot) rejectPendingApprovalForNewMessage(ctx context.Context, updateID i
 
 func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (bool, error) {
 	callback := update.CallbackQuery
+	userID := int64(0)
+	if callback.From != nil {
+		userID = callback.From.ID
+	}
+	b.logger.Info("telegram callback received",
+		"callback_id", callback.ID,
+		"user_id", userID,
+	)
 	if callback.From == nil || callback.From.ID != b.allowedUserID {
 		if b.handler != nil {
 			b.handler.RecordIgnored(contracts.UserMessage{
@@ -396,11 +450,45 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 		_ = b.answerCallbackQuery(ctx, callback.ID, "Missing message context.")
 		return true, nil
 	}
+	if action, chatID, riskLevel, ok := parseTelegramPolicySettingsCallback(callback.Data); ok {
+		targetChatID := callback.Message.Chat.ID
+		if chatID != 0 {
+			targetChatID = chatID
+		}
+		switch action {
+		case telegramPolicySettingsCycleAction:
+			if err := b.cycleTelegramPolicySetting(ctx, targetChatID, callback.Message.MessageID, riskLevel); err != nil {
+				b.logger.Error("telegram policy cycle failed", "error", err)
+				_ = b.answerCallbackQuery(ctx, callback.ID, "")
+				return true, nil
+			}
+			_ = b.answerCallbackQuery(ctx, callback.ID, "")
+			return true, nil
+		case telegramPolicySettingsSaveAction:
+			if err := b.saveTelegramPolicySettings(ctx, targetChatID, callback.Message.MessageID); err != nil {
+				b.logger.Error("telegram policy save failed", "error", err)
+				_ = b.answerCallbackQuery(ctx, callback.ID, "")
+				return true, nil
+			}
+			_ = b.answerCallbackQuery(ctx, callback.ID, "")
+			return true, nil
+		default:
+			_ = b.answerCallbackQuery(ctx, callback.ID, "Unknown action.")
+			return true, nil
+		}
+	}
 	action, approvalID, ok := parseTelegramApprovalCallback(callback.Data)
 	if !ok {
 		_ = b.answerCallbackQuery(ctx, callback.ID, "Unknown action.")
 		return true, nil
 	}
+	b.logger.Info("approval decision received and parsed",
+		"request_id", fmt.Sprintf("telegram_callback_%s", safeTelegramID(callback.ID)),
+		"session_id", fmt.Sprintf("telegram_chat_%d", callback.Message.Chat.ID),
+		"approval_id", approvalID,
+		"decision", action,
+		"telegram_user_id", callback.From.ID,
+	)
 	approvalContext, ok := b.state.lookupApproval(approvalID, callback.Message.Chat.ID, callback.Message.MessageID)
 	if !ok {
 		if err := b.editMessageReplyMarkup(ctx, callback.Message.Chat.ID, callback.Message.MessageID, map[string]any{
@@ -475,6 +563,13 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 	// Continuation after approval may itself require approval (e.g. next task in a
 	// multi-step request). Show the inline keyboard so the user can act on it.
 	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
+		b.logger.Info("approval request sent to channel",
+			"request_id", outbound.RequestID,
+			"session_id", outbound.SessionID,
+			"approval_id", outbound.ApprovalRequest.ApprovalID,
+			"tool_call_id", outbound.ApprovalRequest.ToolCallID,
+			"telegram_chat_id", callback.Message.Chat.ID,
+		)
 		b.state.registerApproval(telegramApprovalContext{
 			ApprovalID: outbound.ApprovalID,
 			SessionID:  outbound.SessionID,
@@ -1394,4 +1489,213 @@ func safeTelegramID(value string) string {
 		return "unknown"
 	}
 	return strings.NewReplacer(" ", "_", ".", "_", ":", "_", "/", "_", "\\", "_").Replace(value)
+}
+
+const (
+	telegramPolicySettingsCycleAction = "cycle"
+	telegramPolicySettingsSaveAction  = "save"
+)
+
+func (b *Bot) sendPolicySettingsMenu(ctx context.Context, chatID int64) error {
+	assignments := b.currentTelegramPolicyAssignments(chatID)
+	b.setTelegramPolicyDraft(chatID, assignments)
+	text := telegramPolicySettingsMenuText()
+	_, err := b.sendMessageWithReplyMarkup(ctx, chatID, text, telegramPolicySettingsKeyboard(chatID, assignments))
+	return err
+}
+
+func (b *Bot) currentTelegramPolicyConfig(chatID int64) policies.UserPolicyConfig {
+	return policies.EffectivePolicyConfig(b.currentTelegramPolicyConfigLocked(chatID))
+}
+
+func (b *Bot) currentTelegramPolicyConfigLocked(chatID int64) policies.UserPolicyConfig {
+	b.policyMu.Lock()
+	defer b.policyMu.Unlock()
+	if draft, ok := b.policyDrafts[chatID]; ok {
+		cfg, err := policies.PolicyConfigFromAssignments(draft)
+		if err == nil {
+			return cfg
+		}
+	}
+	if b.policyStore == nil {
+		return policies.UserPolicyConfig{}
+	}
+	return b.policyStore.Snapshot()
+}
+
+func (b *Bot) currentTelegramPolicyAssignments(chatID int64) map[contracts.RiskLevel]policies.PolicyGroup {
+	b.policyMu.Lock()
+	defer b.policyMu.Unlock()
+	if draft, ok := b.policyDrafts[chatID]; ok {
+		return cloneTelegramPolicyAssignments(draft)
+	}
+	if b.policyStore != nil {
+		cfg := b.policyStore.Snapshot()
+		assignments := policies.EffectivePolicyAssignments(cfg)
+		b.policyDrafts[chatID] = cloneTelegramPolicyAssignments(assignments)
+		return cloneTelegramPolicyAssignments(assignments)
+	}
+	assignments := policies.EffectivePolicyAssignments(policies.UserPolicyConfig{})
+	b.policyDrafts[chatID] = cloneTelegramPolicyAssignments(assignments)
+	return cloneTelegramPolicyAssignments(assignments)
+}
+
+func (b *Bot) setTelegramPolicyDraft(chatID int64, assignments map[contracts.RiskLevel]policies.PolicyGroup) {
+	b.policyMu.Lock()
+	defer b.policyMu.Unlock()
+	b.policyDrafts[chatID] = cloneTelegramPolicyAssignments(assignments)
+}
+
+func (b *Bot) cycleTelegramPolicySetting(ctx context.Context, chatID int64, messageID int, level contracts.RiskLevel) error {
+	assignments := b.currentTelegramPolicyAssignments(chatID)
+	current := assignments[level]
+	next := policies.PolicyGroupNext(current)
+	assignments[level] = next
+	b.setTelegramPolicyDraft(chatID, assignments)
+	return b.editMessageTextWithReplyMarkup(ctx, chatID, messageID, telegramPolicySettingsMenuText(), telegramPolicySettingsKeyboard(chatID, assignments))
+}
+
+func (b *Bot) saveTelegramPolicySettings(ctx context.Context, chatID int64, messageID int) error {
+	assignments := b.currentTelegramPolicyAssignments(chatID)
+	updated, err := policies.PolicyConfigFromAssignments(assignments)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "destructive cannot be auto_allowed") {
+			return b.editPolicySettingsError(ctx, chatID, messageID, "🚫 Xóa dữ liệu không thể để Tự động cho phép.")
+		}
+		return b.editPolicySettingsError(ctx, chatID, messageID, "⚠️ Cấu hình policy không hợp lệ.")
+	}
+	if b.policyStore == nil {
+		return b.editPolicySettingsError(ctx, chatID, messageID, "⚠️ Chức năng lưu policy chưa được cấu hình.")
+	}
+	if err := policies.SaveUserPolicyConfig(b.policyStore.Path(), updated); err != nil {
+		return b.editPolicySettingsError(ctx, chatID, messageID, "⚠️ Mình chưa lưu được cài đặt policy.")
+	}
+	if _, err := b.policyStore.Reload(); err != nil {
+		return b.editPolicySettingsError(ctx, chatID, messageID, "⚠️ Mình đã lưu được file policy nhưng chưa nạp lại được cấu hình.")
+	}
+	b.policyMu.Lock()
+	delete(b.policyDrafts, chatID)
+	b.policyMu.Unlock()
+	return b.editMessageTextWithReplyMarkup(ctx, chatID, messageID, telegramPolicySettingsSavedText(), telegramEmptyInlineKeyboard())
+}
+
+func (b *Bot) editPolicySettingsError(ctx context.Context, chatID int64, messageID int, text string) error {
+	assignments := b.currentTelegramPolicyAssignments(chatID)
+	return b.editMessageTextWithReplyMarkup(ctx, chatID, messageID, text, telegramPolicySettingsKeyboard(chatID, assignments))
+}
+
+func telegramPolicySettingsMenuText() string {
+	return "Chạm vào một nút để đổi nhóm cho từng mức rủi ro."
+}
+
+func telegramPolicySettingsSavedText() string {
+	return "✅ Đã lưu cài đặt."
+}
+
+func telegramPolicySettingsKeyboard(chatID int64, assignments map[contracts.RiskLevel]policies.PolicyGroup) map[string]any {
+	rows := make([][]map[string]string, 0, len(policies.RiskLevelOrder())+1)
+	for _, level := range policies.RiskLevelOrder() {
+		rows = append(rows, []map[string]string{
+			{
+				"text":          telegramPolicySettingsButtonText(level, assignments[level]),
+				"callback_data": telegramPolicySettingsCallbackData(telegramPolicySettingsCycleAction, chatID, level),
+			},
+		})
+	}
+	rows = append(rows, []map[string]string{{
+		"text":          "Lưu",
+		"callback_data": telegramPolicySettingsCallbackData(telegramPolicySettingsSaveAction, chatID, ""),
+	}})
+	return map[string]any{"inline_keyboard": rows}
+}
+
+func telegramPolicySettingsButtonText(level contracts.RiskLevel, group policies.PolicyGroup) string {
+	return fmt.Sprintf("%s\n%s %s", telegramPolicyRiskLevelLabel(level), telegramPolicyGroupEmoji(group), policies.PolicyGroupLabel(group))
+}
+
+func telegramPolicyRiskLevelLabel(level contracts.RiskLevel) string {
+	switch level {
+	case contracts.RiskLevelSafeRead:
+		return "Đọc email, lịch họp, tin nhắn"
+	case contracts.RiskLevelSafeCompute:
+		return "Tóm tắt nội dung, dịch văn bản"
+	case contracts.RiskLevelSensitiveRead:
+		return "Mở và đọc chi tiết email, tài liệu"
+	case contracts.RiskLevelExternalWrite:
+		return "Gửi email, đặt lịch họp, nhắn tin"
+	case contracts.RiskLevelLocalWrite:
+		return "Tải file đính kèm, lưu tài liệu"
+	case contracts.RiskLevelCodeExecution:
+		return "Thực thi script hoặc lệnh hệ thống"
+	case contracts.RiskLevelDestructive:
+		return "Xóa email, file, lịch họp"
+	default:
+		return policies.RiskLevelLabel(level)
+	}
+}
+
+func telegramPolicyGroupEmoji(group policies.PolicyGroup) string {
+	switch group {
+	case policies.PolicyGroupAutoAllow:
+		return "✅"
+	case policies.PolicyGroupRequireApprove:
+		return "👤"
+	case policies.PolicyGroupAlwaysBlock:
+		return "🚫"
+	default:
+		return "•"
+	}
+}
+
+func telegramEmptyInlineKeyboard() map[string]any {
+	return map[string]any{"inline_keyboard": [][]map[string]string{}}
+}
+
+func telegramPolicySettingsCallbackData(action string, chatID int64, riskLevel contracts.RiskLevel) string {
+	parts := []string{"vclaw", "policy", strings.TrimSpace(action), strconv.FormatInt(chatID, 10)}
+	if strings.TrimSpace(string(riskLevel)) != "" {
+		parts = append(parts, string(riskLevel))
+	}
+	return strings.Join(parts, ":")
+}
+
+func parseTelegramPolicySettingsCallback(data string) (action string, chatID int64, riskLevel contracts.RiskLevel, ok bool) {
+	parts := strings.Split(strings.TrimSpace(data), ":")
+	if len(parts) < 4 || parts[0] != "vclaw" || parts[1] != "policy" {
+		return "", 0, "", false
+	}
+	action = strings.TrimSpace(parts[2])
+	switch action {
+	case telegramPolicySettingsCycleAction:
+		if len(parts) != 5 {
+			return "", 0, "", false
+		}
+		id, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil {
+			return "", 0, "", false
+		}
+		return action, id, contracts.RiskLevel(strings.TrimSpace(parts[4])), true
+	case telegramPolicySettingsSaveAction:
+		if len(parts) != 4 {
+			return "", 0, "", false
+		}
+		id, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil {
+			return "", 0, "", false
+		}
+		return action, id, "", true
+	default:
+		return "", 0, "", false
+	}
+}
+
+func cloneTelegramPolicyAssignments(assignments map[contracts.RiskLevel]policies.PolicyGroup) map[contracts.RiskLevel]policies.PolicyGroup {
+	if len(assignments) == 0 {
+		return nil
+	}
+	clone := make(map[contracts.RiskLevel]policies.PolicyGroup, len(assignments))
+	for level, group := range assignments {
+		clone[level] = group
+	}
+	return clone
 }
