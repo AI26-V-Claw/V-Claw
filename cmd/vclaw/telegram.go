@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/app"
@@ -82,6 +83,9 @@ func runTelegramRun(ctx context.Context, args []string) error {
 		SandboxWorkspaceDir:   envOrDefault("VCLAW_SANDBOX_WORKSPACE_DIR", ".sandbox-workspace"),
 		SandboxImage:          envFirst("VCLAW_SANDBOX_IMAGE"),
 		Logger:                logger,
+		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
+		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
+		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),
 	})
 	if err != nil {
 		return err

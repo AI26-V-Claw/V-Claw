@@ -730,3 +730,61 @@ func safeID(id string) string {
 	}
 	return strings.NewReplacer(" ", "_", "/", "_", "\\", "_").Replace(id)
 }
+
+func (r *Runtime) prepareParallelBatch(
+	toolCalls []providers.ToolCall,
+	parallelEnabled bool,
+	userText string,
+	evidenceText string,
+	activeClarification bool,
+) ([]parallelToolCall, bool) {
+	if !parallelEnabled || len(toolCalls) <= 1 {
+		return nil, false
+	}
+	if r == nil || r.registry == nil {
+		return nil, false
+	}
+
+	batch := make([]parallelToolCall, 0, len(toolCalls))
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
+	for _, originalCall := range toolCalls {
+		call := originalCall
+		call.Arguments = cloneArguments(originalCall.Arguments)
+		call = sanitizeUnsupportedOptionalArguments(call, evidenceText)
+		definition, found := r.registry.GetDefinition(call.Name)
+		if !found {
+			return nil, false
+		}
+		if definition.Name == "" {
+			definition.Name = call.Name
+		}
+		tool, ok := r.registry.GetTool(call.Name)
+		if !ok || tool == nil {
+			return nil, false
+		}
+		decision := r.policy.DecideToolCall(call.ID, definition, true, now)
+		if decision.Decision != contracts.RiskDecisionAllow {
+			return nil, false
+		}
+		if definition.RequiresApproval {
+			return nil, false
+		}
+		if !r.policy.CanRunInParallel(tool) {
+			return nil, false
+		}
+		call = normalizeProviderToolCall(now, call, userText)
+		if len(pendingMissingFieldsForToolCall(call, definition, true, activeClarification, userText)) > 0 {
+			return nil, false
+		}
+		batch = append(batch, parallelToolCall{
+			call:       call,
+			definition: definition,
+			tool:       tool,
+		})
+	}
+
+	return batch, true
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/agent/reference"
@@ -65,6 +66,10 @@ type AgentRuntimeConfig struct {
 	SandboxWorkspaceDir string
 	SandboxImage        string
 	SandboxRunner       sandboxruntime.Runner
+
+	ParallelExecutionEnabled   bool
+	ParallelMaxWorkers         int
+	ParallelToolTimeoutDefault time.Duration
 }
 
 type RuntimeBundle struct {
@@ -141,6 +146,9 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		Model:                 model,
 		Compactor:             compactor,
 		MemoryClassifierModel: compactorModel,
+		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
+		ParallelMaxWorkers:         config.ParallelMaxWorkers,
+		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,
 	})
 	return RuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
 }
