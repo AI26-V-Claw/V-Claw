@@ -164,6 +164,8 @@ func (t ListDirTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolR
 		return tools.ToolResult{
 			ToolCallID: call.ID, ToolName: call.Name, Success: true,
 			ContentForLLM: content, ContentForUser: content,
+			ArtifactRef: &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: path},
+			Metadata:    map[string]any{"entry_count": 0},
 		}
 	}
 
@@ -172,13 +174,21 @@ func (t ListDirTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolR
 		header += fmt.Sprintf(" (pattern: %s)", pattern)
 	}
 	content := header + "\n" + strings.Join(entries, "\n")
-	if count > maxListEntries {
+	truncatedList := count > maxListEntries
+	if truncatedList {
 		content += fmt.Sprintf("\n[truncated — showing %d of %d+ entries]", maxListEntries, count)
 	}
 
+	displayCount := len(entries)
 	return tools.ToolResult{
-		ToolCallID: call.ID, ToolName: call.Name, Success: true,
-		ContentForLLM: content, ContentForUser: content,
+		ToolCallID:  call.ID,
+		ToolName:    call.Name,
+		Success:     true,
+		ContentForLLM:  content,
+		ContentForUser: content,
+		Truncated:   truncatedList,
+		ArtifactRef: &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: path},
+		Metadata:    map[string]any{"entry_count": displayCount},
 	}
 }
 
@@ -270,10 +280,24 @@ func (t ReadFileTool) Execute(_ context.Context, call tools.ToolCall) tools.Tool
 		header += " [truncated]"
 	}
 
-	result := header + "\n" + content
+	resultContent := header + "\n" + content
+	meta := map[string]any{
+		"total_lines": totalLines,
+		"size_bytes":  len(data),
+	}
+	if startLine > 0 || endLine > 0 {
+		meta["start_line"] = startLine
+		meta["end_line"] = endLine
+	}
 	return tools.ToolResult{
-		ToolCallID: call.ID, ToolName: call.Name, Success: true,
-		ContentForLLM: result, ContentForUser: result,
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  resultContent,
+		ContentForUser: resultContent,
+		Truncated:      truncated,
+		ArtifactRef:    &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: filepath.Base(resolved)},
+		Metadata:       meta,
 	}
 }
 
@@ -330,11 +354,20 @@ func (t FileInfoTool) Execute(_ context.Context, call tools.ToolCall) tools.Tool
 		fileType = "directory"
 	}
 
+	meta := map[string]any{
+		"type":        fileType,
+		"size_bytes":  info.Size(),
+		"modified_at": info.ModTime().Format(time.RFC3339),
+		"permissions": info.Mode().String(),
+	}
+
 	content := fmt.Sprintf("Path: %s\nType: %s\nSize: %s\nModified: %s\nPermissions: %s",
 		path, fileType, formatSize(info.Size()), info.ModTime().Format(time.RFC3339), info.Mode().String())
 
 	if !info.IsDir() {
-		content += fmt.Sprintf("\nExtension: %s", filepath.Ext(info.Name()))
+		ext := filepath.Ext(info.Name())
+		content += fmt.Sprintf("\nExtension: %s", ext)
+		meta["extension"] = ext
 	} else {
 		entries, err := os.ReadDir(resolved)
 		if err == nil {
@@ -347,12 +380,19 @@ func (t FileInfoTool) Execute(_ context.Context, call tools.ToolCall) tools.Tool
 				}
 			}
 			content += fmt.Sprintf("\nContains: %d files, %d directories", files, dirs)
+			meta["file_count"] = files
+			meta["dir_count"] = dirs
 		}
 	}
 
 	return tools.ToolResult{
-		ToolCallID: call.ID, ToolName: call.Name, Success: true,
-		ContentForLLM: content, ContentForUser: content,
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  content,
+		ContentForUser: content,
+		ArtifactRef:    &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: filepath.Base(resolved)},
+		Metadata:       meta,
 	}
 }
 
@@ -438,10 +478,15 @@ func (t WriteFileTool) Execute(_ context.Context, call tools.ToolCall) tools.Too
 		return inputError(call, fmt.Sprintf("invalid mode %q: must be create, overwrite, or append", mode))
 	}
 
-	result := fmt.Sprintf("Successfully wrote %d bytes to %s (mode: %s)", len(content), path, mode)
+	summary := fmt.Sprintf("Successfully wrote %d bytes to %s (mode: %s)", len(content), path, mode)
 	return tools.ToolResult{
-		ToolCallID: call.ID, ToolName: call.Name, Success: true,
-		ContentForLLM: result, ContentForUser: result,
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  summary,
+		ContentForUser: summary,
+		ArtifactRef:    &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: filepath.Base(resolved)},
+		Metadata:       map[string]any{"bytes_written": len(content), "mode": mode},
 	}
 }
 

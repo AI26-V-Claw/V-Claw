@@ -138,7 +138,7 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 
 	for _, result := range response.ToolResults {
 		if result.Success {
-			if artifactRef := buildArtifactRef(result.ToolName, result.Data); artifactRef != nil {
+			if artifactRef := preferredArtifactRef(result); artifactRef != nil {
 				if text := extractUserText(result.Data); strings.TrimSpace(text) != "" {
 					return &contracts.UserOutput{
 						Kind:        contracts.UserOutputKindSuccess,
@@ -153,7 +153,7 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 						Kind: contracts.UserOutputKindSuccess,
 						Text: limitOutboundText(renderToolFallback(result.ToolName, text)),
 					}
-					if artifactRef := buildArtifactRef(result.ToolName, result.Data); artifactRef != nil {
+					if artifactRef := preferredArtifactRef(result); artifactRef != nil {
 						output.ArtifactRef = artifactRef
 					}
 					return output
@@ -166,6 +166,13 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 		Kind: contracts.UserOutputKindMessage,
 		Text: string(response.Status),
 	}
+}
+
+func preferredArtifactRef(result contracts.ToolResult) *contracts.ArtifactRef {
+	if result.ArtifactRef != nil {
+		return result.ArtifactRef
+	}
+	return buildArtifactRef(result.ToolName, result.Data)
 }
 
 func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {

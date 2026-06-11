@@ -222,8 +222,18 @@ Tool Layer -> Agent Core
   "toolName": "calendar.createEvent",
   "success": true,
   "data": {
-    "eventId": "event_001"
+    "contentForUser": "Created calendar event: Sprint Review",
+    "contentForLLM": "{\"Event\":{\"ID\":\"event_001\",\"Title\":\"Sprint Review\"}}"
   },
+  "artifactRef": {
+    "kind": "calendar.event",
+    "label": "Google Calendar event",
+    "id": "event_001",
+    "uri": "https://calendar.google.com/calendar/r/eventedit/event_001"
+  },
+  "metadata": {},
+  "truncated": false,
+  "redacted": false,
   "error": null
 }
 ```
@@ -243,6 +253,14 @@ Error:
   }
 }
 ```
+
+`artifactRef` is required when the tool reads or writes a concrete primary resource that can be referenced safely, such as a file, URL, Gmail message, Chat message, Calendar event, Drive file, Docs document, or Sheets spreadsheet.
+
+`metadata` is for structured non-sensitive execution details such as byte counts, line counts, query parameters, and pagination state.
+
+`truncated=true` means one or more result payloads were shortened before crossing the contract boundary.
+
+`redacted=true` means sensitive content was removed or masked before the result was added to LLM context. User-facing text can remain more detailed when appropriate, but logs, session observations, and LLM-visible content must use the sanitized result.
 
 ---
 

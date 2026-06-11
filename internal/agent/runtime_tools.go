@@ -167,6 +167,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 
 	select {
 	case result := <-resultCh:
+		result = sanitizeToolResult(result, definition)
 		stage := ProgressStageToolCompleted
 		if !result.Success {
 			stage = ProgressStageToolFailed
@@ -663,11 +664,47 @@ func contractToolResult(result tools.ToolResult) contracts.ToolResult {
 			"contentForUser": result.ContentForUser,
 			"contentForLLM":  result.ContentForLLM,
 		},
+		ArtifactRef: convertToolArtifactRef(result.ArtifactRef),
+		Metadata:    cloneMetadataMap(result.Metadata),
+		Truncated:   result.Truncated,
+		Redacted:    toolResultRedacted(result),
 	}
 	if result.Error != nil {
 		contractResult.Error = toolErrorShape(result)
 	}
 	return contractResult
+}
+
+func sanitizeToolResult(result tools.ToolResult, definition tools.ToolDefinition) tools.ToolResult {
+	return tools.RedactResult(result, definition.RiskLevel)
+}
+
+func convertToolArtifactRef(ref *tools.ToolArtifactRef) *contracts.ArtifactRef {
+	if ref == nil {
+		return nil
+	}
+	return &contracts.ArtifactRef{
+		Kind:  ref.Kind,
+		Label: ref.Label,
+		URI:   ref.URI,
+		ID:    ref.ID,
+	}
+}
+
+func cloneMetadataMap(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func toolResultRedacted(result tools.ToolResult) bool {
+	redacted, _ := result.Metadata["_redacted"].(bool)
+	return redacted
 }
 
 func prependToolResultIfMissing(results []contracts.ToolResult, result contracts.ToolResult) []contracts.ToolResult {
