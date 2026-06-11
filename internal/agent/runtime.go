@@ -700,7 +700,7 @@ If required information is missing, ask one concise clarification question inste
 				toolMessage := providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,
-					Content:    truncateToolContentForLLM(result.ContentForLLM),
+					Content:    truncateToolContentForLLM(r.toolContentForProvider(providerToolCall.Name, result.ContentForLLM)),
 				}
 				transcript = append(transcript, toolMessage)
 				providerTranscript = append(providerTranscript, toolMessage)

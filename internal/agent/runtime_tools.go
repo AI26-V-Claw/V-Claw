@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -42,6 +44,70 @@ func skippedToolObservationMessages(toolCalls []providers.ToolCall, content stri
 		})
 	}
 	return messages
+}
+
+func (r *Runtime) toolContentForProvider(toolName string, content string) string {
+	return enrichToolContentForLLM(toolName, content, runtimeLocalLocation(r))
+}
+
+func runtimeLocalLocation(r *Runtime) *time.Location {
+	now := time.Now
+	if r != nil && r.now != nil {
+		now = r.now
+	}
+	return now().Location()
+}
+
+func enrichToolContentForLLM(toolName string, content string, location *time.Location) string {
+	if toolName != "gmail.listEmails" {
+		return content
+	}
+	if location == nil {
+		location = time.Local
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return content
+	}
+	rawMessages, ok := payload["Messages"].([]any)
+	if !ok {
+		return content
+	}
+	for _, rawMessage := range rawMessages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		internalDate := int64Value(message["InternalDate"])
+		if internalDate <= 0 {
+			continue
+		}
+		localTime := time.UnixMilli(internalDate).In(location)
+		message["LocalDate"] = localTime.Format("2006-01-02")
+		message["LocalDateTime"] = localTime.Format(time.RFC3339)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return content
+	}
+	return string(data)
+}
+
+func int64Value(value any) int64 {
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case json.Number:
+		parsed, err := v.Int64()
+		if err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func validateUserMessage(message contracts.UserMessage) *contracts.ErrorShape {
@@ -250,8 +316,9 @@ func normalizeCalendarListEventsArgs(now time.Time, args map[string]any, userTex
 
 func normalizeGmailListArgs(now time.Time, args map[string]any, userText string) map[string]any {
 	sentQuery, sentLabelIDs, hasSentRecipient := sentMailSearchQuery(userText)
+	disjointDateQuery, hasDisjointDateQuery := gmailDisjointDateQuery(now, userText)
 	start, end, ok := providerRelativeDateRange(now, userText)
-	if !ok && !hasSentRecipient {
+	if !ok && !hasSentRecipient && !hasDisjointDateQuery {
 		return nil
 	}
 
@@ -259,19 +326,68 @@ func normalizeGmailListArgs(now time.Time, args map[string]any, userText string)
 	if normalized == nil {
 		normalized = map[string]any{}
 	}
+	baseQuery := ""
+	if query, ok := normalized["query"].(string); ok {
+		baseQuery = normalizeRelativeProviderQuery(query, userText, gmailQueryIntentTerms())
+	}
+	if hasSentRecipient {
+		baseQuery = sentQuery
+		normalized["labelIds"] = sentLabelIDs
+	}
+	if hasDisjointDateQuery {
+		normalized["query"] = combineGmailQueries(baseQuery, disjointDateQuery)
+		delete(normalized, "after")
+		delete(normalized, "before")
+		return normalized
+	}
 	if ok {
 		normalized["after"] = start.Format("2006-01-02")
 		normalized["before"] = end.Format("2006-01-02")
 	}
 	if hasSentRecipient {
-		normalized["query"] = sentQuery
-		normalized["labelIds"] = sentLabelIDs
+		normalized["query"] = baseQuery
 		return normalized
 	}
-	if query, ok := normalized["query"].(string); ok {
-		normalized["query"] = normalizeRelativeProviderQuery(query, userText, gmailQueryIntentTerms())
+	if _, ok := normalized["query"].(string); ok {
+		normalized["query"] = baseQuery
 	}
 	return normalized
+}
+
+func gmailDisjointDateQuery(now time.Time, userText string) (string, bool) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	text := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if text == "" {
+		return "", false
+	}
+	hasToday := containsAnyText(text, "hom nay", "today")
+	hasDayBeforeYesterday := containsAnyText(text, "hom kia", "day before yesterday", "two days ago")
+	if !hasToday || !hasDayBeforeYesterday {
+		return "", false
+	}
+
+	today := startOfDay(now)
+	dayBeforeYesterday := today.AddDate(0, 0, -2)
+	return fmt.Sprintf("((after:%s before:%s) OR (after:%s before:%s))",
+		today.Format("2006/01/02"),
+		today.AddDate(0, 0, 1).Format("2006/01/02"),
+		dayBeforeYesterday.Format("2006/01/02"),
+		dayBeforeYesterday.AddDate(0, 0, 1).Format("2006/01/02"),
+	), true
+}
+
+func combineGmailQueries(base string, dateQuery string) string {
+	base = strings.TrimSpace(base)
+	dateQuery = strings.TrimSpace(dateQuery)
+	if base == "" {
+		return dateQuery
+	}
+	if dateQuery == "" {
+		return base
+	}
+	return base + " " + dateQuery
 }
 
 func sentMailSearchQuery(userText string) (string, []string, bool) {
@@ -322,6 +438,9 @@ func providerRelativeDateRange(now time.Time, userText string) (time.Time, time.
 	case containsAnyText(text, "ngay mai", "tomorrow"):
 		start := startOfDay(now).AddDate(0, 0, 1)
 		return start, start.AddDate(0, 0, 1), true
+	case containsAnyText(text, "hom kia", "day before yesterday", "two days ago"):
+		start := startOfDay(now).AddDate(0, 0, -2)
+		return start, start.AddDate(0, 0, 1), true
 	case containsAnyText(text, "hom qua", "yesterday"):
 		start := startOfDay(now).AddDate(0, 0, -1)
 		return start, start.AddDate(0, 0, 1), true
@@ -352,7 +471,7 @@ func normalizeRelativeProviderQuery(query string, userText string, intentTerms [
 func relativeQueryTerms() []string {
 	return []string{
 		"tuan nay", "tuan sau", "thang nay", "thang toi", "thang sau",
-		"hom qua", "ngay mai", "hom nay", "yesterday", "today", "tomorrow", "this week", "next week",
+		"hom kia", "hom qua", "ngay mai", "hom nay", "day before yesterday", "two days ago", "yesterday", "today", "tomorrow", "this week", "next week",
 		"this month", "next month",
 	}
 }
