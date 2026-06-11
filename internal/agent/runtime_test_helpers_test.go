@@ -23,6 +23,18 @@ type blockingRuntimeTool struct {
 	release chan struct{}
 }
 
+type parallelRuntimeTool struct {
+	name       string
+	parameters tools.ToolSchema
+	capability tools.Capability
+	risk       tools.RiskLevel
+	started    chan string
+	calls      chan tools.ToolCall
+	release    chan struct{}
+	delay      time.Duration
+	panicNow   bool
+}
+
 type calendarCreateRuntimeTool struct {
 	executions *int
 }
@@ -79,6 +91,51 @@ func (t blockingRuntimeTool) Execute(_ context.Context, call tools.ToolCall) too
 		Success:        true,
 		ContentForLLM:  "released",
 		ContentForUser: "released",
+	}
+}
+
+func (t parallelRuntimeTool) Name() string        { return t.name }
+func (t parallelRuntimeTool) Description() string { return "Parallel runtime test tool." }
+func (t parallelRuntimeTool) Parameters() tools.ToolSchema {
+	if t.parameters != nil {
+		return t.parameters
+	}
+	return tools.ToolSchema{"type": "object", "properties": map[string]any{}}
+}
+func (t parallelRuntimeTool) Capability() tools.Capability {
+	if t.capability != "" {
+		return t.capability
+	}
+	return tools.CapabilityReadOnly
+}
+func (t parallelRuntimeTool) RiskLevel() tools.RiskLevel {
+	if t.risk != "" {
+		return t.risk
+	}
+	return tools.RiskLevelSafeRead
+}
+func (t parallelRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	if t.started != nil {
+		t.started <- call.ID
+	}
+	if t.calls != nil {
+		t.calls <- call
+	}
+	if t.panicNow {
+		panic("parallel runtime test panic")
+	}
+	if t.delay > 0 {
+		time.Sleep(t.delay)
+	}
+	if t.release != nil {
+		<-t.release
+	}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  call.Name + " completed",
+		ContentForUser: call.Name + " completed",
 	}
 }
 

@@ -32,44 +32,50 @@ var (
 )
 
 type RuntimeConfig struct {
-	Provider              providers.Provider
-	Registry              *tools.ToolRegistry
-	Observer              RuntimeObserver
-	ReferenceResolver     reference.Resolver
-	Policy                policies.ToolPolicy
-	SessionStore          sessions.Store
-	StateStore            RuntimeStateStore
-	TurnRouter            TurnRouter
-	Logger                *slog.Logger
-	MaxIterations         int
-	ToolTimeout           time.Duration
-	Model                 string
-	Now                   func() time.Time
-	Compactor             *sessions.Compactor
-	ContextWindow         int
-	MemoryClassifierModel string
+	Provider                   providers.Provider
+	Registry                   *tools.ToolRegistry
+	Observer                   RuntimeObserver
+	ReferenceResolver          reference.Resolver
+	Policy                     policies.ToolPolicy
+	SessionStore               sessions.Store
+	StateStore                 RuntimeStateStore
+	TurnRouter                 TurnRouter
+	Logger                     *slog.Logger
+	MaxIterations              int
+	ToolTimeout                time.Duration
+	ParallelExecutionEnabled   bool
+	ParallelMaxWorkers         int
+	ParallelToolTimeoutDefault time.Duration
+	Model                      string
+	Now                        func() time.Time
+	Compactor                  *sessions.Compactor
+	ContextWindow              int
+	MemoryClassifierModel      string
 }
 
 type Runtime struct {
-	provider              providers.Provider
-	registry              *tools.ToolRegistry
-	observer              RuntimeObserver
-	referenceResolver     reference.Resolver
-	policy                policies.ToolPolicy
-	sessionStore          sessions.Store
-	stateStore            RuntimeStateStore
-	turnRouter            TurnRouter
-	logger                *slog.Logger
-	approvalMu            sync.Mutex
-	pendingApprovals      map[string]pendingApproval
-	pendingBySession      map[string]string
-	maxIterations         int
-	toolTimeout           time.Duration
-	model                 string
-	now                   func() time.Time
-	compactor             *sessions.Compactor
-	contextWindow         int
-	memoryClassifierModel string
+	provider                   providers.Provider
+	registry                   *tools.ToolRegistry
+	observer                   RuntimeObserver
+	referenceResolver          reference.Resolver
+	policy                     policies.ToolPolicy
+	sessionStore               sessions.Store
+	stateStore                 RuntimeStateStore
+	turnRouter                 TurnRouter
+	logger                     *slog.Logger
+	approvalMu                 sync.Mutex
+	pendingApprovals           map[string]pendingApproval
+	pendingBySession           map[string]string
+	maxIterations              int
+	toolTimeout                time.Duration
+	parallelExecutionEnabled   bool
+	parallelMaxWorkers         int
+	parallelToolTimeoutDefault time.Duration
+	model                      string
+	now                        func() time.Time
+	compactor                  *sessions.Compactor
+	contextWindow              int
+	memoryClassifierModel      string
 }
 
 type pendingApproval struct {
@@ -126,6 +132,17 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if toolTimeout <= 0 {
 		toolTimeout = DefaultToolTimeout
 	}
+	parallelMaxWorkers := config.ParallelMaxWorkers
+	if parallelMaxWorkers < 1 {
+		parallelMaxWorkers = 1
+	}
+	if parallelMaxWorkers > 8 {
+		parallelMaxWorkers = 8
+	}
+	parallelToolTimeoutDefault := config.ParallelToolTimeoutDefault
+	if parallelToolTimeoutDefault <= 0 {
+		parallelToolTimeoutDefault = toolTimeout
+	}
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
 		sessionStore = sessions.NewInMemoryStore()
@@ -158,24 +175,27 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		contextWindow = 128_000
 	}
 	return &Runtime{
-		provider:              config.Provider,
-		registry:              config.Registry,
-		observer:              config.Observer,
-		referenceResolver:     referenceResolver,
-		policy:                config.Policy,
-		sessionStore:          sessionStore,
-		stateStore:            stateStore,
-		turnRouter:            config.TurnRouter,
-		logger:                logger,
-		pendingApprovals:      make(map[string]pendingApproval),
-		pendingBySession:      make(map[string]string),
-		maxIterations:         maxIterations,
-		toolTimeout:           toolTimeout,
-		model:                 config.Model,
-		now:                   now,
-		compactor:             config.Compactor,
-		contextWindow:         contextWindow,
-		memoryClassifierModel: memoryClassifierModel(config),
+		provider:                   config.Provider,
+		registry:                   config.Registry,
+		observer:                   config.Observer,
+		referenceResolver:          referenceResolver,
+		policy:                     config.Policy,
+		sessionStore:               sessionStore,
+		stateStore:                 stateStore,
+		turnRouter:                 config.TurnRouter,
+		logger:                     logger,
+		pendingApprovals:           make(map[string]pendingApproval),
+		pendingBySession:           make(map[string]string),
+		maxIterations:              maxIterations,
+		toolTimeout:                toolTimeout,
+		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
+		parallelMaxWorkers:         parallelMaxWorkers,
+		parallelToolTimeoutDefault: parallelToolTimeoutDefault,
+		model:                      config.Model,
+		now:                        now,
+		compactor:                  config.Compactor,
+		contextWindow:              contextWindow,
+		memoryClassifierModel:      memoryClassifierModel(config),
 	}
 }
 
@@ -480,6 +500,91 @@ If required information is missing, ask one concise clarification question inste
 				Data:        r.traceData(referenceResolution),
 				ToolResults: toolResults,
 			}, nil
+		}
+
+		evidenceText := providerTranscriptEvidenceText(providerTranscript)
+		if batch, ok := r.prepareParallelBatch(
+			assistantMessage.ToolCalls,
+			r.parallelExecutionEnabled,
+			message.Text,
+			evidenceText,
+			activeClarification,
+		); ok {
+			batchResults := executeParallelBatch(ctx, batch, ParallelConfig{
+				MaxWorkers:         r.parallelMaxWorkers,
+				ToolTimeoutDefault: r.parallelToolTimeoutDefault,
+				OnStart: func(index int) {
+					item := batch[index]
+					r.logger.Info("parallel tool execution started",
+						"tool_call_id", item.call.ID,
+						"tool_name", item.call.Name,
+						"arguments", logToolArguments(item.call.Name, item.call.Arguments),
+					)
+					emitProgress(ctx, ProgressEvent{
+						Stage:      ProgressStageToolStarted,
+						ToolName:   item.call.Name,
+						ToolCallID: item.call.ID,
+						Message:    "Tool started",
+					})
+				},
+			})
+			for i, outcome := range batchResults {
+				call := batch[i].call
+				result := outcome.result
+				stage := ProgressStageToolCompleted
+				if !result.Success {
+					stage = ProgressStageToolFailed
+				}
+				r.logger.Info("parallel tool execution completed",
+					"tool_call_id", call.ID,
+					"tool_name", call.Name,
+					"success", result.Success,
+					"error_code", toolErrorCode(result),
+					"duration", outcome.duration,
+					"content_preview", logPreview(result.ContentForLLM, 260),
+				)
+				emitProgress(ctx, ProgressEvent{
+					Stage:      stage,
+					ToolName:   call.Name,
+					ToolCallID: call.ID,
+					Message:    "Tool finished",
+				})
+				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, call, result, outcome.duration); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				toolResults = append(toolResults, contractToolResult(result))
+				toolMessage := providers.Message{
+					Role:       providers.MessageRoleTool,
+					ToolCallID: call.ID,
+					Content:    truncateToolContentForLLM(result.ContentForLLM),
+				}
+				transcript = append(transcript, toolMessage)
+				providerTranscript = append(providerTranscript, toolMessage)
+				if err := r.sessionStore.AppendMessage(ctx, message.SessionID, toolMessage); err != nil {
+					base.Error = internalError("append tool message: "+err.Error(), contracts.ErrorSourceSession)
+					base.Message = base.Error.Message
+					return base, nil
+				}
+			}
+			if isBatchSystemError(batchResults) {
+				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				base.ToolResults = toolResults
+				base.Error = toolErrorShape(batchResults[0].result)
+				base.Message = base.Error.Message
+				return base, nil
+			}
+			continue agentLoop
 		}
 
 		for index, providerToolCall := range assistantMessage.ToolCalls {

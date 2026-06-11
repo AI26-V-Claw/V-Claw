@@ -16,6 +16,7 @@ evaluation_results.json
 *_results.json
 
 # Logging and temporary files
+/log.diff
 data/telegram_offset.txt
 data/sessions/
 data/telegram_attachments/

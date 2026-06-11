@@ -1,19 +1,12 @@
 {
-  "app_name": "vclaw",
-  "http_addr": ":8080",
-  "approval_mode": "telegram",
-  "telegram": {
-    "enabled": false,
-    "bot_token": ""
-  },
-  "sandbox": {
-    "provider": "docker",
-    "network_enabled_default": false,
-    "workspace_root": "/var/lib/vclaw/workspace"
-  },
-  "google": {
-    "gmail_enabled": false,
-    "calendar_enabled": false,
-    "chat_enabled": false
-  }
+  "_note": "This file documents supported environment variables. The application reads configuration from env vars only.",
+  "OPENAI_API_KEY": "",
+  "OPENAI_MODEL": "gpt-4o",
+  "OPENAI_BASE_URL": "",
+  "VCLAW_PARALLEL_ENABLED": "false",
+  "_VCLAW_PARALLEL_ENABLED_comment": "Set to 'true' to enable parallel execution for safe_read and safe_compute tool batches.",
+  "VCLAW_PARALLEL_MAX_WORKERS": "4",
+  "_VCLAW_PARALLEL_MAX_WORKERS_comment": "Maximum workers per batch.",
+  "VCLAW_PARALLEL_TOOL_TIMEOUT": "30s",
+  "_VCLAW_PARALLEL_TOOL_TIMEOUT_comment": "Default timeout for each tool running inside a parallel batch."
 }
