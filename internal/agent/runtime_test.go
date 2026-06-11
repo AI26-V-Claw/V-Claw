@@ -818,6 +818,9 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	if !strings.Contains(prompt, "gmail.listEmails") || !strings.Contains(prompt, "date-only YYYY-MM-DD") || !strings.Contains(prompt, "never RFC3339") {
 		t.Fatalf("expected Gmail date-only guidance in prompt, got: %s", prompt)
 	}
+	if !strings.Contains(prompt, "LocalDate") || !strings.Contains(prompt, "different timezone") {
+		t.Fatalf("expected Gmail LocalDate grouping guidance in prompt, got: %s", prompt)
+	}
 	if !strings.Contains(prompt, "people.searchDirectory") || !strings.Contains(prompt, "Attendees must be valid email addresses") {
 		t.Fatalf("expected attendee resolution guidance in prompt, got: %s", prompt)
 	}
@@ -893,6 +896,67 @@ func TestNormalizeGmailListEmailsTodayUsesDateOnlyRange(t *testing.T) {
 		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
 	}
 	if normalized.Arguments["query"] != "" {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+}
+
+func TestNormalizeGmailListEmailsDayBeforeYesterdayUsesDateOnlyRange(t *testing.T) {
+	now := time.Date(2026, 6, 10, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{Name: "gmail.listEmails", Arguments: map[string]any{}}
+
+	normalized := normalizeProviderToolCall(now, call, "xem email h\u00f4m kia")
+
+	if normalized.Arguments["after"] != "2026-06-08" {
+		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
+	}
+	if normalized.Arguments["before"] != "2026-06-09" {
+		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
+	}
+}
+
+func TestNormalizeGmailListEmailsTodayAndDayBeforeYesterdayUsesDisjointQuery(t *testing.T) {
+	now := time.Date(2026, 6, 10, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	userText := "xem trong h\u00f4m nay v\u00e0 h\u00f4m kia c\u00f3 nh\u1eefng ai g\u1eedi mail cho t\u00f4i"
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"query":  userText,
+			"after":  "2026-06-08",
+			"before": "2026-06-11",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, userText)
+
+	want := "((after:2026/06/10 before:2026/06/11) OR (after:2026/06/08 before:2026/06/09))"
+	if normalized.Arguments["query"] != want {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+	if _, ok := normalized.Arguments["after"]; ok {
+		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
+	}
+	if _, ok := normalized.Arguments["before"]; ok {
+		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
+	}
+	query := normalized.Arguments["query"].(string)
+	if strings.Contains(query, "after:2026/06/09 before:2026/06/10") {
+		t.Fatalf("disjoint query should not include yesterday: %q", query)
+	}
+}
+
+func TestNormalizeGmailListEmailsDisjointDatesKeepRealFilterQuery(t *testing.T) {
+	now := time.Date(2026, 6, 10, 9, 59, 40, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"query": "from:alice@example.com",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "email from alice h\u00f4m nay v\u00e0 h\u00f4m kia")
+
+	want := "from:alice@example.com ((after:2026/06/10 before:2026/06/11) OR (after:2026/06/08 before:2026/06/09))"
+	if normalized.Arguments["query"] != want {
 		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
 	}
 }
@@ -1007,6 +1071,102 @@ func TestRuntimeExecutesReadOnlyToolAndContinuesToFinalAnswer(t *testing.T) {
 	}
 	if secondMessages[3].Role != providers.MessageRoleTool || secondMessages[3].ToolCallID != "call_time" {
 		t.Fatalf("unexpected tool observation message: %#v", secondMessages[3])
+	}
+}
+
+func TestRuntimePassesCompactGmailListResultWithoutTruncation(t *testing.T) {
+	gmailContent := `{"Query":"in:inbox ((after:2026/06/11 before:2026/06/12) OR (after:2026/06/09 before:2026/06/10))","Messages":[` +
+		`{"ID":"msg-1","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Mời tham dự sự kiện Test Sprint2","Date":"Wed, 10 Jun 2026 21:04:15 -0700"},` +
+		`{"ID":"msg-2","From":"Slack <no-reply@email.slackhq.com>","Subject":"How to start a conversation in Slack","Date":"Tue, 09 Jun 2026 10:53:25 -0600"},` +
+		`{"ID":"msg-3","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Thông báo tham gia sự kiện Test memory for Sprint2","Date":"Mon, 8 Jun 2026 21:36:50 -0700"},` +
+		`{"ID":"msg-4","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Re: thông tin lịch trình hôm nay","Date":"Mon, 8 Jun 2026 20:37:29 -0700"}` +
+		`]}`
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call_gmail",
+				Name: "gmail.listEmails",
+			}},
+		}},
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "done"}},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(gmailListEmailsRuntimeTool{content: gmailContent}); err != nil {
+		t.Fatalf("register gmail list tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{Provider: provider, Registry: registry})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed, got %#v", response)
+	}
+	if len(provider.calls) != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", len(provider.calls))
+	}
+	secondPrompt := providerMessagesContent(provider.calls[1].Messages)
+	for _, subject := range []string{"Thông báo tham gia sự kiện Test memory for Sprint2", "Re: thông tin lịch trình hôm nay"} {
+		if !strings.Contains(secondPrompt, subject) {
+			t.Fatalf("second provider prompt missing subject %q: %s", subject, secondPrompt)
+		}
+	}
+	if strings.Contains(secondPrompt, "...[truncated") {
+		t.Fatalf("compact Gmail list result should not be truncated: %s", secondPrompt)
+	}
+}
+
+func TestRuntimeEnrichesGmailListMessagesWithLocalDates(t *testing.T) {
+	local := time.FixedZone("ICT", 7*60*60)
+	gmailContent := fmt.Sprintf(`{"Query":"in:inbox","Messages":[`+
+		`{"ID":"msg-today","From":"a@example.com","Subject":"Today local","Date":"Wed, 10 Jun 2026 21:04:15 -0700","InternalDate":%d},`+
+		`{"ID":"msg-hom-kia","From":"b@example.com","Subject":"Day before yesterday local","Date":"Mon, 8 Jun 2026 21:36:50 -0700","InternalDate":%d}`+
+		`]}`,
+		time.Date(2026, 6, 11, 11, 4, 15, 0, local).UnixMilli(),
+		time.Date(2026, 6, 9, 11, 36, 50, 0, local).UnixMilli(),
+	)
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call_gmail",
+				Name: "gmail.listEmails",
+			}},
+		}},
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "done"}},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(gmailListEmailsRuntimeTool{content: gmailContent}); err != nil {
+		t.Fatalf("register gmail list tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return time.Date(2026, 6, 11, 11, 53, 0, 0, local) },
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed, got %#v", response)
+	}
+	if len(provider.calls) != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", len(provider.calls))
+	}
+	secondPrompt := providerMessagesContent(provider.calls[1].Messages)
+	for _, expected := range []string{
+		`"LocalDate":"2026-06-11"`,
+		`"LocalDateTime":"2026-06-11T11:04:15+07:00"`,
+		`"LocalDate":"2026-06-09"`,
+		`"LocalDateTime":"2026-06-09T11:36:50+07:00"`,
+	} {
+		if !strings.Contains(secondPrompt, expected) {
+			t.Fatalf("second provider prompt missing %s: %s", expected, secondPrompt)
+		}
 	}
 }
 
