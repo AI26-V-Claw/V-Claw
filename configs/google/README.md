@@ -250,6 +250,12 @@ https://www.googleapis.com/auth/chat.messages
 https://www.googleapis.com/auth/chat.memberships
 https://www.googleapis.com/auth/chat.spaces
 https://www.googleapis.com/auth/directory.readonly
+https://www.googleapis.com/auth/drive.readonly
+https://www.googleapis.com/auth/drive
+https://www.googleapis.com/auth/documents.readonly
+https://www.googleapis.com/auth/documents
+https://www.googleapis.com/auth/spreadsheets.readonly
+https://www.googleapis.com/auth/spreadsheets
 ```
 
 Scope usage:
@@ -260,6 +266,12 @@ Scope usage:
 - `calendar.events`: creating, updating, and deleting Calendar events after HITL approval.
 - Chat scopes: listing spaces/messages, sending text replies/attachments, updating/deleting messages, creating spaces, and adding/removing members.
 - `directory.readonly`: searching Workspace directory profiles so the agent can resolve names or emails before matching Google Chat members.
+- `drive.readonly`: listing/searching Drive files and reading Drive file metadata.
+- `drive`: creating Drive folders, updating metadata, and sharing files after HITL approval.
+- `documents.readonly`: reading Google Docs document structure/text.
+- `documents`: creating documents and appending text after HITL approval.
+- `spreadsheets.readonly`: reading spreadsheet metadata and values.
+- `spreadsheets`: creating spreadsheets and updating/appending values after HITL approval.
 
 ## Safety Notes
 
@@ -271,6 +283,9 @@ Examples of mutating actions:
 Gmail draft/send/modify/download attachment
 Google Chat send/update/delete/create space/add member/remove member
 Calendar create/update/delete
+Drive create folder/update metadata/share
+Docs create/append text
+Sheets create/update/append values
 ```
 
 Card messages are not supported by the current Google Chat user OAuth flow. Use normal text messages for Google Chat manual tests. If the project needs rich cards later, add a Google Chat app authentication flow and update contracts, docs, and tests before exposing it to agents.

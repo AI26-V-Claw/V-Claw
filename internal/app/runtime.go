@@ -14,9 +14,12 @@ import (
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
+	gdocs "vclaw/internal/connectors/google/docs"
+	gdrive "vclaw/internal/connectors/google/drive"
 	ggmail "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeople "vclaw/internal/connectors/google/people"
+	gsheets "vclaw/internal/connectors/google/sheets"
 	"vclaw/internal/connectors/tavily"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
@@ -27,9 +30,12 @@ import (
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
+	docstool "vclaw/internal/tools/office/docs"
+	drivetool "vclaw/internal/tools/office/drive"
 	gmailtool "vclaw/internal/tools/office/gmail"
-	fstool "vclaw/internal/tools/os/filesystem"
 	peopletool "vclaw/internal/tools/office/people"
+	sheetstool "vclaw/internal/tools/office/sheets"
+	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
 )
@@ -139,13 +145,13 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),
 		),
-		SessionStore:          sessionStore,
-		StateStore:            stateStore,
-		Logger:                config.Logger,
-		MaxIterations:         config.MaxIterations,
-		Model:                 model,
-		Compactor:             compactor,
-		MemoryClassifierModel: compactorModel,
+		SessionStore:               sessionStore,
+		StateStore:                 stateStore,
+		Logger:                     config.Logger,
+		MaxIterations:              config.MaxIterations,
+		Model:                      model,
+		Compactor:                  compactor,
+		MemoryClassifierModel:      compactorModel,
 		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,
@@ -231,6 +237,15 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	}
 
 	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient))); err != nil {
+		return err
+	}
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient))); err != nil {
+		return err
+	}
+	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
+		return err
+	}
+	if err := sheetstool.RegisterTools(registry, sheetstool.NewService(gsheets.NewClient(httpClient))); err != nil {
 		return err
 	}
 	calendarClient, err := gcal.NewClient(ctx, httpClient)

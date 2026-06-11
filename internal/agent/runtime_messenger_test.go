@@ -96,6 +96,51 @@ func TestRenderAgentResponseFormatsToolFallback(t *testing.T) {
 	}
 }
 
+func TestRenderAgentResponsePrefersFinalAssistantMessageOverDriveFallback(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "Dưới đây là các thư mục Google Drive bạn đang có:\n1. **Vclaw** - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)",
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "drive.listFiles",
+			Success:  true,
+			Data: map[string]any{
+				"contentForUser": `{"Files":[{"ID":"folder_1","Name":"Vclaw","MimeType":"application/vnd.google-apps.folder","WebViewLink":"https://drive.google.com/drive/folders/folder_1","ModifiedTime":"2026-06-11T10:00:00.000Z"}]}`,
+			},
+		}},
+	}
+
+	got := renderAgentResponse(response)
+	if !strings.Contains(got, "Dưới đây là các thư mục Google Drive") {
+		t.Fatalf("expected final assistant message to win, got %q", got)
+	}
+	if strings.HasPrefix(got, "Kết quả") {
+		t.Fatalf("expected not to fall back to raw tool result, got %q", got)
+	}
+}
+
+func TestRenderAgentResponseFormatsDriveFallbackWithLinks(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status: contracts.AgentStatusCompleted,
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "drive.listFiles",
+			Success:  true,
+			Data: map[string]any{
+				"contentForUser": `{"Files":[{"ID":"folder_1","Name":"Vclaw","MimeType":"application/vnd.google-apps.folder","WebViewLink":"https://drive.google.com/drive/folders/folder_1","ModifiedTime":"2026-06-11T10:00:00.000Z"}]}`,
+			},
+		}},
+	}
+
+	got := renderAgentResponse(response)
+	for _, want := range []string{"Danh sách Google Drive", "Vclaw", "https://drive.google.com/drive/folders/folder_1", "2026-06-11T10:00:00.000Z"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in rendered fallback, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "Files: Vclaw") {
+		t.Fatalf("expected Drive fallback not to collapse to Files: name-only output, got %q", got)
+	}
+}
+
 func TestRenderAgentResponseFormatsRawGmailDraftJSON(t *testing.T) {
 	response := contracts.AgentResponse{
 		Status:  contracts.AgentStatusCompleted,

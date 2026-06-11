@@ -499,6 +499,36 @@ Rules:
 > `gmail.batchModifyMessages` applies the same modify actions to 1-50 messages. `gmail.deleteDraft` and `gmail.trashMessage` are destructive and require approval; `gmail.untrashMessage` is an external write and also requires approval.
 > These additions use the existing G1 Gmail scopes: `gmail.readonly`, `gmail.compose`, `gmail.send`, and `gmail.modify`; no new OAuth scope is required.
 
+### Google Drive
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `drive.listFiles` | Integration | `safe_read` | No |
+| `drive.getFile` | Integration | `safe_read` | No |
+| `drive.createFolder` | Integration | `external_write` | Yes |
+| `drive.updateFileMetadata` | Integration | `external_write` | Yes |
+| `drive.shareFile` | Integration | `external_write` | Yes |
+
+### Google Docs
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `docs.getDocument` | Integration | `safe_read` | No |
+| `docs.createDocument` | Integration | `external_write` | Yes |
+| `docs.appendText` | Integration | `external_write` | Yes |
+
+### Google Sheets
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `sheets.getSpreadsheet` | Integration | `safe_read` | No |
+| `sheets.readValues` | Integration | `safe_read` | No |
+| `sheets.createSpreadsheet` | Integration | `external_write` | Yes |
+| `sheets.updateValues` | Integration | `external_write` | Yes |
+| `sheets.appendValues` | Integration | `external_write` | Yes |
+
+> Drive/Docs/Sheets MVP is read-first: list/get/read tools are safe reads. Create/update/append/share tools are external writes and must pass the same HITL approval boundary before execution.
+
 ### Calendar
 
 | Tool | Owner | Risk | Approval |

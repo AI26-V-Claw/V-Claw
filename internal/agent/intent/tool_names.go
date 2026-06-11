@@ -51,6 +51,22 @@ var toolNameAliases = map[string]string{
 	// People tools
 	"search_directory": "people.searchDirectory",
 
+	// Drive/Docs/Sheets tools
+	"list_drive_files":           "drive.listFiles",
+	"search_drive":               "drive.listFiles",
+	"get_drive_file":             "drive.getFile",
+	"create_drive_folder":        "drive.createFolder",
+	"update_drive_file_metadata": "drive.updateFileMetadata",
+	"share_drive_file":           "drive.shareFile",
+	"get_document":               "docs.getDocument",
+	"create_document":            "docs.createDocument",
+	"append_document_text":       "docs.appendText",
+	"get_spreadsheet":            "sheets.getSpreadsheet",
+	"read_sheet_values":          "sheets.readValues",
+	"create_spreadsheet":         "sheets.createSpreadsheet",
+	"update_sheet_values":        "sheets.updateValues",
+	"append_sheet_values":        "sheets.appendValues",
+
 	// Web tools
 	"web_search": "web.search",
 	"web_fetch":  "web.fetch",

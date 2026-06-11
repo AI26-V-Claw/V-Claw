@@ -477,6 +477,29 @@ func TestTelegramTextFromResponsePreservesMultilineFormatting(t *testing.T) {
 	}
 }
 
+func TestTelegramTextFromResponsePrefersFinalMessageOverOutputFallback(t *testing.T) {
+	message := "Dưới đây là các thư mục Google Drive bạn đang có:\n1. **Vclaw** - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)"
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+		Output: &contracts.UserOutput{
+			Kind: contracts.UserOutputKindSuccess,
+			Text: "Kết quả:\n- Files: Vclaw",
+		},
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "drive.listFiles",
+			Success:  true,
+			Data: map[string]any{
+				"contentForUser": `{"Files":[{"ID":"folder_1","Name":"Vclaw","WebViewLink":"https://drive.google.com/drive/folders/folder_1"}]}`,
+			},
+		}},
+	})
+
+	if text != message {
+		t.Fatalf("expected final message to win, got %q want %q", text, message)
+	}
+}
+
 func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := telegramTextFromResponse(contracts.AgentResponse{

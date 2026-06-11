@@ -57,6 +57,14 @@ func TestNormalizeToolName(t *testing.T) {
 		// People
 		{"search_directory", "people.searchDirectory"},
 
+		// Drive/Docs/Sheets
+		{"list_drive_files", "drive.listFiles"},
+		{"share_drive_file", "drive.shareFile"},
+		{"get_document", "docs.getDocument"},
+		{"append_document_text", "docs.appendText"},
+		{"read_sheet_values", "sheets.readValues"},
+		{"append_sheet_values", "sheets.appendValues"},
+
 		// Unknown (no alias)
 		{"unknown_tool", "unknown_tool"},
 		{"custom.tool", "custom.tool"}, // already in domain.action format
@@ -117,6 +125,43 @@ func TestContractDrift_AllToolsNormalized(t *testing.T) {
 			if !IsContractCompliant(normalized) {
 				t.Errorf("Tool %q normalizes to %q which is not contract-compliant (<domain>.<action>)",
 					toolName, normalized)
+			}
+		})
+	}
+}
+
+func TestDriveDocsSheetsRiskMetadata(t *testing.T) {
+	tests := []struct {
+		name             string
+		dangerous        bool
+		requiresApproval bool
+	}{
+		{"drive.listFiles", false, false},
+		{"drive.getFile", false, false},
+		{"docs.getDocument", false, false},
+		{"sheets.getSpreadsheet", false, false},
+		{"sheets.readValues", false, false},
+		{"drive.createFolder", true, true},
+		{"drive.updateFileMetadata", true, true},
+		{"drive.shareFile", true, true},
+		{"docs.createDocument", true, true},
+		{"docs.appendText", true, true},
+		{"sheets.createSpreadsheet", true, true},
+		{"sheets.updateValues", true, true},
+		{"sheets.appendValues", true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool, err := LookupTool(tt.name)
+			if err != nil {
+				t.Fatalf("LookupTool(%q): %v", tt.name, err)
+			}
+			if tool.Dangerous != tt.dangerous {
+				t.Fatalf("Dangerous = %t, want %t", tool.Dangerous, tt.dangerous)
+			}
+			if tool.RequiresApproval != tt.requiresApproval {
+				t.Fatalf("RequiresApproval = %t, want %t", tool.RequiresApproval, tt.requiresApproval)
 			}
 		})
 	}
