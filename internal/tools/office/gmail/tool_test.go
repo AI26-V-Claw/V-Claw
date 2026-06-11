@@ -269,6 +269,55 @@ func TestListEmailsMapsConnectorError(t *testing.T) {
 	}
 }
 
+func TestListEmailsRejectsOutOfRangeMaxResultsAtService(t *testing.T) {
+	service := NewService(&mockConnector{})
+
+	_, errShape := service.ListEmails(context.Background(), ListEmailsInput{MaxResults: 999})
+	if errShape == nil || errShape.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %#v", errShape)
+	}
+	if !strings.Contains(errShape.Message, "maxResults") {
+		t.Fatalf("expected maxResults validation message, got %q", errShape.Message)
+	}
+}
+
+func TestGmailListToolBoundsMaxResults(t *testing.T) {
+	tests := []struct {
+		name string
+		arg  any
+		want int64
+	}{
+		{name: "too high clamps", arg: float64(999), want: maxAllowedResults},
+		{name: "too low falls back", arg: float64(-1), want: defaultMaxResults},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMaxResults int64
+			service := NewService(&mockConnector{
+				listMessages: func(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error) {
+					gotMaxResults = maxResults
+					return []gmailconnector.MessageSummary{{ID: "m1"}}, "", nil
+				},
+			})
+			result := NewTool(ToolNameListEmails, service).Execute(context.Background(), tools.ToolCall{
+				ID:   "call-1",
+				Name: ToolNameListEmails,
+				Arguments: map[string]any{
+					"maxResults": tt.arg,
+				},
+			})
+
+			if !result.Success {
+				t.Fatalf("Execute() failed: %#v", result.Error)
+			}
+			if gotMaxResults != tt.want {
+				t.Fatalf("maxResults = %d, want %d", gotMaxResults, tt.want)
+			}
+		})
+	}
+}
+
 func TestListLabelsAndProfile(t *testing.T) {
 	service := NewService(&mockConnector{
 		listLabels: func(ctx context.Context, userID string) ([]gmailconnector.Label, error) {
@@ -651,6 +700,29 @@ func TestCreateAndUpdateDraftSchemasRequireSubject(t *testing.T) {
 	updateSchema := NewTool(ToolNameUpdateDraft, nil).Parameters()
 	if !schemaRequires(updateSchema, "draftId") || !schemaRequires(updateSchema, "to") || !schemaRequires(updateSchema, "subject") {
 		t.Fatalf("update draft schema should require draftId, to, and subject: %#v", updateSchema["required"])
+	}
+}
+
+func TestGmailListSchemasBoundMaxResults(t *testing.T) {
+	for _, name := range []string{ToolNameListEmails, ToolNameListThreads, ToolNameListDrafts} {
+		schema := NewTool(name, nil).Parameters()
+		properties, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s schema missing properties: %#v", name, schema)
+		}
+		maxResults, ok := properties["maxResults"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s schema missing maxResults: %#v", name, properties)
+		}
+		if maxResults["minimum"] != 1 {
+			t.Fatalf("%s maxResults minimum = %#v, want 1", name, maxResults["minimum"])
+		}
+		if maxResults["maximum"] != maxAllowedResults {
+			t.Fatalf("%s maxResults maximum = %#v, want %d", name, maxResults["maximum"], maxAllowedResults)
+		}
+		if strings.TrimSpace(stringArg(maxResults, "description")) == "" {
+			t.Fatalf("%s maxResults description is empty", name)
+		}
 	}
 }
 
