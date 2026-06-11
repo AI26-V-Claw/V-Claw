@@ -63,13 +63,7 @@ func shouldResolveChatSpaceBeforeClarification(toolCall providers.ToolCall) bool
 	}
 }
 
-func shouldResolveDriveMoveBeforeClarification(toolCall providers.ToolCall, requestText string, missing []string) bool {
-	if strings.TrimSpace(toolCall.Name) != "drive.moveFile" {
-		return false
-	}
-	if !containsString(missing, "fileId") && !containsString(missing, "targetParentId") {
-		return false
-	}
+func hasDriveMoveResolutionIntent(requestText string) bool {
 	lower := strings.ToLower(strings.TrimSpace(requestText))
 	if lower == "" {
 		return false
@@ -82,6 +76,31 @@ func shouldResolveDriveMoveBeforeClarification(toolCall providers.ToolCall, requ
 		"vào thư mục", "vao thu muc",
 		"sang folder", "sang thư mục", "sang thu muc",
 	)
+}
+
+func shouldResolveDriveMoveBeforeClarification(toolCall providers.ToolCall, requestText string, missing []string) bool {
+	if strings.TrimSpace(toolCall.Name) != "drive.moveFile" {
+		return false
+	}
+	if !containsString(missing, "fileId") && !containsString(missing, "targetParentId") {
+		return false
+	}
+	return hasDriveMoveResolutionIntent(requestText)
+}
+
+// shouldRedirectClarifyToDriveMove returns true when the LLM called clarify on a request
+// that has clear drive-move intent and the user already supplied file/folder names as text.
+// In that case the clarification should be intercepted and replaced with a drive.listFiles
+// resolution loop instead of surfacing a confirmation question to the user.
+//
+// evidenceText is the accumulated transcript text for the current turn. If it already
+// contains the NEEDS_DRIVE_MOVE_RESOLUTION marker the redirect was already injected once,
+// so we allow subsequent clarify calls to surface normally and avoid an infinite loop.
+func shouldRedirectClarifyToDriveMove(requestText, evidenceText string) bool {
+	if strings.Contains(evidenceText, "NEEDS_DRIVE_MOVE_RESOLUTION") {
+		return false
+	}
+	return hasDriveMoveResolutionIntent(requestText)
 }
 
 func driveMoveResolutionObservation(missing []string) string {

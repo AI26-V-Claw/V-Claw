@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"vclaw/internal/connectors/google/common"
@@ -13,7 +16,11 @@ import (
 	"google.golang.org/api/option"
 )
 
-const FolderMimeType = "application/vnd.google-apps.folder"
+const (
+	FolderMimeType     = "application/vnd.google-apps.folder"
+	defaultContentMIME = "text/plain"
+	maxContentBytes    = int64(10 * 1024 * 1024)
+)
 
 type Client struct {
 	httpClient *http.Client
@@ -64,6 +71,14 @@ type PermissionSummary struct {
 	EmailAddress string
 }
 
+type FileContentOutput struct {
+	File      FileSummary
+	MimeType  string
+	Content   string
+	Size      int64
+	Truncated bool
+}
+
 func (c *Client) ListFiles(ctx context.Context, query, mimeType string, maxResults int64, pageToken string) (ListFilesOutput, error) {
 	return ListFiles(ctx, c.httpClient, query, mimeType, maxResults, pageToken)
 }
@@ -76,12 +91,36 @@ func (c *Client) CreateFolder(ctx context.Context, name string, parentIDs []stri
 	return CreateFolder(ctx, c.httpClient, name, parentIDs)
 }
 
+func (c *Client) CreateFile(ctx context.Context, name string, mimeType string, content string, parentIDs []string) (FileSummary, error) {
+	return CreateFile(ctx, c.httpClient, name, mimeType, strings.NewReader(content), parentIDs)
+}
+
+func (c *Client) UploadFile(ctx context.Context, localPath string, name string, mimeType string, parentIDs []string) (FileSummary, error) {
+	return UploadFile(ctx, c.httpClient, localPath, name, mimeType, parentIDs)
+}
+
+func (c *Client) ExportFile(ctx context.Context, fileID string, mimeType string, maxBytes int64) (FileContentOutput, error) {
+	return ExportFile(ctx, c.httpClient, fileID, mimeType, maxBytes)
+}
+
+func (c *Client) DownloadFile(ctx context.Context, fileID string, maxBytes int64) (FileContentOutput, error) {
+	return DownloadFile(ctx, c.httpClient, fileID, maxBytes)
+}
+
 func (c *Client) UpdateFileMetadata(ctx context.Context, fileID string, input UpdateFileMetadataInput) (FileSummary, error) {
 	return UpdateFileMetadata(ctx, c.httpClient, fileID, input)
 }
 
 func (c *Client) ShareFile(ctx context.Context, fileID string, input ShareFileInput) (PermissionSummary, error) {
 	return ShareFile(ctx, c.httpClient, fileID, input)
+}
+
+func (c *Client) ListPermissions(ctx context.Context, fileID string) ([]PermissionSummary, error) {
+	return ListPermissions(ctx, c.httpClient, fileID)
+}
+
+func (c *Client) RevokePermission(ctx context.Context, fileID string, permissionID string) (PermissionSummary, error) {
+	return RevokePermission(ctx, c.httpClient, fileID, permissionID)
 }
 
 func (c *Client) MoveFile(ctx context.Context, fileID string, targetParentID string, removeParentIDs []string) (FileSummary, error) {
@@ -173,6 +212,98 @@ func CreateFolder(ctx context.Context, client *http.Client, name string, parentI
 	return fileSummaryFromAPI(created), nil
 }
 
+func CreateFile(ctx context.Context, client *http.Client, name string, mimeType string, content io.Reader, parentIDs []string) (FileSummary, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return FileSummary{}, err
+	}
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = defaultContentMIME
+	}
+	file := &drive.File{
+		Name:     strings.TrimSpace(name),
+		MimeType: strings.TrimSpace(mimeType),
+		Parents:  cleanStrings(parentIDs),
+	}
+	created, err := service.Files.Create(file).
+		Media(content).
+		Fields("id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed").
+		Do()
+	if err != nil {
+		return FileSummary{}, common.MapError(err)
+	}
+	return fileSummaryFromAPI(created), nil
+}
+
+func UploadFile(ctx context.Context, client *http.Client, localPath string, name string, mimeType string, parentIDs []string) (FileSummary, error) {
+	path := strings.TrimSpace(localPath)
+	file, err := os.Open(path)
+	if err != nil {
+		return FileSummary{}, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return FileSummary{}, err
+	}
+	if info.Size() > maxContentBytes {
+		return FileSummary{}, fmt.Errorf("file exceeds %d byte upload limit", maxContentBytes)
+	}
+	if strings.TrimSpace(name) == "" {
+		name = filepath.Base(path)
+	}
+	return CreateFile(ctx, client, name, mimeType, file, parentIDs)
+}
+
+func ExportFile(ctx context.Context, client *http.Client, fileID string, mimeType string, maxBytes int64) (FileContentOutput, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return FileContentOutput{}, err
+	}
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = defaultContentMIME
+	}
+	file, err := service.Files.Get(fileID).
+		Fields("id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed").
+		Do()
+	if err != nil {
+		return FileContentOutput{}, common.MapError(err)
+	}
+	response, err := service.Files.Export(fileID, mimeType).Download()
+	if err != nil {
+		return FileContentOutput{}, common.MapError(err)
+	}
+	defer response.Body.Close()
+	content, size, truncated, err := readLimited(response.Body, maxBytes)
+	if err != nil {
+		return FileContentOutput{}, err
+	}
+	return FileContentOutput{File: fileSummaryFromAPI(file), MimeType: mimeType, Content: string(content), Size: size, Truncated: truncated}, nil
+}
+
+func DownloadFile(ctx context.Context, client *http.Client, fileID string, maxBytes int64) (FileContentOutput, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return FileContentOutput{}, err
+	}
+	file, err := service.Files.Get(fileID).
+		Fields("id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed").
+		Do()
+	if err != nil {
+		return FileContentOutput{}, common.MapError(err)
+	}
+	response, err := service.Files.Get(fileID).Download()
+	if err != nil {
+		return FileContentOutput{}, common.MapError(err)
+	}
+	defer response.Body.Close()
+	content, size, truncated, err := readLimited(response.Body, maxBytes)
+	if err != nil {
+		return FileContentOutput{}, err
+	}
+	return FileContentOutput{File: fileSummaryFromAPI(file), MimeType: file.MimeType, Content: string(content), Size: size, Truncated: truncated}, nil
+}
+
 func UpdateFileMetadata(ctx context.Context, client *http.Client, fileID string, input UpdateFileMetadataInput) (FileSummary, error) {
 	service, err := serviceFromClient(ctx, client)
 	if err != nil {
@@ -219,6 +350,41 @@ func ShareFile(ctx context.Context, client *http.Client, fileID string, input Sh
 		Role:         created.Role,
 		EmailAddress: created.EmailAddress,
 	}, nil
+}
+
+func ListPermissions(ctx context.Context, client *http.Client, fileID string) ([]PermissionSummary, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := service.Permissions.List(fileID).
+		Fields("permissions(id, type, role, emailAddress)").
+		Do()
+	if err != nil {
+		return nil, common.MapError(err)
+	}
+	out := make([]PermissionSummary, 0, len(response.Permissions))
+	for _, permission := range response.Permissions {
+		out = append(out, permissionSummaryFromAPI(permission))
+	}
+	return out, nil
+}
+
+func RevokePermission(ctx context.Context, client *http.Client, fileID string, permissionID string) (PermissionSummary, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return PermissionSummary{}, err
+	}
+	permission, err := service.Permissions.Get(fileID, permissionID).
+		Fields("id, type, role, emailAddress").
+		Do()
+	if err != nil {
+		return PermissionSummary{}, common.MapError(err)
+	}
+	if err := service.Permissions.Delete(fileID, permissionID).Do(); err != nil {
+		return PermissionSummary{}, common.MapError(err)
+	}
+	return permissionSummaryFromAPI(permission), nil
 }
 
 func MoveFile(ctx context.Context, client *http.Client, fileID string, targetParentID string, removeParentIDs []string) (FileSummary, error) {
@@ -299,6 +465,33 @@ func fileSummaryFromAPI(file *drive.File) FileSummary {
 		Starred:      file.Starred,
 		Trashed:      file.Trashed,
 	}
+}
+
+func permissionSummaryFromAPI(permission *drive.Permission) PermissionSummary {
+	if permission == nil {
+		return PermissionSummary{}
+	}
+	return PermissionSummary{
+		ID:           permission.Id,
+		Type:         permission.Type,
+		Role:         permission.Role,
+		EmailAddress: permission.EmailAddress,
+	}
+}
+
+func readLimited(reader io.Reader, limit int64) ([]byte, int64, bool, error) {
+	if limit <= 0 || limit > maxContentBytes {
+		limit = maxContentBytes
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, 0, false, err
+	}
+	truncated := int64(len(data)) > limit
+	if truncated {
+		data = data[:limit]
+	}
+	return data, int64(len(data)), truncated, nil
 }
 
 func escapeDriveQueryValue(value string) string {

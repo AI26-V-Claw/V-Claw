@@ -19,6 +19,15 @@ func (fakeDocsConnector) CreateDocument(context.Context, string) (gdocs.Document
 func (fakeDocsConnector) AppendText(context.Context, string, string) (gdocs.AppendTextOutput, error) {
 	return gdocs.AppendTextOutput{}, nil
 }
+func (fakeDocsConnector) ReplaceText(context.Context, string, string, string, bool) (gdocs.EditTextOutput, error) {
+	return gdocs.EditTextOutput{}, nil
+}
+func (fakeDocsConnector) InsertText(context.Context, string, int64, string) (gdocs.EditTextOutput, error) {
+	return gdocs.EditTextOutput{}, nil
+}
+func (fakeDocsConnector) DeleteContent(context.Context, string, int64, int64) (gdocs.EditTextOutput, error) {
+	return gdocs.EditTextOutput{}, nil
+}
 
 func TestRegisterToolsMetadata(t *testing.T) {
 	registry := tools.NewToolRegistry()
@@ -29,6 +38,9 @@ func TestRegisterToolsMetadata(t *testing.T) {
 	assertToolMetadata(t, registry, ToolNameGetDocument, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
 	assertToolMetadata(t, registry, ToolNameCreateDocument, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameAppendText, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameReplaceText, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameInsertText, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameDeleteContent, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 }
 
 func assertToolMetadata(t *testing.T, registry *tools.ToolRegistry, name string, capability tools.Capability, risk tools.RiskLevel, approval bool) {

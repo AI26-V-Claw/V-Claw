@@ -27,6 +27,7 @@ Không tạo sequence diagram riêng cho mọi connector, mọi use case, hoặc
 | Read-only Gmail summary | Mẫu Google Workspace read-only, không HITL | 1/2 | `gmail.listEmails`, `gmail.getEmail`, `safe_read` | [02-gmail-read-summary.md](scenarios/02-gmail-read-summary.md) |
 | Calendar create with HITL | Mẫu external write bắt buộc approval | 2 | `calendar.createEvent`, `RiskDecision`, `ApprovalRequest` | [03-calendar-create-hitl.md](scenarios/03-calendar-create-hitl.md) |
 | Sandbox command with HITL | Mẫu code execution/local action bắt buộc approval | 2 | `sandbox.runShell` / `sandbox.runPython`, `code_execution` | [04-sandbox-command-hitl.md](scenarios/04-sandbox-command-hitl.md) |
+| Drive / Docs / Sheets read-before-write | Mẫu Google Workspace đọc trước, ghi sau approval | 2+ | `drive.*`, `docs.*`, `sheets.*`, `ApprovalRequest` | [05-drive-docs-sheets-hitl.md](scenarios/05-drive-docs-sheets-hitl.md) |
 
 ---
 

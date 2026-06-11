@@ -16,6 +16,9 @@ const (
 	ToolNameGetDocument    = "docs.getDocument"
 	ToolNameCreateDocument = "docs.createDocument"
 	ToolNameAppendText     = "docs.appendText"
+	ToolNameReplaceText    = "docs.replaceText"
+	ToolNameInsertText     = "docs.insertText"
+	ToolNameDeleteContent  = "docs.deleteContent"
 )
 
 type ToolRegistryEntry struct {
@@ -30,12 +33,18 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameGetDocument, Owner: "integration", Description: "Read a Google Docs document.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameCreateDocument, Owner: "integration", Description: "Create a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameAppendText, Owner: "integration", Description: "Append text to a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameReplaceText, Owner: "integration", Description: "Replace matching text in a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameInsertText, Owner: "integration", Description: "Insert text at a Google Docs structural index.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameDeleteContent, Owner: "integration", Description: "Delete content from a Google Docs structural range.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 }
 
 type Connector interface {
 	GetDocument(ctx context.Context, documentID string) (gdocs.Document, error)
 	CreateDocument(ctx context.Context, title string) (gdocs.Document, error)
 	AppendText(ctx context.Context, documentID string, text string) (gdocs.AppendTextOutput, error)
+	ReplaceText(ctx context.Context, documentID string, oldText string, newText string, matchCase bool) (gdocs.EditTextOutput, error)
+	InsertText(ctx context.Context, documentID string, index int64, text string) (gdocs.EditTextOutput, error)
+	DeleteContent(ctx context.Context, documentID string, startIndex int64, endIndex int64) (gdocs.EditTextOutput, error)
 }
 
 type Service struct {
@@ -72,6 +81,25 @@ type CreateDocumentInput struct {
 type AppendTextInput struct {
 	DocumentID string
 	Text       string
+}
+
+type ReplaceTextInput struct {
+	DocumentID string
+	OldText    string
+	NewText    string
+	MatchCase  bool
+}
+
+type InsertTextInput struct {
+	DocumentID string
+	Index      int64
+	Text       string
+}
+
+type DeleteContentInput struct {
+	DocumentID string
+	StartIndex int64
+	EndIndex   int64
 }
 
 func (s *Service) GetDocument(ctx context.Context, input GetDocumentInput) (DocumentOutput, *ErrorShape) {
@@ -120,6 +148,63 @@ func (s *Service) AppendText(ctx context.Context, input AppendTextInput) (gdocs.
 	return output, nil
 }
 
+func (s *Service) ReplaceText(ctx context.Context, input ReplaceTextInput) (gdocs.EditTextOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return gdocs.EditTextOutput{}, errShape
+	}
+	if strings.TrimSpace(input.DocumentID) == "" {
+		return gdocs.EditTextOutput{}, invalidInput("documentId is required")
+	}
+	if strings.TrimSpace(input.OldText) == "" {
+		return gdocs.EditTextOutput{}, invalidInput("oldText is required")
+	}
+	output, err := s.connector.ReplaceText(ctx, input.DocumentID, input.OldText, input.NewText, input.MatchCase)
+	if err != nil {
+		return gdocs.EditTextOutput{}, mapError(err)
+	}
+	return output, nil
+}
+
+func (s *Service) InsertText(ctx context.Context, input InsertTextInput) (gdocs.EditTextOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return gdocs.EditTextOutput{}, errShape
+	}
+	if strings.TrimSpace(input.DocumentID) == "" {
+		return gdocs.EditTextOutput{}, invalidInput("documentId is required")
+	}
+	if input.Index < 1 {
+		return gdocs.EditTextOutput{}, invalidInput("index must be >= 1")
+	}
+	if strings.TrimSpace(input.Text) == "" {
+		return gdocs.EditTextOutput{}, invalidInput("text is required")
+	}
+	output, err := s.connector.InsertText(ctx, input.DocumentID, input.Index, input.Text)
+	if err != nil {
+		return gdocs.EditTextOutput{}, mapError(err)
+	}
+	return output, nil
+}
+
+func (s *Service) DeleteContent(ctx context.Context, input DeleteContentInput) (gdocs.EditTextOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return gdocs.EditTextOutput{}, errShape
+	}
+	if strings.TrimSpace(input.DocumentID) == "" {
+		return gdocs.EditTextOutput{}, invalidInput("documentId is required")
+	}
+	if input.StartIndex < 1 {
+		return gdocs.EditTextOutput{}, invalidInput("startIndex must be >= 1")
+	}
+	if input.EndIndex <= input.StartIndex {
+		return gdocs.EditTextOutput{}, invalidInput("endIndex must be greater than startIndex")
+	}
+	output, err := s.connector.DeleteContent(ctx, input.DocumentID, input.StartIndex, input.EndIndex)
+	if err != nil {
+		return gdocs.EditTextOutput{}, mapError(err)
+	}
+	return output, nil
+}
+
 func (s *Service) validateConnector() *ErrorShape {
 	if s == nil || s.connector == nil {
 		return internalError("docs connector is not configured")
@@ -146,6 +231,12 @@ func (t DocsTool) Description() string {
 		return "Create a Google Docs document. Requires human approval before execution."
 	case ToolNameAppendText:
 		return "Append text to an existing Google Docs document. Requires human approval before execution."
+	case ToolNameReplaceText:
+		return "Replace all matching text in an existing Google Docs document. Requires human approval before execution."
+	case ToolNameInsertText:
+		return "Insert text at a Google Docs structural index. Requires human approval before execution."
+	case ToolNameDeleteContent:
+		return "Delete content from a Google Docs structural range. Requires human approval before execution."
 	default:
 		return "Google Docs tool."
 	}
@@ -166,6 +257,25 @@ func (t DocsTool) Parameters() tools.ToolSchema {
 			"documentId": map[string]any{"type": "string"},
 			"text":       map[string]any{"type": "string"},
 		}, "required": []string{"documentId", "text"}, "additionalProperties": false}
+	case ToolNameReplaceText:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{
+			"documentId": map[string]any{"type": "string"},
+			"oldText":    map[string]any{"type": "string", "description": "Text to find and replace."},
+			"newText":    map[string]any{"type": "string", "description": "Replacement text. Can be empty to remove matches."},
+			"matchCase":  map[string]any{"type": "boolean"},
+		}, "required": []string{"documentId", "oldText", "newText"}, "additionalProperties": false}
+	case ToolNameInsertText:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{
+			"documentId": map[string]any{"type": "string"},
+			"index":      map[string]any{"type": "number", "description": "Google Docs structural index where text should be inserted."},
+			"text":       map[string]any{"type": "string"},
+		}, "required": []string{"documentId", "index", "text"}, "additionalProperties": false}
+	case ToolNameDeleteContent:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{
+			"documentId": map[string]any{"type": "string"},
+			"startIndex": map[string]any{"type": "number"},
+			"endIndex":   map[string]any{"type": "number"},
+		}, "required": []string{"documentId", "startIndex", "endIndex"}, "additionalProperties": false}
 	default:
 		return tools.ToolSchema{"type": "object"}
 	}
@@ -196,13 +306,22 @@ func (t DocsTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolRe
 	case ToolNameAppendText:
 		output, errShape := t.service.AppendText(ctx, AppendTextInput{DocumentID: stringArg(call.Arguments, "documentId"), Text: stringArg(call.Arguments, "text")})
 		return outputToolResult(call, output, errShape)
+	case ToolNameReplaceText:
+		output, errShape := t.service.ReplaceText(ctx, ReplaceTextInput{DocumentID: stringArg(call.Arguments, "documentId"), OldText: stringArg(call.Arguments, "oldText"), NewText: stringArg(call.Arguments, "newText"), MatchCase: boolArg(call.Arguments, "matchCase")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameInsertText:
+		output, errShape := t.service.InsertText(ctx, InsertTextInput{DocumentID: stringArg(call.Arguments, "documentId"), Index: int64Arg(call.Arguments, "index"), Text: stringArg(call.Arguments, "text")})
+		return outputToolResult(call, output, errShape)
+	case ToolNameDeleteContent:
+		output, errShape := t.service.DeleteContent(ctx, DeleteContentInput{DocumentID: stringArg(call.Arguments, "documentId"), StartIndex: int64Arg(call.Arguments, "startIndex"), EndIndex: int64Arg(call.Arguments, "endIndex")})
+		return outputToolResult(call, output, errShape)
 	default:
 		return tools.ToolNotFoundResult(call)
 	}
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	for _, name := range []string{ToolNameGetDocument, ToolNameCreateDocument, ToolNameAppendText} {
+	for _, name := range []string{ToolNameGetDocument, ToolNameCreateDocument, ToolNameAppendText, ToolNameReplaceText, ToolNameInsertText, ToolNameDeleteContent} {
 		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
@@ -285,6 +404,22 @@ func intArg(args map[string]any, name string) int {
 		return int(value)
 	case float64:
 		return int(value)
+	default:
+		return 0
+	}
+}
+
+func int64Arg(args map[string]any, name string) int64 {
+	if args == nil {
+		return 0
+	}
+	switch value := args[name].(type) {
+	case int:
+		return int64(value)
+	case int64:
+		return value
+	case float64:
+		return int64(value)
 	default:
 		return 0
 	}

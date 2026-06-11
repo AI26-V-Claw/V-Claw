@@ -17,13 +17,31 @@ func (fakeDriveConnector) ListFiles(context.Context, string, string, int64, stri
 func (fakeDriveConnector) GetFile(context.Context, string) (gdrive.FileSummary, error) {
 	return gdrive.FileSummary{}, nil
 }
+func (fakeDriveConnector) ExportFile(context.Context, string, string, int64) (gdrive.FileContentOutput, error) {
+	return gdrive.FileContentOutput{}, nil
+}
+func (fakeDriveConnector) DownloadFile(context.Context, string, int64) (gdrive.FileContentOutput, error) {
+	return gdrive.FileContentOutput{}, nil
+}
 func (fakeDriveConnector) CreateFolder(context.Context, string, []string) (gdrive.FileSummary, error) {
+	return gdrive.FileSummary{}, nil
+}
+func (fakeDriveConnector) CreateFile(context.Context, string, string, string, []string) (gdrive.FileSummary, error) {
+	return gdrive.FileSummary{}, nil
+}
+func (fakeDriveConnector) UploadFile(context.Context, string, string, string, []string) (gdrive.FileSummary, error) {
 	return gdrive.FileSummary{}, nil
 }
 func (fakeDriveConnector) UpdateFileMetadata(context.Context, string, gdrive.UpdateFileMetadataInput) (gdrive.FileSummary, error) {
 	return gdrive.FileSummary{}, nil
 }
 func (fakeDriveConnector) ShareFile(context.Context, string, gdrive.ShareFileInput) (gdrive.PermissionSummary, error) {
+	return gdrive.PermissionSummary{}, nil
+}
+func (fakeDriveConnector) ListPermissions(context.Context, string) ([]gdrive.PermissionSummary, error) {
+	return nil, nil
+}
+func (fakeDriveConnector) RevokePermission(context.Context, string, string) (gdrive.PermissionSummary, error) {
 	return gdrive.PermissionSummary{}, nil
 }
 func (fakeDriveConnector) MoveFile(context.Context, string, string, []string) (gdrive.FileSummary, error) {
@@ -44,9 +62,15 @@ func TestRegisterToolsMetadata(t *testing.T) {
 
 	assertToolMetadata(t, registry, ToolNameListFiles, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
 	assertToolMetadata(t, registry, ToolNameGetFile, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
+	assertToolMetadata(t, registry, ToolNameExportFile, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
+	assertToolMetadata(t, registry, ToolNameDownloadFile, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
 	assertToolMetadata(t, registry, ToolNameCreateFolder, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameCreateFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameUploadFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameUpdateFileMetadata, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameShareFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameListPermissions, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
+	assertToolMetadata(t, registry, ToolNameRevokePermission, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameMoveFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameTrashFile, tools.CapabilityMutating, tools.RiskLevelDestructive, true)
 	assertToolMetadata(t, registry, ToolNameUntrashFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)

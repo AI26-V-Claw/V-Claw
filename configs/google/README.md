@@ -1,6 +1,6 @@
 # Google Workspace OAuth
 
-V-Claw uses Google OAuth user authentication. The CLI runs locally, opens a browser consent flow, stores a local token, then calls Gmail, Calendar, Google Chat, and Google People APIs on behalf of the signed-in Workspace user.
+V-Claw uses Google OAuth user authentication. The CLI runs locally, opens a browser consent flow, stores a local token, then calls Gmail, Calendar, Google Chat, Google People, Drive, Docs, and Sheets APIs on behalf of the signed-in Workspace user.
 
 This document only covers Google Cloud setup, Google OAuth, and Google API smoke tests. Channel bot setup lives in:
 
@@ -18,6 +18,9 @@ Gmail API
 Google Calendar API
 Google Chat API
 Google People API
+Google Drive API
+Google Docs API
+Google Sheets API
 ```
 
 3. Configure the OAuth consent screen for your Workspace.
@@ -155,6 +158,9 @@ go run ./cmd/vclaw google chat list-members -space spaces/AAAA...
 go run ./cmd/vclaw google chat list-messages -space spaces/AAAA...
 go run ./cmd/vclaw google gmail list -max-results 10
 go run ./cmd/vclaw google gmail list-threads -max-results 10
+go run ./cmd/vclaw google drive list -max-results 10
+go run ./cmd/vclaw google docs get -id DOCUMENT_ID
+go run ./cmd/vclaw google sheets get -id SPREADSHEET_ID
 ```
 
 Use the `Candidate Chat users` values from the output to compare with `google chat list-members`. You can also pass a candidate `users/...` value directly to `google chat find-spaces-by-members` before listing messages.
@@ -231,6 +237,36 @@ go run ./cmd/vclaw google people help
 go run ./cmd/vclaw google chat help
 go run ./cmd/vclaw google gmail help
 ```
+
+## Drive / Docs / Sheets manual test commands
+
+Read-first checks:
+
+```powershell
+go run ./cmd/vclaw google drive list -query "trashed = false" -max-results 10
+go run ./cmd/vclaw google drive get -id FILE_ID
+go run ./cmd/vclaw google drive export -id GOOGLE_DOC_FILE_ID -mime-type text/plain
+go run ./cmd/vclaw google drive permissions -id FILE_ID
+go run ./cmd/vclaw google docs get -id DOCUMENT_ID
+go run ./cmd/vclaw google sheets get -id SPREADSHEET_ID
+go run ./cmd/vclaw google sheets read -id SPREADSHEET_ID -range "Sheet1!A1:D10"
+```
+
+Manual write checks, for developer testing only:
+
+```powershell
+go run ./cmd/vclaw google drive create-folder -name "V-Claw Smoke"
+go run ./cmd/vclaw google drive create-file -name "vclaw-smoke.txt" -content "hello"
+go run ./cmd/vclaw google docs create -title "V-Claw Smoke Doc"
+go run ./cmd/vclaw google docs append -id DOCUMENT_ID -text "Smoke text"
+go run ./cmd/vclaw google docs replace -id DOCUMENT_ID -old "Smoke" -new "Verified"
+go run ./cmd/vclaw google sheets create -title "V-Claw Smoke Sheet" -sheets "Data"
+go run ./cmd/vclaw google sheets update -id SPREADSHEET_ID -range "Data!A1:B1" -values '[[\"Name\",\"Value\"]]'
+go run ./cmd/vclaw google sheets append -id SPREADSHEET_ID -range "Data!A:B" -values '[[\"Smoke\",\"OK\"]]'
+go run ./cmd/vclaw google sheets clear -id SPREADSHEET_ID -range "Data!A1:B2"
+```
+
+Agent-triggered Drive/Docs/Sheets mutating tools must pass HITL approval before execution. CLI write commands are direct developer smoke checks and do not represent the agent safety boundary.
 
 ## OAuth Scopes
 

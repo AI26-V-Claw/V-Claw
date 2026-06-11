@@ -505,9 +505,15 @@ Rules:
 |---|---|---|---|
 | `drive.listFiles` | Integration | `safe_read` | No |
 | `drive.getFile` | Integration | `safe_read` | No |
+| `drive.exportFile` | Integration | `safe_read` | No |
+| `drive.downloadFile` | Integration | `safe_read` | No |
 | `drive.createFolder` | Integration | `external_write` | Yes |
+| `drive.createFile` | Integration | `external_write` | Yes |
+| `drive.uploadFile` | Integration | `external_write` | Yes |
 | `drive.updateFileMetadata` | Integration | `external_write` | Yes |
 | `drive.shareFile` | Integration | `external_write` | Yes |
+| `drive.listPermissions` | Integration | `safe_read` | No |
+| `drive.revokePermission` | Integration | `external_write` | Yes |
 | `drive.moveFile` | Integration | `external_write` | Yes |
 | `drive.trashFile` | Integration | `destructive` | Yes |
 | `drive.untrashFile` | Integration | `external_write` | Yes |
@@ -519,6 +525,9 @@ Rules:
 | `docs.getDocument` | Integration | `safe_read` | No |
 | `docs.createDocument` | Integration | `external_write` | Yes |
 | `docs.appendText` | Integration | `external_write` | Yes |
+| `docs.replaceText` | Integration | `external_write` | Yes |
+| `docs.insertText` | Integration | `external_write` | Yes |
+| `docs.deleteContent` | Integration | `external_write` | Yes |
 
 ### Google Sheets
 
@@ -526,11 +535,18 @@ Rules:
 |---|---|---|---|
 | `sheets.getSpreadsheet` | Integration | `safe_read` | No |
 | `sheets.readValues` | Integration | `safe_read` | No |
+| `sheets.batchGetValues` | Integration | `safe_read` | No |
 | `sheets.createSpreadsheet` | Integration | `external_write` | Yes |
 | `sheets.updateValues` | Integration | `external_write` | Yes |
+| `sheets.batchUpdateValues` | Integration | `external_write` | Yes |
 | `sheets.appendValues` | Integration | `external_write` | Yes |
+| `sheets.clearValues` | Integration | `external_write` | Yes |
+| `sheets.addSheet` | Integration | `external_write` | Yes |
+| `sheets.renameSheet` | Integration | `external_write` | Yes |
+| `sheets.deleteSheet` | Integration | `destructive` | Yes |
+| `sheets.duplicateSheet` | Integration | `external_write` | Yes |
 
-> Drive/Docs/Sheets MVP is read-first: list/get/read tools are safe reads. Create/update/append/share/move/untrash tools are external writes and must pass the same HITL approval boundary before execution. `drive.trashFile` is treated as destructive because it removes the item from normal Drive views.
+> Drive/Docs/Sheets remain read-first: list/get/read/export/download tools are safe reads with bounded output. Create/update/append/share/move/upload/revoke/clear/tab-management tools must pass the same HITL approval boundary before execution. `drive.trashFile` and `sheets.deleteSheet` are destructive because they remove content from normal user views.
 
 ### Calendar
 

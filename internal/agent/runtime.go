@@ -579,6 +579,30 @@ If required information is missing, ask one concise clarification question inste
 				continue agentLoop
 			}
 			if isClarifyToolCall(providerToolCall) {
+				if shouldRedirectClarifyToDriveMove(currentRequestText, evidenceText) {
+					toolMessage := providers.Message{
+						Role:       providers.MessageRoleTool,
+						ToolCallID: providerToolCall.ID,
+						Content:    truncateToolContentForLLM(driveMoveResolutionObservation([]string{"fileId", "targetParentId"})),
+					}
+					transcript = append(transcript, toolMessage)
+					providerTranscript = append(providerTranscript, toolMessage)
+					if err := r.appendToolObservation(ctx, message.SessionID, transcript, toolMessage); err != nil {
+						base.Error = err
+						base.Message = err.Message
+						return base, nil
+					}
+					for _, skipped := range skippedToolObservationMessages(assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the current Google Drive move target must be resolved first") {
+						transcript = append(transcript, skipped)
+						providerTranscript = append(providerTranscript, skipped)
+						if err := r.appendToolObservation(ctx, message.SessionID, transcript, skipped); err != nil {
+							base.Error = err
+							base.Message = err.Message
+							return base, nil
+						}
+					}
+					continue agentLoop
+				}
 				clarification := clarificationFromToolCall(providerToolCall)
 				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
 					Role:       providers.MessageRoleTool,

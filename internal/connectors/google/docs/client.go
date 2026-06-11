@@ -33,6 +33,11 @@ type AppendTextOutput struct {
 	Title      string
 }
 
+type EditTextOutput struct {
+	DocumentID string
+	Title      string
+}
+
 func (c *Client) GetDocument(ctx context.Context, documentID string) (Document, error) {
 	return GetDocument(ctx, c.httpClient, documentID)
 }
@@ -43,6 +48,18 @@ func (c *Client) CreateDocument(ctx context.Context, title string) (Document, er
 
 func (c *Client) AppendText(ctx context.Context, documentID string, text string) (AppendTextOutput, error) {
 	return AppendText(ctx, c.httpClient, documentID, text)
+}
+
+func (c *Client) ReplaceText(ctx context.Context, documentID string, oldText string, newText string, matchCase bool) (EditTextOutput, error) {
+	return ReplaceText(ctx, c.httpClient, documentID, oldText, newText, matchCase)
+}
+
+func (c *Client) InsertText(ctx context.Context, documentID string, index int64, text string) (EditTextOutput, error) {
+	return InsertText(ctx, c.httpClient, documentID, index, text)
+}
+
+func (c *Client) DeleteContent(ctx context.Context, documentID string, startIndex int64, endIndex int64) (EditTextOutput, error) {
+	return DeleteContent(ctx, c.httpClient, documentID, startIndex, endIndex)
 }
 
 func GetDocument(ctx context.Context, client *http.Client, documentID string) (Document, error) {
@@ -101,6 +118,77 @@ func AppendText(ctx context.Context, client *http.Client, documentID string, tex
 		return AppendTextOutput{}, common.MapError(err)
 	}
 	return AppendTextOutput{DocumentID: documentID, Title: doc.Title}, nil
+}
+
+func ReplaceText(ctx context.Context, client *http.Client, documentID string, oldText string, newText string, matchCase bool) (EditTextOutput, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return EditTextOutput{}, err
+	}
+	doc, err := service.Documents.Get(documentID).Fields("title").Do()
+	if err != nil {
+		return EditTextOutput{}, common.MapError(err)
+	}
+	_, err = service.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{
+		Requests: []*docs.Request{{
+			ReplaceAllText: &docs.ReplaceAllTextRequest{
+				ContainsText: &docs.SubstringMatchCriteria{
+					Text:      oldText,
+					MatchCase: matchCase,
+				},
+				ReplaceText: newText,
+			},
+		}},
+	}).Do()
+	if err != nil {
+		return EditTextOutput{}, common.MapError(err)
+	}
+	return EditTextOutput{DocumentID: documentID, Title: doc.Title}, nil
+}
+
+func InsertText(ctx context.Context, client *http.Client, documentID string, index int64, text string) (EditTextOutput, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return EditTextOutput{}, err
+	}
+	doc, err := service.Documents.Get(documentID).Fields("title").Do()
+	if err != nil {
+		return EditTextOutput{}, common.MapError(err)
+	}
+	_, err = service.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{
+		Requests: []*docs.Request{{
+			InsertText: &docs.InsertTextRequest{
+				Location: &docs.Location{Index: index},
+				Text:     text,
+			},
+		}},
+	}).Do()
+	if err != nil {
+		return EditTextOutput{}, common.MapError(err)
+	}
+	return EditTextOutput{DocumentID: documentID, Title: doc.Title}, nil
+}
+
+func DeleteContent(ctx context.Context, client *http.Client, documentID string, startIndex int64, endIndex int64) (EditTextOutput, error) {
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return EditTextOutput{}, err
+	}
+	doc, err := service.Documents.Get(documentID).Fields("title").Do()
+	if err != nil {
+		return EditTextOutput{}, common.MapError(err)
+	}
+	_, err = service.Documents.BatchUpdate(documentID, &docs.BatchUpdateDocumentRequest{
+		Requests: []*docs.Request{{
+			DeleteContentRange: &docs.DeleteContentRangeRequest{
+				Range: &docs.Range{StartIndex: startIndex, EndIndex: endIndex},
+			},
+		}},
+	}).Do()
+	if err != nil {
+		return EditTextOutput{}, common.MapError(err)
+	}
+	return EditTextOutput{DocumentID: documentID, Title: doc.Title}, nil
 }
 
 func serviceFromClient(ctx context.Context, client *http.Client) (*docs.Service, error) {

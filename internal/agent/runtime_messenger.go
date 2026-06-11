@@ -225,8 +225,58 @@ func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
 			}
 			return ref
 		}
+	case "drive.createFolder", "drive.createFile", "drive.uploadFile", "drive.updateFileMetadata", "drive.moveFile", "drive.trashFile", "drive.untrashFile":
+		if file, ok := nestedMap(value, "File"); ok {
+			return artifactRefFromFile(file)
+		}
+	case "docs.createDocument":
+		if doc, ok := value.(map[string]any); ok {
+			id := firstStringValue(doc, "ID", "Id", "id")
+			if id == "" {
+				return nil
+			}
+			return &contracts.ArtifactRef{
+				Kind:  "google.docs.document",
+				Label: firstNonEmpty("Google Docs document", firstStringValue(doc, "Title", "title")),
+				ID:    id,
+				URI:   "https://docs.google.com/document/d/" + id + "/edit",
+			}
+		}
+	case "sheets.createSpreadsheet", "sheets.addSheet", "sheets.renameSheet", "sheets.deleteSheet", "sheets.duplicateSheet":
+		if spreadsheet, ok := value.(map[string]any); ok {
+			id := firstStringValue(spreadsheet, "ID", "Id", "id")
+			if id == "" {
+				return nil
+			}
+			return &contracts.ArtifactRef{
+				Kind:  "google.sheets.spreadsheet",
+				Label: firstNonEmpty("Google Sheets spreadsheet", firstStringValue(spreadsheet, "Title", "title")),
+				ID:    id,
+				URI:   firstStringValue(spreadsheet, "SpreadsheetURL", "spreadsheetURL", "spreadsheetUrl"),
+			}
+		}
 	}
 	return nil
+}
+
+func artifactRefFromFile(file map[string]any) *contracts.ArtifactRef {
+	id := firstStringValue(file, "ID", "Id", "id")
+	if id == "" {
+		return nil
+	}
+	return &contracts.ArtifactRef{
+		Kind:  "google.drive.file",
+		Label: firstNonEmpty("Google Drive file", firstStringValue(file, "Name", "name")),
+		ID:    id,
+		URI:   firstStringValue(file, "WebViewLink", "webViewLink"),
+	}
+}
+
+func firstNonEmpty(fallback string, value string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return fallback
 }
 
 func extractUserText(data any) string {
@@ -309,17 +359,21 @@ var approvalSkipFields = map[string]bool{
 	"threadId": true, "threadKey": true, "threadName": true,
 	"space": true, "calendarId": true, "messageName": true,
 	"replyToMessageId": true, "messageReplyOption": true, "requestId": true,
+	"pageToken": true, "previewChars": true, "full": true,
 }
 
 // approvalFieldPriority controls display order; lower = shown first.
 var approvalFieldPriority = map[string]int{
 	"subject": 1, "title": 1,
-	"to": 2, "attendees": 2,
-	"textBody": 3, "htmlBody": 3, "text": 3, "body": 3, "content": 3,
+	"name": 1, "fileName": 1, "newTitle": 1,
+	"to": 2, "attendees": 2, "emailAddress": 2,
+	"textBody": 3, "htmlBody": 3, "text": 3, "body": 3, "content": 3, "oldText": 3, "newText": 4, "values": 4, "ranges": 4,
 	"start": 4, "end": 5,
 	"cc": 6, "bcc": 7,
+	"range": 6, "role": 7, "type": 8,
 	"description": 8, "location": 9,
 	"attachments": 10,
+	"fileId":      20, "documentId": 20, "spreadsheetId": 20, "targetParentId": 21, "permissionId": 21, "sheetId": 21, "sourceSheetId": 21,
 }
 
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
@@ -363,8 +417,14 @@ func approvalFieldLabel(key string) string {
 	switch key {
 	case "subject", "title":
 		return "Tiêu đề"
+	case "name", "fileName":
+		return "Tên"
+	case "newTitle":
+		return "Tiêu đề mới"
 	case "to":
 		return "Người nhận"
+	case "emailAddress":
+		return "Email được chia sẻ"
 	case "cc":
 		return "CC"
 	case "bcc":
@@ -375,6 +435,34 @@ func approvalFieldLabel(key string) string {
 		return "Nội dung"
 	case "text":
 		return "Tin nhắn"
+	case "oldText":
+		return "Nội dung cần thay"
+	case "newText":
+		return "Nội dung thay thế"
+	case "range":
+		return "Vùng dữ liệu"
+	case "ranges":
+		return "Các vùng dữ liệu"
+	case "values":
+		return "Giá trị"
+	case "role":
+		return "Quyền"
+	case "type":
+		return "Loại chia sẻ"
+	case "fileId":
+		return "Drive file ID"
+	case "documentId":
+		return "Document ID"
+	case "spreadsheetId":
+		return "Spreadsheet ID"
+	case "targetParentId":
+		return "Folder đích ID"
+	case "permissionId":
+		return "Permission ID"
+	case "sheetId":
+		return "Sheet ID"
+	case "sourceSheetId":
+		return "Sheet nguồn ID"
 	case "start":
 		return "Bắt đầu"
 	case "end":
@@ -418,14 +506,22 @@ func formatApprovalValue(key string, v any) string {
 				parts = append(parts, fmt.Sprintf("%v", item))
 			}
 		}
-		return strings.Join(parts, ", ")
+		return truncateApprovalText(strings.Join(parts, ", "))
 	default:
 		data, err := json.Marshal(v)
 		if err != nil {
-			return fmt.Sprintf("%v", v)
+			return truncateApprovalText(fmt.Sprintf("%v", v))
 		}
-		return string(data)
+		return truncateApprovalText(string(data))
 	}
+}
+
+func truncateApprovalText(s string) string {
+	s = strings.TrimSpace(s)
+	if runes := []rune(s); len(runes) > maxApprovalFieldRunes {
+		return string(runes[:maxApprovalFieldRunes]) + "..."
+	}
+	return s
 }
 
 func renderError(errorShape *contracts.ErrorShape) string {

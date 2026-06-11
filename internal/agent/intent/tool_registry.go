@@ -140,6 +140,24 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}},
 	},
+	"drive.exportFile": {
+		Name: "drive.exportFile", Category: CategorySafeRead,
+		Description: "Export Google Workspace Drive file content with a size cap",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "mimeType", Type: "string", Required: false, Description: "Export MIME type"}},
+	},
+	"drive.downloadFile": {
+		Name: "drive.downloadFile", Category: CategorySafeRead,
+		Description: "Download Drive file content with a size cap into the tool response",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "maxBytes", Type: "int", Required: false, Description: "Maximum bytes to return"}},
+	},
+	"drive.listPermissions": {
+		Name: "drive.listPermissions", Category: CategorySafeRead,
+		Description: "List Google Drive file sharing permissions",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}},
+	},
 	"docs.getDocument": {
 		Name: "docs.getDocument", Category: CategorySafeRead,
 		Description: "Read a Google Docs document",
@@ -157,6 +175,12 @@ var Registry = map[string]ToolDefinition{
 		Description: "Read values from a Google Sheets range",
 		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
 		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "range", Type: "string", Required: true, Description: "A1 range"}},
+	},
+	"sheets.batchGetValues": {
+		Name: "sheets.batchGetValues", Category: CategorySafeRead,
+		Description: "Read values from multiple Google Sheets ranges",
+		Dangerous:   false, RequiresConfirm: false, TimeoutMs: 30000,
+		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "ranges", Type: "string", Required: true, Description: "A1 ranges"}},
 	},
 	"web.search": {
 		Name: "web.search", Category: CategorySafeRead,
@@ -284,6 +308,18 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "name", Type: "string", Required: true, Description: "Folder name"}},
 	},
+	"drive.createFile": {
+		Name: "drive.createFile", Category: CategoryDangerousWrite,
+		Description: "Create a Google Drive file from provided content",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "name", Type: "string", Required: true, Description: "File name"}, {Name: "content", Type: "string", Required: true, Description: "File content"}},
+	},
+	"drive.uploadFile": {
+		Name: "drive.uploadFile", Category: CategoryDangerousWrite,
+		Description: "Upload a local file to Google Drive",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "localPath", Type: "path", Required: true, Description: "Local file path"}, {Name: "name", Type: "string", Required: false, Description: "Drive file name"}},
+	},
 	"drive.updateFileMetadata": {
 		Name: "drive.updateFileMetadata", Category: CategoryDangerousWrite,
 		Description: "Update Google Drive file metadata only; do not use for moving files or changing folders",
@@ -295,6 +331,12 @@ var Registry = map[string]ToolDefinition{
 		Description: "Share a Google Drive file",
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "role", Type: "string", Required: true, Description: "reader, commenter, or writer"}},
+	},
+	"drive.revokePermission": {
+		Name: "drive.revokePermission", Category: CategoryDangerousWrite,
+		Description: "Revoke a Google Drive sharing permission",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "permissionId", Type: "string", Required: true, Description: "Permission ID"}},
 	},
 	"drive.moveFile": {
 		Name: "drive.moveFile", Category: CategoryDangerousWrite,
@@ -327,6 +369,24 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "documentId", Type: "string", Required: true, Description: "Document ID"}, {Name: "text", Type: "string", Required: true, Description: "Text to append"}},
 	},
+	"docs.replaceText": {
+		Name: "docs.replaceText", Category: CategoryDangerousWrite,
+		Description: "Replace matching text in a Google Docs document",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "documentId", Type: "string", Required: true, Description: "Document ID"}, {Name: "oldText", Type: "string", Required: true, Description: "Text to find"}, {Name: "newText", Type: "string", Required: true, Description: "Replacement text"}},
+	},
+	"docs.insertText": {
+		Name: "docs.insertText", Category: CategoryDangerousWrite,
+		Description: "Insert text at a Google Docs structural index",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "documentId", Type: "string", Required: true, Description: "Document ID"}, {Name: "index", Type: "int", Required: true, Description: "Document structural index"}, {Name: "text", Type: "string", Required: true, Description: "Text to insert"}},
+	},
+	"docs.deleteContent": {
+		Name: "docs.deleteContent", Category: CategoryDangerousWrite,
+		Description: "Delete content from a Google Docs structural range",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "documentId", Type: "string", Required: true, Description: "Document ID"}, {Name: "startIndex", Type: "int", Required: true, Description: "Start index"}, {Name: "endIndex", Type: "int", Required: true, Description: "End index"}},
+	},
 	"sheets.createSpreadsheet": {
 		Name: "sheets.createSpreadsheet", Category: CategoryDangerousWrite,
 		Description: "Create a Google Sheets spreadsheet",
@@ -339,11 +399,48 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "range", Type: "string", Required: true, Description: "A1 range"}},
 	},
+	"sheets.batchUpdateValues": {
+		Name: "sheets.batchUpdateValues", Category: CategoryDangerousWrite,
+		Description: "Update values in multiple Google Sheets ranges",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "ranges", Type: "string", Required: true, Description: "Map of A1 ranges to values"}},
+	},
 	"sheets.appendValues": {
 		Name: "sheets.appendValues", Category: CategoryDangerousWrite,
 		Description: "Append rows to a Google Sheets range",
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "range", Type: "string", Required: true, Description: "A1 range"}},
+	},
+	"sheets.clearValues": {
+		Name: "sheets.clearValues", Category: CategoryDangerousWrite,
+		Description: "Clear values from a Google Sheets range",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "range", Type: "string", Required: true, Description: "A1 range"}},
+	},
+	"sheets.addSheet": {
+		Name: "sheets.addSheet", Category: CategoryDangerousWrite,
+		Description: "Add a sheet tab to a Google Sheets spreadsheet",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "title", Type: "string", Required: true, Description: "New sheet title"}},
+	},
+	"sheets.renameSheet": {
+		Name: "sheets.renameSheet", Category: CategoryDangerousWrite,
+		Description: "Rename a Google Sheets tab",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "sheetId", Type: "int", Required: true, Description: "Sheet tab ID"}, {Name: "title", Type: "string", Required: true, Description: "New sheet title"}},
+	},
+	"sheets.deleteSheet": {
+		Name: "sheets.deleteSheet", Category: CategoryDangerousWrite,
+		Description:      "Delete a Google Sheets tab",
+		DefaultRiskLevel: contracts.RiskLevelDestructive,
+		Dangerous:        true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "sheetId", Type: "int", Required: true, Description: "Sheet tab ID"}},
+	},
+	"sheets.duplicateSheet": {
+		Name: "sheets.duplicateSheet", Category: CategoryDangerousWrite,
+		Description: "Duplicate a Google Sheets tab",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
+		Parameters: []ParamDef{{Name: "spreadsheetId", Type: "string", Required: true, Description: "Spreadsheet ID"}, {Name: "sourceSheetId", Type: "int", Required: true, Description: "Source sheet tab ID"}, {Name: "newTitle", Type: "string", Required: true, Description: "New sheet title"}},
 	},
 	"chat.sendMessage": {
 		Name: "chat.sendMessage", Category: CategoryCommunication,

@@ -166,7 +166,25 @@ func (r *Runtime) createApprovalAction(ctx context.Context, runState RunState, m
 	if err != nil {
 		return ActionRecord{}, internalError("create action record: "+err.Error(), contracts.ErrorSourceAgent)
 	}
+	r.appendRunEvent(ctx, runState.RunID, "approval_proposed", map[string]any{
+		"approvalId": approval.ApprovalID,
+		"toolName":   toolCall.Name,
+		"riskLevel":  string(decision.RiskLevel),
+		"summary":    approval.Summary,
+	})
 	return stored, nil
+}
+
+func (r *Runtime) appendRunEvent(ctx context.Context, runID string, eventType string, data map[string]any) {
+	if r == nil || r.stateStore == nil || strings.TrimSpace(runID) == "" || strings.TrimSpace(eventType) == "" {
+		return
+	}
+	_ = r.stateStore.AppendRunEvent(ctx, RunEvent{
+		RunID:     runID,
+		Type:      eventType,
+		Data:      data,
+		CreatedAt: r.now(),
+	})
 }
 
 func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration) *contracts.ErrorShape {

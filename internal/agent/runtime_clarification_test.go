@@ -6,6 +6,30 @@ import (
 	"vclaw/internal/providers"
 )
 
+func TestShouldRedirectClarifyToDriveMove(t *testing.T) {
+	cases := []struct {
+		request  string
+		evidence string
+		want     bool
+	}{
+		{`di chuyển file docs "Thuật toán binary search" vào folder "Nhập môn lập trình"`, ``, true},
+		{`chuyển tài liệu này sang thư mục Projects`, ``, true},
+		{`move file "report.xlsx" into folder "Archive"`, ``, true},
+		{`vào thư mục mới`, ``, true},
+		// Once NEEDS_DRIVE_MOVE_RESOLUTION is already in the transcript, do NOT redirect again.
+		{`di chuyển file docs "Thuật toán binary search" vào folder "Nhập môn lập trình"`, `NEEDS_DRIVE_MOVE_RESOLUTION: The current request...`, false},
+		{`đổi tên file thành "Binary search"`, ``, false},
+		{`tạo file mới trong Drive`, ``, false},
+		{``, ``, false},
+	}
+	for _, tc := range cases {
+		got := shouldRedirectClarifyToDriveMove(tc.request, tc.evidence)
+		if got != tc.want {
+			t.Errorf("shouldRedirectClarifyToDriveMove(%q, evidence) = %v, want %v", tc.request, got, tc.want)
+		}
+	}
+}
+
 func TestShouldRerouteDriveMetadataMove(t *testing.T) {
 	call := providers.ToolCall{Name: "drive.updateFileMetadata"}
 	if !shouldRerouteDriveMetadataMove(call, `di chuyển file docs "Thuật toán binary search" vào folder "Nhập môn lập trình"`) {

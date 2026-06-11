@@ -113,6 +113,10 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				Error:     internalError("approve action: "+err.Error(), contracts.ErrorSourceAgent),
 			}, nil
 		}
+		r.appendRunEvent(ctx, pending.runID, "approval_approved", map[string]any{
+			"approvalId": pending.request.ApprovalID,
+			"toolName":   pending.request.ToolCall.ToolName,
+		})
 		return r.resumeApprovedAction(ctx, pending)
 	case contracts.ApprovalDecisionRejected:
 		if pending.actionID != "" {
@@ -126,6 +130,11 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				}, nil
 			}
 		}
+		r.appendRunEvent(ctx, pending.runID, "approval_rejected", map[string]any{
+			"approvalId": pending.request.ApprovalID,
+			"toolName":   pending.request.ToolCall.ToolName,
+			"comment":    strings.TrimSpace(decision.Comment),
+		})
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
@@ -487,6 +496,11 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 				Error:     internalError("complete action: "+err.Error(), contracts.ErrorSourceAgent),
 			}, nil
 		}
+		r.appendRunEvent(ctx, record.RunID, "approval_executed", map[string]any{
+			"approvalId": pending.request.ApprovalID,
+			"toolName":   pending.toolCall.Name,
+			"success":    true,
+		})
 	} else if _, err := r.stateStore.FailAction(ctx, pending.actionID, result); err != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
@@ -495,6 +509,12 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 			Message:   "Không thể lưu lỗi action.",
 			Error:     internalError("fail action: "+err.Error(), contracts.ErrorSourceAgent),
 		}, nil
+	} else {
+		r.appendRunEvent(ctx, record.RunID, "approval_executed", map[string]any{
+			"approvalId": pending.request.ApprovalID,
+			"toolName":   pending.toolCall.Name,
+			"success":    false,
+		})
 	}
 
 	if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
@@ -724,6 +744,36 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi thêm thành viên Google Chat."
 	case "chat.removeMember":
 		return "Tôi cần bạn xác nhận trước khi xóa thành viên Google Chat."
+	case "drive.createFolder":
+		return "Tôi cần bạn xác nhận trước khi tạo folder trên Google Drive."
+	case "drive.createFile", "drive.uploadFile":
+		return "Tôi cần bạn xác nhận trước khi tạo hoặc upload file lên Google Drive."
+	case "drive.updateFileMetadata":
+		return "Tôi cần bạn xác nhận trước khi sửa metadata file Google Drive."
+	case "drive.shareFile":
+		return "Tôi cần bạn xác nhận trước khi chia sẻ file Google Drive."
+	case "drive.revokePermission":
+		return "Tôi cần bạn xác nhận trước khi thu hồi quyền chia sẻ file Google Drive."
+	case "drive.moveFile":
+		return "Tôi cần bạn xác nhận trước khi di chuyển file hoặc folder Google Drive."
+	case "drive.trashFile":
+		return "Tôi cần bạn xác nhận trước khi chuyển file hoặc folder Google Drive vào thùng rác."
+	case "drive.untrashFile":
+		return "Tôi cần bạn xác nhận trước khi khôi phục file hoặc folder Google Drive."
+	case "docs.createDocument":
+		return "Tôi cần bạn xác nhận trước khi tạo Google Docs document."
+	case "docs.appendText", "docs.replaceText", "docs.insertText":
+		return "Tôi cần bạn xác nhận trước khi sửa nội dung Google Docs document."
+	case "docs.deleteContent":
+		return "Tôi cần bạn xác nhận trước khi xóa nội dung trong Google Docs document."
+	case "sheets.createSpreadsheet":
+		return "Tôi cần bạn xác nhận trước khi tạo Google Sheets spreadsheet."
+	case "sheets.updateValues", "sheets.batchUpdateValues", "sheets.appendValues", "sheets.clearValues":
+		return "Tôi cần bạn xác nhận trước khi thay đổi dữ liệu trong Google Sheets."
+	case "sheets.addSheet", "sheets.renameSheet", "sheets.duplicateSheet":
+		return "Tôi cần bạn xác nhận trước khi thay đổi tab trong Google Sheets."
+	case "sheets.deleteSheet":
+		return "Tôi cần bạn xác nhận trước khi xóa tab trong Google Sheets."
 	case "sandbox.runPython", "sandbox.runShell":
 		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
 	default:
