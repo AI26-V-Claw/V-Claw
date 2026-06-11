@@ -434,8 +434,10 @@ func TestTelegramApprovalTextOmitsTechnicalFields(t *testing.T) {
 			t.Fatalf("telegram approval text leaked %q: %q", forbidden, text)
 		}
 	}
-	if !strings.Contains(text, "Hành động: Gửi email") {
-		t.Fatalf("expected human-friendly approval action, got %q", text)
+	for _, forbidden := range []string{"Cần bạn xác nhận trước khi thực hiện.", "Hành động:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("telegram approval text should omit %q: %q", forbidden, text)
+		}
 	}
 }
 
@@ -462,7 +464,21 @@ func TestTelegramApprovalTextShowsSandboxPythonCode(t *testing.T) {
 	}
 }
 
+func TestTelegramTextFromResponsePreservesMultilineFormatting(t *testing.T) {
+	message := "Đây là một bộ khung mục lục:\n\nCHƯƠNG 2\n2.1 Cơ sở lý thuyết\n  2.1.1 Khái niệm hệ thống thông tin\n  2.1.2 Khái niệm cơ sở dữ liệu\n\n- Mục 1\n- Mục 2"
+
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+	})
+
+	if text != message {
+		t.Fatalf("expected response formatting to be preserved, got %q want %q", text, message)
+	}
+}
+
 func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
+	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := telegramTextFromResponse(contracts.AgentResponse{
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
@@ -473,16 +489,86 @@ func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 				Input: map[string]any{
 					"to":       []any{"vmkqa2@gmail.com"},
 					"subject":  "Mời họp chiều nay",
-					"textBody": "Chào bạn,\nMời bạn tham dự cuộc họp chiều nay.",
+					"textBody": body,
 				},
 			},
 		},
 	})
 
-	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Nội dung email:", "Mời bạn tham dự cuộc họp chiều nay."} {
+	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", telegramPreBlockOpen, telegramPreBlockClose, telegramFieldOpen, telegramFieldClose} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
 		}
+	}
+	if strings.Contains(text, "Nội dung email:") {
+		t.Fatalf("expected email approval text to omit body label, got %q", text)
+	}
+}
+
+func TestTelegramApprovalTextShowsCalendarEventDetails(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_calendar",
+			Summary:    "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "calendar.createEvent",
+				Input: map[string]any{
+					"title":       "Họp",
+					"start":       "2026-06-10T08:00:00+07:00",
+					"end":         "2026-06-10T09:30:00+07:00",
+					"attendees":   []any{"a@test.com", "b@test.com"},
+					"location":    "Phòng A",
+					"description": "Chuẩn bị số liệu bán hàng.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Tiêu đề:", "Họp",
+		"Bắt đầu:", "10/06/2026, 08:00 (+07:00)",
+		"Kết thúc:", "10/06/2026, 09:30 (+07:00)",
+		"Thời lượng:", "1 giờ 30 phút",
+		"Người tham gia:", "a@test.com, b@test.com",
+		"Địa điểm:", "Phòng A",
+		"Ghi chú:", "Chuẩn bị số liệu bán hàng.",
+		telegramTextFieldOpen, telegramTextFieldClose, telegramPreBlockOpen, telegramPreBlockClose,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected calendar approval text to contain %q, got %q", want, text)
+		}
+	}
+	for _, forbidden := range []string{"Start: 2026-06-10T08:00:00+07:00", "End: 2026-06-10T09:30:00+07:00"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected calendar approval text to avoid raw time field %q, got %q", forbidden, text)
+		}
+	}
+}
+
+func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_chat",
+			Summary:    "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "chat.sendMessage",
+				Input: map[string]any{
+					"space": "spaces/87bFdyAAAAE",
+					"text":  "Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.",
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{"Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.", telegramPreBlockOpen, telegramPreBlockClose} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected chat approval text to contain %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "Nội dung:") || strings.Contains(text, "Space:") || strings.Contains(text, "spaces/87bFdyAAAAE") {
+		t.Fatalf("expected chat approval text to omit raw space identifier, got %q", text)
 	}
 }
 
@@ -859,5 +945,95 @@ func TestTelegramRenderHTMLConvertsCodeBlockMarkers(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "print(&#39;hello&#39;)") && !strings.Contains(rendered, "print('hello')") {
 		t.Fatalf("expected escaped code content, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLConvertsRawFencedCodeBlock(t *testing.T) {
+	rendered := telegramRenderHTML("Vi du:\n```python\nif True:\n    print('hello')\n```")
+
+	if !strings.Contains(rendered, "<pre><code") {
+		t.Fatalf("expected raw fenced code to render as html code block, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "language-python") {
+		t.Fatalf("expected raw fenced code to preserve the language class, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "    print(&#39;hello&#39;)") && !strings.Contains(rendered, "    print('hello')") {
+		t.Fatalf("expected raw fenced code indentation to be preserved, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLPreservesLeadingSpacesInPlainText(t *testing.T) {
+	rendered := telegramRenderHTML("  2.1.1 Khái niệm hệ thống thông tin")
+
+	if !strings.Contains(rendered, "\u00a0\u00a0"+"2.1.1 Khái niệm hệ thống thông tin") {
+		t.Fatalf("expected leading spaces to be preserved in plain text, got %q", rendered)
+	}
+}
+
+func XTestTelegramRenderHTMLConvertsNbspEntitiesToVisibleIndentation(t *testing.T) {
+	rendered := telegramRenderHTML("&nbsp;&nbsp;- số")
+
+	if strings.Contains(rendered, "&amp;nbsp;") {
+		t.Fatalf("expected nbsp entities to render as spacing, got %q", rendered)
+	}
+	if strings.Contains(rendered, "&nbsp;") {
+		t.Fatalf("expected nbsp entity text to be removed from output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "• số") {
+		t.Fatalf("expected nbsp entities to become a visible bullet item, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLFormatsMarkdownHeading(t *testing.T) {
+	rendered := telegramRenderHTML("## Giới thiệu")
+
+	if !strings.Contains(rendered, "<b>GIỚI THIỆU</b>") {
+		t.Fatalf("expected markdown heading to render as bold uppercase, got %q", rendered)
+	}
+}
+
+func XTestTelegramRenderHTMLConvertsDashListsToBullets(t *testing.T) {
+	rendered := telegramRenderHTML("- Mục lớn\n - Mục con")
+
+	if !strings.Contains(rendered, "• Mục lớn") {
+		t.Fatalf("expected top-level dash item to become a bullet, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "\u00a0\u00a0\u00a0\u00a0"+"• Mục con") {
+		t.Fatalf("expected nested dash item to become a deeper indented bullet, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLConvertsPreBlockMarkers(t *testing.T) {
+	rendered := telegramRenderHTML(telegramPreBlock("Chào bạn,\n\nThân mến,\nV-Claw"))
+
+	if !strings.Contains(rendered, "<blockquote>") {
+		t.Fatalf("expected html blockquote, got %q", rendered)
+	}
+	if strings.Contains(rendered, "<code") {
+		t.Fatalf("expected email preview to avoid code markup, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "Thân mến,") {
+		t.Fatalf("expected full email body in preview block, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLConvertsFieldMarkers(t *testing.T) {
+	rendered := telegramRenderHTML(telegramField("Người nhận", "vmkqa2@gmail.com") + "\n" + telegramField("Tiêu đề", "Hỏi thăm sức khỏe"))
+
+	for _, want := range []string{"<b>Người nhận:</b>", "<code>vmkqa2@gmail.com</code>", "<b>Tiêu đề:</b>", "<code>Hỏi thăm sức khỏe</code>"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered field markup %q, got %q", want, rendered)
+		}
+	}
+}
+
+func TestTelegramRenderHTMLConvertsTextFieldMarkers(t *testing.T) {
+	rendered := telegramRenderHTML(telegramTextField("Bắt đầu", "10/06/2026, 08:00 (+07:00)"))
+
+	if !strings.Contains(rendered, "<b>Bắt đầu:</b> 10/06/2026, 08:00 (+07:00)") {
+		t.Fatalf("expected rendered text field without code markup, got %q", rendered)
+	}
+	if strings.Contains(rendered, "<code>10/06/2026, 08:00 (+07:00)</code>") {
+		t.Fatalf("expected text field to avoid code markup, got %q", rendered)
 	}
 }

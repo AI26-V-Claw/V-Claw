@@ -12,6 +12,7 @@ import (
 
 	"github.com/slack-go/slack"
 
+	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 )
 
@@ -133,9 +134,9 @@ func slackTextFromResponse(response contracts.AgentResponse) string {
 		return "Mình cần bạn xác nhận trước khi thực hiện hành động này."
 	}
 
-	text := strings.TrimSpace(response.Message)
-	if text == "" && response.Output != nil {
-		text = strings.TrimSpace(response.Output.Text)
+	text := response.Message
+	if strings.TrimSpace(text) == "" && response.Output != nil {
+		text = response.Output.Text
 	}
 	text = sanitizeSlackResponseText(text)
 	if text != "" {
@@ -167,17 +168,15 @@ func slackIsUserCancelledApproval(response contracts.AgentResponse) bool {
 }
 
 func slackApprovalText(approval contracts.ApprovalRequest) string {
-	action := slackActionLabel(approval.ToolCall.ToolName)
-	lines := []string{
-		"Cần bạn xác nhận trước khi thực hiện.",
-		"",
-		"Hành động: " + action,
-	}
+	lines := []string{}
 	if summary := sanitizeSlackResponseText(approval.Summary); summary != "" && !strings.EqualFold(summary, "Mình cần bạn xác nhận trước khi thực hiện hành động này.") {
 		lines = append(lines, summary)
 	}
 	if detail := slackApprovalDetailText(approval); detail != "" {
-		lines = append(lines, "", detail)
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, detail)
 	}
 	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy. Nếu muốn thay đổi, cứ nhắn thêm cho mình.")
 	return formatSlackUserText(lines...)
@@ -255,45 +254,46 @@ func slackActionLabel(toolName string) string {
 }
 
 func sanitizeSlackResponseText(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	if looksLikeSlackMachinePayload(text) {
+	text = formatting.NormalizeLineEndings(text)
+	if looksLikeSlackMachinePayload(strings.TrimSpace(text)) {
 		return ""
 	}
 
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	lines := strings.Split(text, "\n")
 	filtered := make([]string, 0, len(lines))
-	skipJSONBlock := false
+	inFence := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		lower := strings.ToLower(trimmed)
 
-		if skipJSONBlock {
-			if trimmed == "" {
-				skipJSONBlock = false
+		if inFence {
+			filtered = append(filtered, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
 			}
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			filtered = append(filtered, line)
+			inFence = true
 			continue
 		}
 		switch {
 		case trimmed == "":
 			filtered = append(filtered, "")
-		case strings.HasPrefix(lower, "approval id:"),
-			strings.HasPrefix(lower, "tool:"),
-			strings.HasPrefix(lower, "risk:"):
-			continue
-		case strings.HasPrefix(lower, "input:"):
-			skipJSONBlock = true
-			continue
 		case slackSensitiveTextPattern.MatchString(trimmed):
 			continue
 		default:
-			filtered = append(filtered, trimmed)
+			filtered = append(filtered, line)
 		}
 	}
 
-	clean := formatSlackUserText(filtered...)
+	clean := strings.Join(filtered, "\n")
+	if strings.TrimSpace(clean) == "" {
+		return ""
+	}
 	if slackSensitiveTextPattern.MatchString(clean) {
 		return ""
 	}
@@ -308,20 +308,28 @@ func slackApprovalDetailText(approval contracts.ApprovalRequest) string {
 		if detail := slackDraftApprovalDetailText(input); detail != "" {
 			return detail
 		}
+	case "calendar.createEvent", "calendar.updateEvent":
+		if detail := slackCalendarApprovalDetailText(input); detail != "" {
+			return detail
+		}
+	case "chat.sendMessage", "chat.updateMessage":
+		if detail := slackChatApprovalDetailText(input); detail != "" {
+			return detail
+		}
 	case "gmail.sendDraft":
 		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
 	}
 	switch strings.TrimSpace(approval.ToolCall.ToolName) {
 	case "sandbox.runPython":
 		if code := stringMapValue(input, "code"); code != "" {
-			return "Mã Python sẽ chạy:\n\n" + code
+			return "Mã Python sẽ chạy:\n\n" + slackCodeBlock("python", code)
 		}
 		if scriptPath := stringMapValue(input, "script_path", "scriptPath"); scriptPath != "" {
 			return "File Python sẽ chạy: " + scriptPath
 		}
 	case "sandbox.runShell":
 		if command := stringMapValue(input, "command"); command != "" {
-			return "Lệnh shell sẽ chạy:\n\n" + command
+			return "Lệnh shell sẽ chạy:\n\n" + slackCodeBlock("bash", command)
 		}
 	}
 	return slackGenericApprovalDetailText(input)
@@ -330,22 +338,62 @@ func slackApprovalDetailText(approval contracts.ApprovalRequest) string {
 func slackDraftApprovalDetailText(input map[string]any) string {
 	lines := []string{}
 	if recipients := stringSliceMapValue(input, "to"); len(recipients) > 0 {
-		lines = append(lines, "Người nhận: "+strings.Join(recipients, ", "))
+		lines = append(lines, slackField("Người nhận", strings.Join(recipients, ", ")))
 	}
 	if cc := stringSliceMapValue(input, "cc"); len(cc) > 0 {
-		lines = append(lines, "CC: "+strings.Join(cc, ", "))
+		lines = append(lines, slackField("CC", strings.Join(cc, ", ")))
 	}
 	if bcc := stringSliceMapValue(input, "bcc"); len(bcc) > 0 {
-		lines = append(lines, "BCC: "+strings.Join(bcc, ", "))
+		lines = append(lines, slackField("BCC", strings.Join(bcc, ", ")))
 	}
 	if subject := stringMapValue(input, "subject"); subject != "" {
-		lines = append(lines, "Tiêu đề: "+subject)
+		lines = append(lines, slackField("Tiêu đề", subject))
 	}
 	if body := firstNonEmptyStringMapValue(input, "textBody", "body", "content", "message", "text", "htmlBody"); body != "" {
-		lines = append(lines, "", "Nội dung email:", "", body)
+		lines = append(lines, "", slackPreBlock(body))
 	}
 	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
-		lines = append(lines, "", "Tệp đính kèm: "+strings.Join(attachments, ", "))
+		lines = append(lines, "", slackField("Tệp đính kèm", strings.Join(attachments, ", ")))
+	}
+	return formatSlackUserText(lines...)
+}
+
+func slackCalendarApprovalDetailText(input map[string]any) string {
+	lines := []string{}
+
+	if title := firstNonEmptyStringMapValue(input, "title", "name", "subject"); title != "" {
+		lines = append(lines, slackTextField("Tiêu đề", title))
+	}
+
+	startRaw := firstNonEmptyStringMapValue(input, "start", "startTime", "startDate", "date")
+	endRaw := firstNonEmptyStringMapValue(input, "end", "endTime", "endDate", "dueDate", "dueTime")
+	if start := slackFormatApprovalDateTime(startRaw); start != "" {
+		lines = append(lines, slackTextField("Bắt đầu", start))
+	}
+	if end := slackFormatApprovalDateTime(endRaw); end != "" {
+		lines = append(lines, slackTextField("Kết thúc", end))
+	}
+	if duration := approvalDurationText(startRaw, endRaw); duration != "" {
+		lines = append(lines, slackTextField("Thời lượng", duration))
+	}
+
+	if attendees := stringSliceMapValue(input, "attendees"); len(attendees) > 0 {
+		lines = append(lines, slackTextField("Người tham gia", strings.Join(attendees, ", ")))
+	}
+	if location := stringMapValue(input, "location"); location != "" {
+		lines = append(lines, slackTextField("Địa điểm", location))
+	}
+	if description := firstNonEmptyStringMapValue(input, "description"); description != "" {
+		lines = append(lines, "", "Ghi chú:", "", slackPreBlock(description))
+	}
+
+	return formatSlackUserText(lines...)
+}
+
+func slackChatApprovalDetailText(input map[string]any) string {
+	lines := []string{}
+	if body := firstNonEmptyStringMapValue(input, "text", "message", "content", "body"); body != "" {
+		lines = append(lines, slackPreBlock(body))
 	}
 	return formatSlackUserText(lines...)
 }
@@ -366,8 +414,7 @@ func slackGenericApprovalDetailText(input map[string]any) string {
 		lines = append(lines, label+": "+text)
 	}
 	appendMultiline := func(label string, value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
+		if strings.TrimSpace(value) == "" {
 			return
 		}
 		lines = append(lines, label+":", "", value)
@@ -432,7 +479,22 @@ func looksLikeSlackMachinePayload(text string) bool {
 func formatSlackUserText(lines ...string) string {
 	out := make([]string, 0, len(lines))
 	previousBlank := false
+	inFence := false
 	for _, line := range lines {
+		if inFence {
+			out = append(out, line)
+			if formatting.IsFencedCodeBlockClose(line) {
+				inFence = false
+			}
+			previousBlank = false
+			continue
+		}
+		if _, ok := formatting.ParseFencedCodeBlockOpen(line); ok {
+			out = append(out, line)
+			inFence = true
+			previousBlank = false
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			if len(out) > 0 && !previousBlank {
@@ -441,10 +503,99 @@ func formatSlackUserText(lines ...string) string {
 			previousBlank = true
 			continue
 		}
-		out = append(out, trimmed)
+		out = append(out, line)
 		previousBlank = false
 	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
+	return strings.Join(out, "\n")
+}
+
+func slackCodeBlock(_ string, code string) string {
+	if code == "" {
+		return ""
+	}
+	return "```\n" + strings.ReplaceAll(code, "```", "``\u200b`") + "\n```"
+}
+
+func slackPreBlock(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	text = formatting.NormalizeLineEndings(text)
+	return "```" + strings.ReplaceAll(text, "```", "``\u200b`") + "```"
+}
+
+func slackFormatApprovalDateTime(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.Format("02/01/2006, 15:04") + " (" + utcOffsetText(parsed) + ")"
+	}
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		return parsed.Format("02/01/2006")
+	}
+	return value
+}
+
+func approvalDurationText(start string, end string) string {
+	startTime, err := time.Parse(time.RFC3339, strings.TrimSpace(start))
+	if err != nil {
+		return ""
+	}
+	endTime, err := time.Parse(time.RFC3339, strings.TrimSpace(end))
+	if err != nil || !endTime.After(startTime) {
+		return ""
+	}
+
+	totalMinutes := int(endTime.Sub(startTime).Minutes())
+	hours := totalMinutes / 60
+	minutes := totalMinutes % 60
+
+	switch {
+	case hours > 0 && minutes > 0:
+		return fmt.Sprintf("%d giờ %d phút", hours, minutes)
+	case hours > 0:
+		return fmt.Sprintf("%d giờ", hours)
+	default:
+		return fmt.Sprintf("%d phút", minutes)
+	}
+}
+
+func slackField(label string, value string) string {
+	label = strings.TrimSpace(label)
+	value = strings.TrimSpace(value)
+	if label == "" {
+		return value
+	}
+	if value == "" {
+		return "*" + label + ":*"
+	}
+	return "*" + label + ":* `" + strings.ReplaceAll(value, "`", "ˋ") + "`"
+}
+
+func slackTextField(label string, value string) string {
+	label = strings.TrimSpace(label)
+	value = strings.TrimSpace(value)
+	if label == "" {
+		return value
+	}
+	if value == "" {
+		return "*" + label + ":*"
+	}
+	return "*" + label + ":* " + value
+}
+
+func utcOffsetText(value time.Time) string {
+	_, offsetSeconds := value.Zone()
+	sign := "+"
+	if offsetSeconds < 0 {
+		sign = "-"
+		offsetSeconds = -offsetSeconds
+	}
+	hours := offsetSeconds / 3600
+	minutes := (offsetSeconds % 3600) / 60
+	return fmt.Sprintf("%s%02d:%02d", sign, hours, minutes)
 }
 
 func slackApprovalBlocks(text, approvalID, sessionID string) []slack.Block {
@@ -487,8 +638,7 @@ func stringMapValue(input map[string]any, keys ...string) string {
 			continue
 		}
 		if text, ok := value.(string); ok {
-			text = strings.TrimSpace(text)
-			if text != "" {
+			if strings.TrimSpace(text) != "" {
 				return text
 			}
 		}
