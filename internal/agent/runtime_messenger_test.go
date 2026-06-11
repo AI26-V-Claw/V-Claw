@@ -369,8 +369,8 @@ func TestParseApprovalCommandRejectsWithRevisionComment(t *testing.T) {
 	if !ok {
 		t.Fatal("expected revise command")
 	}
-	if !command.revise {
-		t.Fatal("expected revise command flag")
+	if command.decision != contracts.ApprovalDecisionRevised {
+		t.Fatalf("expected revised, got %s", command.decision)
 	}
 	if command.comment != "đổi giờ sang 10:00" {
 		t.Fatalf("unexpected comment: %q", command.comment)

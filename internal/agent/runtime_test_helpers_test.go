@@ -44,6 +44,10 @@ type gmailListEmailsRuntimeTool struct {
 	content    string
 }
 
+type gmailDownloadAttachmentsRuntimeTool struct {
+	executions *int
+}
+
 type chatListSpacesRuntimeTool struct {
 	executions *int
 }
@@ -71,6 +75,8 @@ type failingLoadSessionStore struct{}
 type failingAssistantAppendSessionStore struct {
 	*sessions.InMemoryStore
 }
+
+type toolEnabledRouter struct{}
 
 func (blockingRuntimeTool) Name() string                 { return "test.blocking" }
 func (blockingRuntimeTool) Description() string          { return "Blocks until released." }
@@ -184,6 +190,40 @@ func (t gmailListEmailsRuntimeTool) Execute(_ context.Context, call tools.ToolCa
 		Success:        true,
 		ContentForLLM:  content,
 		ContentForUser: content,
+	}
+}
+
+func (gmailDownloadAttachmentsRuntimeTool) Name() string { return "gmail.downloadAttachments" }
+func (gmailDownloadAttachmentsRuntimeTool) Description() string {
+	return "Download Gmail attachments."
+}
+func (gmailDownloadAttachmentsRuntimeTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"messageId": map[string]any{"type": "string"},
+			"outputDir": map[string]any{"type": "string"},
+			"filenames": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+		"required": []string{"messageId", "outputDir"},
+	}
+}
+func (gmailDownloadAttachmentsRuntimeTool) Capability() tools.Capability {
+	return tools.CapabilityMutating
+}
+func (gmailDownloadAttachmentsRuntimeTool) RiskLevel() tools.RiskLevel {
+	return tools.RiskLevelLocalWrite
+}
+func (t gmailDownloadAttachmentsRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	if t.executions != nil {
+		(*t.executions)++
+	}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  "downloaded",
+		ContentForUser: "downloaded",
 	}
 }
 
@@ -381,4 +421,12 @@ func runtimeTestMessage() contracts.UserMessage {
 
 func fixedTestTime() time.Time {
 	return time.Date(2026, 5, 29, 9, 0, 0, 0, time.FixedZone("ICT", 7*60*60))
+}
+
+func testToolEnabledRouter() TurnRouter {
+	return toolEnabledRouter{}
+}
+
+func (toolEnabledRouter) RouteTurn(_ context.Context, _ TurnRouteInput) (TurnRoute, error) {
+	return TurnRoute{Mode: TurnModeToolEnabled, Reason: "test"}, nil
 }

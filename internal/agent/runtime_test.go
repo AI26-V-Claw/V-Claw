@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"vclaw/internal/contracts"
+	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
@@ -792,6 +795,96 @@ func TestRuntimeResolvesNamedChatSpaceBeforeApproval(t *testing.T) {
 	if !strings.Contains(secondCallMessages, "NEEDS_SPACE_RESOLUTION") ||
 		!strings.Contains(secondCallMessages, "chat.listSpaces") {
 		t.Fatalf("expected provider to receive space resolution guidance, got %#v", provider.calls[1].Messages)
+	}
+}
+
+func TestRuntimeDefaultsTelegramDownloadAttachmentsOutputDir(t *testing.T) {
+	homeDir := t.TempDir()
+	downloadsDir := filepath.Join(homeDir, "Downloads")
+	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+		t.Fatalf("mkdir downloads: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_download",
+				Name:      "gmail.downloadAttachments",
+				Arguments: map[string]any{"messageId": "m1", "outputDir": "./"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(gmailDownloadAttachmentsRuntimeTool{}); err != nil {
+		t.Fatalf("register gmail download: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	message := runtimeTestMessage()
+	message.Channel = "telegram"
+	message.Text = "tải file đính kèm"
+
+	response, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", response)
+	}
+	if response.ApprovalRequest == nil {
+		t.Fatal("expected approval request")
+	}
+	if got, want := response.ApprovalRequest.ToolCall.Input["outputDir"], filepath.Join(homeDir, "Downloads", "Vclaw"); got != want {
+		t.Fatalf("expected default outputDir %q, got %#v", want, got)
+	}
+}
+
+func TestRuntimeFallsBackTelegramDownloadAttachmentsOutputDir(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_download_fallback",
+				Name:      "gmail.downloadAttachments",
+				Arguments: map[string]any{"messageId": "m1"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(gmailDownloadAttachmentsRuntimeTool{}); err != nil {
+		t.Fatalf("register gmail download: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	message := runtimeTestMessage()
+	message.Channel = "telegram"
+	message.Text = "tải file đính kèm"
+
+	response, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", response)
+	}
+	if response.ApprovalRequest == nil {
+		t.Fatal("expected approval request")
+	}
+	if got, want := response.ApprovalRequest.ToolCall.Input["outputDir"], filepath.Join(homeDir, "Vclaw"); got != want {
+		t.Fatalf("expected fallback outputDir %q, got %#v", want, got)
 	}
 }
 
@@ -1958,6 +2051,25 @@ func TestApprovalContinuationMessageWarnsGmailSendDraftDeliveryWording(t *testin
 	}
 }
 
+func TestApprovalContinuationMessageMapsDraftIDToSendDraftArgument(t *testing.T) {
+	message := buildApprovalContinuationMessage(pendingApproval{
+		message:  runtimeTestMessage(),
+		toolCall: providers.ToolCall{Name: "gmail.createDraft"},
+	}, tools.ToolResult{
+		ToolCallID:    "call_create",
+		ToolName:      "gmail.createDraft",
+		Success:       true,
+		ContentForLLM: `{"Draft":{"ID":"draft_123"}}`,
+	}, runtimeTestMessage().Timestamp)
+
+	if !strings.Contains(message.Text, "Draft.ID") {
+		t.Fatalf("expected continuation to mention Draft.ID, got %q", message.Text)
+	}
+	if !strings.Contains(message.Text, "draftId argument") {
+		t.Fatalf("expected continuation to map Draft.ID to draftId, got %q", message.Text)
+	}
+}
+
 func TestRuntimeResultFollowUpUsesRecentApprovedActionContext(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Có. Calendar sẽ gửi email thông báo cho attendee nếu sự kiện được tạo với người tham gia."},
@@ -2673,7 +2785,10 @@ func TestRuntimeReviseApprovalReplansWithoutExecutingOriginalTool(t *testing.T) 
 			},
 		},
 		{
-			Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "replanned"},
+			Message: providers.Message{
+				Role:      providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{ID: "call_write_revised", Name: "danger.count", Arguments: map[string]any{"value": "new"}}},
+			},
 		},
 	}}
 	registry := tools.NewToolRegistry()
@@ -2694,8 +2809,8 @@ func TestRuntimeReviseApprovalReplansWithoutExecutingOriginalTool(t *testing.T) 
 	if err != nil {
 		t.Fatalf("revise approval: %v", err)
 	}
-	if response.Status != contracts.AgentStatusCompleted {
-		t.Fatalf("expected completed after replanning, got %#v", response)
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required after replanning, got %#v", response)
 	}
 	if len(provider.calls) != 2 {
 		t.Fatalf("expected provider to be called for original and revision, got %d", len(provider.calls))
@@ -2710,8 +2825,17 @@ func TestRuntimeReviseApprovalReplansWithoutExecutingOriginalTool(t *testing.T) 
 	if executions != 0 {
 		t.Fatalf("revision must not execute original tool, executions=%d", executions)
 	}
+	if response.ApprovalRequest == nil {
+		t.Fatal("expected revised approval request")
+	}
+	if response.ApprovalRequest.ParentApprovalID != pending.ApprovalID {
+		t.Fatalf("expected parent approval id %q, got %#v", pending.ApprovalID, response.ApprovalRequest)
+	}
+	if response.ApprovalRequest.Status != contracts.ApprovalStatusPending {
+		t.Fatalf("expected revised approval request to be pending, got %#v", response.ApprovalRequest)
+	}
 	if !runtime.HasPendingApproval(context.Background(), runtimeTestMessage().SessionID) {
-		t.Fatal("revision should keep original approval pending until replaced by a new approval")
+		t.Fatal("revision should replace the original approval with a new pending approval")
 	}
 }
 
@@ -2940,6 +3064,54 @@ func TestRuntimeStoresToolObservationForApprovalRequiredTool(t *testing.T) {
 	}
 	if transcript[2].Role != providers.MessageRoleTool || transcript[2].ToolCallID != "call_write" {
 		t.Fatalf("expected tool observation for approval-required call, got %#v", transcript[2])
+	}
+}
+
+func TestRuntimeBlocksDestructiveToolByUserPolicy(t *testing.T) {
+	executions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call_block",
+				Name: "danger.count",
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.RegisterWithEntry(countingDangerousTool{executions: &executions}, tools.ToolRegistryEntry{
+		Owner:            "integration",
+		Capability:       tools.CapabilityMutating,
+		RiskLevel:        tools.RiskLevelDestructive,
+		RequiresApproval: true,
+	}); err != nil {
+		t.Fatalf("register destructive tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Policy: policies.NewToolPolicyWithConfig(policies.UserPolicyConfig{
+			AlwaysBlock: []contracts.RiskLevel{contracts.RiskLevelDestructive},
+		}),
+		TurnRouter: testToolEnabledRouter(),
+		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusBlocked {
+		t.Fatalf("expected blocked, got %#v", response)
+	}
+	if response.Message != "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại." {
+		t.Fatalf("unexpected block message: %q", response.Message)
+	}
+	if response.Error == nil || response.Error.Code != contracts.ErrorActionBlockedByPolicy {
+		t.Fatalf("expected policy block error, got %#v", response.Error)
+	}
+	if executions != 0 {
+		t.Fatalf("blocked tool must not execute, executions=%d", executions)
 	}
 }
 

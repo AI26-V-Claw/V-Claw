@@ -1,0 +1,15 @@
+{
+  "auto_allow": [
+    "safe_read",
+    "safe_compute"
+  ],
+  "require_approval": [
+    "sensitive_read",
+    "external_write",
+    "local_write",
+    "code_execution"
+  ],
+  "always_block": [
+    "destructive"
+  ]
+}

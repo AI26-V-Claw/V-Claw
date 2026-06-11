@@ -17,6 +17,7 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/app"
 	"vclaw/internal/channels/telegram"
+	"vclaw/internal/monitoring"
 )
 
 func runTelegram(ctx context.Context, args []string) error {
@@ -66,23 +67,25 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	defer lock.Close()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	metrics := monitoring.NewMetrics(time.Now())
 	bundle, err := app.BuildRuntime(ctx, app.AgentRuntimeConfig{
-		DataDir:               *dataDir,
-		OpenAIAPIKey:          envFirst("OPENAI_API_KEY", "LLM_API_KEY"),
-		OpenAIModel:           envFirst("OPENAI_MODEL", "LLM_MODEL"),
-		OpenAIBaseURL:         envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
-		CompactorModel:        envFirst("VCLAW_COMPACTOR_MODEL"),
-		MaxIterations:         *maxIterations,
-		GoogleToolsMode:       *googleToolsMode,
-		WebToolsMode:          *webToolsMode,
-		GoogleCredentialsPath: *credentialsPath,
-		GoogleTokenPath:       *googleTokenPath,
-		TavilyAPIKey:          envFirst("TAVILY_API_KEY", "TALIVY_API_KEY"),
-		TavilyBaseURL:         envFirst("TAVILY_BASE_URL"),
-		EnableSandboxTools:    true,
-		SandboxWorkspaceDir:   envOrDefault("VCLAW_SANDBOX_WORKSPACE_DIR", ".sandbox-workspace"),
-		SandboxImage:          envFirst("VCLAW_SANDBOX_IMAGE"),
-		Logger:                logger,
+		DataDir:                    *dataDir,
+		OpenAIAPIKey:               envFirst("OPENAI_API_KEY", "LLM_API_KEY"),
+		OpenAIModel:                envFirst("OPENAI_MODEL", "LLM_MODEL"),
+		OpenAIBaseURL:              envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
+		CompactorModel:             envFirst("VCLAW_COMPACTOR_MODEL"),
+		MaxIterations:              *maxIterations,
+		GoogleToolsMode:            *googleToolsMode,
+		WebToolsMode:               *webToolsMode,
+		GoogleCredentialsPath:      *credentialsPath,
+		GoogleTokenPath:            *googleTokenPath,
+		TavilyAPIKey:               envFirst("TAVILY_API_KEY", "TALIVY_API_KEY"),
+		TavilyBaseURL:              envFirst("TAVILY_BASE_URL"),
+		EnableSandboxTools:         true,
+		SandboxWorkspaceDir:        envOrDefault("VCLAW_SANDBOX_WORKSPACE_DIR", ".sandbox-workspace"),
+		SandboxImage:               envFirst("VCLAW_SANDBOX_IMAGE"),
+		Logger:                     logger,
+		Observer:                   metrics,
 		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
 		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
 		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),
@@ -93,9 +96,14 @@ func runTelegramRun(ctx context.Context, args []string) error {
 
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if err := startMetricsServer(runCtx, logger, bundle, metrics, "telegram"); err != nil {
+		return err
+	}
+	stopPolicyReload := startPolicyReloadWatcher(runCtx, logger, bundle.PolicyStore)
+	defer stopPolicyReload()
 
 	logger.Info("starting vclaw telegram runtime", "model", bundle.Model, "google_tools", *googleToolsMode, "web_tools", *webToolsMode)
-	bot := telegram.New(*botToken, *allowedUserID, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime), logger)
+	bot := telegram.New(*botToken, *allowedUserID, *dataDir, bundle.PolicyStore, agent.NewRuntimeMessenger(bundle.Runtime), logger)
 	if err := bot.Run(runCtx); err != nil && err != context.Canceled {
 		return fmt.Errorf("telegram bot stopped: %w", err)
 	}

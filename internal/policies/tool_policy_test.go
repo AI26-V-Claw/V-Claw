@@ -102,9 +102,13 @@ func (parallelCodeExecutionTool) Execute(_ context.Context, call tools.ToolCall)
 
 type readOnlyCodeExecRiskTool struct{}
 
-func (readOnlyCodeExecRiskTool) Name() string                 { return "readonly.code.exec.risk" }
-func (readOnlyCodeExecRiskTool) Description() string          { return "Read-only tool with unsafe code execution risk." }
-func (readOnlyCodeExecRiskTool) Parameters() tools.ToolSchema { return tools.ToolSchema{"type": "object"} }
+func (readOnlyCodeExecRiskTool) Name() string { return "readonly.code.exec.risk" }
+func (readOnlyCodeExecRiskTool) Description() string {
+	return "Read-only tool with unsafe code execution risk."
+}
+func (readOnlyCodeExecRiskTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{"type": "object"}
+}
 func (readOnlyCodeExecRiskTool) Capability() tools.Capability { return tools.CapabilityReadOnly }
 func (readOnlyCodeExecRiskTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelCodeExecution }
 func (readOnlyCodeExecRiskTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
@@ -193,5 +197,96 @@ func TestToolPolicyDecideToolCallRequiresApprovalForSideEffectTool(t *testing.T)
 	}
 	if !decision.RequiresApproval {
 		t.Fatalf("expected RequiresApproval=true")
+	}
+}
+
+func TestToolPolicyDecideToolCallUsesRiskMatrixWhenRequiresApprovalMissing(t *testing.T) {
+	policy := NewToolPolicy()
+	decision := policy.DecideToolCall("call_write", tools.ToolDefinition{
+		Name:       "filesystem.writeFile",
+		Capability: tools.CapabilityMutating,
+		RiskLevel:  tools.RiskLevelLocalWrite,
+		Enabled:    true,
+	}, true, time.Now())
+
+	if decision.Decision != contracts.RiskDecisionRequiresApproval {
+		t.Fatalf("expected local write to require approval by risk matrix, got %#v", decision)
+	}
+	if !decision.RequiresApproval {
+		t.Fatalf("expected RequiresApproval=true")
+	}
+}
+
+func TestToolPolicyDecideToolCallBlocksDisabledOrUnknownTool(t *testing.T) {
+	policy := NewToolPolicy()
+
+	disabled := policy.DecideToolCall("call_disabled", tools.ToolDefinition{
+		Name:       "disabled.tool",
+		Capability: tools.CapabilityReadOnly,
+		RiskLevel:  tools.RiskLevelSafeRead,
+		Enabled:    false,
+	}, true, time.Now())
+	if disabled.Decision != contracts.RiskDecisionBlock {
+		t.Fatalf("expected disabled tool to block, got %#v", disabled)
+	}
+
+	unknown := policy.DecideToolCall("call_unknown", tools.ToolDefinition{Name: "missing.tool"}, false, time.Now())
+	if unknown.Decision != contracts.RiskDecisionBlock {
+		t.Fatalf("expected unknown tool to block, got %#v", unknown)
+	}
+	if unknown.RiskLevel != contracts.RiskLevelDestructive {
+		t.Fatalf("expected unknown tool riskLevel=destructive, got %#v", unknown)
+	}
+}
+
+func TestToolPolicyDecideToolCallHonorsUserPolicyConfig(t *testing.T) {
+	policy := NewToolPolicyWithConfig(UserPolicyConfig{
+		AutoAllow:       []contracts.RiskLevel{contracts.RiskLevelSafeCompute, contracts.RiskLevelExternalWrite},
+		RequireApproval: []contracts.RiskLevel{contracts.RiskLevelSafeRead},
+		AlwaysBlock:     []contracts.RiskLevel{contracts.RiskLevelLocalWrite},
+	})
+
+	lowRiskAllow := policy.DecideToolCall("call_low_risk_allow", tools.ToolDefinition{
+		Name:       "safe.compute",
+		Capability: tools.CapabilityReadOnly,
+		RiskLevel:  tools.RiskLevelSafeCompute,
+		Enabled:    true,
+	}, true, time.Now())
+	if lowRiskAllow.Decision != contracts.RiskDecisionAllow {
+		t.Fatalf("expected low-risk auto-allow, got %#v", lowRiskAllow)
+	}
+	if lowRiskAllow.RequiresApproval {
+		t.Fatalf("low-risk auto-allow should skip approval, got %#v", lowRiskAllow)
+	}
+
+	highRiskAllow := policy.DecideToolCall("call_high_risk_allow", tools.ToolDefinition{
+		Name:             "calendar.createEvent",
+		Capability:       tools.CapabilityMutating,
+		RiskLevel:        tools.RiskLevelExternalWrite,
+		RequiresApproval: true,
+		Enabled:          true,
+	}, true, time.Now())
+	if highRiskAllow.Decision != contracts.RiskDecisionRequiresApproval {
+		t.Fatalf("expected high-risk auto-allow to fall back to approval, got %#v", highRiskAllow)
+	}
+
+	block := policy.DecideToolCall("call_block", tools.ToolDefinition{
+		Name:       "file.write",
+		Capability: tools.CapabilityReadOnly,
+		RiskLevel:  tools.RiskLevelLocalWrite,
+		Enabled:    true,
+	}, true, time.Now())
+	if block.Decision != contracts.RiskDecisionBlock {
+		t.Fatalf("expected always_block, got %#v", block)
+	}
+
+	approve := policy.DecideToolCall("call_approval", tools.ToolDefinition{
+		Name:       "gmail.listEmails",
+		Capability: tools.CapabilityReadOnly,
+		RiskLevel:  tools.RiskLevelSafeRead,
+		Enabled:    true,
+	}, true, time.Now())
+	if approve.Decision != contracts.RiskDecisionRequiresApproval {
+		t.Fatalf("expected require_approval override, got %#v", approve)
 	}
 }

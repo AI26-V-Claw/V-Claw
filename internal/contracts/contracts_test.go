@@ -60,3 +60,37 @@ func TestRiskDecisionSerializesCheckedAt(t *testing.T) {
 		t.Fatalf("unexpected checkedAt: %s", decoded.CheckedAt.Format(time.RFC3339))
 	}
 }
+
+func TestApprovalRequestSerializesParentApprovalAndRevisedStatus(t *testing.T) {
+	request := ApprovalRequest{
+		ApprovalID:       "appr_001",
+		ParentApprovalID: "appr_root",
+		RequestID:        "req_001",
+		SessionID:        "sess_001",
+		ToolCallID:       "call_001",
+		Status:           ApprovalStatusRevised,
+		RiskLevel:        RiskLevelExternalWrite,
+		Summary:          "Revise approval request",
+		ToolCall: ToolCall{
+			ToolName: "calendar.createEvent",
+		},
+		CreatedAt: time.Date(2026, 5, 29, 9, 0, 0, 0, time.UTC),
+		ExpiresAt: time.Date(2026, 5, 29, 9, 10, 0, 0, time.UTC),
+	}
+
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	var decoded ApprovalRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	if decoded.Status != ApprovalStatusRevised {
+		t.Fatalf("expected revised status, got %q", decoded.Status)
+	}
+	if decoded.ParentApprovalID != "appr_root" {
+		t.Fatalf("expected parentApprovalId to round-trip, got %#v", decoded.ParentApprovalID)
+	}
+}

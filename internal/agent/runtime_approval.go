@@ -29,6 +29,10 @@ func (r *Runtime) HasPendingApproval(ctx context.Context, sessionID string) bool
 }
 
 func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decision contracts.ApprovalDecision) (contracts.AgentResponse, error) {
+	if decision.Decision == contracts.ApprovalDecisionRevised {
+		return r.ReviseApproval(ctx, sessionID, decision.RequestID, decision.ApprovalID, decision.Comment)
+	}
+
 	pending, ok := r.takePendingApproval(sessionID, decision.ApprovalID)
 	if !ok {
 		var errShape *contracts.ErrorShape
@@ -69,6 +73,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 					Error:     internalError("expire action: "+err.Error(), contracts.ErrorSourceAgent),
 				}, nil
 			}
+			r.recordApprovalObservation(ActionStatusExpired)
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
 			return contracts.AgentResponse{
@@ -113,6 +118,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				Error:     internalError("approve action: "+err.Error(), contracts.ErrorSourceAgent),
 			}, nil
 		}
+		r.recordApprovalObservation(ActionStatusApproved)
 		return r.resumeApprovedAction(ctx, pending)
 	case contracts.ApprovalDecisionRejected:
 		if pending.actionID != "" {
@@ -125,6 +131,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 					Error:     internalError("reject action: "+err.Error(), contracts.ErrorSourceAgent),
 				}, nil
 			}
+			r.recordApprovalObservation(ActionStatusRejected)
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked); errShape != nil {
 			return contracts.AgentResponse{
@@ -219,6 +226,7 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 					Error:     internalError("expire action: "+err.Error(), contracts.ErrorSourceAgent),
 				}, nil
 			}
+			r.recordApprovalObservation(ActionStatusExpired)
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
 			return contracts.AgentResponse{
@@ -255,6 +263,7 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 		revisionMessage.Metadata = map[string]any{}
 	}
 	revisionMessage.Metadata["approvalId"] = pending.request.ApprovalID
+	revisionMessage.Metadata["parentApprovalId"] = pending.request.ApprovalID
 	revisionMessage.Metadata["revisionComment"] = comment
 
 	return r.Run(ctx, revisionMessage)
@@ -270,18 +279,27 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		Input:      cloneArguments(toolCall.Arguments),
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
+	parentApprovalID := ""
+	if message.Metadata != nil {
+		if value, ok := message.Metadata["parentApprovalId"].(string); ok && strings.TrimSpace(value) != "" {
+			parentApprovalID = strings.TrimSpace(value)
+		} else if value, ok := message.Metadata["approvalId"].(string); ok && strings.TrimSpace(value) != "" {
+			parentApprovalID = strings.TrimSpace(value)
+		}
+	}
 	return contracts.ApprovalRequest{
-		ApprovalID: "appr_" + safeID(toolCall.ID),
-		RequestID:  message.RequestID,
-		SessionID:  message.SessionID,
-		ToolCallID: toolCall.ID,
-		Status:     contracts.ApprovalStatusPending,
-		RiskLevel:  decision.RiskLevel,
-		Summary:    summary,
-		Details:    decision.Reason,
-		ToolCall:   contractCall,
-		CreatedAt:  now,
-		ExpiresAt:  now.Add(approvalTTL),
+		ApprovalID:       "appr_" + safeID(toolCall.ID),
+		ParentApprovalID: parentApprovalID,
+		RequestID:        message.RequestID,
+		SessionID:        message.SessionID,
+		ToolCallID:       toolCall.ID,
+		Status:           contracts.ApprovalStatusPending,
+		RiskLevel:        decision.RiskLevel,
+		Summary:          summary,
+		Details:          decision.Reason,
+		ToolCall:         contractCall,
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(approvalTTL),
 	}
 }
 
@@ -613,7 +631,7 @@ Call each remaining tool exactly once. Do not call a tool that already appears i
 	} else {
 		pipelineHint := ""
 		if isDraftCreationTool(pending.toolCall.Name) {
-			pipelineHint = "\nIf the completed tool returned a draftId, call gmail.sendDraft with that draftId now to actually deliver the email."
+			pipelineHint = "\nIf the completed tool returned a Gmail draft object like Draft.ID, use Draft.ID as the draftId argument for gmail.sendDraft to actually deliver the email."
 		}
 		text = strings.TrimSpace(fmt.Sprintf(`An approved tool just completed as part of the user's original request.
 Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.

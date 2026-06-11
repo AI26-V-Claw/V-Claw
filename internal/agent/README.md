@@ -23,13 +23,15 @@ Confidence thresholds for different intent types:
 
 ### 3. Tool Registry (`tool_registry.go`)
 Centralized registry of all available tools:
-- **Safe Read Tools**: `gmail.listEmails`, `gmail.getEmail`, `gmail.listLabels`, `gmail.getProfile`, `gmail.listThreads`, `gmail.getThread`, `gmail.listDrafts`, `gmail.getDraft`, `calendar.listEvents`, `chat.listSpaces`, `chat.listMembers`, `chat.findSpacesByMembers`, `chat.listMessages`, `people.searchDirectory`
+- **Safe Read Tools**: `gmail.listEmails`, `gmail.listLabels`, `gmail.getProfile`, `gmail.listThreads`, `gmail.getThread`, `gmail.listDrafts`, `gmail.getDraft`, `calendar.listEvents`, `chat.listSpaces`, `chat.listMembers`, `chat.findSpacesByMembers`, `chat.listMessages`, `people.searchDirectory`
+- **Sensitive Read Tools**: `gmail.getEmail`
 - **Dangerous Write Tools**: `gmail.createDraft`, `gmail.updateDraft`, `gmail.sendDraft`, `gmail.deleteDraft`, `gmail.replyDraft`, `gmail.forwardDraft`, `gmail.downloadAttachments`, `gmail.modifyMessage`, `gmail.batchModifyMessages`, `gmail.trashMessage`, `gmail.untrashMessage`, `calendar.createEvent`, `calendar.updateEvent`, `calendar.deleteEvent`, `chat.sendMessage`, `chat.updateMessage`, `chat.deleteMessage`, `chat.createSpace`, `chat.addMember`, `chat.removeMember`
+- **Built-in Tools**: `calculator`, `get_current_time`
 - **Execution Tools**: `sandbox.runPython`, `sandbox.runShell`
 - **Communication Tools**: `gmail.createDraft`, `gmail.updateDraft`, `gmail.sendDraft`, `gmail.replyDraft`, `gmail.forwardDraft`, `chat.sendMessage`, `chat.updateMessage`, `chat.createSpace`, `chat.addMember`
 
 Each tool has:
-- Category (SAFE_READ, DANGEROUS_WRITE, EXECUTION, COMMUNICATION)
+- Category (SAFE_READ, SENSITIVE_READ, DANGEROUS_WRITE, EXECUTION, COMMUNICATION)
 - Required parameters
 - Timeout configuration
 - Danger flag and confirmation requirement

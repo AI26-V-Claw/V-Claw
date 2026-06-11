@@ -222,7 +222,7 @@ func TestSafety_ToolRegistry_ContractFields(t *testing.T) {
 		timeoutMs        int
 	}{
 		{name: "gmail.listEmails", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
-		{name: "gmail.getEmail", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
+		{name: "gmail.getEmail", owner: "integration", defaultRiskLevel: contracts.RiskLevelSensitiveRead, requiresApproval: true, timeoutMs: 30000},
 		{name: "gmail.listLabels", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
 		{name: "gmail.getProfile", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},
 		{name: "gmail.listThreads", owner: "integration", defaultRiskLevel: contracts.RiskLevelSafeRead, requiresApproval: false, timeoutMs: 30000},

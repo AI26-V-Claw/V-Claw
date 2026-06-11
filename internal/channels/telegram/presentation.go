@@ -1,7 +1,9 @@
 package telegram
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -185,6 +187,12 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	if telegramIsUserCancelledApproval(response) {
 		return "Đã hủy theo yêu cầu của bạn."
 	}
+	if response.Error != nil && response.Error.Code == contracts.ErrorActionBlockedByPolicy {
+		return "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại."
+	}
+	if response.Error != nil && response.Error.Code == contracts.ErrorApprovalExpired {
+		return "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại."
+	}
 
 	switch response.Status {
 	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusMaxIterationsReached:
@@ -196,9 +204,13 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 		return "Mình cần bạn xác nhận trước khi thực hiện hành động này."
 	}
 
-	text := response.Message
-	if strings.TrimSpace(text) == "" && response.Output != nil {
-		text = response.Output.Text
+	if text := telegramDownloadAttachmentsResultText(response.ToolResults); text != "" {
+		return text
+	}
+
+	text := strings.TrimSpace(response.Message)
+	if text == "" && response.Output != nil {
+		text = strings.TrimSpace(response.Output.Text)
 	}
 	text = sanitizeTelegramResponseText(text)
 	if text != "" {
@@ -220,6 +232,91 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	default:
 		return "Agent chưa có phản hồi."
 	}
+}
+
+func telegramDownloadAttachmentsResultText(results []contracts.ToolResult) string {
+	for _, result := range results {
+		if !result.Success || strings.TrimSpace(result.ToolName) != "gmail.downloadAttachments" {
+			continue
+		}
+		data, ok := result.Data.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := data["contentForLLM"].(string)
+		if !ok || strings.TrimSpace(content) == "" {
+			continue
+		}
+
+		var payload struct {
+			Files []struct {
+				Filename string `json:"filename"`
+				Path     string `json:"path"`
+			} `json:"files"`
+		}
+		if err := json.Unmarshal([]byte(content), &payload); err != nil || len(payload.Files) == 0 {
+			continue
+		}
+
+		names := make([]string, 0, len(payload.Files))
+		for _, file := range payload.Files {
+			if strings.TrimSpace(file.Filename) != "" {
+				names = append(names, strings.TrimSpace(file.Filename))
+			}
+		}
+		if len(names) == 0 {
+			continue
+		}
+
+		dir := telegramDisplayDownloadDir(payload.Files[0].Path)
+		if len(names) == 1 {
+			return fmt.Sprintf("Đã tải xuống: %s\nThư mục: %s", names[0], dir)
+		}
+		return fmt.Sprintf("Đã tải xuống: %s\nThư mục: %s", strings.Join(names, ", "), dir)
+	}
+	return ""
+}
+
+func telegramDownloadOutputDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	downloadsDir := filepath.Join(homeDir, "Downloads")
+	if info, err := os.Stat(downloadsDir); err == nil && info.IsDir() {
+		return filepath.Join(downloadsDir, "Vclaw"), nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+
+	return filepath.Join(homeDir, "Vclaw"), nil
+}
+
+func telegramDisplayDownloadDir(path string) string {
+	dir := filepath.Dir(strings.TrimSpace(path))
+	if dir == "." || dir == "" {
+		return "~/Downloads/Vclaw/"
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err == nil && strings.TrimSpace(homeDir) != "" {
+		homeDir = filepath.Clean(homeDir)
+		cleanDir := filepath.Clean(dir)
+		if cleanDir == homeDir {
+			dir = "~"
+		} else if strings.HasPrefix(cleanDir, homeDir+string(filepath.Separator)) {
+			dir = "~" + string(filepath.Separator) + strings.TrimPrefix(cleanDir, homeDir+string(filepath.Separator))
+		} else {
+			dir = cleanDir
+		}
+	}
+
+	dir = filepath.ToSlash(dir)
+	if !strings.HasSuffix(dir, "/") {
+		dir += "/"
+	}
+	return dir
 }
 
 func telegramIsUserCancelledApproval(response contracts.AgentResponse) bool {
@@ -380,6 +477,8 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		}
 	case "gmail.sendDraft":
 		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
+	case "gmail.downloadAttachments":
+		input = telegramDisplayDownloadAttachmentInput(input)
 	}
 	switch strings.TrimSpace(approval.ToolCall.ToolName) {
 	case "sandbox.runPython":
@@ -395,6 +494,29 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		}
 	}
 	return telegramGenericApprovalDetailText(input)
+}
+
+func telegramDisplayDownloadAttachmentInput(input map[string]any) map[string]any {
+	outputDir, ok := input["outputDir"]
+	if !ok {
+		return input
+	}
+	text := strings.TrimSpace(fmt.Sprint(outputDir))
+	if text == "" || filepath.IsAbs(text) {
+		return input
+	}
+
+	resolved, err := telegramDownloadOutputDir()
+	if err != nil || strings.TrimSpace(resolved) == "" {
+		return input
+	}
+
+	clone := make(map[string]any, len(input))
+	for key, value := range input {
+		clone[key] = value
+	}
+	clone["outputDir"] = telegramDisplayDownloadDir(filepath.Join(resolved, "attachment"))
+	return clone
 }
 
 func telegramDraftApprovalDetailText(input map[string]any) string {

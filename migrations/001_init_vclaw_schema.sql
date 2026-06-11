@@ -74,6 +74,7 @@ CREATE TABLE tool_executions (
 CREATE TABLE approval_requests (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     approval_id text NOT NULL UNIQUE,
+    parent_approval_id text REFERENCES approval_requests(approval_id) ON DELETE SET NULL,
     request_id text NOT NULL,
     session_id text NOT NULL,
     tool_call_id text NOT NULL,
@@ -124,6 +125,7 @@ CREATE INDEX idx_tool_executions_request_id ON tool_executions(request_id);
 CREATE INDEX idx_tool_executions_session_id ON tool_executions(session_id);
 CREATE INDEX idx_approval_requests_session_status ON approval_requests(session_id, status);
 CREATE INDEX idx_approval_requests_tool_call_id ON approval_requests(tool_call_id);
+CREATE INDEX idx_approval_requests_parent_approval_id ON approval_requests(parent_approval_id);
 CREATE INDEX idx_approval_decisions_approval_id ON approval_decisions(approval_id);
 CREATE INDEX idx_audit_entries_request_id ON audit_entries(request_id);
 CREATE INDEX idx_audit_entries_session_timestamp ON audit_entries(session_id, timestamp);

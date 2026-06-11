@@ -53,6 +53,7 @@ type AgentRuntimeConfig struct {
 
 	Logger        *slog.Logger
 	MaxIterations int
+	Observer      agent.RuntimeObserver
 
 	GoogleToolsMode       string
 	GoogleCredentialsPath string
@@ -73,9 +74,13 @@ type AgentRuntimeConfig struct {
 }
 
 type RuntimeBundle struct {
-	Runtime  *agent.Runtime
-	Registry *tools.ToolRegistry
-	Model    string
+	Runtime               *agent.Runtime
+	Registry              *tools.ToolRegistry
+	Model                 string
+	PolicyStore           *policies.UserPolicyStore
+	Provider              providers.Provider
+	GoogleOAuthConfigured bool
+	TavilyConfigured      bool
 }
 
 func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle, error) {
@@ -123,6 +128,10 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			return RuntimeBundle{}, fmt.Errorf("create runtime state store: %w", err)
 		}
 	}
+	userPolicy, policyStore, err := loadToolPolicy(config.Logger)
+	if err != nil {
+		return RuntimeBundle{}, fmt.Errorf("load user policy config: %w", err)
+	}
 
 	compactorModel := strings.TrimSpace(config.CompactorModel)
 	if compactorModel == "" {
@@ -135,11 +144,13 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
 		Provider: provider,
 		Registry: registry,
+		Observer: config.Observer,
 		ReferenceResolver: reference.NewFallbackResolver(
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),
 		),
 		SessionStore:          sessionStore,
+		Policy:                userPolicy,
 		StateStore:            stateStore,
 		Logger:                config.Logger,
 		MaxIterations:         config.MaxIterations,
@@ -150,7 +161,15 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,
 	})
-	return RuntimeBundle{Runtime: runtime, Registry: registry, Model: model}, nil
+	return RuntimeBundle{
+		Runtime:               runtime,
+		Registry:              registry,
+		Model:                 model,
+		PolicyStore:           policyStore,
+		Provider:              provider,
+		GoogleOAuthConfigured: googleOAuthConfigured(config),
+		TavilyConfigured:      strings.TrimSpace(config.TavilyAPIKey) != "",
+	}, nil
 }
 
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {
@@ -289,6 +308,60 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 		Guard:               guard,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
+}
+
+func loadToolPolicy(logger *slog.Logger) (policies.ToolPolicy, *policies.UserPolicyStore, error) {
+	dataDir := envOrDefault("DATA_DIR", "./data")
+	path := envOrDefault("VCLAW_USER_POLICY_PATH", policies.DefaultUserPolicyPath(dataDir))
+	missing := false
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		missing = true
+	}
+	store, err := policies.NewUserPolicyStore(path)
+	if err != nil {
+		return policies.ToolPolicy{}, nil, err
+	}
+	cfg := store.Snapshot()
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if missing && len(cfg.AutoAllow) == 0 && len(cfg.RequireApproval) == 0 && len(cfg.AlwaysBlock) == 0 {
+		logger.Warn("user policy config missing; using empty policy defaults",
+			"path", path,
+			"auto_allow", cfg.AutoAllow,
+			"require_approval", cfg.RequireApproval,
+			"always_block", cfg.AlwaysBlock,
+		)
+	} else {
+		logger.Info("loaded user policy config",
+			"path", path,
+			"auto_allow", cfg.AutoAllow,
+			"require_approval", cfg.RequireApproval,
+			"always_block", cfg.AlwaysBlock,
+		)
+	}
+	return policies.NewToolPolicyWithStore(store), store, nil
+}
+
+func googleOAuthConfigured(config AgentRuntimeConfig) bool {
+	mode, err := normalizeToolMode(config.GoogleToolsMode)
+	if err != nil || mode == ToolModeOff {
+		return false
+	}
+	credentialsPath := strings.TrimSpace(config.GoogleCredentialsPath)
+	tokenPath := strings.TrimSpace(config.GoogleTokenPath)
+	if mode == ToolModeRequired {
+		return true
+	}
+	return fileExists(credentialsPath) && fileExists(tokenPath)
+}
+
+func envOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func normalizeToolMode(mode string) (string, error) {
