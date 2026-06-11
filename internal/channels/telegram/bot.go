@@ -3,10 +3,12 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -51,6 +53,15 @@ func New(token string, allowedUserID int64, dataDir string, handler messageHandl
 		offsetPath:    filepath.Join(dataDir, "telegram_offset.txt"),
 		client: &http.Client{
 			Timeout: 65 * time.Second,
+			Transport: &http.Transport{
+				Proxy:                 http.ProxyFromEnvironment,
+				DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          100,
+				IdleConnTimeout:       60 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
 		},
 		handler: handler,
 		logger:  logger,
@@ -972,43 +983,93 @@ func (b *Bot) writeOffset(offset int64) error {
 	return os.WriteFile(b.offsetPath, []byte(strconv.FormatInt(offset, 10)), 0o644)
 }
 
+const (
+	doJSONMaxRetries = 2
+	doJSONRetryDelay = 500 * time.Millisecond
+)
+
 func (b *Bot) doJSON(ctx context.Context, method, path string, body any, out any) ([]byte, error) {
-	var reader io.Reader
+	var jsonBytes []byte
 	if body != nil {
-		jsonBytes, err := json.Marshal(body)
+		var err error
+		jsonBytes, err = json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		reader = strings.NewReader(string(jsonBytes))
 	}
 
-	request, err := http.NewRequestWithContext(ctx, method, b.apiURL(path), reader)
-	if err != nil {
-		return nil, err
-	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
+	var lastErr error
+	for attempt := 0; attempt <= doJSONMaxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(doJSONRetryDelay):
+			}
+			b.logger.Debug("retrying telegram api call after network error",
+				"path", path, "attempt", attempt, "error", lastErr)
+		}
 
-	response, err := b.client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("telegram api request failed: %s", redactTelegramToken(err.Error(), b.token))
-	}
-	defer response.Body.Close()
-
-	responseBytes, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("telegram api status %d: %s", response.StatusCode, strings.TrimSpace(redactTelegramToken(string(responseBytes), b.token)))
-	}
-	if out != nil {
-		if err := json.Unmarshal(responseBytes, out); err != nil {
+		var reader io.Reader
+		if jsonBytes != nil {
+			reader = strings.NewReader(string(jsonBytes))
+		}
+		request, err := http.NewRequestWithContext(ctx, method, b.apiURL(path), reader)
+		if err != nil {
 			return nil, err
 		}
+		if jsonBytes != nil {
+			request.Header.Set("Content-Type", "application/json")
+		}
+
+		response, err := b.client.Do(request)
+		if err != nil {
+			if isTelegramNetworkError(err) {
+				lastErr = err
+				continue
+			}
+			return nil, fmt.Errorf("telegram api request failed: %s", redactTelegramToken(err.Error(), b.token))
+		}
+
+		responseBytes, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			if isTelegramNetworkError(err) {
+				lastErr = err
+				continue
+			}
+			return nil, err
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, fmt.Errorf("telegram api status %d: %s", response.StatusCode, strings.TrimSpace(redactTelegramToken(string(responseBytes), b.token)))
+		}
+		if out != nil {
+			if err := json.Unmarshal(responseBytes, out); err != nil {
+				return nil, err
+			}
+		}
+		return responseBytes, nil
 	}
-	return responseBytes, nil
+
+	return nil, fmt.Errorf("telegram api request failed: %s", redactTelegramToken(lastErr.Error(), b.token))
+}
+
+func isTelegramNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "forcibly closed") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "eof")
 }
 
 func (b *Bot) apiURL(path string) string {

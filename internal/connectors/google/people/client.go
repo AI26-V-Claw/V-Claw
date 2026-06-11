@@ -44,6 +44,32 @@ func (c *Client) SearchDirectoryPeople(ctx context.Context, query string, pageSi
 	return SearchDirectoryPeople(ctx, c.httpClient, query, pageSize, pageToken)
 }
 
+func (c *Client) GetPerson(ctx context.Context, resourceName string) (DirectoryPerson, error) {
+	return GetPerson(ctx, c.httpClient, resourceName)
+}
+
+// GetPerson fetches a single person by People API resource name (e.g. "people/123456789").
+// Use this to resolve a Chat member's numeric ID to an email address:
+// convert "users/123456789" → "people/123456789" before calling.
+func GetPerson(ctx context.Context, client *http.Client, resourceName string) (DirectoryPerson, error) {
+	resourceName = strings.TrimSpace(resourceName)
+	if resourceName == "" {
+		return DirectoryPerson{}, errors.New("resourceName is required")
+	}
+	service, err := serviceFromClient(ctx, client)
+	if err != nil {
+		return DirectoryPerson{}, err
+	}
+	person, err := service.People.Get(resourceName).
+		PersonFields(defaultReadMask).
+		Context(ctx).
+		Do()
+	if err != nil {
+		return DirectoryPerson{}, err
+	}
+	return personFromAPI(person), nil
+}
+
 func SearchDirectoryPeople(ctx context.Context, client *http.Client, query string, pageSize int64, pageToken string) (SearchDirectoryOutput, error) {
 	if strings.TrimSpace(query) == "" {
 		return SearchDirectoryOutput{}, errors.New("query is required")
