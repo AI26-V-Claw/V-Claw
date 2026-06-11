@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"vclaw/internal/contracts"
@@ -72,6 +73,55 @@ func int64Value(value any) int64 {
 		}
 	}
 	return 0
+}
+
+func prependToolResultIfMissing(results []contracts.ToolResult, result contracts.ToolResult) []contracts.ToolResult {
+	for _, existing := range results {
+		if strings.TrimSpace(existing.ToolCallID) != "" && existing.ToolCallID == result.ToolCallID {
+			return results
+		}
+	}
+	merged := make([]contracts.ToolResult, 0, len(results)+1)
+	merged = append(merged, result)
+	merged = append(merged, results...)
+	return merged
+}
+
+func (r *Runtime) prepareParallelBatch(toolCalls []providers.ToolCall, enabled bool, userText string, evidenceText string, activeClarification bool) ([]parallelToolCall, bool) {
+	if !enabled || len(toolCalls) < 2 || r == nil || r.registry == nil {
+		return nil, false
+	}
+
+	batch := make([]parallelToolCall, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		toolCall = sanitizeUnsupportedOptionalArguments(toolCall, evidenceText)
+		if isClarifyToolCall(toolCall) {
+			return nil, false
+		}
+		toolCall = normalizeProviderToolCall(r.now(), toolCall, userText)
+
+		definition, found := r.registry.GetDefinition(toolCall.Name)
+		if !found {
+			return nil, false
+		}
+		if len(pendingMissingFieldsForToolCall(toolCall, definition, found, activeClarification, userText)) > 0 {
+			return nil, false
+		}
+		decision := r.policy.DecideToolCall(toolCall.ID, definition, found, r.now())
+		if decision.Decision != contracts.RiskDecisionAllow || decision.RequiresApproval {
+			return nil, false
+		}
+		tool, ok := r.registry.GetTool(toolCall.Name)
+		if !ok || !r.policy.CanRunInParallel(tool) {
+			return nil, false
+		}
+		batch = append(batch, parallelToolCall{
+			call:       toolCall,
+			definition: definition,
+			tool:       tool,
+		})
+	}
+	return batch, len(batch) > 1
 }
 
 func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall providers.ToolCall) tools.ToolResult {

@@ -394,6 +394,8 @@ func isTelegramPolicyCommand(text string) bool {
 		command = command[:index]
 	}
 	return strings.EqualFold(command, "policy")
+}
+
 func (b *Bot) rejectPendingApprovalForNewMessage(ctx context.Context, updateID int, approvalContext telegramApprovalContext) error {
 	if b.handler == nil {
 		return fmt.Errorf("message handler is not configured")
