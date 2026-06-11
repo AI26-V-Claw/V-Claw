@@ -302,12 +302,12 @@ Scope usage:
 - `calendar.events`: creating, updating, and deleting Calendar events after HITL approval.
 - Chat scopes: listing spaces/messages, sending text replies/attachments, updating/deleting messages, creating spaces, and adding/removing members.
 - `directory.readonly`: searching Workspace directory profiles so the agent can resolve names or emails before matching Google Chat members.
-- `drive.readonly`: listing/searching Drive files and reading Drive file metadata.
-- `drive`: creating Drive folders, updating metadata, sharing files, moving files/folders, trashing, and untrashing after HITL approval.
-- `documents.readonly`: reading Google Docs document structure/text.
-- `documents`: creating documents and appending text after HITL approval.
-- `spreadsheets.readonly`: reading spreadsheet metadata and values.
-- `spreadsheets`: creating spreadsheets and updating/appending values after HITL approval.
+- `drive.readonly`: listing/searching Drive files, reading Drive file metadata, listing permissions, exporting Google Workspace files, and downloading capped file content.
+- `drive`: creating Drive folders/files, uploading local files, updating metadata, sharing files, revoking permissions, moving files/folders, trashing, and untrashing after HITL approval.
+- `documents.readonly`: reading Google Docs document structure/text with preview or full-content modes.
+- `documents`: creating documents, appending text, replacing text, inserting text, and deleting content ranges after HITL approval.
+- `spreadsheets.readonly`: reading spreadsheet metadata, one value range, or multiple value ranges.
+- `spreadsheets`: creating spreadsheets, updating/batch-updating/appending/clearing values, adding/renaming/deleting/duplicating sheets after HITL approval.
 
 ## Safety Notes
 

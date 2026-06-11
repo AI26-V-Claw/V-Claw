@@ -10,10 +10,12 @@ package contracts_test
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"vclaw/internal/contracts"
+	"vclaw/internal/policies"
 	"vclaw/internal/tools"
 	"vclaw/internal/tools/office/calendar"
 	"vclaw/internal/tools/office/chat"
@@ -302,6 +304,109 @@ func TestGoogleWorkspaceToolMetadataNoDrift(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDriveDocsSheetsReadFirstAndWriteToolsRequireHITL(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	for _, registerer := range []func(*tools.ToolRegistry) error{
+		func(r *tools.ToolRegistry) error { return drive.RegisterTools(r, nil) },
+		func(r *tools.ToolRegistry) error { return docs.RegisterTools(r, nil) },
+		func(r *tools.ToolRegistry) error { return sheets.RegisterTools(r, nil) },
+	} {
+		if err := registerer(registry); err != nil {
+			t.Fatalf("register Drive/Docs/Sheets tool: %v", err)
+		}
+	}
+	policy := policies.NewToolPolicy()
+	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+
+	readTools := []string{
+		drive.ToolNameListFiles,
+		drive.ToolNameGetFile,
+		drive.ToolNameExportFile,
+		drive.ToolNameDownloadFile,
+		drive.ToolNameListPermissions,
+		docs.ToolNameGetDocument,
+		sheets.ToolNameGetSpreadsheet,
+		sheets.ToolNameReadValues,
+		sheets.ToolNameBatchGetValues,
+	}
+	for _, name := range readTools {
+		name := name
+		t.Run("read_first/"+name, func(t *testing.T) {
+			def, ok := registry.GetDefinition(name)
+			if !ok {
+				t.Fatalf("tool %q not registered", name)
+			}
+			if def.Capability != tools.CapabilityReadOnly {
+				t.Fatalf("%s capability = %s, want read_only", name, def.Capability)
+			}
+			if def.RiskLevel != tools.RiskLevelSafeRead {
+				t.Fatalf("%s risk = %s, want safe_read", name, def.RiskLevel)
+			}
+			if def.RequiresApproval {
+				t.Fatalf("%s should not require approval", name)
+			}
+			decision := policy.DecideToolCall("call_"+safeTestName(name), def, true, now)
+			if decision.Decision != contracts.RiskDecisionAllow {
+				t.Fatalf("%s policy decision = %s, want allow", name, decision.Decision)
+			}
+		})
+	}
+
+	writeTools := []string{
+		drive.ToolNameCreateFolder,
+		drive.ToolNameCreateFile,
+		drive.ToolNameUploadFile,
+		drive.ToolNameUpdateFileMetadata,
+		drive.ToolNameShareFile,
+		drive.ToolNameRevokePermission,
+		drive.ToolNameMoveFile,
+		drive.ToolNameTrashFile,
+		drive.ToolNameUntrashFile,
+		docs.ToolNameCreateDocument,
+		docs.ToolNameAppendText,
+		docs.ToolNameReplaceText,
+		docs.ToolNameInsertText,
+		docs.ToolNameDeleteContent,
+		sheets.ToolNameCreateSpreadsheet,
+		sheets.ToolNameUpdateValues,
+		sheets.ToolNameBatchUpdateValues,
+		sheets.ToolNameAppendValues,
+		sheets.ToolNameClearValues,
+		sheets.ToolNameAddSheet,
+		sheets.ToolNameRenameSheet,
+		sheets.ToolNameDeleteSheet,
+		sheets.ToolNameDuplicateSheet,
+	}
+	for _, name := range writeTools {
+		name := name
+		t.Run("hitl_write/"+name, func(t *testing.T) {
+			def, ok := registry.GetDefinition(name)
+			if !ok {
+				t.Fatalf("tool %q not registered", name)
+			}
+			if def.Capability != tools.CapabilityMutating {
+				t.Fatalf("%s capability = %s, want mutating", name, def.Capability)
+			}
+			if !def.RequiresApproval {
+				t.Fatalf("%s must require HITL approval", name)
+			}
+			decision := policy.DecideToolCall("call_"+safeTestName(name), def, true, now)
+			if decision.Decision != contracts.RiskDecisionRequiresApproval {
+				t.Fatalf("%s policy decision = %s, want requires_approval", name, decision.Decision)
+			}
+			if !decision.RequiresApproval {
+				t.Fatalf("%s policy decision must preserve RequiresApproval=true", name)
+			}
+		})
+	}
+}
+
+func safeTestName(name string) string {
+	name = strings.ReplaceAll(name, ".", "_")
+	name = strings.ReplaceAll(name, "-", "_")
+	return name
 }
 
 func addGoogleWorkspaceFixtures(dest map[string]toolMetaFixture, entries any) {
