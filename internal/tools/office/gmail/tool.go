@@ -1279,8 +1279,9 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 	if errShape != nil {
 		return toolErrorResult(call, errShape)
 	}
-	content := formatJSON(output)
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: content, ContentForUser: content}
+	userContent := formatJSON(output)
+	llmContent := formatJSON(compactOutputForLLM(call.Name, output))
+	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent}
 }
 
 func toolErrorResult(call tools.ToolCall, errShape *ErrorShape) tools.ToolResult {
@@ -1293,6 +1294,86 @@ func formatJSON(output any) string {
 		return fmt.Sprintf("%#v", output)
 	}
 	return string(data)
+}
+
+func compactOutputForLLM(toolName string, output any) any {
+	switch toolName {
+	case ToolNameListEmails:
+		if list, ok := output.(ListEmailsOutput); ok {
+			return compactListEmailsOutput(list)
+		}
+	case ToolNameListThreads:
+		if list, ok := output.(ListThreadsOutput); ok {
+			return compactListThreadsOutput(list)
+		}
+	case ToolNameListDrafts:
+		if list, ok := output.(ListDraftsOutput); ok {
+			return compactListDraftsOutput(list)
+		}
+	}
+	return output
+}
+
+type compactListEmails struct {
+	Query         string                `json:"Query"`
+	Messages      []compactEmailMessage `json:"Messages"`
+	NextPageToken string                `json:"NextPageToken,omitempty"`
+}
+
+type compactEmailMessage struct {
+	ID           string   `json:"ID"`
+	ThreadID     string   `json:"ThreadID"`
+	From         string   `json:"From"`
+	To           string   `json:"To"`
+	Subject      string   `json:"Subject"`
+	Date         string   `json:"Date"`
+	LabelIDs     []string `json:"LabelIDs,omitempty"`
+	InternalDate int64    `json:"InternalDate"`
+}
+
+func compactListEmailsOutput(output ListEmailsOutput) compactListEmails {
+	messages := make([]compactEmailMessage, 0, len(output.Messages))
+	for _, message := range output.Messages {
+		messages = append(messages, compactEmailMessage{
+			ID:           message.ID,
+			ThreadID:     message.ThreadID,
+			From:         message.From,
+			To:           message.To,
+			Subject:      message.Subject,
+			Date:         message.Date,
+			LabelIDs:     message.LabelIDs,
+			InternalDate: message.InternalDate,
+		})
+	}
+	return compactListEmails{Query: output.Query, Messages: messages, NextPageToken: output.NextPageToken}
+}
+
+type compactListThreads struct {
+	Query         string          `json:"Query"`
+	Threads       []compactThread `json:"Threads"`
+	NextPageToken string          `json:"NextPageToken,omitempty"`
+}
+
+type compactThread struct {
+	ID        string `json:"ID"`
+	HistoryID uint64 `json:"HistoryID"`
+}
+
+func compactListThreadsOutput(output ListThreadsOutput) compactListThreads {
+	threads := make([]compactThread, 0, len(output.Threads))
+	for _, thread := range output.Threads {
+		threads = append(threads, compactThread{ID: thread.ID, HistoryID: thread.HistoryID})
+	}
+	return compactListThreads{Query: output.Query, Threads: threads, NextPageToken: output.NextPageToken}
+}
+
+type compactListDrafts struct {
+	Drafts        []gmailconnector.DraftSummary `json:"Drafts"`
+	NextPageToken string                        `json:"NextPageToken,omitempty"`
+}
+
+func compactListDraftsOutput(output ListDraftsOutput) compactListDrafts {
+	return compactListDrafts{Drafts: output.Drafts, NextPageToken: output.NextPageToken}
 }
 
 func draftInputFromArgs(args map[string]any) DraftInput {

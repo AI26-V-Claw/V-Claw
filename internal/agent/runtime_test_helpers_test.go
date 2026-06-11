@@ -29,6 +29,7 @@ type calendarCreateRuntimeTool struct {
 
 type gmailListEmailsRuntimeTool struct {
 	executions *int
+	content    string
 }
 
 type gmailDownloadAttachmentsRuntimeTool struct {
@@ -122,7 +123,10 @@ func (t gmailListEmailsRuntimeTool) Execute(_ context.Context, call tools.ToolCa
 	if t.executions != nil {
 		(*t.executions)++
 	}
-	content := "- Demo Sprint: Bao asks to schedule a follow-up and notify VClaw chat."
+	content := strings.TrimSpace(t.content)
+	if content == "" {
+		content = "- Demo Sprint: Bao asks to schedule a follow-up and notify VClaw chat."
+	}
 	return tools.ToolResult{
 		ToolCallID:     call.ID,
 		ToolName:       call.Name,
