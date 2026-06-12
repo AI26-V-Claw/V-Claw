@@ -23,7 +23,7 @@ flowchart LR
         UC_RECV["Nhận phản hồi"]
         UC_CANCEL["Hủy yêu cầu đang chạy"]
  
-        UC_ROUTE["Turn router\n(chỉ chọn tool exposure)"]
+        UC_ROUTE["Agent runtime\\n(chọn tool exposure theo context)"]
         UC_NO_TOOL["No-tool chat\n(chào hỏi / hỏi đáp an toàn)"]
         UC_TOOL["Tool-enabled agent loop"]
         UC_INJECT["Chặn prompt injection"]

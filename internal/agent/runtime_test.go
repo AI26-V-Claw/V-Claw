@@ -3093,8 +3093,7 @@ func TestRuntimeBlocksDestructiveToolByUserPolicy(t *testing.T) {
 		Policy: policies.NewToolPolicyWithConfig(policies.UserPolicyConfig{
 			AlwaysBlock: []contracts.RiskLevel{contracts.RiskLevelDestructive},
 		}),
-		TurnRouter: testToolEnabledRouter(),
-		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+		Now: func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())

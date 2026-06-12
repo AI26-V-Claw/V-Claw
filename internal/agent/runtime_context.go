@@ -59,17 +59,12 @@ func historyWithSessionMemory(memory sessions.SessionMemory, history []string) [
 func (r *Runtime) traceData(parts ...any) map[string]any {
 	var planResult *TaskPlanResult
 	var resolution *reference.Resolution
-	var routes []*TurnRoute
 	for _, part := range parts {
 		switch typed := part.(type) {
 		case *TaskPlanResult:
 			planResult = typed
 		case *reference.Resolution:
 			resolution = typed
-		case *TurnRoute:
-			if typed != nil {
-				routes = append(routes, typed)
-			}
 		}
 	}
 	data := map[string]any{
@@ -83,12 +78,6 @@ func (r *Runtime) traceData(parts ...any) map[string]any {
 			"source":             resolution.Source,
 			"confidence":         resolution.Confidence,
 			"needsClarification": resolution.NeedsClarification,
-		}
-	}
-	if len(routes) > 0 && routes[0] != nil {
-		data["turnRouter"] = map[string]any{
-			"mode":   routes[0].Mode,
-			"reason": routes[0].Reason,
 		}
 	}
 	if planResult != nil && len(planResult.Plan.Steps) > 0 {

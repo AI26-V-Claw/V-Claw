@@ -27,7 +27,6 @@ func TestRuntimePromptOrdersSystemMemoryReferenceAndTranscript(t *testing.T) {
 			Confidence:      0.9,
 			ResolvedContext: map[string]any{"title": "planning"},
 		},
-		nil,
 	)
 
 	if len(messages) != 4 {
