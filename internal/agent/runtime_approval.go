@@ -487,7 +487,11 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 
 	startedAt := time.Now()
 	execCtx := toolhooks.WithRequestContext(ctx, pending.message.RequestID, pending.message.SessionID)
-	result := r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
+	decision := r.approvedToolDecision(execCtx, pending.toolCall, pending.definition, true)
+	result := toolDecisionDeniedResult(pending.toolCall, decision)
+	if decision.Decision != contracts.RiskDecisionBlock {
+		result = r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
+	}
 	if errShape := r.recordRuntimeToolCall(ctx, record.RunID, pending.toolCall, result, time.Since(startedAt)); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,

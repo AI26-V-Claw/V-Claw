@@ -54,6 +54,39 @@ func (r *Runtime) decideToolCall(ctx context.Context, toolCall providers.ToolCal
 	return policyDecision
 }
 
+func (r *Runtime) approvedToolDecision(ctx context.Context, toolCall providers.ToolCall, definition tools.ToolDefinition, found bool) contracts.RiskDecision {
+	now := time.Now
+	if r != nil && r.now != nil {
+		now = r.now
+	}
+	requestID, sessionID := toolhooks.RequestContextFrom(ctx)
+
+	if r != nil && r.toolHooks != nil {
+		preResult, err := r.toolHooks.BeforeTool(ctx, toolhooks.PreToolInput{
+			RequestID:  requestID,
+			SessionID:  sessionID,
+			ToolCallID: toolCall.ID,
+			ToolName:   toolCall.Name,
+			Input:      cloneArguments(toolCall.Arguments),
+			Definition: definition,
+			OccurredAt: now(),
+			Source:     "agent_runtime",
+		})
+		if err != nil {
+			return blockedToolDecision(toolCall, definition, found, now(), "pre-tool hook failed: "+err.Error())
+		}
+		if preResult.Decision == toolhooks.DecisionBlock {
+			return blockedToolDecision(toolCall, definition, found, now(), firstNonEmpty(strings.TrimSpace(preResult.Reason), "pre-tool hook blocked the tool call"))
+		}
+	}
+
+	policyDecision := r.policy.DecideToolCall(toolCall.ID, definition, found, now())
+	if policyDecision.Decision == contracts.RiskDecisionBlock {
+		return policyDecision
+	}
+	return policyDecision
+}
+
 func (r *Runtime) runPostToolHook(ctx context.Context, toolCall providers.ToolCall, definition tools.ToolDefinition, result tools.ToolResult, execErr error, startedAt time.Time) {
 	if r == nil || r.toolHooks == nil {
 		return

@@ -993,7 +993,11 @@ func (r *Runtime) legacyResolveApproval(ctx context.Context, sessionID string, d
 			"tool_call_id", pending.request.ToolCallID,
 		)
 		execCtx := toolhooks.WithRequestContext(ctx, pending.message.RequestID, pending.message.SessionID)
-		result := r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
+		decision := r.approvedToolDecision(execCtx, pending.toolCall, pending.definition, true)
+		result := toolDecisionDeniedResult(pending.toolCall, decision)
+		if decision.Decision != contracts.RiskDecisionBlock {
+			result = r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
+		}
 		if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,

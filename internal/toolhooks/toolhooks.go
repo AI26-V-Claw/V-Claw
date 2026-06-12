@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"vclaw/internal/policies"
+	"vclaw/internal/safety"
 	"vclaw/internal/tools"
 )
 
@@ -27,22 +29,27 @@ type PreToolInput struct {
 }
 
 type PreToolResult struct {
-	Decision Decision
-	Reason   string
+	Decision     Decision
+	Reason       string
+	PolicyResult *policies.Result
+	Threats      []safety.DangerReport
 }
 
 type PostToolInput struct {
-	RequestID  string
-	SessionID  string
-	ToolCallID string
-	ToolName   string
-	Input      map[string]any
-	Definition tools.ToolDefinition
-	Result     tools.ToolResult
-	Err        error
-	StartedAt  time.Time
-	FinishedAt time.Time
-	Source     string
+	RequestID       string
+	SessionID       string
+	ToolCallID      string
+	ToolName        string
+	Input           map[string]any
+	Definition      tools.ToolDefinition
+	Result          tools.ToolResult
+	Err             error
+	JobID           string
+	ExitCode        int
+	StartedAt       time.Time
+	FinishedAt      time.Time
+	OutputTruncated bool
+	Source          string
 }
 
 type Hooks interface {

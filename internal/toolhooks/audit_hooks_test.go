@@ -63,11 +63,14 @@ func TestAuditHooksAfterToolLogsResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query() error = %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %#v", events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %#v", events)
 	}
-	if events[0].EventType != audit.EventExecutionStart || events[1].EventType != audit.EventExecutionResult {
+	if events[0].EventType != audit.EventExecutionResult {
 		t.Fatalf("unexpected events: %#v", events)
+	}
+	if events[0].Status != audit.StatusExecuted {
+		t.Fatalf("expected executed status, got %#v", events[0])
 	}
 }
 
@@ -97,10 +100,16 @@ func TestAuditHooksAfterToolLogsError(t *testing.T) {
 		t.Fatalf("AfterTool() error = %v", err)
 	}
 	events, _ := logger.Query(audit.Filter{RequestID: "req_3"})
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %#v", events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %#v", events)
 	}
-	if events[1].Status != audit.StatusFailed {
-		t.Fatalf("expected failed status, got %#v", events[1])
+	if events[0].EventType != audit.EventExecutionResult {
+		t.Fatalf("expected execution_result event, got %#v", events[0])
+	}
+	if events[0].Status != audit.StatusFailed {
+		t.Fatalf("expected failed status, got %#v", events[0])
+	}
+	if events[0].ErrorMessage != "boom" {
+		t.Fatalf("expected error message boom, got %#v", events[0])
 	}
 }

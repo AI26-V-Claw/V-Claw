@@ -11,6 +11,7 @@ import (
 	"vclaw/internal/sandbox/gate"
 	"vclaw/internal/sandbox/runtime"
 	"vclaw/internal/toolhooks"
+	"vclaw/internal/tools"
 )
 
 // ─── Stub runner ─────────────────────────────────────────────────────────────
@@ -597,6 +598,45 @@ func TestGate_RunShell_PostHookCalledOnSuccessfulExecution(t *testing.T) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+func TestGate_RunShell_PostHookMapsTimeoutResult(t *testing.T) {
+	stub := &stubRunner{
+		result: &runtime.JobResult{
+			RequestID: "req_hook_timeout",
+			JobID:     "stub-job-timeout",
+			Status:    runtime.JobTimeout,
+			ExitCode:  -1,
+			Stderr:    "timed out",
+		},
+	}
+	hooks := &stubToolHooks{
+		preResult: toolhooks.PreToolResult{Decision: toolhooks.DecisionAllow},
+	}
+	g := gate.NewGatedRunner(gate.Config{
+		Checker:   allowChecker{},
+		Detector:  safety.DefaultScanner,
+		Logger:    audit.NewMemoryLogger(),
+		ToolHooks: hooks,
+		Runner:    stub,
+	})
+
+	result, err := g.RunShell(context.Background(), shellReq("req_hook_timeout", "echo hello"))
+	if err != nil {
+		t.Fatalf("run shell: %v", err)
+	}
+	if result == nil || result.Status != runtime.JobTimeout {
+		t.Fatalf("expected timeout job result, got %#v", result)
+	}
+	if len(hooks.after) != 1 {
+		t.Fatalf("expected one post-hook call, got %d", len(hooks.after))
+	}
+	if hooks.after[0].Result.Success {
+		t.Fatalf("timeout result must not be marked successful: %#v", hooks.after[0].Result)
+	}
+	if hooks.after[0].Result.Error == nil || hooks.after[0].Result.Error.Code != tools.ErrorTimeout {
+		t.Fatalf("expected timeout tool error, got %#v", hooks.after[0].Result.Error)
+	}
+}
 
 func containsAny(s string, subs ...string) bool {
 	for _, sub := range subs {

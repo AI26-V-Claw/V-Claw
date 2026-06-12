@@ -49,37 +49,45 @@ func (h AuditHooks) AfterTool(ctx context.Context, input PostToolInput) error {
 		actionTypeForDefinition(input.Definition),
 		commandPreview(input.ToolName, input.Input),
 	)
-	start := audit.NewExecutionStartEvent(base, "")
-	if err := h.Logger.Log(start); err != nil {
-		return fmt.Errorf("audit execution-start log failed: %w", err)
-	}
-	if input.Err != nil {
-		failed := base
-		failed.ErrorMessage = input.Err.Error()
-		failed.Status = audit.StatusFailed
-		return h.Logger.Log(failed)
-	}
-	resultStatus := "failed"
-	switch {
-	case input.Result.Success:
-		resultStatus = "success"
-	case input.Result.Error != nil && input.Result.Error.Code == tools.ErrorTimeout:
-		resultStatus = "timeout"
-	}
+	resultStatus := resultStatusForPostTool(input)
 	duration := input.FinishedAt.Sub(input.StartedAt).Milliseconds()
+	if duration < 0 {
+		duration = 0
+	}
 	event := audit.NewExecutionResultEvent(
 		base,
-		"",
+		input.JobID,
 		resultStatus,
-		0,
+		input.ExitCode,
 		duration,
 		audit.SummariseOutput(input.Result.ContentForLLM, "", 200),
-		false,
+		input.OutputTruncated,
 	)
-	if !input.Result.Success && input.Result.Error != nil {
-		event.ErrorMessage = input.Result.Error.Message
+	if message := executionErrorMessage(input); message != "" {
+		event.ErrorMessage = message
 	}
 	return h.Logger.Log(event)
+}
+
+func resultStatusForPostTool(input PostToolInput) string {
+	switch {
+	case input.Result.Success:
+		return "success"
+	case input.Result.Error != nil && input.Result.Error.Code == tools.ErrorTimeout:
+		return "timeout"
+	default:
+		return "failed"
+	}
+}
+
+func executionErrorMessage(input PostToolInput) string {
+	if input.Result.Error != nil && strings.TrimSpace(input.Result.Error.Message) != "" {
+		return strings.TrimSpace(input.Result.Error.Message)
+	}
+	if input.Err != nil {
+		return strings.TrimSpace(input.Err.Error())
+	}
+	return ""
 }
 
 func actionTypeForDefinition(definition tools.ToolDefinition) audit.ActionType {

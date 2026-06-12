@@ -55,6 +55,7 @@ type AgentRuntimeConfig struct {
 
 	Logger        *slog.Logger
 	AuditLogger   audit.AuditEventLogger
+	ToolHooks     toolhooks.Hooks
 	MaxIterations int
 	Observer      agent.RuntimeObserver
 
@@ -96,6 +97,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		return RuntimeBundle{}, fmt.Errorf("create audit logger: %w", err)
 	}
 	config.AuditLogger = auditLogger
+	auditHooks := toolhooks.AuditHooks{Logger: auditLogger}
 
 	provider := config.Provider
 	model := strings.TrimSpace(config.OpenAIModel)
@@ -149,6 +151,10 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	compactor := sessions.NewCompactor(provider, sessions.CompactorConfig{
 		SummarizeModel: compactorModel,
 	}, config.Logger)
+	var runtimeHooks toolhooks.Hooks = auditHooks
+	if config.ToolHooks != nil {
+		runtimeHooks = toolhooks.ChainHooks{config.ToolHooks, auditHooks}
+	}
 
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
 		Provider: provider,
@@ -162,7 +168,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		Policy:                     userPolicy,
 		StateStore:                 stateStore,
 		Logger:                     config.Logger,
-		ToolHooks:                  toolhooks.AuditHooks{Logger: auditLogger},
+		ToolHooks:                  runtimeHooks,
 		MaxIterations:              config.MaxIterations,
 		Model:                      model,
 		Compactor:                  compactor,
@@ -194,7 +200,7 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 		return nil, fmt.Errorf("register filesystem tools: %w", err)
 	}
 	if config.EnableSandboxTools {
-		sandboxConfig, err := newSandboxToolConfig(config)
+		sandboxConfig, err := newSandboxToolConfig(config, config.ToolHooks)
 		if err != nil {
 			return nil, fmt.Errorf("configure sandbox tools: %w", err)
 		}
@@ -276,10 +282,10 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	return peopletool.RegisterTools(registry, peopletool.NewService(peopleClient))
 }
 
-func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error) {
+func newSandboxToolConfig(config AgentRuntimeConfig, hooks toolhooks.Hooks) (sandboxtool.Config, error) {
 	if config.SandboxRunner != nil {
 		return sandboxtool.Config{
-			Runner:              config.SandboxRunner,
+			Runner:              newSandboxGate(config, hooks, config.SandboxRunner),
 			DefaultWorkspaceDir: strings.TrimSpace(config.SandboxWorkspaceDir),
 		}, nil
 	}
@@ -307,18 +313,39 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 		Image: strings.TrimSpace(config.SandboxImage),
 		Guard: guard,
 	})
-	gatedRunner := sandboxgate.NewGatedRunner(sandboxgate.Config{
-		Checker:          policies.DefaultChecker,
-		Detector:         safety.DefaultScanner,
-		Logger:           config.AuditLogger,
-		Runner:           dockerRunner,
-		SkipApprovalGate: true,
-	})
 	return sandboxtool.Config{
-		Runner:              gatedRunner,
+		Runner:              newSandboxGate(config, hooks, dockerRunner),
 		Guard:               guard,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
+}
+
+func newSandboxGate(config AgentRuntimeConfig, hooks toolhooks.Hooks, runner sandboxruntime.Runner) sandboxruntime.Runner {
+	baseHooks := toolhooks.SandboxPolicyHooks{
+		Checker:          policies.DefaultChecker,
+		Detector:         safety.DefaultScanner,
+		Logger:           config.AuditLogger,
+		SkipApprovalGate: true,
+	}
+	var sandboxHooks toolhooks.Hooks = baseHooks
+	if hooks != nil {
+		sandboxHooks = toolhooks.ChainHooks{hooks, baseHooks}
+	}
+	for {
+		gated, ok := runner.(*sandboxgate.GatedRunner)
+		if !ok {
+			break
+		}
+		existingHooks := gated.Hooks()
+		runner = gated.Runner()
+		if existingHooks != nil {
+			sandboxHooks = toolhooks.ChainHooks{existingHooks, sandboxHooks}
+		}
+	}
+	return sandboxgate.NewGatedRunner(sandboxgate.Config{
+		ToolHooks: sandboxHooks,
+		Runner:    runner,
+	})
 }
 
 func resolveAuditLogger(dataDir string, provided audit.AuditEventLogger) (audit.AuditEventLogger, error) {
