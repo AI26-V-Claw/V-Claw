@@ -32,10 +32,12 @@ var (
 type RuntimeConfig struct {
 	Provider                   providers.Provider
 	Registry                   *tools.ToolRegistry
+	Observer                   RuntimeObserver
 	ReferenceResolver          reference.Resolver
 	Policy                     policies.ToolPolicy
 	SessionStore               sessions.Store
 	StateStore                 RuntimeStateStore
+	TurnRouter                 TurnRouter
 	Logger                     *slog.Logger
 	MaxIterations              int
 	ToolTimeout                time.Duration
@@ -52,10 +54,12 @@ type RuntimeConfig struct {
 type Runtime struct {
 	provider                   providers.Provider
 	registry                   *tools.ToolRegistry
+	observer                   RuntimeObserver
 	referenceResolver          reference.Resolver
 	policy                     policies.ToolPolicy
 	sessionStore               sessions.Store
 	stateStore                 RuntimeStateStore
+	turnRouter                 TurnRouter
 	logger                     *slog.Logger
 	approvalMu                 sync.Mutex
 	pendingApprovals           map[string]pendingApproval
@@ -89,6 +93,32 @@ type pendingClarificationResolution struct {
 	ProvidedFields []string `json:"provided_fields"`
 	StillMissing   []string `json:"still_missing"`
 	Reason         string   `json:"reason"`
+}
+
+type TurnMode string
+
+const (
+	TurnModeNoTool      TurnMode = "no_tool"
+	TurnModeToolEnabled TurnMode = "tool_enabled"
+)
+
+type TurnRouteInput struct {
+	Message       string
+	RecentHistory []string
+	Now           time.Time
+}
+
+type TurnRoute struct {
+	Mode   TurnMode
+	Reason string
+}
+
+type TurnRouter interface {
+	RouteTurn(ctx context.Context, input TurnRouteInput) (TurnRoute, error)
+}
+
+type TaskPlanResult struct {
+	Plan contracts.Plan
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
@@ -145,10 +175,12 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	return &Runtime{
 		provider:                   config.Provider,
 		registry:                   config.Registry,
+		observer:                   config.Observer,
 		referenceResolver:          referenceResolver,
 		policy:                     config.Policy,
 		sessionStore:               sessionStore,
 		stateStore:                 stateStore,
+		turnRouter:                 config.TurnRouter,
 		logger:                     logger,
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
@@ -393,7 +425,7 @@ agentLoop:
 		}
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
+		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference, nil)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
@@ -574,6 +606,7 @@ If required information is missing, ask one concise clarification question inste
 			// contain times, titles, or emails that the user never mentioned in the current turn.
 			currentRequestText := message.Text
 			providerToolCall = sanitizeUnsupportedOptionalArguments(providerToolCall, evidenceText)
+			providerToolCall = applyChannelToolDefaults(message, providerToolCall)
 			if isClarifyToolCall(providerToolCall) {
 				clarification := clarificationFromToolCall(providerToolCall)
 				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, providers.Message{
@@ -793,6 +826,7 @@ If required information is missing, ask one concise clarification question inste
 					definition:         definition,
 					remainingToolCalls: cloneProviderToolCalls(assistantMessage.ToolCalls[index+1:]),
 				})
+				r.recordApprovalObservation(ActionStatusPendingApproval)
 				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,
@@ -807,6 +841,15 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = err.Message
 					return base, nil
 				}
+				r.logger.Info("agent loop exited after proposing approval-required tool",
+					"request_id", message.RequestID,
+					"session_id", message.SessionID,
+					"tool_call_id", providerToolCall.ID,
+					"tool_name", providerToolCall.Name,
+					"approval_id", approval.ApprovalID,
+					"risk_level", approval.RiskLevel,
+					"waiting_for_approval", true,
+				)
 				runState.Status = RuntimeRunStatusWaitingApproval
 				runState.PendingActionID = action.ActionID
 				if errShape := r.updateRunState(ctx, runState); errShape != nil {
@@ -856,16 +899,17 @@ If required information is missing, ask one concise clarification question inste
 					return base, nil
 				}
 				base.ToolResults = toolResults
+				base.Status = contracts.AgentStatusBlocked
+				base.Message = "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại."
 				base.Error = &contracts.ErrorShape{
 					Code:      policyErrorCode(found),
-					Message:   reason,
+					Message:   base.Message,
 					Source:    contracts.ErrorSourcePolicy,
 					Retryable: false,
 				}
 				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusBlocked); errShape != nil {
 					base.Error = errShape
 				}
-				base.Message = base.Error.Message
 				return base, nil
 			}
 		}
@@ -890,4 +934,34 @@ If required information is missing, ask one concise clarification question inste
 			Retryable: false,
 		},
 	}, nil
+}
+
+func legacyPendingClarificationFromToolCall(runID string, originalRequest string, question string, toolCall providers.ToolCall, missing []string) *sessions.PendingClarification {
+	return &sessions.PendingClarification{
+		RunID:           strings.TrimSpace(runID),
+		OriginalRequest: strings.TrimSpace(originalRequest),
+		Question:        strings.TrimSpace(question),
+		ToolName:        strings.TrimSpace(toolCall.Name),
+		MissingFields:   append([]string(nil), missing...),
+		PartialInput:    cloneAnyMap(toolCall.Arguments),
+	}
+}
+
+func legacyCloneAnyMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func responsePlan(planResult *TaskPlanResult) *contracts.Plan {
+	if planResult == nil || len(planResult.Plan.Steps) == 0 {
+		return nil
+	}
+	plan := planResult.Plan
+	return &plan
 }

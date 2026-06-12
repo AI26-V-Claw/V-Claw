@@ -277,4 +277,5 @@ func TestRegisterToolsRegistersAllTools(t *testing.T) {
 	if def.Capability != tools.CapabilityMutating {
 		t.Fatalf("writeFile capability should be mutating, got %s", def.Capability)
 	}
+
 }

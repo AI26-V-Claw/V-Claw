@@ -214,6 +214,7 @@ func (r *Runtime) recordRuntimeToolCallStatus(ctx context.Context, runState RunS
 }
 
 func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration, approvalID string) *contracts.ErrorShape {
+	r.recordToolCallObservation(toolCall.Name, result.Success)
 	if r.stateStore == nil {
 		return nil
 	}

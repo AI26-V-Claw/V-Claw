@@ -831,6 +831,42 @@ func TestDownloadAttachmentsWritesFiles(t *testing.T) {
 	}
 }
 
+func TestDownloadAttachmentsFiltersByFilename(t *testing.T) {
+	service := NewService(&mockConnector{
+		getMessage: func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageDetail, error) {
+			return gmailconnector.MessageDetail{
+				MessageSummary: gmailconnector.MessageSummary{ID: messageID},
+				Attachments: []gmailconnector.Attachment{
+					{Filename: "one.txt", MimeType: "text/plain", AttachmentID: "att-1"},
+					{Filename: "two.txt", MimeType: "text/plain", AttachmentID: "att-2"},
+				},
+			}, nil
+		},
+		downloadAttachment: func(ctx context.Context, userID string, messageID string, attachment gmailconnector.Attachment) (gmailconnector.AttachmentData, error) {
+			return gmailconnector.AttachmentData{
+				Attachment: attachment,
+				Data:       []byte(attachment.Filename),
+			}, nil
+		},
+	})
+
+	outputDir := t.TempDir()
+	output, errShape := service.DownloadAttachments(context.Background(), DownloadAttachmentsInput{
+		MessageID: "m1",
+		Filenames: []string{"two.txt"},
+		OutputDir: outputDir,
+	})
+	if errShape != nil {
+		t.Fatalf("DownloadAttachments() errShape = %v", errShape)
+	}
+	if len(output.Files) != 1 {
+		t.Fatalf("expected one file, got %#v", output)
+	}
+	if output.Files[0].Filename != "two.txt" {
+		t.Fatalf("expected two.txt to be selected, got %#v", output.Files[0])
+	}
+}
+
 func TestGmailToolRiskMetadataAndRegistration(t *testing.T) {
 	service := NewService(&mockConnector{})
 	registry := tools.NewToolRegistry()
@@ -868,6 +904,17 @@ func TestGmailToolRiskMetadataAndRegistration(t *testing.T) {
 	}
 	if download.Capability() != tools.CapabilityMutating || download.RiskLevel() != tools.RiskLevelLocalWrite {
 		t.Fatalf("download metadata mismatch: %s %s", download.Capability(), download.RiskLevel())
+	}
+	schema := download.Parameters()
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("download schema properties missing: %#v", schema)
+	}
+	if _, ok := properties["filenames"]; !ok {
+		t.Fatalf("expected filenames in download schema: %#v", schema)
+	}
+	if _, ok := properties["attachmentIds"]; ok {
+		t.Fatalf("attachmentIds should not remain in download schema: %#v", schema)
 	}
 
 	deleteDraft, ok := registry.GetTool(ToolNameDeleteDraft)

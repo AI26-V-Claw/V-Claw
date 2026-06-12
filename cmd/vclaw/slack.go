@@ -14,6 +14,7 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/app"
 	"vclaw/internal/channels/slack"
+	"vclaw/internal/monitoring"
 )
 
 func runSlack(ctx context.Context, args []string) error {
@@ -59,6 +60,7 @@ func runSlackRun(ctx context.Context, args []string) error {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	metrics := monitoring.NewMetrics(time.Now())
 	bundle, err := app.BuildRuntime(ctx, app.AgentRuntimeConfig{
 		DataDir:                    *dataDir,
 		OpenAIAPIKey:               envFirst("OPENAI_API_KEY", "LLM_API_KEY"),
@@ -77,6 +79,7 @@ func runSlackRun(ctx context.Context, args []string) error {
 		SandboxWorkspaceDir:        envOrDefault("VCLAW_SANDBOX_WORKSPACE_DIR", ".sandbox-workspace"),
 		SandboxImage:               envFirst("VCLAW_SANDBOX_IMAGE"),
 		Logger:                     logger,
+		Observer:                   metrics,
 		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
 		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
 		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),
@@ -87,6 +90,11 @@ func runSlackRun(ctx context.Context, args []string) error {
 
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if err := startMetricsServer(runCtx, logger, bundle, metrics, "slack"); err != nil {
+		return err
+	}
+	stopPolicyReload := startPolicyReloadWatcher(runCtx, logger, bundle.PolicyStore)
+	defer stopPolicyReload()
 
 	logger.Info("starting vclaw slack runtime", "model", bundle.Model, "google_tools", *googleToolsMode)
 	bot, err := slack.New(slack.Config{
@@ -94,6 +102,7 @@ func runSlackRun(ctx context.Context, args []string) error {
 		AppToken:          *appToken,
 		OwnerUserID:       *ownerUserID,
 		AllowedChannelIDs: splitCSV(*allowedChannels),
+		PolicyStore:       bundle.PolicyStore,
 	}, agent.NewRuntimeMessenger(bundle.Runtime), logger)
 	if err != nil {
 		return err

@@ -43,6 +43,12 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "agent":
 		return runAgent(ctx, args[1:])
+	case "approvals":
+		return runApprovals(ctx, args[1:])
+	case "logs":
+		return runLogs(ctx, args[1:])
+	case "status":
+		return runStatus(ctx, args[1:])
 	case "tools":
 		return runTools(ctx, args[1:])
 	case "google":
@@ -295,6 +301,9 @@ func printUsage() {
 	fmt.Println(`Usage:
   vclaw agent -prompt "..."
   vclaw agent chat
+  vclaw status
+  vclaw logs [-limit 50] [-since 1h] [-level error|info] [-tool gmail.createDraft]
+  vclaw approvals [-status pending|approved|rejected|expired|revised] [-limit 20]
   vclaw tools list [-group <group>]
   vclaw slack run
   vclaw telegram run

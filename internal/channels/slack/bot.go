@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -15,6 +16,7 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
+	"vclaw/internal/policies"
 )
 
 type Config struct {
@@ -22,6 +24,7 @@ type Config struct {
 	AppToken          string
 	OwnerUserID       string
 	AllowedChannelIDs []string
+	PolicyStore       *policies.UserPolicyStore
 }
 
 type Bot struct {
@@ -33,6 +36,7 @@ type Bot struct {
 	botUserID       string
 	ownerUserID     string
 	allowedChannels map[string]struct{}
+	policyStore     *policies.UserPolicyStore
 	state           *slackChannelState
 }
 
@@ -64,6 +68,7 @@ func New(cfg Config, orchestrator messageHandler, logger *slog.Logger) (*Bot, er
 		socketClient:    socketClient,
 		ownerUserID:     strings.TrimSpace(cfg.OwnerUserID),
 		allowedChannels: makeAllowSet(cfg.AllowedChannelIDs),
+		policyStore:     cfg.PolicyStore,
 		state:           newSlackChannelState(),
 	}
 
@@ -118,20 +123,41 @@ func (b *Bot) handleEvent(ctx context.Context, event socketmode.Event) error {
 			if inner.SubType != "" {
 				return nil
 			}
-			if inner.ChannelType != "im" {
-				return nil
+			if isSlackPolicySettingsTriggerText(inner.Text) {
+				if !b.isAllowed(inner.Channel, inner.User) {
+					inbound := b.inboundMessage(inner.Channel, inner.User, inner.Text, inner.TimeStamp, inner.ThreadTimeStamp, inner.ChannelType)
+					b.orchestrator.RecordIgnored(inbound, "ignored_unauthorized")
+					return nil
+				}
+				replyThreadTimestamp := inner.ThreadTimeStamp
+				if strings.TrimSpace(replyThreadTimestamp) == "" && inner.ChannelType != "im" {
+					replyThreadTimestamp = inner.TimeStamp
+				}
+				return b.handleSlackPolicySettingsRequest(ctx, inner.Channel, inner.User, replyThreadTimestamp)
 			}
-			return b.handleSlackMessage(ctx, inner.Channel, inner.User, inner.Text, inner.TimeStamp, inner.ThreadTimeStamp, inner.ChannelType)
+			if inner.ChannelType == "im" {
+				return b.handleSlackMessage(ctx, inner.Channel, inner.User, inner.Text, inner.TimeStamp, inner.ThreadTimeStamp, inner.ChannelType)
+			}
+			return nil
 		default:
 			return nil
 		}
 	case socketmode.EventTypeInteractive:
-		if event.Request != nil {
-			b.socketClient.Ack(*event.Request)
-		}
 		callback, ok := event.Data.(slack.InteractionCallback)
 		if !ok {
 			return nil
+		}
+		if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackPolicySettingsModalCallbackID {
+			payload, err := b.handleSlackPolicySettingsSubmission(ctx, callback)
+			if event.Request != nil {
+				if ackErr := b.socketClient.Ack(*event.Request, payload); ackErr != nil {
+					return ackErr
+				}
+			}
+			return err
+		}
+		if event.Request != nil {
+			b.socketClient.Ack(*event.Request)
 		}
 		return b.handleSlackInteraction(ctx, callback)
 	default:
@@ -152,12 +178,19 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 		b.orchestrator.RecordIgnored(inbound, "ignored_unauthorized")
 		return nil
 	}
-
-	inbound := b.inboundMessage(channelID, userID, text, timestamp, threadTimestamp, channelType)
+	if isSlackPolicySettingsTriggerText(text) {
+		replyThreadTimestamp := threadTimestamp
+		if strings.TrimSpace(replyThreadTimestamp) == "" && channelType != "im" {
+			replyThreadTimestamp = timestamp
+		}
+		return b.handleSlackPolicySettingsRequest(ctx, channelID, userID, replyThreadTimestamp)
+	}
 	replyThreadTimestamp := threadTimestamp
 	if strings.TrimSpace(replyThreadTimestamp) == "" && channelType != "im" {
 		replyThreadTimestamp = timestamp
 	}
+
+	inbound := b.inboundMessage(channelID, userID, text, timestamp, threadTimestamp, channelType)
 	if approvalContext, ok := b.state.approvalForSession(inbound.SessionID, channelID); ok {
 		if err := b.updateMessageClearBlocks(ctx, approvalContext.ChannelID, approvalContext.MessageTS, approvalContext.PromptText); err != nil {
 			b.logger.Error("slack approval block dismiss failed", "channel_id", approvalContext.ChannelID, "message_ts", approvalContext.MessageTS, "error", err)
@@ -212,6 +245,13 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 		b.logger.Error("agent response error", "request_id", outbound.RequestID, "session_id", outbound.SessionID, "status", outbound.Status, "message", outbound.Message)
 	}
 	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
+		b.logger.Info("approval request sent to channel",
+			"request_id", outbound.RequestID,
+			"session_id", outbound.SessionID,
+			"approval_id", outbound.ApprovalRequest.ApprovalID,
+			"tool_call_id", outbound.ApprovalRequest.ToolCallID,
+			"channel_id", channelID,
+		)
 		if err := progress.UpdateApproval(ctx, outboundText, outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); err != nil {
 			b.logger.Error("slack final approval update failed", "error", err)
 			if _, sendErr := b.sendApprovalMessage(ctx, channelID, outboundText, replyThreadTimestamp, outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); sendErr != nil {
@@ -235,6 +275,30 @@ func (b *Bot) handleSlackMessage(ctx context.Context, channelID, userID, text, t
 }
 
 func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.InteractionCallback) error {
+	logger := b.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("slack interaction received",
+		"callback_type", callback.Type,
+		"callback_id", callback.CallbackID,
+		"user_id", callback.User.ID,
+	)
+	if callback.Type == slack.InteractionTypeBlockActions {
+		if len(callback.ActionCallback.BlockActions) == 0 {
+			return nil
+		}
+		action := callback.ActionCallback.BlockActions[0]
+		if action.ActionID == slackPolicySettingsPromptActionID {
+			policyAction, ok := parseSlackPolicySettingsActionValue(action.Value)
+			if ok && policyAction == slackPolicySettingsOpenAction {
+				return b.openSlackPolicySettingsModal(ctx, callback.TriggerID, slackPolicySettingsMetadata{
+					ChannelID: callback.Container.ChannelID,
+					MessageTS: callback.Container.MessageTs,
+				})
+			}
+		}
+	}
 	if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackApprovalReviseCallbackID {
 		return b.handleSlackReviseSubmission(ctx, callback)
 	}
@@ -249,6 +313,13 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 	if !ok {
 		return nil
 	}
+	logger.Info("approval decision received and parsed",
+		"request_id", "slack_interaction_"+normalizeSlackTimestamp(callback.ActionTs),
+		"session_id", sessionID,
+		"approval_id", approvalID,
+		"decision", approvalAction,
+		"slack_user_id", callback.User.ID,
+	)
 	channelID := callback.Container.ChannelID
 	if strings.TrimSpace(channelID) == "" {
 		channelID = callback.Channel.ID
@@ -325,6 +396,13 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 	// Continuation after approval may itself require approval (next task in a
 	// multi-step request). Show the approval blocks so the user can act on it.
 	if outbound.Status == contracts.AgentStatusApprovalRequired && outbound.ApprovalRequest != nil {
+		b.logger.Info("approval request sent to channel",
+			"request_id", outbound.RequestID,
+			"session_id", outbound.SessionID,
+			"approval_id", outbound.ApprovalRequest.ApprovalID,
+			"tool_call_id", outbound.ApprovalRequest.ToolCallID,
+			"channel_id", channelID,
+		)
 		if err := b.updateApprovalMessage(ctx, channelID, messageTS, outboundText, outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); err != nil {
 			b.logger.Error("slack continuation approval update failed", "error", err)
 			if _, sendErr := b.sendApprovalMessage(ctx, channelID, outboundText, "", outbound.ApprovalID, inbound.SessionID, outbound.ApprovalRequest.ToolCall.ToolName); sendErr != nil {
@@ -345,6 +423,11 @@ func (b *Bot) handleSlackInteraction(ctx context.Context, callback slack.Interac
 }
 
 func (b *Bot) handleSlackReviseSubmission(ctx context.Context, callback slack.InteractionCallback) error {
+	b.logger.Info("slack interaction received",
+		"callback_type", callback.Type,
+		"callback_id", callback.View.CallbackID,
+		"user_id", callback.User.ID,
+	)
 	meta, err := parseSlackApprovalMetadata(callback.View.PrivateMetadata)
 	if err != nil {
 		return err
@@ -360,6 +443,13 @@ func (b *Bot) handleSlackReviseSubmission(ctx context.Context, callback slack.In
 	if strings.TrimSpace(comment) == "" {
 		comment = "Tôi muốn chỉnh lại yêu cầu."
 	}
+	b.logger.Info("approval decision received and parsed",
+		"request_id", "slack_view_"+normalizeSlackTimestamp(callback.ActionTs),
+		"session_id", meta.SessionID,
+		"approval_id", meta.ApprovalID,
+		"decision", contracts.ApprovalDecisionRevised,
+		"comment", comment,
+	)
 	inbound := contracts.UserMessage{
 		RequestID: "slack_view_" + normalizeSlackTimestamp(callback.ActionTs),
 		SessionID: meta.SessionID,
@@ -731,6 +821,265 @@ func slackMrkdwn(text string) string {
 		return "Approval required."
 	}
 	return text
+}
+
+type slackPolicySettingsMetadata struct {
+	ChannelID string `json:"channelId"`
+	MessageTS string `json:"messageTs"`
+}
+
+type slackPolicySettingsActionPayload struct {
+	Action string `json:"action"`
+}
+
+const (
+	slackPolicySettingsPromptActionID  = "vclaw_policy_settings_open"
+	slackPolicySettingsOpenAction      = "open_policy_settings"
+	slackPolicySettingsModalCallbackID = "vclaw_policy_settings_modal"
+	slackPolicySettingsGroupActionID   = "group"
+)
+
+func (b *Bot) handleSlackPolicySettingsRequest(ctx context.Context, channelID, _ string, threadTimestamp string) error {
+	cfg := b.currentPolicyConfig()
+	text := "Cài đặt chính sách hiện tại:\n" + policies.PolicySummary(cfg) + "\n\nNhấn nút bên dưới để mở modal chỉnh sửa."
+	blocks := slackPolicySettingsPromptBlocks(cfg)
+	if _, _, err := b.api.PostMessageContext(ctx, channelID,
+		slack.MsgOptionText(text, false),
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionPostMessageParameters(slack.PostMessageParameters{ThreadTimestamp: threadTimestamp}),
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (b *Bot) currentPolicyConfig() policies.UserPolicyConfig {
+	if b.policyStore == nil {
+		return policies.EffectivePolicyConfig(policies.UserPolicyConfig{})
+	}
+	cfg := b.policyStore.Snapshot()
+	return policies.EffectivePolicyConfig(cfg)
+}
+
+func (b *Bot) openSlackPolicySettingsModal(ctx context.Context, triggerID string, metadata slackPolicySettingsMetadata) error {
+	if strings.TrimSpace(triggerID) == "" {
+		return fmt.Errorf("missing Slack trigger ID")
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	view := slack.ModalViewRequest{
+		Type:            slack.VTModal,
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, "Cài đặt policy", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "Đóng", false, false),
+		Submit:          slack.NewTextBlockObject(slack.PlainTextType, "Lưu", false, false),
+		CallbackID:      slackPolicySettingsModalCallbackID,
+		PrivateMetadata: string(encoded),
+		Blocks:          slack.Blocks{BlockSet: slackPolicySettingsModalBlocks(b.currentPolicyConfig())},
+	}
+	_, err = b.api.OpenViewContext(ctx, triggerID, view)
+	return err
+}
+
+func (b *Bot) handleSlackPolicySettingsSubmission(ctx context.Context, callback slack.InteractionCallback) (*slack.ViewSubmissionResponse, error) {
+	metadata, err := parseSlackPolicySettingsMetadata(callback.View.PrivateMetadata)
+	if err != nil {
+		return slack.NewErrorsViewSubmissionResponse(map[string]string{
+			slackPolicySettingsBlockID(contracts.RiskLevelSafeRead): "Không đọc được dữ liệu cài đặt.",
+		}), nil
+	}
+	assignments, parseErr := slackPolicySettingsAssignmentsFromView(callback.View)
+	if parseErr != nil {
+		return slack.NewErrorsViewSubmissionResponse(map[string]string{
+			slackPolicySettingsBlockID(contracts.RiskLevelDestructive): "Không đọc được lựa chọn trong modal.",
+		}), nil
+	}
+	updated, err := policies.PolicyConfigFromAssignments(assignments)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "destructive cannot be auto_allowed") {
+			return slack.NewErrorsViewSubmissionResponse(map[string]string{
+				slackPolicySettingsBlockID(contracts.RiskLevelDestructive): "Xóa vĩnh viễn không thể ở nhóm Tự động cho phép.",
+			}), nil
+		}
+		return slack.NewErrorsViewSubmissionResponse(map[string]string{
+			slackPolicySettingsBlockID(contracts.RiskLevelDestructive): "Cấu hình policy không hợp lệ.",
+		}), nil
+	}
+	if b.policyStore == nil {
+		if metadata.ChannelID != "" {
+			_, _ = b.sendMessage(ctx, metadata.ChannelID, "Chức năng lưu policy chưa được cấu hình.", metadata.MessageTS)
+		}
+		return nil, fmt.Errorf("user policy store is not configured")
+	}
+	before := b.currentPolicyConfig()
+	if err := policies.SaveUserPolicyConfig(b.policyStore.Path(), updated); err != nil {
+		if metadata.ChannelID != "" {
+			_, _ = b.sendMessage(ctx, metadata.ChannelID, "Mình chưa lưu được cài đặt policy. Vui lòng thử lại.", metadata.MessageTS)
+		}
+		return nil, err
+	}
+	if _, err := b.policyStore.Reload(); err != nil {
+		if metadata.ChannelID != "" {
+			_, _ = b.sendMessage(ctx, metadata.ChannelID, "Mình đã lưu được file policy nhưng chưa nạp lại được cấu hình. Vui lòng kiểm tra terminal local.", metadata.MessageTS)
+		}
+		return nil, err
+	}
+	if metadata.ChannelID != "" {
+		summary := policies.PolicyChangesSummary(before, updated)
+		_, _ = b.sendMessage(ctx, metadata.ChannelID, summary+"\n\n"+policies.PolicySummary(updated), metadata.MessageTS)
+	}
+	return nil, nil
+}
+
+func slackPolicySettingsPromptBlocks(cfg policies.UserPolicyConfig) []slack.Block {
+	summary := slack.NewTextBlockObject(slack.MarkdownType, slackMrkdwn("```"+policies.PolicySummary(cfg)+"```"), false, false)
+	buttonText := slack.NewTextBlockObject(slack.PlainTextType, "⚙️ Cài đặt chính sách", false, false)
+	openButton := slack.NewButtonBlockElement(slackPolicySettingsPromptActionID, slackPolicySettingsActionValue(slackPolicySettingsOpenAction), buttonText).WithStyle(slack.StylePrimary)
+
+	return []slack.Block{
+		slack.NewSectionBlock(summary, nil, nil),
+		slack.NewActionBlock("vclaw_policy_settings_prompt_actions", openButton),
+	}
+}
+
+func isSlackPolicySettingsTriggerText(text string) bool {
+	words := slackTriggerWords(text)
+	for i := 0; i < len(words); i++ {
+		switch words[i] {
+		case "settings", "policy":
+			return true
+		case "cài":
+			if i+1 < len(words) && words[i+1] == "đặt" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func slackTriggerWords(text string) []string {
+	fields := strings.Fields(strings.ToLower(text))
+	words := make([]string, 0, len(fields))
+	for _, field := range fields {
+		word := strings.TrimFunc(field, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+		})
+		if word != "" {
+			words = append(words, word)
+		}
+	}
+	return words
+}
+
+func slackPolicySettingsModalBlocks(cfg policies.UserPolicyConfig) []slack.Block {
+	assignments := policies.EffectivePolicyAssignments(cfg)
+	blocks := make([]slack.Block, 0, len(policies.RiskLevelOrder())+1)
+	blocks = append(blocks, slack.NewSectionBlock(
+		slack.NewTextBlockObject(slack.MarkdownType, slackMrkdwn("Chọn nhóm cho từng mức rủi ro. Xóa vĩnh viễn không thể ở nhóm Tự động cho phép."), false, false),
+		nil,
+		nil,
+	))
+	for _, level := range policies.RiskLevelOrder() {
+		group := assignments[level]
+		label := slack.NewTextBlockObject(slack.PlainTextType, slackPolicySettingsRiskLabel(level), false, false)
+		placeholder := slack.NewTextBlockObject(slack.PlainTextType, "Chọn nhóm", false, false)
+		options := make([]*slack.OptionBlockObject, 0, len(policies.PolicyGroupOrder()))
+		for _, candidate := range policies.PolicyGroupOrder() {
+			optionText := slack.NewTextBlockObject(slack.PlainTextType, policies.PolicyGroupLabel(candidate), false, false)
+			options = append(options, slack.NewOptionBlockObject(string(candidate), optionText, nil))
+		}
+		selectElement := slack.NewOptionsSelectBlockElement(slack.OptTypeStatic, placeholder, slackPolicySettingsGroupActionID, options...)
+		for _, option := range options {
+			if option.Value == string(group) {
+				selectElement.WithInitialOption(option)
+				break
+			}
+		}
+		blocks = append(blocks, slack.NewInputBlock(
+			slackPolicySettingsBlockID(level),
+			label,
+			nil,
+			selectElement,
+		))
+	}
+	return blocks
+}
+
+func slackPolicySettingsRiskLabel(level contracts.RiskLevel) string {
+	switch level {
+	case contracts.RiskLevelSafeRead:
+		return "Đọc email, lịch họp, tin nhắn"
+	case contracts.RiskLevelSafeCompute:
+		return "Tóm tắt nội dung, dịch văn bản"
+	case contracts.RiskLevelSensitiveRead:
+		return "Mở và đọc chi tiết email, tài liệu"
+	case contracts.RiskLevelExternalWrite:
+		return "Gửi email, đặt lịch họp, nhắn tin"
+	case contracts.RiskLevelLocalWrite:
+		return "Tải file đính kèm, lưu tài liệu"
+	case contracts.RiskLevelCodeExecution:
+		return "Thực thi script hoặc lệnh hệ thống"
+	case contracts.RiskLevelDestructive:
+		return "Xóa email, file, lịch họp"
+	default:
+		return policies.RiskLevelLabel(level)
+	}
+}
+
+func slackPolicySettingsAssignmentsFromView(view slack.View) (map[contracts.RiskLevel]policies.PolicyGroup, error) {
+	assignments := make(map[contracts.RiskLevel]policies.PolicyGroup, len(policies.RiskLevelOrder()))
+	if view.State == nil {
+		return nil, fmt.Errorf("missing view state")
+	}
+	for _, level := range policies.RiskLevelOrder() {
+		blockValues, ok := view.State.Values[slackPolicySettingsBlockID(level)]
+		if !ok {
+			return nil, fmt.Errorf("missing policy block %s", level)
+		}
+		action, ok := blockValues[slackPolicySettingsGroupActionID]
+		if !ok || strings.TrimSpace(action.SelectedOption.Value) == "" {
+			return nil, fmt.Errorf("missing policy selection %s", level)
+		}
+		assignments[level] = policies.PolicyGroup(strings.TrimSpace(action.SelectedOption.Value))
+	}
+	return assignments, nil
+}
+
+func parseSlackPolicySettingsMetadata(value string) (slackPolicySettingsMetadata, error) {
+	var metadata slackPolicySettingsMetadata
+	if err := json.Unmarshal([]byte(strings.TrimSpace(value)), &metadata); err != nil {
+		return slackPolicySettingsMetadata{}, err
+	}
+	if strings.TrimSpace(metadata.ChannelID) == "" || strings.TrimSpace(metadata.MessageTS) == "" {
+		return slackPolicySettingsMetadata{}, fmt.Errorf("missing slack policy metadata")
+	}
+	return metadata, nil
+}
+
+func slackPolicySettingsBlockID(level contracts.RiskLevel) string {
+	return "vclaw_policy_" + strings.ReplaceAll(string(level), "-", "_")
+}
+
+func slackPolicySettingsActionValue(action string) string {
+	data, err := json.Marshal(slackPolicySettingsActionPayload{Action: strings.TrimSpace(action)})
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func parseSlackPolicySettingsActionValue(value string) (string, bool) {
+	var payload slackPolicySettingsActionPayload
+	if err := json.Unmarshal([]byte(strings.TrimSpace(value)), &payload); err != nil {
+		return "", false
+	}
+	switch strings.TrimSpace(payload.Action) {
+	case slackPolicySettingsOpenAction:
+		return payload.Action, true
+	default:
+		return "", false
+	}
 }
 
 func slackRenderText(text string) string {

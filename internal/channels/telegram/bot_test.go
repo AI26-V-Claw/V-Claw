@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/contracts"
+	"vclaw/internal/policies"
 )
 
 type fakeHandler struct {
@@ -247,7 +250,7 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 		return jsonResponse(http.StatusOK, `{"ok":true}`), nil
 	})
 
-	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
 	bot.client = &http.Client{Transport: botTransport}
 
 	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
@@ -306,6 +309,30 @@ func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	}
 }
 
+func TestTelegramTextFromResponseFormatsDownloadAttachmentsResult(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	path := filepath.Join(homeDir, "Downloads", "Vclaw", "Google Workspace Message.png")
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "ignored generic message",
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "gmail.downloadAttachments",
+			Success:  true,
+			Data: map[string]any{
+				"contentForLLM": fmt.Sprintf(`{"files":[{"filename":"Google Workspace Message.png","path":%q}]}`, path),
+			},
+		}},
+	}
+
+	got := telegramTextFromResponse(response)
+	want := "Đã tải xuống: Google Workspace Message.png\nThư mục: ~/Downloads/Vclaw/"
+	if got != want {
+		t.Fatalf("telegramTextFromResponse() = %q, want %q", got, want)
+	}
+}
+
 func TestTelegramProgressTextHidesInternalRoutingStages(t *testing.T) {
 	for _, stage := range []agent.ProgressStage{
 		agent.ProgressStageClassifying,
@@ -317,6 +344,19 @@ func TestTelegramProgressTextHidesInternalRoutingStages(t *testing.T) {
 	} {
 		if got := telegramProgressText(agent.ProgressEvent{Stage: stage}); got != "" {
 			t.Fatalf("expected stage %s to be hidden, got %q", stage, got)
+		}
+	}
+}
+
+func TestIsTelegramPolicyCommand(t *testing.T) {
+	for _, input := range []string{"/policy", "/policy@vclaw_bot", "/policy extra args"} {
+		if !isTelegramPolicyCommand(input) {
+			t.Fatalf("expected %q to match /policy command", input)
+		}
+	}
+	for _, input := range []string{"policy", "cài đặt policy", "/other"} {
+		if isTelegramPolicyCommand(input) {
+			t.Fatalf("unexpected match for %q", input)
 		}
 	}
 }
@@ -346,7 +386,7 @@ func TestProcessUpdateDownloadsPhotoAttachmentAndPassesMetadata(t *testing.T) {
 	})
 
 	dataDir := t.TempDir()
-	bot := New("token", 123, dataDir, handler, nil)
+	bot := New("token", 123, dataDir, nil, handler, nil)
 	bot.client = &http.Client{Transport: botTransport}
 
 	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
@@ -406,7 +446,7 @@ func jsonResponse(statusCode int, body string) *http.Response {
 
 func TestProcessUpdateIgnoresUnauthorizedUser(t *testing.T) {
 	handler := &fakeHandler{}
-	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
 
 	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
 		UpdateID: 8,
@@ -430,6 +470,314 @@ func TestProcessUpdateIgnoresUnauthorizedUser(t *testing.T) {
 	}
 }
 
+func TestTelegramPolicySettingsCallbackRoundTrip(t *testing.T) {
+	raw := telegramPolicySettingsCallbackData(telegramPolicySettingsCycleAction, 123, contracts.RiskLevelDestructive)
+	action, chatID, riskLevel, ok := parseTelegramPolicySettingsCallback(raw)
+	if !ok {
+		t.Fatalf("expected callback to parse: %q", raw)
+	}
+	if action != telegramPolicySettingsCycleAction || chatID != 123 || riskLevel != contracts.RiskLevelDestructive {
+		t.Fatalf("unexpected parsed callback: action=%q chatID=%d riskLevel=%q", action, chatID, riskLevel)
+	}
+}
+
+func TestTelegramPolicySettingsKeyboardContainsSaveButton(t *testing.T) {
+	assignments := policies.EffectivePolicyAssignments(policies.UserPolicyConfig{})
+	keyboard := telegramPolicySettingsKeyboard(123, assignments)
+	rows, ok := keyboard["inline_keyboard"].([][]map[string]string)
+	if !ok {
+		t.Fatalf("unexpected keyboard format: %#v", keyboard)
+	}
+	if len(rows) != 8 {
+		t.Fatalf("expected seven cycle rows plus save row, got %d", len(rows))
+	}
+	for _, want := range []string{
+		"Đọc email, lịch họp, tin nhắn\n✅ Tự động cho phép",
+		"Tóm tắt nội dung, dịch văn bản\n✅ Tự động cho phép",
+		"Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
+		"Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
+		"Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
+		"Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
+		"Xóa email, file, lịch họp\n🚫 Luôn chặn",
+	} {
+		found := false
+		for _, row := range rows[:len(rows)-1] {
+			if len(row) > 0 && row[0]["text"] == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected keyboard to contain label %q, got %#v", want, keyboard)
+		}
+	}
+	lastRow := rows[len(rows)-1]
+	if len(lastRow) != 1 || lastRow[0]["text"] != "Lưu" {
+		t.Fatalf("expected save button, got %#v", lastRow)
+	}
+}
+
+func TestTelegramPolicySettingsCyclesEditButtonsAndSaveShowsBriefConfirmation(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := policies.NewUserPolicyStore(filepath.Join(dataDir, "user-policy.json"))
+	if err != nil {
+		t.Fatalf("new user policy store: %v", err)
+	}
+
+	type telegramCall struct {
+		path    string
+		payload map[string]any
+	}
+	var calls []telegramCall
+	client := &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+			calls = append(calls, telegramCall{path: r.URL.Path, payload: payload})
+			if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+				return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
+			}
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		}),
+	}
+
+	bot := New("token", 123, dataDir, store, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bot.client = client
+
+	if err := bot.sendPolicySettingsMenu(context.Background(), 55); err != nil {
+		t.Fatalf("sendPolicySettingsMenu() error = %v", err)
+	}
+
+	sendCall := calls[0]
+	if !strings.HasSuffix(sendCall.path, "/sendMessage") {
+		t.Fatalf("expected initial sendMessage call, got %#v", sendCall)
+	}
+	if fmt.Sprint(sendCall.payload["text"]) != "Chạm vào một nút để đổi nhóm cho từng mức rủi ro." {
+		t.Fatalf("unexpected menu text: %#v", sendCall.payload["text"])
+	}
+	assertPolicyKeyboardText(t, sendCall.payload["reply_markup"], map[contracts.RiskLevel]string{
+		contracts.RiskLevelSafeRead:      "Đọc email, lịch họp, tin nhắn\n✅ Tự động cho phép",
+		contracts.RiskLevelSafeCompute:   "Tóm tắt nội dung, dịch văn bản\n✅ Tự động cho phép",
+		contracts.RiskLevelSensitiveRead: "Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
+		contracts.RiskLevelExternalWrite: "Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
+		contracts.RiskLevelLocalWrite:    "Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
+		contracts.RiskLevelCodeExecution: "Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
+		contracts.RiskLevelDestructive:   "Xóa email, file, lịch họp\n🚫 Luôn chặn",
+	})
+
+	for _, level := range []contracts.RiskLevel{contracts.RiskLevelSafeRead, contracts.RiskLevelSafeCompute} {
+		processed, err := bot.processCallbackQuery(context.Background(), telegramUpdate{
+			CallbackQuery: &telegramCallbackQuery{
+				ID:   "callback-" + string(level),
+				From: &telegramUser{ID: 123},
+				Message: &telegramMessage{
+					MessageID: 42,
+					Chat:      telegramChat{ID: 55},
+				},
+				Data: telegramPolicySettingsCallbackData(telegramPolicySettingsCycleAction, 55, level),
+			},
+		})
+		if err != nil {
+			t.Fatalf("cycle callback for %s: %v", level, err)
+		}
+		if !processed {
+			t.Fatalf("expected cycle callback for %s to be processed", level)
+		}
+	}
+
+	processed, err := bot.processCallbackQuery(context.Background(), telegramUpdate{
+		CallbackQuery: &telegramCallbackQuery{
+			ID:   "callback-save",
+			From: &telegramUser{ID: 123},
+			Message: &telegramMessage{
+				MessageID: 42,
+				Chat:      telegramChat{ID: 55},
+			},
+			Data: telegramPolicySettingsCallbackData(telegramPolicySettingsSaveAction, 55, ""),
+		},
+	})
+	if err != nil {
+		t.Fatalf("save callback error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected save callback to be processed")
+	}
+
+	var editCalls []telegramCall
+	for _, call := range calls {
+		if strings.HasSuffix(call.path, "/editMessageText") {
+			editCalls = append(editCalls, call)
+		}
+	}
+	if len(editCalls) != 3 {
+		t.Fatalf("expected 3 message edits, got %d: %#v", len(editCalls), editCalls)
+	}
+	if fmt.Sprint(editCalls[0].payload["text"]) != "Chạm vào một nút để đổi nhóm cho từng mức rủi ro." {
+		t.Fatalf("unexpected cycle text: %#v", editCalls[0].payload["text"])
+	}
+	assertPolicyKeyboardText(t, editCalls[0].payload["reply_markup"], map[contracts.RiskLevel]string{
+		contracts.RiskLevelSafeRead:      "Đọc email, lịch họp, tin nhắn\n👤 Cần phê duyệt",
+		contracts.RiskLevelSafeCompute:   "Tóm tắt nội dung, dịch văn bản\n✅ Tự động cho phép",
+		contracts.RiskLevelSensitiveRead: "Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
+		contracts.RiskLevelExternalWrite: "Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
+		contracts.RiskLevelLocalWrite:    "Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
+		contracts.RiskLevelCodeExecution: "Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
+		contracts.RiskLevelDestructive:   "Xóa email, file, lịch họp\n🚫 Luôn chặn",
+	})
+	assertPolicyKeyboardText(t, editCalls[1].payload["reply_markup"], map[contracts.RiskLevel]string{
+		contracts.RiskLevelSafeRead:      "Đọc email, lịch họp, tin nhắn\n👤 Cần phê duyệt",
+		contracts.RiskLevelSafeCompute:   "Tóm tắt nội dung, dịch văn bản\n👤 Cần phê duyệt",
+		contracts.RiskLevelSensitiveRead: "Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
+		contracts.RiskLevelExternalWrite: "Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
+		contracts.RiskLevelLocalWrite:    "Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
+		contracts.RiskLevelCodeExecution: "Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
+		contracts.RiskLevelDestructive:   "Xóa email, file, lịch họp\n🚫 Luôn chặn",
+	})
+	if fmt.Sprint(editCalls[2].payload["text"]) != "✅ Đã lưu cài đặt." {
+		t.Fatalf("unexpected save text: %#v", editCalls[2].payload["text"])
+	}
+	markup, ok := editCalls[2].payload["reply_markup"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected save markup: %#v", editCalls[2].payload["reply_markup"])
+	}
+	if rows, ok := markup["inline_keyboard"].([]any); !ok || len(rows) != 0 {
+		t.Fatalf("expected empty keyboard after save, got %#v", editCalls[2].payload["reply_markup"])
+	}
+}
+
+func TestTelegramPolicySettingsSaveRejectsDestructiveAutoAllowKeepsMenuOpen(t *testing.T) {
+	type telegramCall struct {
+		path    string
+		payload map[string]any
+	}
+	var calls []telegramCall
+	client := &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+			calls = append(calls, telegramCall{path: r.URL.Path, payload: payload})
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/answerCallbackQuery"):
+				return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+			case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+				return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+			default:
+				return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+			}
+		}),
+	}
+
+	bot := New("token", 123, t.TempDir(), nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bot.client = client
+	bot.setTelegramPolicyDraft(55, map[contracts.RiskLevel]policies.PolicyGroup{
+		contracts.RiskLevelSafeRead:      policies.PolicyGroupAutoAllow,
+		contracts.RiskLevelSafeCompute:   policies.PolicyGroupAutoAllow,
+		contracts.RiskLevelSensitiveRead: policies.PolicyGroupRequireApprove,
+		contracts.RiskLevelExternalWrite: policies.PolicyGroupRequireApprove,
+		contracts.RiskLevelLocalWrite:    policies.PolicyGroupRequireApprove,
+		contracts.RiskLevelCodeExecution: policies.PolicyGroupRequireApprove,
+		contracts.RiskLevelDestructive:   policies.PolicyGroupAutoAllow,
+	})
+
+	processed, err := bot.processCallbackQuery(context.Background(), telegramUpdate{
+		CallbackQuery: &telegramCallbackQuery{
+			ID:   "callback-save",
+			From: &telegramUser{ID: 123},
+			Message: &telegramMessage{
+				MessageID: 42,
+				Chat:      telegramChat{ID: 55},
+			},
+			Data: telegramPolicySettingsCallbackData(telegramPolicySettingsSaveAction, 55, ""),
+		},
+	})
+	if err != nil {
+		t.Fatalf("save callback error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected save callback to be processed")
+	}
+
+	var editCall telegramCall
+	for _, call := range calls {
+		if strings.HasSuffix(call.path, "/editMessageText") {
+			editCall = call
+			break
+		}
+	}
+	if fmt.Sprint(editCall.payload["text"]) != "🚫 Xóa dữ liệu không thể để Tự động cho phép." {
+		t.Fatalf("unexpected validation text: %#v", editCall.payload["text"])
+	}
+	assertPolicyKeyboardText(t, editCall.payload["reply_markup"], map[contracts.RiskLevel]string{
+		contracts.RiskLevelSafeRead:      "Đọc email, lịch họp, tin nhắn\n✅ Tự động cho phép",
+		contracts.RiskLevelSafeCompute:   "Tóm tắt nội dung, dịch văn bản\n✅ Tự động cho phép",
+		contracts.RiskLevelSensitiveRead: "Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
+		contracts.RiskLevelExternalWrite: "Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
+		contracts.RiskLevelLocalWrite:    "Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
+		contracts.RiskLevelCodeExecution: "Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
+		contracts.RiskLevelDestructive:   "Xóa email, file, lịch họp\n✅ Tự động cho phép",
+	})
+}
+
+func assertPolicyKeyboardText(t *testing.T, replyMarkup any, want map[contracts.RiskLevel]string) {
+	t.Helper()
+
+	data, err := json.Marshal(replyMarkup)
+	if err != nil {
+		t.Fatalf("marshal reply markup: %v", err)
+	}
+	var parsed struct {
+		InlineKeyboard [][]map[string]any `json:"inline_keyboard"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal reply markup: %v", err)
+	}
+	rows := parsed.InlineKeyboard
+	if rows == nil {
+		t.Fatalf("unexpected inline keyboard: %#v", replyMarkup)
+	}
+	if len(rows) == 0 {
+		if len(want) != 0 {
+			t.Fatalf("unexpected empty inline keyboard: %#v", replyMarkup)
+		}
+		return
+	}
+	if len(rows) > 0 {
+		last := rows[len(rows)-1]
+		if len(last) == 1 {
+			if text, _ := last[0]["text"].(string); text == "Lưu" {
+				rows = rows[:len(rows)-1]
+			}
+		}
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("unexpected button count: got %d want %d", len(rows), len(want))
+	}
+	for _, row := range rows {
+		if len(row) != 1 {
+			t.Fatalf("expected one button per row, got %#v", row)
+		}
+		text, _ := row[0]["text"].(string)
+		found := false
+		for level, wantText := range want {
+			if text == wantText {
+				found = true
+				delete(want, level)
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("unexpected button text: %q", text)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing button texts: %#v", want)
+	}
+}
+
 func TestTelegramTextHidesDetailedFailedErrors(t *testing.T) {
 	text := telegramTextFromResponse(contracts.AgentResponse{
 		Status:  contracts.AgentStatusFailed,
@@ -444,17 +792,33 @@ func TestTelegramTextHidesDetailedFailedErrors(t *testing.T) {
 	}
 }
 
-func TestTelegramTextShowsFriendlyCancelMessage(t *testing.T) {
+func TestTelegramTextFromBlockedByPolicyResponseShowsPolicyMessage(t *testing.T) {
 	text := telegramTextFromResponse(contracts.AgentResponse{
-		Status:  contracts.AgentStatusBlocked,
-		Message: "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
+		Status: contracts.AgentStatusFailed,
 		Error: &contracts.ErrorShape{
-			Message: "approval rejected",
+			Code:      contracts.ErrorActionBlockedByPolicy,
+			Message:   "tool blocked by policy: gmail.trashMessage",
+			Source:    contracts.ErrorSourcePolicy,
+			Retryable: false,
 		},
 	})
+	if text != "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại." {
+		t.Fatalf("unexpected policy block text: %q", text)
+	}
+}
 
-	if !strings.Contains(text, "Đã hủy theo yêu cầu") {
-		t.Fatalf("expected friendly cancel text, got %q", text)
+func TestTelegramTextFromApprovalExpiredResponseShowsExpiredMessage(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusFailed,
+		Error: &contracts.ErrorShape{
+			Code:      contracts.ErrorApprovalExpired,
+			Message:   "approval expired",
+			Source:    contracts.ErrorSourcePolicy,
+			Retryable: false,
+		},
+	})
+	if text != "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại." {
+		t.Fatalf("unexpected approval expired text: %q", text)
 	}
 }
 
@@ -645,6 +1009,36 @@ func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
 	}
 	if strings.Contains(text, "Nội dung:") || strings.Contains(text, "Space:") || strings.Contains(text, "spaces/87bFdyAAAAE") {
 		t.Fatalf("expected chat approval text to omit raw space identifier, got %q", text)
+	}
+}
+
+func TestTelegramApprovalTextResolvesDownloadDirectoryForGmailAttachments(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, "Downloads"), 0o755); err != nil {
+		t.Fatalf("mkdir downloads: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_download",
+			Summary:    "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "gmail.downloadAttachments",
+				Input: map[string]any{
+					"messageId": "msg-1",
+					"outputDir": "./",
+				},
+			},
+		},
+	})
+
+	if strings.Contains(text, "Output Dir: ./") {
+		t.Fatalf("expected approval text to resolve outputDir, got %q", text)
+	}
+	if !strings.Contains(text, "Output Dir: ~/Downloads/Vclaw/") {
+		t.Fatalf("expected approval text to show resolved download dir, got %q", text)
 	}
 }
 

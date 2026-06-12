@@ -376,7 +376,7 @@ func runGoogleGmail(ctx context.Context, args []string) error {
 		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
 		userID := fs.String("user", "me", "Gmail user ID, use me for the authorized account")
 		messageID := fs.String("id", "", "Gmail message ID (required)")
-		attachmentIDs := fs.String("attachment-ids", "", "comma separated attachment IDs; omit to download all")
+		filenames := fs.String("filenames", "", "comma separated attachment filenames; omit to download all")
 		outputDir := fs.String("output-dir", "", "local output directory (required)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -386,10 +386,10 @@ func runGoogleGmail(ctx context.Context, args []string) error {
 			return err
 		}
 		output, toolErr := service.DownloadAttachments(ctx, gmailtool.DownloadAttachmentsInput{
-			UserID:        *userID,
-			MessageID:     *messageID,
-			AttachmentIDs: splitCSV(*attachmentIDs),
-			OutputDir:     *outputDir,
+			UserID:    *userID,
+			MessageID: *messageID,
+			Filenames: splitCSV(*filenames),
+			OutputDir: *outputDir,
 		})
 		return printGmailToolOutput(output, toolErr)
 

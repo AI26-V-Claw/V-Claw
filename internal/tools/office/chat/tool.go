@@ -397,7 +397,9 @@ func (s *Service) FindSpacesByMembers(ctx context.Context, input FindSpacesByMem
 		return FindSpacesByMembersOutput{}, errShape
 	}
 
-	spacesOutput, err := s.connector.ListSpacesPageFiltered(ctx, maxResults, input.PageToken, input.SpaceType)
+	// Use unfiltered listing: the server-side spaceType filter for DIRECT_MESSAGE
+	// does not return results under user OAuth. Local type filtering is applied below.
+	spacesOutput, err := s.connector.ListSpacesPage(ctx, maxResults, input.PageToken)
 	if err != nil {
 		return FindSpacesByMembersOutput{}, MapError(err)
 	}
@@ -927,7 +929,7 @@ func (SendMessageTool) Name() string {
 }
 
 func (SendMessageTool) Description() string {
-	return "Send a Google Chat text message or attachment. The space input must be a spaces/... resource name. If the user names a group or space display name (e.g. VClaw), resolve it with chat.listSpaces. If the user names a specific person (e.g. Bao Le), use people.searchDirectory to get their users/... resource name, then chat.findSpacesByMembers with spaceType=DIRECT_MESSAGE to get the DM space — do NOT reuse a previously known group space. This external write requires approval."
+	return "Send a Google Chat text message or attachment. The space input must be a spaces/... resource name. If the user names a group or space display name (e.g. VClaw), resolve it with chat.listSpaces. If the user names a specific person (e.g. Bao Le), ALWAYS call people.searchDirectory then chat.findSpacesByMembers with spaceType=DIRECT_MESSAGE — do NOT reuse any previously known space from memory or history, even if a DM was recently used; different people have different DM spaces and reusing the wrong one sends to the wrong person. This external write requires approval."
 }
 
 func (SendMessageTool) Parameters() tools.ToolSchema {

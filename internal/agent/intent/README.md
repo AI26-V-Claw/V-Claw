@@ -189,6 +189,14 @@ Tool Registry định nghĩa các tool có sẵn và tham số bắt buộc:
 
 Xem chi tiết trong `tool_registry.go`.
 
+Tool registry hiện có các nhóm chính:
+- Safe Read Tools: list/read thông tin không nhạy cảm, không cần approval
+- Sensitive Read Tools: đọc dữ liệu nhạy cảm, cần approval
+- Dangerous Write Tools: thay đổi dữ liệu bên ngoài, cần approval
+- Built-in Tools: `calculator`, `get_current_time`
+- Execution Tools: chạy code/lệnh trong sandbox, cần approval
+- Communication Tools: tạo/gửi draft hoặc gửi tin nhắn, cần approval
+
 ## Contract Compliance
 
 Module này tuân thủ theo contracts định nghĩa trong `docs/03-contracts.md`:

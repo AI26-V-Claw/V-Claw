@@ -438,7 +438,7 @@ func (t WriteFileTool) Execute(_ context.Context, call tools.ToolCall) tools.Too
 		return inputError(call, fmt.Sprintf("invalid mode %q: must be create, overwrite, or append", mode))
 	}
 
-	result := fmt.Sprintf("Successfully wrote %d bytes to %s (mode: %s)", len(content), path, mode)
+	result := fmt.Sprintf("Successfully wrote %d bytes to %s (mode: %s)", len(content), resolved, mode)
 	return tools.ToolResult{
 		ToolCallID: call.ID, ToolName: call.Name, Success: true,
 		ContentForLLM: result, ContentForUser: result,
@@ -447,8 +447,8 @@ func (t WriteFileTool) Execute(_ context.Context, call tools.ToolCall) tools.Too
 
 // ─── Registration ────────────────────────────────────────────────────────────
 
-// RegisterTools registers all filesystem tools (listDir, readFile, fileInfo, writeFile)
-// into the given registry. All tools share the same PathGuard configured via Config.
+// RegisterTools registers all filesystem tools into the given registry.
+// All tools share the same PathGuard configured via Config.
 func RegisterTools(registry *tools.ToolRegistry, config Config) error {
 	guard := NewPathGuard(config.AllowedRoots)
 

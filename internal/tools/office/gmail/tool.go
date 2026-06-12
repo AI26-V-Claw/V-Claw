@@ -62,8 +62,8 @@ type ToolRegistryEntry struct {
 }
 
 var RegistryEntries = []ToolRegistryEntry{
-	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameGetEmail, Owner: "integration", Description: "Read one email in detail.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria. This returns message summaries only and does not include attachment information; call gmail.getEmail to inspect attachments.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameGetEmail, Owner: "integration", Description: "Read one email in detail, including attachment metadata and message content. This is a sensitive read and requires approval.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameListLabels, Owner: "integration", Description: "List Gmail labels.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetProfile, Owner: "integration", Description: "Read the Gmail account profile.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameListThreads, Owner: "integration", Description: "List Gmail threads by search criteria.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
@@ -76,7 +76,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameDeleteDraft, Owner: "integration", Description: "Delete an existing Gmail draft.", DefaultRiskLevel: "destructive", RequiresApproval: true},
 	{Name: ToolNameReplyDraft, Owner: "integration", Description: "Create a Gmail reply draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameForwardDraft, Owner: "integration", Description: "Create a Gmail forward draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameDownloadAttachments, Owner: "integration", Description: "Download Gmail attachments to a local directory.", DefaultRiskLevel: "local_write", RequiresApproval: true},
+	{Name: ToolNameDownloadAttachments, Owner: "integration", Description: "Download Gmail attachments to a local directory. Call gmail.getEmail immediately before gmail.downloadAttachments so the agent can use fresh attachment filenames from the current message. If filenames are provided, only matching attachments are downloaded.", DefaultRiskLevel: "local_write", RequiresApproval: true},
 	{Name: ToolNameModifyMessage, Owner: "integration", Description: "Modify Gmail message labels such as read, unread, starred, archive, or inbox.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameBatchModifyMessages, Owner: "integration", Description: "Modify Gmail labels for multiple messages.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameTrashMessage, Owner: "integration", Description: "Move a Gmail message to trash.", DefaultRiskLevel: "destructive", RequiresApproval: true},
@@ -274,10 +274,10 @@ type ForwardDraftInput struct {
 }
 
 type DownloadAttachmentsInput struct {
-	UserID        string
-	MessageID     string
-	AttachmentIDs []string
-	OutputDir     string
+	UserID    string
+	MessageID string
+	Filenames []string
+	OutputDir string
 }
 
 type DownloadedAttachment struct {
@@ -599,7 +599,7 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 	if err != nil {
 		return DownloadAttachmentsOutput{}, MapError(err)
 	}
-	attachments := selectAttachments(message.Attachments, input.AttachmentIDs)
+	attachments := selectAttachmentsByFilename(message.Attachments, input.Filenames)
 	if len(attachments) == 0 {
 		return DownloadAttachmentsOutput{}, invalidInput("no matching attachments found")
 	}
@@ -964,12 +964,12 @@ func buildModifyMessageInput(input ModifyMessageInput) (gmailconnector.ModifyMes
 	}
 }
 
-func selectAttachments(attachments []gmailconnector.Attachment, attachmentIDs []string) []gmailconnector.Attachment {
+func selectAttachmentsByFilename(attachments []gmailconnector.Attachment, filenames []string) []gmailconnector.Attachment {
 	wanted := map[string]struct{}{}
-	for _, id := range attachmentIDs {
-		id = strings.TrimSpace(id)
-		if id != "" {
-			wanted[id] = struct{}{}
+	for _, name := range filenames {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			wanted[name] = struct{}{}
 		}
 	}
 	if len(wanted) == 0 {
@@ -977,7 +977,7 @@ func selectAttachments(attachments []gmailconnector.Attachment, attachmentIDs []
 	}
 	out := []gmailconnector.Attachment{}
 	for _, attachment := range attachments {
-		if _, ok := wanted[attachment.AttachmentID]; ok {
+		if _, ok := wanted[strings.TrimSpace(attachment.Filename)]; ok {
 			out = append(out, attachment)
 		}
 	}
@@ -1075,9 +1075,9 @@ func (t GmailTool) Name() string { return t.name }
 func (t GmailTool) Description() string {
 	switch t.name {
 	case ToolNameListEmails:
-		return "List Gmail messages by search criteria."
+		return "List Gmail messages by search criteria. This returns message summaries only and does not include attachment information; call gmail.getEmail to inspect attachments."
 	case ToolNameGetEmail:
-		return "Read one Gmail message in detail."
+		return "Read one Gmail message in detail, including attachment metadata and message content. This is a sensitive read and requires approval."
 	case ToolNameListLabels:
 		return "List Gmail labels."
 	case ToolNameGetProfile:
@@ -1091,11 +1091,11 @@ func (t GmailTool) Description() string {
 	case ToolNameGetDraft:
 		return "Read one Gmail draft in detail."
 	case ToolNameCreateDraft:
-		return "Create a Gmail draft WITHOUT sending it. The email is NOT delivered until gmail.sendDraft is called with the returned draftId. If the user asked to send an email, you MUST call gmail.sendDraft after this tool succeeds."
+		return "Create a Gmail draft WITHOUT sending it. The email is NOT delivered until gmail.sendDraft is called with the returned Draft.ID value passed as draftId. If the user asked to send an email, you MUST call gmail.sendDraft after this tool succeeds."
 	case ToolNameUpdateDraft:
 		return "Update a Gmail draft. This external write requires approval."
 	case ToolNameSendDraft:
-		return "Send a Gmail draft, delivering it to recipients. Call this after gmail.createDraft succeeds, using the draftId returned by createDraft. This is the step that actually sends the email."
+		return "Send a Gmail draft, delivering it to recipients. Call this after gmail.createDraft succeeds, using Draft.ID from the createDraft result as the draftId argument. This is the step that actually sends the email."
 	case ToolNameDeleteDraft:
 		return "Delete an existing Gmail draft. This destructive action requires approval."
 	case ToolNameReplyDraft:
@@ -1103,7 +1103,7 @@ func (t GmailTool) Description() string {
 	case ToolNameForwardDraft:
 		return "Create a Gmail forward draft. This external write requires approval."
 	case ToolNameDownloadAttachments:
-		return "Download attachments from a Gmail email message to a local directory. Only use this when the file comes from a Gmail email. Do NOT use this to access files already in the sandbox workspace — those are accessible via sandbox.runShell using workspace_dir."
+		return "Download Gmail attachments to a local directory. Call gmail.getEmail immediately before gmail.downloadAttachments so the agent can use fresh attachment filenames from the current message. If filenames are provided, only matching attachments are downloaded. This local write requires approval."
 	case ToolNameModifyMessage:
 		return "Modify Gmail message labels such as read, unread, starred, archive, or inbox. This external write requires approval."
 	case ToolNameBatchModifyMessages:
@@ -1147,7 +1147,7 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 	case ToolNameForwardDraft:
 		return forwardDraftSchema()
 	case ToolNameDownloadAttachments:
-		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "attachmentIds": arrayStringSchema(), "outputDir": map[string]any{"type": "string"}}, "required": []string{"messageId", "outputDir"}, "additionalProperties": false}
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "filenames": arrayStringSchema(), "outputDir": map[string]any{"type": "string"}}, "required": []string{"messageId", "outputDir"}, "additionalProperties": false}
 	case ToolNameModifyMessage:
 		return tools.ToolSchema{
 			"type": "object",
@@ -1247,7 +1247,7 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		output, errShape := t.service.ForwardDraft(ctx, input)
 		return outputToolResult(call, output, errShape)
 	case ToolNameDownloadAttachments:
-		output, errShape := t.service.DownloadAttachments(ctx, DownloadAttachmentsInput{MessageID: stringArg(call.Arguments, "messageId"), AttachmentIDs: stringSliceArg(call.Arguments, "attachmentIds"), OutputDir: stringArg(call.Arguments, "outputDir")})
+		output, errShape := t.service.DownloadAttachments(ctx, DownloadAttachmentsInput{MessageID: stringArg(call.Arguments, "messageId"), Filenames: stringSliceArg(call.Arguments, "filenames"), OutputDir: stringArg(call.Arguments, "outputDir")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameModifyMessage:
 		output, errShape := t.service.ModifyMessage(ctx, ModifyMessageInput{MessageID: stringArg(call.Arguments, "messageId"), Action: stringArg(call.Arguments, "action"), LabelIDs: stringSliceArg(call.Arguments, "labelIds")})

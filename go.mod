@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/google/generative-ai-go v0.20.1
-	github.com/jackc/pgx/v5 v5.7.6
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/slack-go/slack v0.24.0
 	golang.org/x/net v0.55.0
 	golang.org/x/oauth2 v0.36.0

@@ -117,7 +117,7 @@ func (SearchDirectoryTool) Name() string {
 }
 
 func (SearchDirectoryTool) Description() string {
-	return "Search Google Workspace directory people by name or email. Use this to resolve user names before matching Google Chat members and listing messages from a named group chat."
+	return "Search Google Workspace directory for individual people by name or email. Use this to resolve a specific person's name to their users/... resource name or email address. Do NOT use this to look up a Chat group or space by its display name — to find members of a named Chat space, call chat.listSpaces first to get the space resource name, then chat.listMembers."
 }
 
 func (SearchDirectoryTool) Parameters() tools.ToolSchema {

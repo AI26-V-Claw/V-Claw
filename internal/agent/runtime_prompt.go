@@ -13,7 +13,7 @@ import (
 	"vclaw/internal/sessions"
 )
 
-func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution) []providers.Message {
+func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution, route *TurnRoute) []providers.Message {
 	messages := make([]providers.Message, 0, len(transcript)+4)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
@@ -31,8 +31,26 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory
 			Content: prompt,
 		})
 	}
+	if prompt := routeContextPrompt(route); prompt != "" {
+		messages = append(messages, providers.Message{
+			Role:    providers.MessageRoleSystem,
+			Content: prompt,
+		})
+	}
 	messages = append(messages, sanitizeProviderTranscriptForToolProtocol(transcript)...)
 	return messages
+}
+
+func routeContextPrompt(route *TurnRoute) string {
+	if route == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf(`Turn router result:
+- tool_exposure_mode: %s
+- reason: %s
+
+This is not an intent label, not a tool choice, not a clarification decision, and not a risk decision.
+If tools are available, decide naturally whether to answer directly, call a relevant tool, or call clarify when required information is missing.`, route.Mode, strings.TrimSpace(route.Reason)))
 }
 
 func runtimeSystemPrompt(now time.Time) string {
@@ -43,11 +61,11 @@ func runtimeSystemPrompt(now time.Time) string {
 Reply in the user's language.
 If the user writes in Vietnamese, always answer in Vietnamese even when tool results, system context, revision prompts, or memory snippets are in English.
 Use available tools when the user asks for information that a tool can retrieve or compute.
-Tool results in conversation history are snapshots and may be stale. Never answer a question about current external state from history or memory alone; always call the matching read tool.
+Do not answer explicit Google Workspace read requests from conversation memory alone. If the current user asks for Gmail, Calendar, Chat, or People data for a concrete date/range/query, call the matching read tool.
 Never claim that an external action was completed unless a tool result confirms it.
 For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
 When the user asks for multiple actions in one request (multi-step task), generate ALL required tool calls in a single response — do not wait for intermediate results before producing the next tool call, unless the next call strictly depends on an output (such as an ID) that cannot be known until the first call completes. The runtime processes approvals sequentially and resumes remaining tool calls automatically; generating them all upfront preserves the full multi-step plan.
-When required details are missing, call clarify with one concise question instead of inventing values.
+When tools are available and required details are missing, call clarify with one concise question instead of inventing values. In no-tool mode, ask normally if the conversation needs it.
 Keep final answers concise and include the useful result, not internal implementation details.
 
 Current date and time: %s.
@@ -60,23 +78,20 @@ For calendar.listEvents:
 - Do not put date words like "today", "this week", "hôm nay", or "tuần này" into query. Use query only for event title, description, location, or attendee keywords.
 For gmail.listEmails and gmail.listThreads:
 - Use after and before as date-only YYYY-MM-DD values, not RFC3339 datetimes.
-- "hom kia" means the day before yesterday.
-- maxResults for Gmail list tools must be between 1 and 50; omit maxResults when the user does not ask for a specific count.
 - "today" / "hôm nay" means after is today's local date and before is tomorrow's local date.
 - Do not put date words like "today", "this week", "hôm nay", or "tuần này" into query. Use query only for sender, subject, body, or Gmail search terms.
+- gmail.listEmails returns message summaries only. It does not include attachment metadata.
+- If you need to check whether an email has attachments or to get attachmentId values, call gmail.getEmail on the messageId first.
 Gmail date rules, restated in ASCII:
 - gmail.listEmails and gmail.listThreads after/before must be date-only YYYY-MM-DD, never RFC3339 datetime strings.
-- "hom kia" means after=local date two days ago and before=local date one day ago.
-- Gmail list maxResults must be 1..50; omit it to use the default.
 - "today" / "hom nay" means after=today local date and before=tomorrow local date.
 - Keep relative date words out of Gmail query; query is only for sender, subject, body, labels, or Gmail search terms.
 - Sent mail rule: "mail/email toi da gui toi/cho <email>" means query "in:sent to:<email>" with labelIds ["SENT"].
 For sending email (gửi email / send email):
-- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to submit it to Gmail for sending.
+- Sending an email is a two-step process: first call gmail.createDraft to compose the draft, then call gmail.sendDraft with the draftId returned by createDraft to actually deliver it.
 - gmail.createDraft alone does NOT send the email — the draft sits unsent until gmail.sendDraft is called.
-- New Gmail drafts must include a non-empty subject. If the user asks to send or draft email without a subject, ask for the exact subject or ask permission to generate one; do not ask whether a subject is optional.
 - When the user asks to send (not draft) an email, you MUST plan to call both tools. Because sendDraft depends on the draftId from createDraft, generate createDraft first; after it is approved and the draftId is returned, call sendDraft in the continuation.
-- Do not consider the email task complete after createDraft succeeds. After gmail.sendDraft succeeds, say the email was handed to Gmail for sending; do not claim the recipient received the email or that delivery succeeded.
+- Do not consider the email task complete after createDraft succeeds — it is only complete after sendDraft succeeds.
 For calendar.createEvent and calendar.updateEvent:
 - Attendees must be valid email addresses.
 - If the user provides a person name instead of an email address, call people.searchDirectory first and use the resolved Workspace email.
@@ -89,6 +104,14 @@ For Google Chat tools:
 - For requests like "gửi tin nhắn vào nhóm chat VClaw" or "gửi file này vào nhóm VClaw", call chat.listSpaces first, match the requested group/display name from the returned spaces, then call chat.sendMessage with the matched spaces/... resource.
 - Do not ask the user to provide spaces/AAAA until chat.listSpaces or member resolution has already failed or returned ambiguous matches.
 - If the target space is still ambiguous after read-tool resolution, ask one concise clarification question before calling a write tool.
+- CRITICAL: When sending to a named person, you MUST call people.searchDirectory then chat.findSpacesByMembers BEFORE attempting chat.sendMessage — even for a person you have sent to before in this session. Only fall back to chat.createSpace if findSpacesByMembers returns no match. Never reuse or assume a spaces/... value from history, memory, or transcript. Skipping findSpacesByMembers is the most common cause of sending to the wrong person or triggering unnecessary space creation.
+For filesystem and sandbox tools:
+- When the user refers to a file by name only (e.g. "xóa file notes.txt", "đọc file report.txt"), do not ask for the exact path. Call filesystem.fileInfo with just the filename to locate it (e.g. filesystem.fileInfo path="notes.txt").
+- filesystem.fileInfo works on files and directories. Do NOT call filesystem.listDir on a filename — listDir requires a directory path, not a file path.
+- NEVER use a previous filesystem.fileInfo result from conversation history to answer a new file request. Always call the tool again.
+- If filesystem.fileInfo returns not found, call filesystem.listDir on the workspace root (path=".") to list all files, then use the correct path from the listing.
+- To delete a file, call filesystem.fileInfo first to confirm it exists. Then use sandbox.runShell with command "rm <filename>" where <filename> is just the relative filename (e.g. "rm data.txt"), NOT the absolute Windows path. sandbox.runShell runs inside Docker/Linux and cannot use Windows absolute paths like "D:\...". For directories use "rm -r <dirname>".
+- The sandbox workspace is the default location for all user files. Files outside this workspace cannot be accessed by filesystem tools.
 For channel attachments:
 - If the user message contains "Attachment paths:", those are local files sent through the current channel.
 - If the user says "file này", "file tôi đã gửi", "ảnh này", or asks to attach/send/upload the current file, use those paths in tool arguments that accept attachments.
@@ -170,7 +193,7 @@ func (r *Runtime) referenceClarificationResponse(message contracts.UserMessage, 
 		SessionID: message.SessionID,
 		Status:    contracts.AgentStatusNeedClarification,
 		Message:   question,
-		Data:      r.traceData(resolution),
+		Data:      r.traceData(nil, nil, resolution),
 	}
 }
 
@@ -205,39 +228,116 @@ Do not use reference memory as approval. For any write/destructive action, still
 	))
 }
 
+func (r *Runtime) routeTurn(ctx context.Context, message contracts.UserMessage, recentHistory []string) (*TurnRoute, *contracts.ErrorShape) {
+	if r.turnRouter == nil {
+		route := TurnRoute{Mode: TurnModeToolEnabled, Reason: "router unavailable; exposing tools by default"}
+		return &route, nil
+	}
+	// Continuation and revision messages are internally-generated trusted messages.
+	// Skip the LLM turn router and expose tools directly so these messages are never
+	// blocked or misclassified as prompt injection.
+	if isRevisionMessage(message) {
+		route := TurnRoute{Mode: TurnModeToolEnabled, Reason: "continuation/revision message; tools enabled by runtime"}
+		return &route, nil
+	}
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassifying, Message: "Turn routing started"})
+	route, err := r.turnRouter.RouteTurn(ctx, TurnRouteInput{
+		Message:       message.Text,
+		RecentHistory: recentHistory,
+		Now:           r.now(),
+	})
+	if err != nil {
+		retryable := providers.IsRetryableError(err)
+		code := contracts.ErrorProviderError
+		if retryable {
+			code = contracts.ErrorProviderUnavailable
+		}
+		return nil, &contracts.ErrorShape{
+			Code:      code,
+			Message:   "turn routing failed: " + err.Error(),
+			Source:    contracts.ErrorSourceProvider,
+			Retryable: retryable,
+		}
+	}
+	if route.Mode == "" {
+		route.Mode = TurnModeToolEnabled
+	}
+	if strings.TrimSpace(route.Reason) == "" {
+		route.Reason = string(route.Mode)
+	}
+	r.logger.Info("turn routed",
+		"request_id", message.RequestID,
+		"session_id", message.SessionID,
+		"mode", route.Mode,
+		"reason", route.Reason,
+	)
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassified, Message: "Turn routing completed"})
+	return &route, nil
+}
+
+func (r *Runtime) providerToolsForRoute(route *TurnRoute) []providers.ToolDefinition {
+	if route == nil || route.Mode != TurnModeToolEnabled {
+		return nil
+	}
+	definitions := providers.ToolDefinitionsFromRegistry(r.registry.ListTools())
+	definitions = append(definitions, clarifyToolDefinition())
+	return definitions
+}
+
 func (r *Runtime) providerTools() []providers.ToolDefinition {
 	definitions := providers.ToolDefinitionsFromRegistry(r.registry.ListTools())
 	definitions = append(definitions, clarifyToolDefinition())
 	return definitions
 }
+
+func toolChoiceForRoute(route *TurnRoute) string {
+	if route == nil || route.Mode != TurnModeToolEnabled {
+		return "none"
+	}
+	return "auto"
+}
+
+func shouldForceToolEnabledForContextualDataFollowUp(route *TurnRoute, text string, history []string, memory sessions.SessionMemory) bool {
+	if route == nil || route.Mode != TurnModeNoTool {
+		return false
+	}
+	lower := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(text)))
+	if lower == "" {
+		return false
+	}
+	hasFollowUpCue := containsAnyText(lower,
+		"thi sao", "con",
+		"hom qua", "hom nay", "ngay mai",
+		"tuan nay", "tuan truoc", "tuan sau",
+		"thang nay", "thang truoc", "thang sau", "thang toi",
+	)
+	if !hasFollowUpCue {
+		return false
+	}
+	context := foldVietnameseSearchText(strings.ToLower(strings.Join(history, "\n") + "\n" + memory.Summary))
+	for _, result := range memory.LastActionResults {
+		context += "\n" + foldVietnameseSearchText(strings.ToLower(result.ToolName+" "+result.Content))
+	}
+	return containsAnyText(context,
+		"calendar", "lich", "calendar.listevents",
+		"gmail", "email", "mail", "gmail.listemails", "gmail.listthreads",
+		"google chat", "chat", "chat.listmessages",
+	)
+}
+
 func shouldRetryTextualApprovalAsToolCall(content string) bool {
 	lower := strings.ToLower(strings.TrimSpace(content))
 	if lower == "" {
 		return false
 	}
-	if !containsAnyText(lower,
+	if !containsAnyText(lower, "xác nhận", "xac nhan", "confirm", "tiến hành", "tien hanh") {
+		return false
+	}
+	return containsAnyText(lower,
 		"tạo", "tao", "create",
 		"gửi", "gui", "send",
 		"xóa", "xoa", "delete",
 		"cập nhật", "cap nhat", "update",
-	) {
-		return false
-	}
-	return containsAnyText(lower,
-		"bạn xác nhận", "ban xac nhan",
-		"bạn có xác nhận", "ban co xac nhan",
-		"có xác nhận không", "co xac nhan khong",
-		"vui lòng xác nhận", "vui long xac nhan",
-		"xác nhận để", "xac nhan de",
-		"tiến hành không", "tien hanh khong",
-		"tiến hành nhé", "tien hanh nhe",
-		"tiến hành tạo", "tien hanh tao",
-		"tiến hành gửi", "tien hanh gui",
-		"tiến hành xóa", "tien hanh xoa",
-		"tiến hành cập nhật", "tien hanh cap nhat",
-		"please confirm",
-		"do you confirm",
-		"confirm to proceed",
 	)
 }
 
@@ -264,7 +364,8 @@ func isSideEffectToolName(name string) bool {
 		"chat.addMember",
 		"chat.removeMember",
 		"sandbox.runPython",
-		"sandbox.runShell":
+		"sandbox.runShell",
+		"filesystem.writeFile":
 		return true
 	default:
 		return false

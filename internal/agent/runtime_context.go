@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
@@ -25,24 +26,20 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 			if content == "" {
 				continue
 			}
-			timestamp := ""
-			if !result.CreatedAt.IsZero() {
-				timestamp = " (at " + result.CreatedAt.Format("15:04") + ")"
-			}
-			lines = append(lines, fmt.Sprintf("- %s%s: %s", strings.TrimSpace(result.ToolName), timestamp, truncateToolContentForLLM(content)))
+			lines = append(lines, fmt.Sprintf("- %s: %s", strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
 		}
 		if len(lines) > 0 {
-			parts = append(parts, "Recent action results (snapshot from last tool call - may be stale if user made external changes):\n"+strings.Join(lines, "\n"))
+			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
 		}
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return strings.TrimSpace(`Session memory for understanding context only.
-Use this memory to recall what actions were taken and what IDs or names were returned.
-Do not answer questions about current state from memory alone; always call the live API to verify current state.
+Use this memory to answer follow-up questions and maintain conversational continuity.
 Do not use memory alone to fill required parameters for a new write, destructive, local file, or code execution action.
 If the current user message does not explicitly provide required write parameters, ask a concise clarification question.
+HARD RULE — chat.sendMessage space parameter: a spaces/... value from these results or from anywhere in conversation history must NEVER be reused as the destination for a new chat.sendMessage to a named person. Always call people.searchDirectory then chat.findSpacesByMembers to obtain the correct space. Only call chat.createSpace if chat.findSpacesByMembers returns no match. Never skip the findSpacesByMembers step even if a spaces/... value is visible in history or memory.
 
 ` + strings.Join(parts, "\n\n"))
 }
@@ -62,7 +59,25 @@ func historyWithSessionMemory(memory sessions.SessionMemory, history []string) [
 	return enriched
 }
 
-func (r *Runtime) traceData(resolution *reference.Resolution) map[string]any {
+func (r *Runtime) traceData(parts ...any) map[string]any {
+	var classification *agentintent.ClassificationOutput
+	var planResult *TaskPlanResult
+	var resolution *reference.Resolution
+	var routes []*TurnRoute
+	for _, part := range parts {
+		switch typed := part.(type) {
+		case *agentintent.ClassificationOutput:
+			classification = typed
+		case *TaskPlanResult:
+			planResult = typed
+		case *reference.Resolution:
+			resolution = typed
+		case *TurnRoute:
+			if typed != nil {
+				routes = append(routes, typed)
+			}
+		}
+	}
 	data := map[string]any{
 		"model": r.model,
 	}
@@ -75,6 +90,24 @@ func (r *Runtime) traceData(resolution *reference.Resolution) map[string]any {
 			"confidence":         resolution.Confidence,
 			"needsClarification": resolution.NeedsClarification,
 		}
+	}
+	if len(routes) > 0 && routes[0] != nil {
+		data["turnRouter"] = map[string]any{
+			"mode":   routes[0].Mode,
+			"reason": routes[0].Reason,
+		}
+	}
+	if classification != nil && classification.Intent != nil {
+		data["intent"] = map[string]any{
+			"type":                 classification.Intent.Type,
+			"confidence":           classification.Intent.Confidence,
+			"needsClarification":   classification.NeedsClarification,
+			"clarificationMessage": classification.ClarificationMessage,
+			"toolCalls":            classification.Intent.ToolCalls,
+		}
+	}
+	if planResult != nil && len(planResult.Plan.Steps) > 0 {
+		data["plan"] = planResult.Plan
 	}
 	if r.registry != nil {
 		definitions := r.registry.ListTools()
@@ -435,6 +468,10 @@ func isPotentialWriteRequest(text string) bool {
 		containsAnyText(lower, "gửi", "gui", "nhắn", "nhan", "thông báo", "thong bao", "send", "reply", "file") {
 		return true
 	}
+	// "gửi cho X" / "nhắn cho X" without explicit "tin nhắn" keyword — still a write request.
+	if containsAnyText(lower, "gửi cho", "gui cho", "nhắn cho", "nhan cho", "nhắn tin cho", "nhan tin cho") {
+		return true
+	}
 	return containsAnyText(lower,
 		"tạo lịch", "tao lich", "tạo sự kiện", "tao su kien", "đặt lịch", "dat lich",
 		"lên lịch", "len lich", "schedule", "create event", "create meeting",
@@ -629,19 +666,6 @@ func isUsableReference(resolution *reference.Resolution) bool {
 		!resolution.NeedsClarification &&
 		resolution.ReferenceType != reference.TypeNone &&
 		resolution.Confidence >= 0.6
-}
-
-func isOrdinalActionReference(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(text))
-	return containsAnyText(lower,
-		"số 1", "so 1", "số 2", "so 2", "số 3", "so 3", "số 4", "so 4", "số 5", "so 5",
-		"cái 1", "cai 1", "cái 2", "cai 2", "cái 3", "cai 3",
-		"cái đầu tiên", "cai dau tien", "cái đầu", "cai dau",
-		"cái thứ nhất", "cai thu nhat", "cái thứ hai", "cai thu hai", "cái thứ ba", "cai thu ba",
-		"mục 1", "muc 1", "mục 2", "muc 2", "mục 3", "muc 3",
-		"#1", "#2", "#3", "#4", "#5",
-		"item 1", "item 2", "item 3", "option 1", "option 2",
-	)
 }
 
 func isRevisionMessage(message contracts.UserMessage) bool {
