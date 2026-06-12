@@ -47,11 +47,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"vclaw/internal/audit"
 	"vclaw/internal/policies"
 	"vclaw/internal/safety"
 	"vclaw/internal/sandbox/runtime"
+	"vclaw/internal/toolhooks"
+	"vclaw/internal/tools"
 )
 
 // ─── Error types ──────────────────────────────────────────────────────────────
@@ -120,6 +123,10 @@ type Config struct {
 	// Optional — if nil, a NopLogger is used.
 	Logger audit.AuditEventLogger
 
+	// ToolHooks runs common pre/post tool hooks around sandbox executions.
+	// Optional — if nil, a no-op implementation is used.
+	ToolHooks toolhooks.Hooks
+
 	// Runner is the underlying executor that dispatches jobs to Docker.
 	// Required.
 	Runner runtime.Runner
@@ -149,6 +156,7 @@ type GatedRunner struct {
 	checker          policies.Checker
 	detector         safety.Detector
 	logger           audit.AuditEventLogger
+	toolHooks        toolhooks.Hooks
 	runner           runtime.Runner
 	skipApprovalGate bool
 }
@@ -169,10 +177,15 @@ func NewGatedRunner(cfg Config) *GatedRunner {
 	if logger == nil {
 		logger = &audit.NopLogger{}
 	}
+	hooks := cfg.ToolHooks
+	if hooks == nil {
+		hooks = toolhooks.NoopHooks{}
+	}
 	return &GatedRunner{
 		checker:          cfg.Checker,
 		detector:         cfg.Detector,
 		logger:           logger,
+		toolHooks:        hooks,
 		runner:           cfg.Runner,
 		skipApprovalGate: cfg.SkipApprovalGate,
 	}
@@ -207,6 +220,16 @@ func (g *GatedRunner) RunPython(ctx context.Context, req *runtime.RunPythonReque
 		text,
 	)
 	_ = g.logger.Log(base)
+
+	definition := sandboxToolDefinition(string(policies.ToolRunPython))
+	input := map[string]any{
+		"code":        req.Code,
+		"script_path": req.ScriptPath,
+		"timeout":     req.Timeout.String(),
+	}
+	if blocked, err := g.beforeTool(ctx, req.RequestID, req.SessionID, definition, input, base); blocked != nil || err != nil {
+		return blocked, err
+	}
 
 	// ── Policy check ──────────────────────────────────────────────────────
 	policyResult := g.checker.Check(policyReq)
@@ -244,7 +267,7 @@ func (g *GatedRunner) RunPython(ctx context.Context, req *runtime.RunPythonReque
 	}
 
 	// ── Execute ───────────────────────────────────────────────────────────
-	return g.execute(ctx, base, func() (*runtime.JobResult, error) {
+	return g.execute(ctx, base, definition, input, req.RequestID, req.SessionID, func() (*runtime.JobResult, error) {
 		return g.runner.RunPython(ctx, req)
 	})
 }
@@ -268,6 +291,15 @@ func (g *GatedRunner) RunShell(ctx context.Context, req *runtime.RunShellRequest
 		req.Command,
 	)
 	_ = g.logger.Log(base)
+
+	definition := sandboxToolDefinition(string(policies.ToolRunShell))
+	input := map[string]any{
+		"command": req.Command,
+		"timeout": req.Timeout.String(),
+	}
+	if blocked, err := g.beforeTool(ctx, req.RequestID, req.SessionID, definition, input, base); blocked != nil || err != nil {
+		return blocked, err
+	}
 
 	// ── Policy check ──────────────────────────────────────────────────────
 	policyResult := g.checker.Check(policyReq)
@@ -305,7 +337,7 @@ func (g *GatedRunner) RunShell(ctx context.Context, req *runtime.RunShellRequest
 	}
 
 	// ── Execute ───────────────────────────────────────────────────────────
-	return g.execute(ctx, base, func() (*runtime.JobResult, error) {
+	return g.execute(ctx, base, definition, input, req.RequestID, req.SessionID, func() (*runtime.JobResult, error) {
 		return g.runner.RunShell(ctx, req)
 	})
 }
@@ -316,9 +348,13 @@ func (g *GatedRunner) RunShell(ctx context.Context, req *runtime.RunShellRequest
 func (g *GatedRunner) execute(
 	ctx context.Context,
 	base audit.AuditEvent,
+	definition tools.ToolDefinition,
+	input map[string]any,
+	requestID string,
+	sessionID string,
 	fn func() (*runtime.JobResult, error),
 ) (*runtime.JobResult, error) {
-	_ = ctx // retained for future middleware hooks
+	startedAt := time.Now()
 
 	startEv := audit.NewExecutionStartEvent(base, "")
 	_ = g.logger.Log(startEv)
@@ -330,6 +366,17 @@ func (g *GatedRunner) execute(
 		errEv.ErrorMessage = err.Error()
 		errEv.Status = audit.StatusFailed
 		_ = g.logger.Log(errEv)
+		g.afterTool(ctx, requestID, sessionID, definition, input, tools.ToolResult{
+			ToolCallID:     requestID,
+			ToolName:       definition.Name,
+			Success:        false,
+			ContentForLLM:  err.Error(),
+			ContentForUser: err.Error(),
+			Error: &tools.ToolError{
+				Code:    tools.ErrorExecutionFailed,
+				Message: err.Error(),
+			},
+		}, err, startedAt)
 		return nil, err
 	}
 
@@ -341,6 +388,141 @@ func (g *GatedRunner) execute(
 		outputSummary, result.OutputTruncated,
 	)
 	_ = g.logger.Log(resultEv)
+	g.afterTool(ctx, requestID, sessionID, definition, input, tools.ToolResult{
+		ToolCallID:     requestID,
+		ToolName:       definition.Name,
+		Success:        result.Status == runtime.JobSuccess,
+		ContentForLLM:  outputSummary,
+		ContentForUser: outputSummary,
+		Error:          nil,
+	}, nil, startedAt)
 
 	return result, nil
+}
+
+func (g *GatedRunner) beforeTool(
+	ctx context.Context,
+	requestID string,
+	sessionID string,
+	definition tools.ToolDefinition,
+	input map[string]any,
+	base audit.AuditEvent,
+) (*runtime.JobResult, error) {
+	if g == nil || g.toolHooks == nil {
+		return nil, nil
+	}
+	result, err := g.toolHooks.BeforeTool(ctx, toolhooks.PreToolInput{
+		RequestID:  requestID,
+		SessionID:  sessionID,
+		ToolCallID: requestID,
+		ToolName:   definition.Name,
+		Input:      cloneMap(input),
+		Definition: definition,
+		OccurredAt: time.Now(),
+		Source:     "sandbox_gate",
+	})
+	if err != nil {
+		reasons := []string{"pre-tool hook failed: " + err.Error()}
+		_ = g.logger.Log(audit.NewBlockedEvent(base, string(definition.RiskLevel), reasons))
+		return nil, &ErrBlocked{
+			RequestID: requestID,
+			PolicyResult: policies.Result{
+				RequestID: requestID,
+				Decision:  policies.DecisionBlock,
+				RiskLevel: policies.RiskLevel(definition.RiskLevel),
+				Reasons:   reasons,
+			},
+		}
+	}
+	switch result.Decision {
+	case toolhooks.DecisionBlock:
+		reason := firstNonEmpty(strings.TrimSpace(result.Reason), "pre-tool hook blocked the request")
+		reasons := []string{reason}
+		_ = g.logger.Log(audit.NewBlockedEvent(base, string(definition.RiskLevel), reasons))
+		return nil, &ErrBlocked{
+			RequestID: requestID,
+			PolicyResult: policies.Result{
+				RequestID: requestID,
+				Decision:  policies.DecisionBlock,
+				RiskLevel: policies.RiskLevel(definition.RiskLevel),
+				Reasons:   reasons,
+			},
+		}
+	case toolhooks.DecisionRequiresApproval:
+		reason := firstNonEmpty(strings.TrimSpace(result.Reason), "pre-tool hook requires approval")
+		_ = g.logger.Log(audit.NewHITLProposalEvent(base, "hitl_"+requestID, "", reason, nil))
+		if g.skipApprovalGate {
+			return nil, nil
+		}
+		return nil, &ErrNeedsApproval{
+			RequestID: requestID,
+			PolicyResult: policies.Result{
+				RequestID: requestID,
+				Decision:  policies.DecisionRequiresApproval,
+				RiskLevel: policies.RiskLevel(definition.RiskLevel),
+				Reasons:   []string{reason},
+			},
+		}
+	default:
+		return nil, nil
+	}
+}
+
+func (g *GatedRunner) afterTool(
+	ctx context.Context,
+	requestID string,
+	sessionID string,
+	definition tools.ToolDefinition,
+	input map[string]any,
+	result tools.ToolResult,
+	execErr error,
+	startedAt time.Time,
+) {
+	if g == nil || g.toolHooks == nil {
+		return
+	}
+	_ = g.toolHooks.AfterTool(ctx, toolhooks.PostToolInput{
+		RequestID:  requestID,
+		SessionID:  sessionID,
+		ToolCallID: requestID,
+		ToolName:   definition.Name,
+		Input:      cloneMap(input),
+		Definition: definition,
+		Result:     result,
+		Err:        execErr,
+		StartedAt:  startedAt,
+		FinishedAt: time.Now(),
+		Source:     "sandbox_gate",
+	})
+}
+
+func sandboxToolDefinition(name string) tools.ToolDefinition {
+	return tools.ToolDefinition{
+		Name:             name,
+		Group:            "sandbox",
+		Capability:       tools.CapabilityMutating,
+		RiskLevel:        tools.RiskLevelCodeExecution,
+		RequiresApproval: true,
+		Enabled:          true,
+	}
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

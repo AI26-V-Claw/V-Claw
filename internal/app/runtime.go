@@ -11,6 +11,7 @@ import (
 
 	"vclaw/internal/agent"
 	"vclaw/internal/agent/reference"
+	"vclaw/internal/audit"
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
@@ -24,12 +25,13 @@ import (
 	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
 	gmailtool "vclaw/internal/tools/office/gmail"
-	fstool "vclaw/internal/tools/os/filesystem"
 	peopletool "vclaw/internal/tools/office/people"
+	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
 )
@@ -52,6 +54,7 @@ type AgentRuntimeConfig struct {
 	StateStore   agent.RuntimeStateStore
 
 	Logger        *slog.Logger
+	AuditLogger   audit.AuditEventLogger
 	MaxIterations int
 	Observer      agent.RuntimeObserver
 
@@ -84,6 +87,16 @@ type RuntimeBundle struct {
 }
 
 func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle, error) {
+	dataDir := strings.TrimSpace(config.DataDir)
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	auditLogger, err := resolveAuditLogger(dataDir, config.AuditLogger)
+	if err != nil {
+		return RuntimeBundle{}, fmt.Errorf("create audit logger: %w", err)
+	}
+	config.AuditLogger = auditLogger
+
 	provider := config.Provider
 	model := strings.TrimSpace(config.OpenAIModel)
 	if model == "" {
@@ -110,10 +123,6 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		return RuntimeBundle{}, err
 	}
 
-	dataDir := strings.TrimSpace(config.DataDir)
-	if dataDir == "" {
-		dataDir = "./data"
-	}
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
 		sessionStore, err = sessions.NewFileStore(dataDir)
@@ -149,14 +158,15 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),
 		),
-		SessionStore:          sessionStore,
-		Policy:                userPolicy,
-		StateStore:            stateStore,
-		Logger:                config.Logger,
-		MaxIterations:         config.MaxIterations,
-		Model:                 model,
-		Compactor:             compactor,
-		MemoryClassifierModel: compactorModel,
+		SessionStore:               sessionStore,
+		Policy:                     userPolicy,
+		StateStore:                 stateStore,
+		Logger:                     config.Logger,
+		ToolHooks:                  toolhooks.AuditHooks{Logger: auditLogger},
+		MaxIterations:              config.MaxIterations,
+		Model:                      model,
+		Compactor:                  compactor,
+		MemoryClassifierModel:      compactorModel,
 		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,
@@ -300,6 +310,7 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 	gatedRunner := sandboxgate.NewGatedRunner(sandboxgate.Config{
 		Checker:          policies.DefaultChecker,
 		Detector:         safety.DefaultScanner,
+		Logger:           config.AuditLogger,
 		Runner:           dockerRunner,
 		SkipApprovalGate: true,
 	})
@@ -308,6 +319,19 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 		Guard:               guard,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
+}
+
+func resolveAuditLogger(dataDir string, provided audit.AuditEventLogger) (audit.AuditEventLogger, error) {
+	if provided != nil {
+		return provided, nil
+	}
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = "."
+	}
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return nil, err
+	}
+	return audit.NewFileLogger(filepath.Join(dataDir, "tool_audit.jsonl"))
 }
 
 func loadToolPolicy(logger *slog.Logger) (policies.ToolPolicy, *policies.UserPolicyStore, error) {

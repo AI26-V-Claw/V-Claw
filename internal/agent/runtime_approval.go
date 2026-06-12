@@ -10,6 +10,7 @@ import (
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 )
 
@@ -485,7 +486,8 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 	}
 
 	startedAt := time.Now()
-	result := r.executeAllowedTool(ctx, pending.toolCall, pending.definition)
+	execCtx := toolhooks.WithRequestContext(ctx, pending.message.RequestID, pending.message.SessionID)
+	result := r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
 	if errShape := r.recordRuntimeToolCall(ctx, record.RunID, pending.toolCall, result, time.Since(startedAt)); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
