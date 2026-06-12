@@ -1303,6 +1303,7 @@ For Google Chat tools:
 - If the target space is still ambiguous after read-tool resolution, ask one concise clarification question before calling a write tool.
 For Google Drive tools:
 - For requests like "move file X into folder Y", "di chuyển file X vào folder Y", or "chuyển file X vào thư mục Y", resolve the source file and target folder with drive.listFiles first, then call drive.moveFile with fileId and targetParentId.
+- For requests like "create folder X", "tạo folder X", or "tạo thư mục X", call drive.createFolder with name. If the user names a parent folder/location, resolve that parent folder with drive.listFiles first, then pass its Drive ID in parentIds.
 - Do NOT call clarify to ask for file or folder names when the user has already provided them as natural-language text (e.g. "Thuật toán binary search", "Nhập môn lập trình"). Those names are sufficient; always resolve them with drive.listFiles first.
 - Do not use drive.updateFileMetadata for moving files, changing folders, or changing parents. drive.updateFileMetadata is only for name, description, or starred metadata.
 - If a Drive file/folder name search returns multiple plausible matches, ask one concise clarification question before calling a write tool.

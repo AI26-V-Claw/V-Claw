@@ -358,7 +358,7 @@ func googleSheetsServiceFromArgs(ctx context.Context, name string, args []string
 }
 
 func printWorkspaceOutput(output any, toolErr any) error {
-	if toolErr != nil {
+	if !isNilToolErr(toolErr) {
 		data, err := json.Marshal(toolErr)
 		if err != nil {
 			return fmt.Errorf("%v", toolErr)
@@ -371,6 +371,22 @@ func printWorkspaceOutput(output any, toolErr any) error {
 	}
 	fmt.Println(string(data))
 	return nil
+}
+
+func isNilToolErr(toolErr any) bool {
+	if toolErr == nil {
+		return true
+	}
+	switch v := toolErr.(type) {
+	case *drivetool.ErrorShape:
+		return v == nil
+	case *docstool.ErrorShape:
+		return v == nil
+	case *sheetstool.ErrorShape:
+		return v == nil
+	default:
+		return false
+	}
 }
 
 func parseRowsJSON(value string) ([][]any, error) {

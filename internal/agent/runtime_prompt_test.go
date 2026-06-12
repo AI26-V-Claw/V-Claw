@@ -64,3 +64,16 @@ func TestRuntimePromptRoutesDriveMoveToMoveFile(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimePromptRoutesDriveFolderCreationToCreateFolder(t *testing.T) {
+	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 11, 18, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
+	for _, want := range []string{
+		"tạo thư mục X",
+		"drive.createFolder",
+		"parentIds",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected runtime prompt to contain %q", want)
+		}
+	}
+}

@@ -204,6 +204,7 @@ func CreateFolder(ctx context.Context, client *http.Client, name string, parentI
 		Parents:  cleanStrings(parentIDs),
 	}
 	created, err := service.Files.Create(file).
+		SupportsAllDrives(true).
 		Fields("id, name, mimeType, webViewLink, parents").
 		Do()
 	if err != nil {
@@ -226,6 +227,7 @@ func CreateFile(ctx context.Context, client *http.Client, name string, mimeType 
 		Parents:  cleanStrings(parentIDs),
 	}
 	created, err := service.Files.Create(file).
+		SupportsAllDrives(true).
 		Media(content).
 		Fields("id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed").
 		Do()
