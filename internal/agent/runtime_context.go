@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
@@ -60,22 +58,14 @@ func historyWithSessionMemory(memory sessions.SessionMemory, history []string) [
 }
 
 func (r *Runtime) traceData(parts ...any) map[string]any {
-	var classification *agentintent.ClassificationOutput
 	var planResult *TaskPlanResult
 	var resolution *reference.Resolution
-	var routes []*TurnRoute
 	for _, part := range parts {
 		switch typed := part.(type) {
-		case *agentintent.ClassificationOutput:
-			classification = typed
 		case *TaskPlanResult:
 			planResult = typed
 		case *reference.Resolution:
 			resolution = typed
-		case *TurnRoute:
-			if typed != nil {
-				routes = append(routes, typed)
-			}
 		}
 	}
 	data := map[string]any{
@@ -89,21 +79,6 @@ func (r *Runtime) traceData(parts ...any) map[string]any {
 			"source":             resolution.Source,
 			"confidence":         resolution.Confidence,
 			"needsClarification": resolution.NeedsClarification,
-		}
-	}
-	if len(routes) > 0 && routes[0] != nil {
-		data["turnRouter"] = map[string]any{
-			"mode":   routes[0].Mode,
-			"reason": routes[0].Reason,
-		}
-	}
-	if classification != nil && classification.Intent != nil {
-		data["intent"] = map[string]any{
-			"type":                 classification.Intent.Type,
-			"confidence":           classification.Intent.Confidence,
-			"needsClarification":   classification.NeedsClarification,
-			"clarificationMessage": classification.ClarificationMessage,
-			"toolCalls":            classification.Intent.ToolCalls,
 		}
 	}
 	if planResult != nil && len(planResult.Plan.Steps) > 0 {

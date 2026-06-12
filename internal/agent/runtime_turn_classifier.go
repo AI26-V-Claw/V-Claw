@@ -29,7 +29,7 @@ func heuristicMemoryMode(text string) memoryMode {
 }
 
 // turnAnalysis is the result of a single pre-turn LLM call that classifies
-// the semantic intent of the user's message. Replaces the individual keyword
+// the semantic meaning of the user's message. Replaces the individual keyword
 // heuristics: isLikelyClarificationAnswer, isLikelyResultFollowUpQuestion,
 // isLikelyContextualFollowUpQuestion, and classifyMemoryMode.
 type turnAnalysis struct {

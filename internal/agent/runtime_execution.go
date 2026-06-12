@@ -217,7 +217,7 @@ func normalizeCalendarListEventsArgs(now time.Time, args map[string]any, userTex
 	normalized["timeMin"] = start.Format(time.RFC3339)
 	normalized["timeMax"] = end.Format(time.RFC3339)
 	if query, ok := normalized["query"].(string); ok {
-		normalized["query"] = normalizeRelativeProviderQuery(query, userText, calendarQueryIntentTerms())
+		normalized["query"] = normalizeRelativeProviderQuery(query, userText, calendarQueryPurposeTerms())
 	}
 	return normalized
 }
@@ -236,7 +236,7 @@ func normalizeGmailListArgs(now time.Time, args map[string]any, userText string)
 	}
 	baseQuery := ""
 	if query, ok := normalized["query"].(string); ok {
-		baseQuery = normalizeRelativeProviderQuery(query, userText, gmailQueryIntentTerms())
+		baseQuery = normalizeRelativeProviderQuery(query, userText, gmailQueryPurposeTerms())
 	}
 	if hasSentRecipient {
 		baseQuery = sentQuery
@@ -360,7 +360,7 @@ func providerRelativeDateRange(now time.Time, userText string) (time.Time, time.
 	}
 }
 
-func normalizeRelativeProviderQuery(query string, userText string, intentTerms []string) string {
+func normalizeRelativeProviderQuery(query string, userText string, purposeTerms []string) string {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
 		return ""
@@ -370,7 +370,7 @@ func normalizeRelativeProviderQuery(query string, userText string, intentTerms [
 	if queryText == userText {
 		return ""
 	}
-	if containsAnyText(queryText, relativeQueryTerms()...) && containsAnyText(queryText, intentTerms...) {
+	if containsAnyText(queryText, relativeQueryTerms()...) && containsAnyText(queryText, purposeTerms...) {
 		return ""
 	}
 	return trimmed
@@ -384,11 +384,11 @@ func relativeQueryTerms() []string {
 	}
 }
 
-func calendarQueryIntentTerms() []string {
+func calendarQueryPurposeTerms() []string {
 	return []string{"lich", "calendar", "su kien", "event"}
 }
 
-func gmailQueryIntentTerms() []string {
+func gmailQueryPurposeTerms() []string {
 	return []string{"email", "mail", "gmail", "thu", "hop thu"}
 }
 
