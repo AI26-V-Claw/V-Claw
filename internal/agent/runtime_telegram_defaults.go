@@ -36,9 +36,13 @@ func applyChannelToolDefaults(message contracts.UserMessage, toolCall providers.
 }
 
 func telegramDownloadOutputDir() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	homeDir := strings.TrimSpace(os.Getenv("HOME"))
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
 	}
 
 	downloadsDir := filepath.Join(homeDir, "Downloads")
