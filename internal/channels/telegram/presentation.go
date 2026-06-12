@@ -278,9 +278,13 @@ func telegramDownloadAttachmentsResultText(results []contracts.ToolResult) strin
 }
 
 func telegramDownloadOutputDir() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	homeDir := strings.TrimSpace(os.Getenv("HOME"))
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
 	}
 
 	downloadsDir := filepath.Join(homeDir, "Downloads")
@@ -299,8 +303,15 @@ func telegramDisplayDownloadDir(path string) string {
 		return "~/Downloads/Vclaw/"
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err == nil && strings.TrimSpace(homeDir) != "" {
+	homeDir := strings.TrimSpace(os.Getenv("HOME"))
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			homeDir = ""
+		}
+	}
+	if strings.TrimSpace(homeDir) != "" {
 		homeDir = filepath.Clean(homeDir)
 		cleanDir := filepath.Clean(dir)
 		if cleanDir == homeDir {
