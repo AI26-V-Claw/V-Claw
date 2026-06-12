@@ -1188,7 +1188,11 @@ func (t GmailTool) Capability() tools.Capability {
 
 func (t GmailTool) RiskLevel() tools.RiskLevel {
 	switch t.name {
-	case ToolNameListEmails, ToolNameGetEmail, ToolNameListLabels, ToolNameGetProfile, ToolNameListThreads, ToolNameGetThread, ToolNameListDrafts, ToolNameGetDraft:
+	case ToolNameGetEmail:
+		// Reading a full email (body + attachment metadata) is a sensitive read:
+		// it stays read-only but requires approval and is redacted from LLM context.
+		return tools.RiskLevelSensitiveRead
+	case ToolNameListEmails, ToolNameListLabels, ToolNameGetProfile, ToolNameListThreads, ToolNameGetThread, ToolNameListDrafts, ToolNameGetDraft:
 		return tools.RiskLevelSafeRead
 	case ToolNameDownloadAttachments:
 		return tools.RiskLevelLocalWrite
@@ -1268,27 +1272,11 @@ func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 	for _, entry := range RegistryEntries {
-		if err := registry.RegisterWithEntry(NewTool(entry.Name, service), gmailRegistryEntry(entry)); err != nil {
+		if err := registry.RegisterWithEntry(NewTool(entry.Name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func gmailRegistryEntry(entry ToolRegistryEntry) tools.ToolRegistryEntry {
-	capability := tools.CapabilityReadOnly
-	if entry.RequiresApproval {
-		capability = tools.CapabilityMutating
-	}
-	return tools.ToolRegistryEntry{
-		Name:             entry.Name,
-		Owner:            entry.Owner,
-		Group:            "google_workspace",
-		Description:      entry.Description,
-		Capability:       capability,
-		RiskLevel:        tools.RiskLevel(entry.DefaultRiskLevel),
-		RequiresApproval: entry.RequiresApproval,
-	}
 }
 
 func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) tools.ToolResult {
@@ -1297,7 +1285,30 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 	}
 	userContent := formatJSON(output)
 	llmContent := formatJSON(compactOutputForLLM(call.Name, output))
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent}
+	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent, ArtifactRef: gmailArtifactRef(call.Name, output)}
+}
+
+// gmailArtifactRef returns a typed reference to the message produced by a Gmail
+// write tool, so the messenger no longer has to parse it back out of the result
+// text. Returns nil when the tool produces no referenceable artifact.
+func gmailArtifactRef(toolName string, output any) *tools.ToolArtifactRef {
+	if toolName != ToolNameSendDraft {
+		return nil
+	}
+	out, ok := output.(SendDraftOutput)
+	if !ok {
+		return nil
+	}
+	id := strings.TrimSpace(out.Message.ID)
+	if id == "" {
+		return nil
+	}
+	return &tools.ToolArtifactRef{
+		Kind:  "gmail.message",
+		Label: "Gmail message",
+		ID:    id,
+		URI:   "https://mail.google.com/mail/u/0/#sent/" + id,
+	}
 }
 
 func toolErrorResult(call tools.ToolCall, errShape *ErrorShape) tools.ToolResult {

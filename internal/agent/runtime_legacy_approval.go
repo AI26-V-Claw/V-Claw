@@ -284,7 +284,7 @@ func contractToolResult(result tools.ToolResult) contracts.ToolResult {
 		ArtifactRef: convertToolArtifactRef(result.ArtifactRef),
 		Metadata:    cloneMetadataMap(result.Metadata),
 		Truncated:   result.Truncated,
-		Redacted:    toolResultRedacted(result),
+		Redacted:    result.Redacted,
 	}
 	if result.Error != nil {
 		contractResult.Error = toolErrorShape(result)

@@ -254,13 +254,15 @@ Error:
 }
 ```
 
-`artifactRef` is required when the tool reads or writes a concrete primary resource that can be referenced safely, such as a file, URL, Gmail message, Chat message, Calendar event, Drive file, Docs document, or Sheets spreadsheet.
+`data` carries the result **content** payload (`contentForUser` and `contentForLLM`). The sibling fields — `artifactRef`, `metadata`, `truncated`, `redacted` — are typed **metadata about that payload**. The two axes are independent: `data` is the content channel (and the only field the agent transcript/memory reads, via `contentForLLM`), while the typed fields describe it. Do not duplicate content into the typed fields, and do not store flags inside `data`.
 
-`metadata` is for structured non-sensitive execution details such as byte counts, line counts, query parameters, and pagination state.
+`artifactRef` is required when the tool reads or writes a concrete primary resource that can be referenced safely, such as a file, URL, Gmail message, Chat message, Calendar event, Drive file, Docs document, or Sheets spreadsheet. **The tool that produces the resource sets `artifactRef` directly from its typed output** (e.g. each office tool's `*ArtifactRef` helper). Downstream consumers (messenger, channels) read it as-is; they MUST NOT reverse-engineer a reference by re-parsing `contentForLLM`/`contentForUser`. `artifactRef.meta` carries optional secondary references tied to the resource, e.g. a Calendar event's Google Meet link.
+
+`metadata` is for structured non-sensitive execution details such as byte counts, line counts, query parameters, and pagination state. It MUST NOT carry control flags such as redaction state.
 
 `truncated=true` means one or more result payloads were shortened before crossing the contract boundary.
 
-`redacted=true` means sensitive content was removed or masked before the result was added to LLM context. User-facing text can remain more detailed when appropriate, but logs, session observations, and LLM-visible content must use the sanitized result.
+`redacted=true` means sensitive content was removed or masked before the result was added to LLM context. `redacted` is a typed boolean and is the single source of truth for redaction state (it is never stored as a `metadata` key). User-facing text can remain more detailed when appropriate, but logs, session observations, and LLM-visible content must use the sanitized result.
 
 ---
 
@@ -569,6 +571,10 @@ Rules:
 | `sheets.duplicateSheet` | Integration | `external_write` | Yes |
 
 > Drive/Docs/Sheets remain read-first: list/get/read/export/download tools are safe reads with bounded output. Create/update/append/share/move/upload/revoke/clear/tab-management tools must pass the same HITL approval boundary before execution. `drive.trashFile` and `sheets.deleteSheet` are destructive because they remove content from normal user views.
+>
+> Two additional safety constraints apply beyond approval:
+> - **`drive.uploadFile` is sandboxed.** Its `localPath` is resolved through the same workspace `PathGuard` as the filesystem tools; a path outside the sandbox workspace is rejected with `INVALID_INPUT`. The tool must be constructed with a guard — without one, upload is refused. This prevents the agent from uploading host files such as `configs/google/token.json` or `.env`.
+> - **`drive.shareFile` cannot grant public write access.** When `type=anyone`, `role` must be `reader`; `writer` or `commenter` for `anyone` is rejected with `INVALID_INPUT`. Public links are read-only.
 
 ### Calendar
 

@@ -36,15 +36,13 @@ func RedactResult(result ToolResult, riskLevel RiskLevel) ToolResult {
 	// Pattern-based masking always applies to ContentForLLM.
 	out.ContentForLLM = maskSensitivePatterns(result.ContentForLLM)
 	if out.ContentForLLM != result.ContentForLLM {
-		out.Metadata = cloneMetadata(result.Metadata)
-		out.Metadata["_redacted"] = true
+		out.Redacted = true
 	}
 
 	// Risk-based: for sensitive_read tools, suppress the LLM body and flag it.
 	if riskLevel == RiskLevelSensitiveRead && result.Success {
 		out.ContentForLLM = summarizeSensitiveContent(out.ContentForLLM)
-		out.Metadata = cloneMetadata(result.Metadata)
-		out.Metadata["_redacted"] = true
+		out.Redacted = true
 	}
 
 	return out
@@ -80,13 +78,4 @@ func summarizeSensitiveContent(content string) string {
 		return "[sensitive content redacted from LLM context]"
 	}
 	return header + "\n[sensitive content redacted from LLM context]"
-}
-
-// cloneMetadata returns a shallow copy of m (or a new map if m is nil).
-func cloneMetadata(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m)+1)
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }

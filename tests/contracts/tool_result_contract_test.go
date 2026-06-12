@@ -257,7 +257,7 @@ func TestGoogleWorkspaceToolMetadataNoDrift(t *testing.T) {
 		{name: "calendar", fn: func(r *tools.ToolRegistry) error { return calendar.RegisterTools(r, nil) }},
 		{name: "chat", fn: func(r *tools.ToolRegistry) error { return chat.RegisterTools(r, nil) }},
 		{name: "docs", fn: func(r *tools.ToolRegistry) error { return docs.RegisterTools(r, nil) }},
-		{name: "drive", fn: func(r *tools.ToolRegistry) error { return drive.RegisterTools(r, nil) }},
+		{name: "drive", fn: func(r *tools.ToolRegistry) error { return drive.RegisterTools(r, nil, nil) }},
 		{name: "gmail", fn: func(r *tools.ToolRegistry) error { return gmail.RegisterTools(r, nil) }},
 		{name: "people", fn: func(r *tools.ToolRegistry) error { return people.RegisterTools(r, nil) }},
 		{name: "sheets", fn: func(r *tools.ToolRegistry) error { return sheets.RegisterTools(r, nil) }},
@@ -309,7 +309,7 @@ func TestGoogleWorkspaceToolMetadataNoDrift(t *testing.T) {
 func TestDriveDocsSheetsReadFirstAndWriteToolsRequireHITL(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	for _, registerer := range []func(*tools.ToolRegistry) error{
-		func(r *tools.ToolRegistry) error { return drive.RegisterTools(r, nil) },
+		func(r *tools.ToolRegistry) error { return drive.RegisterTools(r, nil, nil) },
 		func(r *tools.ToolRegistry) error { return docs.RegisterTools(r, nil) },
 		func(r *tools.ToolRegistry) error { return sheets.RegisterTools(r, nil) },
 	} {
@@ -417,9 +417,13 @@ func addGoogleWorkspaceFixtures(dest map[string]toolMetaFixture, entries any) {
 		name := entry.FieldByName("Name").String()
 		riskLevel := tools.RiskLevel(entry.FieldByName("DefaultRiskLevel").String())
 		requiresApproval := entry.FieldByName("RequiresApproval").Bool()
-		capability := tools.CapabilityReadOnly
-		if requiresApproval {
-			capability = tools.CapabilityMutating
+		// Capability follows the risk level, not the approval flag: a read that
+		// requires approval (e.g. gmail.getEmail / sensitive_read) is still
+		// read-only, not mutating. Approval and capability are independent axes.
+		capability := tools.CapabilityMutating
+		switch riskLevel {
+		case tools.RiskLevelSafeRead, tools.RiskLevelSensitiveRead, tools.RiskLevelSafeCompute:
+			capability = tools.CapabilityReadOnly
 		}
 		dest[name] = toolMetaFixture{
 			name:             name,

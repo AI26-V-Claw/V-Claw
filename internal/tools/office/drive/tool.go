@@ -292,6 +292,11 @@ func (s *Service) ShareFile(ctx context.Context, input ShareFileInput) (gdrive.P
 	if !contains([]string{"reader", "commenter", "writer"}, input.Role) {
 		return gdrive.PermissionSummary{}, invalidInput("role must be one of: reader, commenter, writer")
 	}
+	// Public sharing (type=anyone) must never grant write access. Anyone+writer
+	// would expose the file to edits by the entire internet; cap it at read-only.
+	if input.Type == "anyone" && input.Role != "reader" {
+		return gdrive.PermissionSummary{}, invalidInput("public sharing (type=anyone) is limited to role=reader; granting writer or commenter to anyone is not allowed")
+	}
 	if (input.Type == "user" || input.Type == "group") && strings.TrimSpace(input.EmailAddress) == "" {
 		return gdrive.PermissionSummary{}, invalidInput("emailAddress is required for user or group permissions")
 	}
@@ -413,13 +418,40 @@ func (s *Service) validateConnector() *ErrorShape {
 	return nil
 }
 
+// PathGuard validates and resolves a local path against an allowed sandbox
+// workspace. drive.uploadFile uses it so the agent can only upload files that
+// live inside the workspace, never arbitrary host paths (e.g. token.json, .env).
+// filesystem.PathGuard satisfies this interface.
+type PathGuard interface {
+	Resolve(path string) (string, error)
+}
+
 type DriveTool struct {
 	name    string
 	service *Service
+	guard   PathGuard
 }
 
-func NewTool(name string, service *Service) DriveTool {
-	return DriveTool{name: name, service: service}
+func NewTool(name string, service *Service, guard PathGuard) DriveTool {
+	return DriveTool{name: name, service: service, guard: guard}
+}
+
+// resolveUploadPath validates a caller-supplied localPath against the sandbox
+// workspace guard before any upload happens. Without a guard, upload is refused
+// so the agent can never read arbitrary host files (credentials, tokens, etc.).
+func (t DriveTool) resolveUploadPath(localPath string) (string, *ErrorShape) {
+	localPath = strings.TrimSpace(localPath)
+	if localPath == "" {
+		return "", invalidInput("localPath is required")
+	}
+	if t.guard == nil {
+		return "", invalidInput("file upload is unavailable: no sandbox workspace is configured")
+	}
+	resolved, err := t.guard.Resolve(localPath)
+	if err != nil {
+		return "", invalidInput("localPath is outside the allowed workspace: " + err.Error())
+	}
+	return resolved, nil
 }
 
 func (t DriveTool) Name() string { return t.name }
@@ -505,7 +537,7 @@ func (t DriveTool) Parameters() tools.ToolSchema {
 	case ToolNameShareFile:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{
 			"fileId":                map[string]any{"type": "string"},
-			"type":                  map[string]any{"type": "string", "enum": []string{"user", "group", "domain", "anyone"}},
+			"type":                  map[string]any{"type": "string", "enum": []string{"user", "group", "domain", "anyone"}, "description": "Audience. When type=anyone (public link), role must be reader; public writer/commenter is rejected."},
 			"role":                  map[string]any{"type": "string", "enum": []string{"reader", "commenter", "writer"}},
 			"emailAddress":          map[string]any{"type": "string"},
 			"allowFileDiscovery":    map[string]any{"type": "boolean"},
@@ -580,7 +612,11 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		output, errShape := t.service.CreateFile(ctx, CreateFileInput{Name: stringArg(call.Arguments, "name"), MimeType: stringArg(call.Arguments, "mimeType"), Content: stringArg(call.Arguments, "content"), ParentIDs: stringSliceArg(call.Arguments, "parentIds")})
 		return outputToolResult(call, map[string]any{"File": output}, errShape)
 	case ToolNameUploadFile:
-		output, errShape := t.service.UploadFile(ctx, UploadFileInput{LocalPath: stringArg(call.Arguments, "localPath"), Name: stringArg(call.Arguments, "name"), MimeType: stringArg(call.Arguments, "mimeType"), ParentIDs: stringSliceArg(call.Arguments, "parentIds")})
+		localPath, errShape := t.resolveUploadPath(stringArg(call.Arguments, "localPath"))
+		if errShape != nil {
+			return outputToolResult(call, nil, errShape)
+		}
+		output, errShape := t.service.UploadFile(ctx, UploadFileInput{LocalPath: localPath, Name: stringArg(call.Arguments, "name"), MimeType: stringArg(call.Arguments, "mimeType"), ParentIDs: stringSliceArg(call.Arguments, "parentIds")})
 		return outputToolResult(call, map[string]any{"File": output}, errShape)
 	case ToolNameUpdateFileMetadata:
 		output, errShape := t.service.UpdateFileMetadata(ctx, UpdateFileMetadataInput{FileID: stringArg(call.Arguments, "fileId"), Name: stringArg(call.Arguments, "name"), Description: stringArg(call.Arguments, "description"), Starred: optionalBoolArg(call.Arguments, "starred")})
@@ -611,9 +647,9 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	}
 }
 
-func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
+func RegisterTools(registry *tools.ToolRegistry, service *Service, guard PathGuard) error {
 	for _, name := range []string{ToolNameListFiles, ToolNameGetFile, ToolNameExportFile, ToolNameDownloadFile, ToolNameCreateFolder, ToolNameCreateFile, ToolNameUploadFile, ToolNameUpdateFileMetadata, ToolNameShareFile, ToolNameListPermissions, ToolNameRevokePermission, ToolNameMoveFile, ToolNameMoveFiles, ToolNameTrashFile, ToolNameUntrashFile} {
-		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
+		if err := registry.RegisterWithEntry(NewTool(name, service, guard), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
 	}

@@ -171,6 +171,7 @@ func convertToolArtifactRef(ref *tools.ToolArtifactRef) *contracts.ArtifactRef {
 		Label: ref.Label,
 		URI:   ref.URI,
 		ID:    ref.ID,
+		Meta:  ref.Meta,
 	}
 }
 
@@ -183,9 +184,4 @@ func cloneMetadataMap(metadata map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
-}
-
-func toolResultRedacted(result tools.ToolResult) bool {
-	redacted, _ := result.Metadata["_redacted"].(bool)
-	return redacted
 }

@@ -21,8 +21,8 @@ func TestRedactLeavesLowRiskUnchanged(t *testing.T) {
 	if out.ContentForUser != result.ContentForUser {
 		t.Errorf("ContentForUser should never be modified; got %q", out.ContentForUser)
 	}
-	if out.Metadata["_redacted"] == true {
-		t.Error("low-risk result should not have _redacted metadata")
+	if out.Redacted {
+		t.Error("low-risk result should not be flagged Redacted")
 	}
 }
 
@@ -46,8 +46,8 @@ func TestRedactSensitiveReadTruncatesLLMContent(t *testing.T) {
 	if !strings.Contains(out.ContentForLLM, "[sensitive content redacted from LLM context]") {
 		t.Errorf("expected redaction notice in ContentForLLM; got: %q", out.ContentForLLM)
 	}
-	if out.Metadata["_redacted"] != true {
-		t.Error("expected _redacted=true in Metadata after sensitive redaction")
+	if !out.Redacted {
+		t.Error("expected Redacted=true after sensitive redaction")
 	}
 }
 
@@ -132,8 +132,8 @@ func TestRedactDoesNotModifyOriginalResult(t *testing.T) {
 	if result.ContentForLLM != original {
 		t.Error("RedactResult must not mutate the original result's ContentForLLM")
 	}
-	if result.Metadata["_redacted"] == true {
-		t.Error("RedactResult must not mutate the original result's Metadata")
+	if result.Redacted {
+		t.Error("RedactResult must not mutate the original result's Redacted flag")
 	}
 }
 

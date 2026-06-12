@@ -179,122 +179,12 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 	}
 }
 
+// preferredArtifactRef returns the artifact reference the tool attached to its
+// result. Tools set this directly at the tool layer (see each office tool's
+// *ArtifactRef helper), so the messenger never reverse-engineers it from result
+// text. Returns nil when the tool produced no referenceable artifact.
 func preferredArtifactRef(result contracts.ToolResult) *contracts.ArtifactRef {
-	if result.ArtifactRef != nil {
-		return result.ArtifactRef
-	}
-	return buildArtifactRef(result.ToolName, result.Data)
-}
-
-func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
-	payload, ok := data.(map[string]any)
-	if !ok {
-		return nil
-	}
-	content, ok := payload["contentForUser"].(string)
-	if !ok || strings.TrimSpace(content) == "" {
-		return nil
-	}
-	value, ok := extractJSONValue(content)
-	if !ok {
-		return nil
-	}
-
-	switch strings.TrimSpace(toolName) {
-	case "chat.sendMessage":
-		if message, ok := nestedMap(value, "Message"); ok {
-			id := firstStringValue(message, "Name", "name")
-			if id == "" {
-				return nil
-			}
-			return &contracts.ArtifactRef{
-				Kind:  "chat.message",
-				Label: "Google Chat message",
-				ID:    id,
-			}
-		}
-	case "gmail.sendDraft":
-		if message, ok := nestedMap(value, "Message"); ok {
-			id := firstStringValue(message, "ID", "Id", "id")
-			if id == "" {
-				return nil
-			}
-			return &contracts.ArtifactRef{
-				Kind:  "gmail.message",
-				Label: "Gmail message",
-				ID:    id,
-				URI:   "https://mail.google.com/mail/u/0/#sent/" + id,
-			}
-		}
-	case "calendar.createEvent":
-		if event, ok := nestedMap(value, "Event"); ok {
-			id := firstStringValue(event, "ID", "Id", "id")
-			if id == "" {
-				return nil
-			}
-			ref := &contracts.ArtifactRef{
-				Kind:  "calendar.event",
-				Label: "Google Calendar event",
-				ID:    id,
-				URI:   "https://calendar.google.com/calendar/r/eventedit/" + id,
-			}
-			if meetLink := firstStringValue(event, "MeetLink", "meetLink"); meetLink != "" {
-				ref.Meta = map[string]any{"meetLink": meetLink}
-			}
-			return ref
-		}
-	case "drive.createFolder", "drive.createFile", "drive.uploadFile", "drive.updateFileMetadata", "drive.moveFile", "drive.moveFiles", "drive.trashFile", "drive.untrashFile":
-		if file, ok := nestedMap(value, "File"); ok {
-			return artifactRefFromFile(file)
-		}
-	case "docs.createDocument":
-		if doc, ok := value.(map[string]any); ok {
-			id := firstStringValue(doc, "ID", "Id", "id")
-			if id == "" {
-				return nil
-			}
-			return &contracts.ArtifactRef{
-				Kind:  "google.docs.document",
-				Label: firstNonEmpty("Google Docs document", firstStringValue(doc, "Title", "title")),
-				ID:    id,
-				URI:   "https://docs.google.com/document/d/" + id + "/edit",
-			}
-		}
-	case "sheets.createSpreadsheet", "sheets.addSheet", "sheets.renameSheet", "sheets.deleteSheet", "sheets.duplicateSheet":
-		if spreadsheet, ok := value.(map[string]any); ok {
-			id := firstStringValue(spreadsheet, "ID", "Id", "id")
-			if id == "" {
-				return nil
-			}
-			return &contracts.ArtifactRef{
-				Kind:  "google.sheets.spreadsheet",
-				Label: firstNonEmpty("Google Sheets spreadsheet", firstStringValue(spreadsheet, "Title", "title")),
-				ID:    id,
-				URI:   firstStringValue(spreadsheet, "SpreadsheetURL", "spreadsheetURL", "spreadsheetUrl"),
-			}
-		}
-	}
-	return nil
-}
-
-func artifactRefFromFile(file map[string]any) *contracts.ArtifactRef {
-	id := firstStringValue(file, "ID", "Id", "id")
-	if id == "" {
-		return nil
-	}
-	return &contracts.ArtifactRef{
-		Kind:  "google.drive.file",
-		Label: firstNonEmpty("Google Drive file", firstStringValue(file, "Name", "name")),
-		ID:    id,
-		URI:   firstStringValue(file, "WebViewLink", "webViewLink"),
-	}
-}
-
-func firstNonEmpty(fallback string, value string) string {
-	if strings.TrimSpace(value) != "" {
-		return strings.TrimSpace(value)
-	}
-	return fallback
+	return result.ArtifactRef
 }
 
 func extractUserText(data any) string {

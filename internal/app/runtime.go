@@ -186,11 +186,7 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	// filesystem tools must use the same directory that sandbox.runShell mounts as /workspace.
 	// sandbox.runShell calls PrepareSessionWorkspace(DefaultSessionID) → <root>/<session>/workspace/.
 	// Aligning AllowedRoots here ensures writeFile/readFile/deleteFile operate on the same path.
-	sandboxRoot := strings.TrimSpace(config.SandboxWorkspaceDir)
-	if sandboxRoot == "" {
-		sandboxRoot = ".sandbox-workspace"
-	}
-	fsRoot := filepath.Join(sandboxRoot, sandboxtool.DefaultSessionID, "workspace")
+	fsRoot := sandboxWorkspaceFSRoot(config)
 	fstoolConfig := fstool.Config{
 		AllowedRoots: []string{fsRoot},
 	}
@@ -266,7 +262,10 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient))); err != nil {
 		return err
 	}
-	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient))); err != nil {
+	// drive.uploadFile may only read local files from the same sandbox workspace
+	// the filesystem tools are restricted to — never arbitrary host paths.
+	driveUploadGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)), driveUploadGuard); err != nil {
 		return err
 	}
 	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
@@ -287,6 +286,17 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 		return err
 	}
 	return peopletool.RegisterTools(registry, peopletool.NewService(peopleClient))
+}
+
+// sandboxWorkspaceFSRoot returns the single workspace directory that both the
+// filesystem tools and drive.uploadFile are restricted to. It must match what
+// sandbox.runShell mounts as /workspace so all local file access stays aligned.
+func sandboxWorkspaceFSRoot(config AgentRuntimeConfig) string {
+	sandboxRoot := strings.TrimSpace(config.SandboxWorkspaceDir)
+	if sandboxRoot == "" {
+		sandboxRoot = ".sandbox-workspace"
+	}
+	return filepath.Join(sandboxRoot, sandboxtool.DefaultSessionID, "workspace")
 }
 
 func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error) {

@@ -2,12 +2,24 @@ package drive
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	gdrive "vclaw/internal/connectors/google/drive"
 	"vclaw/internal/tools"
 )
+
+// fakeUploadGuard approves only paths under allowedPrefix, modelling the sandbox
+// PathGuard used by drive.uploadFile.
+type fakeUploadGuard struct{ allowedPrefix string }
+
+func (g fakeUploadGuard) Resolve(path string) (string, error) {
+	if g.allowedPrefix != "" && strings.HasPrefix(path, g.allowedPrefix) {
+		return path, nil
+	}
+	return "", errors.New("path is outside allowed directories")
+}
 
 type fakeDriveConnector struct{}
 
@@ -101,7 +113,7 @@ func (c *moveFilesConnector) MoveFile(_ context.Context, fileID string, targetPa
 
 func TestRegisterToolsMetadata(t *testing.T) {
 	registry := tools.NewToolRegistry()
-	if err := RegisterTools(registry, NewService(fakeDriveConnector{})); err != nil {
+	if err := RegisterTools(registry, NewService(fakeDriveConnector{}), nil); err != nil {
 		t.Fatalf("RegisterTools: %v", err)
 	}
 
@@ -124,7 +136,7 @@ func TestRegisterToolsMetadata(t *testing.T) {
 
 func TestMoveFilesMovesEveryFileID(t *testing.T) {
 	connector := &moveFilesConnector{}
-	tool := NewTool(ToolNameMoveFiles, NewService(connector))
+	tool := NewTool(ToolNameMoveFiles, NewService(connector), nil)
 	result := tool.Execute(context.Background(), tools.ToolCall{
 		ID:   "call_move_files",
 		Name: ToolNameMoveFiles,
@@ -149,7 +161,7 @@ func TestMoveFilesMovesEveryFileID(t *testing.T) {
 }
 
 func TestListFilesUsesCompactContentForLLM(t *testing.T) {
-	tool := NewTool(ToolNameListFiles, NewService(listFilesConnector{}))
+	tool := NewTool(ToolNameListFiles, NewService(listFilesConnector{}), nil)
 	result := tool.Execute(context.Background(), tools.ToolCall{
 		ID:        "call_list",
 		Name:      ToolNameListFiles,
@@ -175,7 +187,7 @@ func TestListFilesUsesCompactContentForLLM(t *testing.T) {
 }
 
 func TestUpdateMetadataDescriptionRejectsMoveUse(t *testing.T) {
-	description := NewTool(ToolNameUpdateFileMetadata, NewService(fakeDriveConnector{})).Description()
+	description := NewTool(ToolNameUpdateFileMetadata, NewService(fakeDriveConnector{}), nil).Description()
 	for _, want := range []string{"metadata only", "Do not use this tool to move", "drive.moveFile"} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("expected update metadata description to contain %q, got %q", want, description)
@@ -184,7 +196,7 @@ func TestUpdateMetadataDescriptionRejectsMoveUse(t *testing.T) {
 }
 
 func TestDriveToolResultIncludesArtifactMetadataAndTruncation(t *testing.T) {
-	download := NewTool(ToolNameDownloadFile, NewService(artifactDriveConnector{}))
+	download := NewTool(ToolNameDownloadFile, NewService(artifactDriveConnector{}), nil)
 	result := download.Execute(context.Background(), tools.ToolCall{
 		ID:   "call_download",
 		Name: ToolNameDownloadFile,
@@ -211,6 +223,46 @@ func TestDriveToolResultIncludesArtifactMetadataAndTruncation(t *testing.T) {
 	}
 	if !result.Truncated {
 		t.Fatal("expected truncated result")
+	}
+}
+
+func TestUploadFileRejectsPathOutsideSandbox(t *testing.T) {
+	tool := NewTool(ToolNameUploadFile, NewService(fakeDriveConnector{}), fakeUploadGuard{allowedPrefix: "/workspace/"})
+	result := tool.Execute(context.Background(), tools.ToolCall{ID: "c1", Name: ToolNameUploadFile, Arguments: map[string]any{"localPath": "/etc/passwd"}})
+	if result.Success {
+		t.Fatal("expected upload of out-of-sandbox path to fail")
+	}
+	if result.Error == nil || result.Error.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %#v", result.Error)
+	}
+}
+
+func TestUploadFileAllowsPathInsideSandbox(t *testing.T) {
+	tool := NewTool(ToolNameUploadFile, NewService(fakeDriveConnector{}), fakeUploadGuard{allowedPrefix: "/workspace/"})
+	result := tool.Execute(context.Background(), tools.ToolCall{ID: "c2", Name: ToolNameUploadFile, Arguments: map[string]any{"localPath": "/workspace/report.txt"}})
+	if !result.Success {
+		t.Fatalf("expected in-sandbox upload to succeed, got %#v", result.Error)
+	}
+}
+
+func TestUploadFileWithoutGuardRejected(t *testing.T) {
+	tool := NewTool(ToolNameUploadFile, NewService(fakeDriveConnector{}), nil)
+	result := tool.Execute(context.Background(), tools.ToolCall{ID: "c3", Name: ToolNameUploadFile, Arguments: map[string]any{"localPath": "/workspace/report.txt"}})
+	if result.Success {
+		t.Fatal("expected upload without a configured guard to fail")
+	}
+}
+
+func TestShareFileRejectsPublicWrite(t *testing.T) {
+	service := NewService(fakeDriveConnector{})
+	for _, role := range []string{"writer", "commenter"} {
+		_, errShape := service.ShareFile(context.Background(), ShareFileInput{FileID: "f1", Type: "anyone", Role: role})
+		if errShape == nil || errShape.Code != "INVALID_INPUT" {
+			t.Fatalf("anyone+%s should be rejected with INVALID_INPUT, got %#v", role, errShape)
+		}
+	}
+	if _, errShape := service.ShareFile(context.Background(), ShareFileInput{FileID: "f1", Type: "anyone", Role: "reader"}); errShape != nil {
+		t.Fatalf("anyone+reader should be allowed, got %#v", errShape)
 	}
 }
 

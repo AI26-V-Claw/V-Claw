@@ -285,6 +285,12 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 			ToolResults: []contracts.ToolResult{{
 				ToolName: "gmail.sendDraft",
 				Success:  true,
+				ArtifactRef: &contracts.ArtifactRef{
+					Kind:  "gmail.message",
+					Label: "Gmail message",
+					ID:    "msg_1",
+					URI:   "https://mail.google.com/mail/u/0/#sent/msg_1",
+				},
 				Data: map[string]any{
 					"contentForUser": `{"Message":{"ID":"msg_1","ThreadID":"thread_1","To":"baolnc@vclaw.site","Subject":"Test HITL"}}`,
 				},
@@ -304,6 +310,13 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 			ToolResults: []contracts.ToolResult{{
 				ToolName: "calendar.createEvent",
 				Success:  true,
+				ArtifactRef: &contracts.ArtifactRef{
+					Kind:  "calendar.event",
+					Label: "Google Calendar event",
+					ID:    "event_1",
+					URI:   "https://calendar.google.com/calendar/r/eventedit/event_1",
+					Meta:  map[string]any{"meetLink": "https://meet.google.com/abc-defg-hij"},
+				},
 				Data: map[string]any{
 					"contentForUser": `{"Event":{"id":"event_1","summary":"Test HITL","meetLink":"https://meet.google.com/abc-defg-hij"}}`,
 				},

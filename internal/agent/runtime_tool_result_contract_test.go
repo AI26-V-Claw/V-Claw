@@ -54,8 +54,8 @@ func TestExecuteAllowedToolRedactsSensitiveResultBeforeBoundary(t *testing.T) {
 	if !strings.Contains(result.ContentForUser, "private body") {
 		t.Fatalf("ContentForUser should remain intact, got %q", result.ContentForUser)
 	}
-	if result.Metadata["_redacted"] != true {
-		t.Fatalf("expected _redacted metadata, got %#v", result.Metadata)
+	if !result.Redacted {
+		t.Fatalf("expected Redacted=true after sensitive redaction, got %#v", result)
 	}
 }
 
@@ -67,8 +67,9 @@ func TestContractToolResultPreservesArtifactMetadataAndFlags(t *testing.T) {
 		ContentForLLM:  "File: big.log [content truncated]",
 		ContentForUser: "File: big.log [content truncated]",
 		ArtifactRef:    &tools.ToolArtifactRef{Kind: "file", URI: "/workspace/big.log", Label: "big.log"},
-		Metadata:       map[string]any{"total_lines": 1000, "_redacted": true},
+		Metadata:       map[string]any{"total_lines": 1000},
 		Truncated:      true,
+		Redacted:       true,
 	}
 
 	contractResult := contractToolResult(result)
@@ -86,6 +87,6 @@ func TestContractToolResultPreservesArtifactMetadataAndFlags(t *testing.T) {
 		t.Fatal("expected Truncated=true to survive")
 	}
 	if !contractResult.Redacted {
-		t.Fatal("expected Redacted=true from metadata")
+		t.Fatal("expected Redacted=true to survive contract conversion")
 	}
 }

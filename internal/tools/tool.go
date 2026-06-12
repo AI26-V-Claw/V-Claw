@@ -54,6 +54,9 @@ type ToolArtifactRef struct {
 	URI string `json:"uri,omitempty"`
 	// ID is a resource identifier used by external APIs (e.g. email ID, event ID).
 	ID string `json:"id,omitempty"`
+	// Meta holds optional extra references tied to the artifact (e.g. a Google
+	// Meet link for a calendar event). It mirrors contracts.ArtifactRef.Meta.
+	Meta map[string]any `json:"meta,omitempty"`
 }
 
 // ToolResult is returned by every tool execution. Fields are populated by the
@@ -84,6 +87,11 @@ type ToolResult struct {
 	// Truncated is true when ContentForLLM or ContentForUser was cut short due to
 	// size limits. Consumers can use this to request a more targeted read.
 	Truncated bool `json:"truncated,omitempty"`
+	// Redacted is true when sensitive content was masked or removed from
+	// ContentForLLM before the result crossed the contract boundary. It is the
+	// single source of truth for redaction state; do not store this flag in
+	// Metadata.
+	Redacted bool `json:"redacted,omitempty"`
 }
 
 type ToolError struct {
