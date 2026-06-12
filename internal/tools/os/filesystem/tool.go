@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	ToolNameListDir   = "filesystem.listDir"
-	ToolNameReadFile  = "filesystem.readFile"
-	ToolNameFileInfo  = "filesystem.fileInfo"
-	ToolNameWriteFile = "filesystem.writeFile"
+	ToolNameListDir    = "filesystem.listDir"
+	ToolNameReadFile   = "filesystem.readFile"
+	ToolNameFileInfo   = "filesystem.fileInfo"
+	ToolNameWriteFile  = "filesystem.writeFile"
+	ToolNameDeleteFile = "filesystem.deleteFile"
 
 	maxReadFileChars  = 8000
 	maxListEntries    = 200
@@ -181,14 +182,14 @@ func (t ListDirTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolR
 
 	displayCount := len(entries)
 	return tools.ToolResult{
-		ToolCallID:  call.ID,
-		ToolName:    call.Name,
-		Success:     true,
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
 		ContentForLLM:  content,
 		ContentForUser: content,
-		Truncated:   truncatedList,
-		ArtifactRef: &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: path},
-		Metadata:    map[string]any{"entry_count": displayCount},
+		Truncated:      truncatedList,
+		ArtifactRef:    &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: path},
+		Metadata:       map[string]any{"entry_count": displayCount},
 	}
 }
 
@@ -490,10 +491,95 @@ func (t WriteFileTool) Execute(_ context.Context, call tools.ToolCall) tools.Too
 	}
 }
 
+// ─── DeleteFile ──────────────────────────────────────────────────────────────
+
+// DeleteFileTool removes a file or empty/non-empty directory from the sandbox workspace.
+// Uses PathGuard directly (no Docker) so it operates on the same path space as writeFile.
+// Classified as local_write, requires HITL approval.
+type DeleteFileTool struct {
+	guard PathGuard
+}
+
+func NewDeleteFileTool(guard PathGuard) DeleteFileTool {
+	return DeleteFileTool{guard: guard}
+}
+
+func (DeleteFileTool) Name() string { return ToolNameDeleteFile }
+
+func (DeleteFileTool) Description() string {
+	return "Delete a file or directory from the sandbox workspace. Requires approval. Use recursive=true to delete non-empty directories."
+}
+
+func (DeleteFileTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"path":      map[string]any{"type": "string", "description": "Path of the file or directory to delete. Can be relative to workspace or an absolute path within the workspace."},
+			"recursive": map[string]any{"type": "boolean", "description": "If true, delete directory and all its contents. Default false."},
+		},
+		"required":             []string{"path"},
+		"additionalProperties": false,
+	}
+}
+
+func (DeleteFileTool) Capability() tools.Capability { return tools.CapabilityMutating }
+func (DeleteFileTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelLocalWrite }
+
+func (t DeleteFileTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	path := stringArg(call.Arguments, "path")
+	recursive, _ := call.Arguments["recursive"].(bool)
+
+	resolved, err := t.guard.Resolve(path)
+	if err != nil {
+		return inputError(call, err.Error())
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return inputError(call, fmt.Sprintf("path does not exist: %s", path))
+		}
+		return execError(call, err)
+	}
+
+	if info.IsDir() {
+		if !recursive {
+			return inputError(call, fmt.Sprintf("%s is a directory; set recursive=true to delete it and its contents", path))
+		}
+		if err := os.RemoveAll(resolved); err != nil {
+			return execError(call, err)
+		}
+		result := fmt.Sprintf("Deleted directory %s and its contents", resolved)
+		return tools.ToolResult{
+			ToolCallID:     call.ID,
+			ToolName:       call.Name,
+			Success:        true,
+			ContentForLLM:  result,
+			ContentForUser: result,
+			ArtifactRef:    &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: filepath.Base(resolved)},
+			Metadata:       map[string]any{"deleted": true, "recursive": true, "type": "directory"},
+		}
+	}
+
+	if err := os.Remove(resolved); err != nil {
+		return execError(call, err)
+	}
+	result := fmt.Sprintf("Deleted file %s", resolved)
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  result,
+		ContentForUser: result,
+		ArtifactRef:    &tools.ToolArtifactRef{Kind: "file", URI: resolved, Label: filepath.Base(resolved)},
+		Metadata:       map[string]any{"deleted": true, "recursive": false, "type": "file"},
+	}
+}
+
 // ─── Registration ────────────────────────────────────────────────────────────
 
-// RegisterTools registers all filesystem tools (listDir, readFile, fileInfo, writeFile)
-// into the given registry. All tools share the same PathGuard configured via Config.
+// RegisterTools registers all filesystem tools into the given registry.
+// All tools share the same PathGuard configured via Config.
 func RegisterTools(registry *tools.ToolRegistry, config Config) error {
 	guard := NewPathGuard(config.AllowedRoots)
 
@@ -502,6 +588,7 @@ func RegisterTools(registry *tools.ToolRegistry, config Config) error {
 		NewReadFileTool(guard),
 		NewFileInfoTool(guard),
 		NewWriteFileTool(guard),
+		NewDeleteFileTool(guard),
 	}
 
 	for _, tool := range allTools {

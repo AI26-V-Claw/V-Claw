@@ -183,8 +183,16 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	if err := tools.RegisterBuiltInTools(registry); err != nil {
 		return nil, err
 	}
+	// filesystem tools must use the same directory that sandbox.runShell mounts as /workspace.
+	// sandbox.runShell calls PrepareSessionWorkspace(DefaultSessionID) → <root>/<session>/workspace/.
+	// Aligning AllowedRoots here ensures writeFile/readFile/deleteFile operate on the same path.
+	sandboxRoot := strings.TrimSpace(config.SandboxWorkspaceDir)
+	if sandboxRoot == "" {
+		sandboxRoot = ".sandbox-workspace"
+	}
+	fsRoot := filepath.Join(sandboxRoot, sandboxtool.DefaultSessionID, "workspace")
 	fstoolConfig := fstool.Config{
-		AllowedRoots: []string{strings.TrimSpace(config.SandboxWorkspaceDir)},
+		AllowedRoots: []string{fsRoot},
 	}
 	if err := fstool.RegisterTools(registry, fstoolConfig); err != nil {
 		return nil, fmt.Errorf("register filesystem tools: %w", err)
