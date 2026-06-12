@@ -193,6 +193,10 @@ func (t SearchTool) Execute(ctx context.Context, call tools.ToolCall) tools.Tool
 		Success:        true,
 		ContentForLLM:  content,
 		ContentForUser: content,
+		Metadata: map[string]any{
+			"query":        stringArg(call.Arguments, "query"),
+			"result_count": len(output.Results),
+		},
 	}
 }
 
@@ -238,13 +242,17 @@ func (t FetchTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	if errShape != nil {
 		return toolErrorResult(call, errShape)
 	}
-	content := formatFetchOutput(output)
+	rawURL := stringArg(call.Arguments, "url")
+	content, wasTruncated := formatFetchOutputWithTruncation(output)
 	return tools.ToolResult{
 		ToolCallID:     call.ID,
 		ToolName:       call.Name,
 		Success:        true,
 		ContentForLLM:  content,
 		ContentForUser: content,
+		Truncated:      wasTruncated,
+		ArtifactRef:    &tools.ToolArtifactRef{Kind: "url", URI: rawURL, Label: rawURL},
+		Metadata:       map[string]any{"url": rawURL},
 	}
 }
 
@@ -330,19 +338,29 @@ func formatSearchOutput(output tavily.SearchOutput) string {
 }
 
 func formatFetchOutput(output tavily.ExtractOutput) string {
+	content, _ := formatFetchOutputWithTruncation(output)
+	return content
+}
+
+func formatFetchOutputWithTruncation(output tavily.ExtractOutput) (string, bool) {
 	lines := []string{}
+	truncated := false
 	if len(output.Results) == 0 {
 		lines = append(lines, "No page content extracted.")
 	}
 	for _, result := range output.Results {
 		lines = append(lines, "URL: "+result.URL)
 		lines = append(lines, "Content:")
-		lines = append(lines, truncate(firstNonEmpty(result.Content, result.RawContent), maxContentChars))
+		body := firstNonEmpty(result.Content, result.RawContent)
+		if len(strings.TrimSpace(body)) > maxContentChars {
+			truncated = true
+		}
+		lines = append(lines, truncate(body, maxContentChars))
 	}
 	for _, failed := range output.Failed {
 		lines = append(lines, fmt.Sprintf("Failed: %s - %s", failed.URL, failed.Error))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), truncated
 }
 
 func truncate(value string, max int) string {

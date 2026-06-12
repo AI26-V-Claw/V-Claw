@@ -31,6 +31,13 @@ func truncateToolContentForLLM(content string) string {
 	return content[:maxToolContentForLLM] + fmt.Sprintf("\n...[truncated %d bytes]", len(content)-maxToolContentForLLM)
 }
 
+func truncateStringBytes(content string, limit int) string {
+	if limit <= 0 || len(content) <= limit {
+		return content
+	}
+	return content[:limit] + fmt.Sprintf("\n...[truncated %d bytes]", len(content)-limit)
+}
+
 func extractPlannerJSONObject(text string) string {
 	return extractJSONObject(text)
 }
@@ -75,6 +82,26 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 		cloned[i].ToolCalls = cloneProviderToolCalls(message.ToolCalls)
 	}
 	return cloned
+}
+
+func compactProviderTranscriptForPrompt(transcript []providers.Message) []providers.Message {
+	const maxMessages = 12
+	const maxToolContent = 1600
+
+	if len(transcript) == 0 {
+		return nil
+	}
+	start := 0
+	if len(transcript) > maxMessages {
+		start = len(transcript) - maxMessages
+	}
+	compacted := cloneProviderMessages(transcript[start:])
+	for i := range compacted {
+		if compacted[i].Role == providers.MessageRoleTool {
+			compacted[i].Content = truncateStringBytes(strings.TrimSpace(compacted[i].Content), maxToolContent)
+		}
+	}
+	return compacted
 }
 
 func sanitizeProviderTranscriptForToolProtocol(messages []providers.Message) []providers.Message {
