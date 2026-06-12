@@ -96,6 +96,51 @@ func TestRenderAgentResponseFormatsToolFallback(t *testing.T) {
 	}
 }
 
+func TestRenderAgentResponsePrefersFinalAssistantMessageOverDriveFallback(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "Dưới đây là các thư mục Google Drive bạn đang có:\n1. **Vclaw** - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)",
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "drive.listFiles",
+			Success:  true,
+			Data: map[string]any{
+				"contentForUser": `{"Files":[{"ID":"folder_1","Name":"Vclaw","MimeType":"application/vnd.google-apps.folder","WebViewLink":"https://drive.google.com/drive/folders/folder_1","ModifiedTime":"2026-06-11T10:00:00.000Z"}]}`,
+			},
+		}},
+	}
+
+	got := renderAgentResponse(response)
+	if !strings.Contains(got, "Dưới đây là các thư mục Google Drive") {
+		t.Fatalf("expected final assistant message to win, got %q", got)
+	}
+	if strings.HasPrefix(got, "Kết quả") {
+		t.Fatalf("expected not to fall back to raw tool result, got %q", got)
+	}
+}
+
+func TestRenderAgentResponseFormatsDriveFallbackWithLinks(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status: contracts.AgentStatusCompleted,
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "drive.listFiles",
+			Success:  true,
+			Data: map[string]any{
+				"contentForUser": `{"Files":[{"ID":"folder_1","Name":"Vclaw","MimeType":"application/vnd.google-apps.folder","WebViewLink":"https://drive.google.com/drive/folders/folder_1","ModifiedTime":"2026-06-11T10:00:00.000Z"}]}`,
+			},
+		}},
+	}
+
+	got := renderAgentResponse(response)
+	for _, want := range []string{"Danh sách Google Drive", "Vclaw", "https://drive.google.com/drive/folders/folder_1", "2026-06-11T10:00:00.000Z"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in rendered fallback, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "Files: Vclaw") {
+		t.Fatalf("expected Drive fallback not to collapse to Files: name-only output, got %q", got)
+	}
+}
+
 func TestRenderAgentResponseFormatsRawGmailDraftJSON(t *testing.T) {
 	response := contracts.AgentResponse{
 		Status:  contracts.AgentStatusCompleted,
@@ -240,6 +285,12 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 			ToolResults: []contracts.ToolResult{{
 				ToolName: "gmail.sendDraft",
 				Success:  true,
+				ArtifactRef: &contracts.ArtifactRef{
+					Kind:  "gmail.message",
+					Label: "Gmail message",
+					ID:    "msg_1",
+					URI:   "https://mail.google.com/mail/u/0/#sent/msg_1",
+				},
 				Data: map[string]any{
 					"contentForUser": `{"Message":{"ID":"msg_1","ThreadID":"thread_1","To":"baolnc@vclaw.site","Subject":"Test HITL"}}`,
 				},
@@ -259,6 +310,13 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 			ToolResults: []contracts.ToolResult{{
 				ToolName: "calendar.createEvent",
 				Success:  true,
+				ArtifactRef: &contracts.ArtifactRef{
+					Kind:  "calendar.event",
+					Label: "Google Calendar event",
+					ID:    "event_1",
+					URI:   "https://calendar.google.com/calendar/r/eventedit/event_1",
+					Meta:  map[string]any{"meetLink": "https://meet.google.com/abc-defg-hij"},
+				},
 				Data: map[string]any{
 					"contentForUser": `{"Event":{"id":"event_1","summary":"Test HITL","meetLink":"https://meet.google.com/abc-defg-hij"}}`,
 				},
@@ -334,6 +392,37 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 			t.Fatalf("expected expired output, got %#v", output)
 		}
 	})
+}
+
+func TestApprovalTextShowsDriveMoveSourceAndTarget(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_drive_move",
+			Summary:    "Tôi cần bạn xác nhận trước khi di chuyển file hoặc folder Google Drive.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "drive.moveFile",
+				Input: map[string]any{
+					"sourceFiles":    []any{"Thuật toán segment tree (ID: file_1)"},
+					"targetFolder":   "Nhập môn lập trình (ID: folder_1)",
+					"fileId":         "file_1",
+					"targetParentId": "folder_1",
+				},
+			},
+		},
+	}
+
+	text := renderAgentResponse(response)
+	for _, want := range []string{
+		"Nguồn di chuyển: Thuật toán segment tree",
+		"Thư mục đích: Nhập môn lập trình",
+		"Drive file ID: file_1",
+		"Folder đích ID: folder_1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("approval text missing %q:\n%s", want, text)
+		}
+	}
 }
 
 func TestParseApprovalCommandApprovesPendingRequest(t *testing.T) {

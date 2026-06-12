@@ -990,6 +990,20 @@ func (t SendMessageTool) Execute(ctx context.Context, call tools.ToolCall) tools
 		Success:        true,
 		ContentForLLM:  content,
 		ContentForUser: userContent,
+		ArtifactRef:    chatMessageArtifactRef(output.Message.Name),
+	}
+}
+
+// chatMessageArtifactRef returns a typed reference to a sent Google Chat message.
+func chatMessageArtifactRef(name string) *tools.ToolArtifactRef {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	return &tools.ToolArtifactRef{
+		Kind:  "chat.message",
+		Label: "Google Chat message",
+		ID:    name,
 	}
 }
 

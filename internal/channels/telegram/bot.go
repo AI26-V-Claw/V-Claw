@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -895,9 +896,112 @@ func telegramRenderPlainHTML(text string) string {
 			builder.WriteString("</b>")
 			continue
 		}
-		builder.WriteString(telegramEscapeHTMLPreservingSpaces(line))
+		builder.WriteString(telegramRenderInlineMarkdownHTML(telegramNormalizeMarkdownListLine(line)))
 	}
 	return builder.String()
+}
+
+func telegramNormalizeMarkdownListLine(line string) string {
+	left := strings.TrimLeft(line, " \t")
+	if !strings.HasPrefix(left, "- ") {
+		return line
+	}
+	indent := line[:len(line)-len(left)]
+	return indent + "• " + strings.TrimSpace(strings.TrimPrefix(left, "- "))
+}
+
+func telegramRenderInlineMarkdownHTML(text string) string {
+	var builder strings.Builder
+	for len(text) > 0 {
+		if strings.HasPrefix(text, "`") {
+			if end := strings.Index(text[1:], "`"); end >= 0 {
+				code := text[1 : 1+end]
+				builder.WriteString("<code>")
+				builder.WriteString(telegramEscapeHTMLPreservingSpaces(code))
+				builder.WriteString("</code>")
+				text = text[1+end+1:]
+				continue
+			}
+		}
+		if strings.HasPrefix(text, "**") {
+			if end := strings.Index(text[2:], "**"); end >= 0 {
+				bold := text[2 : 2+end]
+				if strings.TrimSpace(bold) != "" {
+					builder.WriteString("<b>")
+					builder.WriteString(telegramEscapeHTMLPreservingSpaces(bold))
+					builder.WriteString("</b>")
+					text = text[2+end+2:]
+					continue
+				}
+			}
+		}
+		if strings.HasPrefix(text, "[") {
+			if label, href, rest, ok := consumeMarkdownLink(text); ok {
+				builder.WriteString(`<a href="`)
+				builder.WriteString(html.EscapeString(href))
+				builder.WriteString(`">`)
+				builder.WriteString(telegramEscapeHTMLPreservingSpaces(label))
+				builder.WriteString("</a>")
+				text = rest
+				continue
+			}
+		}
+
+		next := nextMarkdownTokenIndex(text[1:])
+		if next < 0 {
+			builder.WriteString(telegramEscapeHTMLPreservingSpaces(text))
+			break
+		}
+		next++
+		builder.WriteString(telegramEscapeHTMLPreservingSpaces(text[:next]))
+		text = text[next:]
+	}
+	return builder.String()
+}
+
+func consumeMarkdownLink(text string) (label string, href string, rest string, ok bool) {
+	closeLabel := strings.Index(text, "](")
+	if closeLabel <= 0 {
+		return "", "", "", false
+	}
+	closeURL := strings.Index(text[closeLabel+2:], ")")
+	if closeURL < 0 {
+		return "", "", "", false
+	}
+	label = text[1:closeLabel]
+	href = strings.TrimSpace(text[closeLabel+2 : closeLabel+2+closeURL])
+	if strings.TrimSpace(label) == "" || !telegramSafeLinkURL(href) {
+		return "", "", "", false
+	}
+	rest = text[closeLabel+2+closeURL+1:]
+	return label, href, rest, true
+}
+
+func telegramSafeLinkURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return parsed.Host != ""
+	default:
+		return false
+	}
+}
+
+func nextMarkdownTokenIndex(text string) int {
+	indices := []int{}
+	for _, token := range []string{"`", "**", "["} {
+		if index := strings.Index(text, token); index >= 0 {
+			indices = append(indices, index)
+		}
+	}
+	if len(indices) == 0 {
+		return -1
+	}
+	sort.Ints(indices)
+	return indices[0]
 }
 
 func telegramEscapeHTMLPreservingSpaces(text string) string {

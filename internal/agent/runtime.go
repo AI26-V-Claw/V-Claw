@@ -784,7 +784,7 @@ If required information is missing, ask one concise clarification question inste
 				}
 
 			case contracts.RiskDecisionRequiresApproval:
-				approval := r.approvalRequest(message, providerToolCall, decision)
+				approval := r.approvalRequest(message, providerToolCall, decision, providerTranscript)
 				action, errShape := r.createApprovalAction(ctx, runState, message, providerToolCall, decision, approval)
 				if errShape != nil {
 					base.Error = errShape

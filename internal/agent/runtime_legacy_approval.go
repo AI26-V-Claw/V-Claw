@@ -182,8 +182,8 @@ Do not repeat the tool that was just executed.`,
 
 func legacyBuildRevisionRequest(pending pendingApproval, comment string) string {
 	input := "{}"
-	if len(pending.request.ToolCall.Input) > 0 {
-		if data, err := json.MarshalIndent(pending.request.ToolCall.Input, "", "  "); err == nil {
+	if len(pending.toolCall.Arguments) > 0 {
+		if data, err := json.MarshalIndent(pending.toolCall.Arguments, "", "  "); err == nil {
 			input = string(data)
 		}
 	}
@@ -281,6 +281,10 @@ func contractToolResult(result tools.ToolResult) contracts.ToolResult {
 			"contentForUser": result.ContentForUser,
 			"contentForLLM":  result.ContentForLLM,
 		},
+		ArtifactRef: convertToolArtifactRef(result.ArtifactRef),
+		Metadata:    cloneMetadataMap(result.Metadata),
+		Truncated:   result.Truncated,
+		Redacted:    result.Redacted,
 	}
 	if result.Error != nil {
 		contractResult.Error = toolErrorShape(result)

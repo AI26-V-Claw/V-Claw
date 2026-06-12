@@ -111,6 +111,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 
 	select {
 	case result := <-resultCh:
+		result = sanitizeToolResult(result, definition)
 		stage := ProgressStageToolCompleted
 		if !result.Success {
 			stage = ProgressStageToolFailed
