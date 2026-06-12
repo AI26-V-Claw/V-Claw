@@ -49,7 +49,7 @@ func routeContextPrompt(route *TurnRoute) string {
 - tool_exposure_mode: %s
 - reason: %s
 
-This is not an intent label, not a tool choice, not a clarification decision, and not a risk decision.
+This is not a tool choice, not a clarification decision, and not a risk decision.
 If tools are available, decide naturally whether to answer directly, call a relevant tool, or call clarify when required information is missing.`, route.Mode, strings.TrimSpace(route.Reason)))
 }
 
@@ -232,7 +232,7 @@ func (r *Runtime) routeTurn(ctx context.Context, message contracts.UserMessage, 
 		route := TurnRoute{Mode: TurnModeToolEnabled, Reason: "continuation/revision message; tools enabled by runtime"}
 		return &route, nil
 	}
-	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassifying, Message: "Turn routing started"})
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageRouting, Message: "Turn routing started"})
 	route, err := r.turnRouter.RouteTurn(ctx, TurnRouteInput{
 		Message:       message.Text,
 		RecentHistory: recentHistory,
@@ -263,7 +263,7 @@ func (r *Runtime) routeTurn(ctx context.Context, message contracts.UserMessage, 
 		"mode", route.Mode,
 		"reason", route.Reason,
 	)
-	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassified, Message: "Turn routing completed"})
+	emitProgress(ctx, ProgressEvent{Stage: ProgressStageRouted, Message: "Turn routing completed"})
 	return &route, nil
 }
 

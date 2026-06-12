@@ -421,13 +421,13 @@ func normalizeListEventsQuery(query string) string {
 			return ""
 		}
 	}
-	if containsCalendarIntentWords(lower) && containsDatePhrase(lower) && !containsLikelySearchKeyword(lower) {
+	if containsCalendarRequestWords(lower) && containsDatePhrase(lower) && !containsLikelySearchKeyword(lower) {
 		return ""
 	}
 	return trimmed
 }
 
-func containsCalendarIntentWords(text string) bool {
+func containsCalendarRequestWords(text string) bool {
 	for _, word := range []string{"lịch", "lich", "calendar", "event", "sự kiện", "su kien", "có gì", "co gi"} {
 		if strings.Contains(text, word) {
 			return true

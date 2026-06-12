@@ -38,7 +38,7 @@ Phụ trách hệ thống agent, sandbox, HITL và memory.
 Bao gồm:
 
 - Agent loop.
-- Intent/risk classification.
+- Risk classification.
 - Tool routing.
 - HITL approval flow.
 - Sandbox execution policy.
@@ -73,8 +73,7 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 | Module | Owner chính | Ghi chú |
 |---|---|---|
 | `internal/agent/` | Agent Core | Agent loop, planning đơn giản, xử lý `UserMessage` thành response/tool calls. |
-| `internal/agent/intent/` | Agent Core | Intent classification tối giản. Không overfit bằng nhiều layer rule engine nếu chưa cần. |
-| `internal/agent/router/` | Agent Core | Tool routing: chọn tool dựa trên intent/context. |
+| `internal/agent/router/` | Agent Core | Tool routing: chọn tool dựa trên context và tool schema. |
 | `internal/providers/` | Agent Core | LLM provider interface hoặc implementation tối giản. |
 | `internal/sessions/` | Agent Core | Transcript, session summary và pending clarification được runtime sử dụng. |
 

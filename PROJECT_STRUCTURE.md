@@ -70,7 +70,7 @@ Key package groups:
 
 | Area | Responsibility |
 |---|---|
-| `internal/agent/` | Agent loop, planning, intent handling, and tool-call orchestration. |
+| `internal/agent/` | Agent loop, planning, request handling, and tool-call orchestration. |
 | `internal/approvals/` | Human-in-the-loop approval state and approve/reject flow. |
 | `internal/audit/` | Action logs and execution evidence. |
 | `internal/channels/` | User-facing message adapters such as Telegram or Slack. |

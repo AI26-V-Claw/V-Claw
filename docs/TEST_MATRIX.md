@@ -19,7 +19,6 @@ reference, not a Khang-only harness backlog. Keep rows aligned with code, tests,
 | Area | Contract / Behavior | Unit | Integration | E2E | Platform | Status | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Agent runtime | Route a user turn through runtime state, tool calls, clarification, approvals, and formatted output | yes | yes | no | no | implemented | `internal/agent/*_test.go`, `cmd/vclaw/agent_test.go` |
-| Intent classification | Classify greetings, read/write/tool intents, dangerous actions, ambiguity, and tool-name compatibility | yes | yes | no | no | implemented | `internal/agent/intent/*_test.go`, `cmd/intent-eval/main_test.go`, `tests/safety` |
 | Safety policy | Detect and gate risky shell/python/local/external actions before execution | yes | yes | no | no | implemented | `internal/safety/*_test.go`, `internal/policies/*_test.go`, `internal/sandbox/gate/*_test.go` |
 | HITL approvals | Create, revise, expire, and route approval decisions for risky actions | yes | yes | partial | no | in_progress | `internal/agent/runtime_*approval*_test.go`, `cmd/vclaw/approvals.go`, `internal/channels/*_test.go` |
 | Google Gmail tools | List/get/search/render Gmail content and support draft, send, modify, and attachment workflows with risk metadata | yes | yes | no | no | implemented | `internal/tools/office/gmail/*_test.go`, `internal/connectors/google/gmail/*_test.go`, `cmd/vclaw/google_gmail_test.go` |
