@@ -157,6 +157,8 @@ func (r *Runtime) createApprovalAction(ctx context.Context, runState RunState, m
 		RiskLevel:         decision.RiskLevel,
 		Status:            ActionStatusPendingApproval,
 		ApprovalID:        approval.ApprovalID,
+		ApprovalSummary:   approval.Summary,
+		ApprovalDetails:   approval.Details,
 		ApprovalExpiresAt: approval.ExpiresAt,
 		IdempotencyKey:    key,
 		CreatedAt:         now,
@@ -169,9 +171,57 @@ func (r *Runtime) createApprovalAction(ctx context.Context, runState RunState, m
 	return stored, nil
 }
 
-func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration) *contracts.ErrorShape {
+func (r *Runtime) recordRuntimeRiskDecision(ctx context.Context, runState RunState, toolCall providers.ToolCall, decision contracts.RiskDecision) *contracts.ErrorShape {
 	if r.stateStore == nil {
 		return nil
+	}
+	if err := r.stateStore.RecordRiskDecision(ctx, RiskDecisionRecord{
+		RunID:            runState.RunID,
+		RequestID:        runState.RequestID,
+		SessionID:        runState.SessionID,
+		ToolCallID:       toolCall.ID,
+		ToolName:         toolCall.Name,
+		RiskLevel:        decision.RiskLevel,
+		Decision:         decision.Decision,
+		RequiresApproval: decision.RequiresApproval,
+		Reason:           decision.Reason,
+		CheckedAt:        decision.CheckedAt,
+	}); err != nil {
+		return internalError("record risk decision: "+err.Error(), contracts.ErrorSourceAgent)
+	}
+	return nil
+}
+
+func (r *Runtime) recordRuntimeToolCallStatus(ctx context.Context, runState RunState, toolCall providers.ToolCall, status ToolCallStatus, reason string, approvalID string) *contracts.ErrorShape {
+	if r.stateStore == nil {
+		return nil
+	}
+	if err := r.stateStore.RecordToolCall(ctx, ToolCallRecord{
+		ToolCallID:   toolCall.ID,
+		RunID:        runState.RunID,
+		RequestID:    runState.RequestID,
+		SessionID:    runState.SessionID,
+		ToolName:     toolCall.Name,
+		ArgsSnapshot: cloneArguments(toolCall.Arguments),
+		Status:       status,
+		Reason:       reason,
+		ApprovalID:   approvalID,
+		CreatedAt:    r.now(),
+	}); err != nil {
+		return internalError("record tool call: "+err.Error(), contracts.ErrorSourceAgent)
+	}
+	return nil
+}
+
+func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration, approvalID string) *contracts.ErrorShape {
+	if r.stateStore == nil {
+		return nil
+	}
+	requestID := ""
+	sessionID := ""
+	if runState, err := r.stateStore.GetRun(ctx, runID); err == nil {
+		requestID = runState.RequestID
+		sessionID = runState.SessionID
 	}
 	status := ToolCallStatusCompleted
 	errorMessage := ""
@@ -184,9 +234,12 @@ func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolC
 	if err := r.stateStore.RecordToolCall(ctx, ToolCallRecord{
 		ToolCallID:   toolCall.ID,
 		RunID:        runID,
+		RequestID:    requestID,
+		SessionID:    sessionID,
 		ToolName:     toolCall.Name,
 		ArgsSnapshot: cloneArguments(toolCall.Arguments),
 		Status:       status,
+		ApprovalID:   approvalID,
 		Result:       &result,
 		ErrorMessage: errorMessage,
 		LatencyMS:    latency.Milliseconds(),

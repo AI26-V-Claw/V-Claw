@@ -407,8 +407,15 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 		}); err != nil {
 			b.logger.Error("telegram stale approval keyboard dismiss failed", "chat_id", callback.Message.Chat.ID, "message_id", callback.Message.MessageID, "error", err)
 		}
-		_ = b.answerCallbackQuery(ctx, callback.ID, "Yêu cầu xác nhận này không còn hợp lệ.")
-		return true, nil
+		if action == "revise" || b.state.hasApproval(approvalID) {
+			_ = b.answerCallbackQuery(ctx, callback.ID, "Yêu cầu xác nhận này không còn hợp lệ.")
+			return true, nil
+		}
+		approvalContext = telegramApprovalContext{
+			ApprovalID: approvalID,
+			SessionID:  fmt.Sprintf("telegram_chat_%d", callback.Message.Chat.ID),
+			ChatID:     callback.Message.Chat.ID,
+		}
 	}
 	if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
 		b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)

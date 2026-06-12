@@ -104,7 +104,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				Error:     internalError("approval action id is missing", contracts.ErrorSourceAgent),
 			}, nil
 		}
-		if _, err := r.stateStore.MarkActionApproved(ctx, pending.actionID); err != nil {
+		if _, err := r.stateStore.MarkActionApproved(ctx, pending.actionID, approvalDecisionRecord(sessionID, decision)); err != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
 				SessionID: pending.message.SessionID,
@@ -116,7 +116,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 		return r.resumeApprovedAction(ctx, pending)
 	case contracts.ApprovalDecisionRejected:
 		if pending.actionID != "" {
-			if _, err := r.stateStore.MarkActionRejected(ctx, pending.actionID); err != nil && !errors.Is(err, ErrRuntimeStateNotFound) {
+			if _, err := r.stateStore.MarkActionRejected(ctx, pending.actionID, approvalDecisionRecord(sessionID, decision)); err != nil && !errors.Is(err, ErrRuntimeStateNotFound) {
 				return contracts.AgentResponse{
 					RequestID: pending.message.RequestID,
 					SessionID: pending.message.SessionID,
@@ -285,6 +285,17 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 	}
 }
 
+func approvalDecisionRecord(sessionID string, decision contracts.ApprovalDecision) ApprovalDecisionRecord {
+	return ApprovalDecisionRecord{
+		RequestID: decision.RequestID,
+		SessionID: sessionID,
+		Decision:  decision.Decision,
+		DecidedBy: decision.DecidedBy,
+		Comment:   decision.Comment,
+		DecidedAt: decision.DecidedAt,
+	}
+}
+
 func (r *Runtime) storePendingApproval(pending pendingApproval) {
 	r.approvalMu.Lock()
 	defer r.approvalMu.Unlock()
@@ -419,12 +430,7 @@ func (r *Runtime) isLatestPendingApproval(ctx context.Context, record ActionReco
 }
 
 func isResolvableApprovalActionStatus(status ActionStatus) bool {
-	switch status {
-	case ActionStatusPendingApproval, ActionStatusApproved, ActionStatusExecuting, ActionStatusCompleted:
-		return true
-	default:
-		return false
-	}
+	return status == ActionStatusPendingApproval
 }
 
 func approvalStatusForAction(status ActionStatus) contracts.ApprovalStatus {
@@ -468,7 +474,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 
 	startedAt := time.Now()
 	result := r.executeAllowedTool(ctx, pending.toolCall, pending.definition)
-	if errShape := r.recordRuntimeToolCall(ctx, record.RunID, pending.toolCall, result, time.Since(startedAt)); errShape != nil {
+	if errShape := r.recordRuntimeToolCall(ctx, record.RunID, pending.toolCall, result, time.Since(startedAt), record.ApprovalID); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
 			SessionID: pending.message.SessionID,
@@ -520,7 +526,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 		response.Error = toolErrorShape(result)
 		response.Message = response.Error.Message
 	}
-	if errShape := r.appendAssistantTranscript(ctx, pending.message.SessionID, response.Message); errShape != nil {
+	if errShape := r.appendAssistantTranscriptForRun(ctx, pending.message.SessionID, pending.runID, pending.message.RequestID, response.Message); errShape != nil {
 		response.Status = contracts.AgentStatusFailed
 		response.Error = errShape
 		response.Message = errShape.Message

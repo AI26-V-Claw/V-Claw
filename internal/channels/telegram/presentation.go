@@ -107,6 +107,25 @@ func (s *telegramChannelState) lookupApproval(approvalID string, chatID int64, m
 	return ctx, true
 }
 
+func (s *telegramChannelState) hasApproval(approvalID string) bool {
+	if s == nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, ok := s.approvals[strings.TrimSpace(approvalID)]
+	if !ok {
+		return false
+	}
+	if isExpiredTelegramState(ctx.RegisteredAt) {
+		delete(s.approvals, ctx.ApprovalID)
+		return false
+	}
+	return true
+}
+
 func (s *telegramChannelState) approvalForChat(chatID int64) (telegramApprovalContext, bool) {
 	if s == nil || chatID == 0 {
 		return telegramApprovalContext{}, false
