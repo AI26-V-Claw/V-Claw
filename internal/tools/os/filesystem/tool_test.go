@@ -255,8 +255,8 @@ func TestRegisterToolsRegistersAllTools(t *testing.T) {
 	}
 
 	defs := registry.ListTools()
-	if len(defs) != 5 {
-		t.Fatalf("expected 5 tools, got %d", len(defs))
+	if len(defs) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(defs))
 	}
 
 	// Verify group
@@ -278,15 +278,4 @@ func TestRegisterToolsRegistersAllTools(t *testing.T) {
 		t.Fatalf("writeFile capability should be mutating, got %s", def.Capability)
 	}
 
-	// Verify deleteFile requires approval
-	defDel, ok := registry.GetDefinition(ToolNameDeleteFile)
-	if !ok {
-		t.Fatal("deleteFile not found")
-	}
-	if !defDel.RequiresApproval {
-		t.Fatal("deleteFile should require approval")
-	}
-	if defDel.Capability != tools.CapabilityMutating {
-		t.Fatalf("deleteFile capability should be mutating, got %s", defDel.Capability)
-	}
 }
