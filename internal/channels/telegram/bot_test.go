@@ -839,6 +839,29 @@ func TestTelegramTextFromResponsePreservesMultilineFormatting(t *testing.T) {
 	}
 }
 
+func TestTelegramTextFromResponsePrefersFinalMessageOverOutputFallback(t *testing.T) {
+	message := "Dưới đây là các thư mục Google Drive bạn đang có:\n1. **Vclaw** - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)"
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+		Output: &contracts.UserOutput{
+			Kind: contracts.UserOutputKindSuccess,
+			Text: "Kết quả:\n- Files: Vclaw",
+		},
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "drive.listFiles",
+			Success:  true,
+			Data: map[string]any{
+				"contentForUser": `{"Files":[{"ID":"folder_1","Name":"Vclaw","WebViewLink":"https://drive.google.com/drive/folders/folder_1"}]}`,
+			},
+		}},
+	})
+
+	if text != message {
+		t.Fatalf("expected final message to win, got %q want %q", text, message)
+	}
+}
+
 func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := telegramTextFromResponse(contracts.AgentResponse{
@@ -1381,6 +1404,29 @@ func TestTelegramRenderHTMLFormatsMarkdownHeading(t *testing.T) {
 
 	if !strings.Contains(rendered, "<b>GIỚI THIỆU</b>") {
 		t.Fatalf("expected markdown heading to render as bold uppercase, got %q", rendered)
+	}
+}
+
+func TestTelegramRenderHTMLFormatsDriveFolderMarkdown(t *testing.T) {
+	rendered := telegramRenderHTML(strings.Join([]string{
+		"Dưới đây là các thư mục Google Drive bạn đang có:",
+		"",
+		"1. **Vclaw**",
+		"   - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)",
+		"   - Được chỉnh sửa lần cuối: 10 tháng 6, 2026",
+	}, "\n"))
+
+	for _, want := range []string{
+		"1. <b>Vclaw</b>",
+		"   • Link: <a href=\"https://drive.google.com/drive/folders/folder_1\">Mở thư mục</a>",
+		"   • Được chỉnh sửa lần cuối: 10 tháng 6, 2026",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered Drive markdown to contain %q, got %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "**Vclaw**") || strings.Contains(rendered, "[Mở thư mục]") {
+		t.Fatalf("expected markdown markers to be rendered away, got %q", rendered)
 	}
 }
 

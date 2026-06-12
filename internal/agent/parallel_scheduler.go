@@ -120,6 +120,7 @@ func executeParallelToolCall(ctx context.Context, call parallelToolCall, default
 	case <-toolCtx.Done():
 		result = timeoutResult(call.call, toolCtx.Err())
 	}
+	result = sanitizeToolResult(result, call.definition)
 	return parallelToolResult{
 		result:   result,
 		duration: time.Since(startedAt),

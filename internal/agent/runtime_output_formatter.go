@@ -15,12 +15,24 @@ func renderAssistantMessage(message string, results []contracts.ToolResult) stri
 	}
 	if looksLikeMachinePayload(message) {
 		for i := len(results) - 1; i >= 0; i-- {
-			if rendered := renderToolResultForUser(results[i]); rendered != "" {
+			if !results[i].Success {
+				continue
+			}
+			if rendered := renderMachinePayload(results[i].ToolName, message); rendered != "" {
 				return rendered
 			}
 		}
 		if rendered := renderMachinePayload("", message); rendered != "" {
 			return rendered
+		}
+		if !shouldFallbackToToolResultForMachineLikeMessage(message) {
+			message = sanitizeDeliveryClaimsForResults(message, results)
+			return formatOutboundText(message)
+		}
+		for i := len(results) - 1; i >= 0; i-- {
+			if rendered := renderToolResultForUser(results[i]); rendered != "" {
+				return rendered
+			}
 		}
 	}
 	message = sanitizeDeliveryClaimsForResults(message, results)
@@ -78,6 +90,20 @@ func looksLikeMachinePayload(text string) bool {
 		strings.HasPrefix(lower, "event updated:") ||
 		strings.Contains(lower, ": {") ||
 		strings.Contains(lower, ": [")
+}
+
+func shouldFallbackToToolResultForMachineLikeMessage(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "event created:") ||
+		strings.HasPrefix(lower, "event updated:") ||
+		strings.Contains(lower, ": {")
 }
 
 func renderMachinePayload(toolName string, content string) string {
@@ -146,12 +172,24 @@ func renderPayloadMap(toolName string, prefix string, payload map[string]any) []
 		return renderCalendarPayload(toolName, prefix, payload)
 	case strings.HasPrefix(toolName, "chat."):
 		return renderChatPayload(toolName, payload)
+	case strings.HasPrefix(toolName, "drive."):
+		return renderDrivePayload(toolName, payload)
+	case strings.HasPrefix(toolName, "docs."):
+		return renderDocsPayload(toolName, payload)
+	case strings.HasPrefix(toolName, "sheets."):
+		return renderSheetsPayload(toolName, payload)
 	case hasAnyPayloadKey(payload, "Draft", "Drafts"):
 		return renderGmailPayload(toolName, payload)
 	case hasAnyPayloadKey(payload, "Event", "Title", "StartTime", "EndTime"):
 		return renderCalendarPayload(toolName, prefix, payload)
 	case hasAnyPayloadKey(payload, "Space", "Spaces", "Message", "Messages", "Membership"):
 		return renderChatPayload(toolName, payload)
+	case hasAnyPayloadKey(payload, "Files", "File", "Permission"):
+		return renderDrivePayload(toolName, payload)
+	case hasAnyPayloadKey(payload, "Document", "BodyText"):
+		return renderDocsPayload(toolName, payload)
+	case hasAnyPayloadKey(payload, "SpreadsheetID", "SpreadsheetUrl", "Values", "UpdatedRange"):
+		return renderSheetsPayload(toolName, payload)
 	default:
 		return renderGenericPayload(payloadTitle(toolName, prefix), payload)
 	}
@@ -271,6 +309,92 @@ func renderChatPayload(toolName string, payload map[string]any) []string {
 	return renderGenericPayload(payloadTitle(toolName, ""), payload)
 }
 
+func renderDrivePayload(toolName string, payload map[string]any) []string {
+	if files, ok := payloadArray(payload, "Files"); ok {
+		title := "Danh sách tệp Google Drive"
+		if toolName == "drive.listFiles" {
+			title = "Danh sách Google Drive"
+		}
+		return renderPayloadList(toolName, title, files)
+	}
+	if file, ok := payloadMap(payload, "File"); ok {
+		return append([]string{driveFileTitle(toolName)}, driveFileBullets(file)...)
+	}
+	if permission, ok := payloadMap(payload, "Permission"); ok {
+		return append([]string{"Đã cập nhật chia sẻ Google Drive."}, payloadBullets(permission, []fieldLabel{
+			{"Type", "Loại"},
+			{"Role", "Quyền"},
+			{"EmailAddress", "Email"},
+			{"ID", "Permission ID"},
+		})...)
+	}
+	return renderGenericPayload(payloadTitle(toolName, ""), payload)
+}
+
+func driveFileTitle(toolName string) string {
+	switch toolName {
+	case "drive.moveFile", "drive.moveFiles":
+		return "Đã di chuyển tệp Google Drive."
+	case "drive.trashFile":
+		return "Đã chuyển tệp Google Drive vào thùng rác."
+	case "drive.untrashFile":
+		return "Đã khôi phục tệp Google Drive."
+	case "drive.createFolder":
+		return "Đã tạo thư mục Google Drive."
+	case "drive.updateFileMetadata":
+		return "Đã cập nhật tệp Google Drive."
+	default:
+		return "Tệp Google Drive."
+	}
+}
+
+func driveFileBullets(file map[string]any) []string {
+	return payloadBullets(file, []fieldLabel{
+		{"Name", "Tên"},
+		{"ID", "File ID"},
+		{"MimeType", "Loại"},
+		{"WebViewLink", "Link"},
+		{"ModifiedTime", "Cập nhật"},
+		{"Owners", "Chủ sở hữu"},
+	})
+}
+
+func renderDocsPayload(toolName string, payload map[string]any) []string {
+	if document, ok := payloadMap(payload, "Document"); ok {
+		title := "Tài liệu Google Docs."
+		if toolName == "docs.createDocument" {
+			title = "Đã tạo Google Docs."
+		}
+		return append([]string{title}, payloadBullets(document, []fieldLabel{
+			{"Title", "Tiêu đề"},
+			{"ID", "Document ID"},
+			{"Text", "Nội dung"},
+		})...)
+	}
+	return renderGenericPayload(payloadTitle(toolName, ""), payload)
+}
+
+func renderSheetsPayload(toolName string, payload map[string]any) []string {
+	title := "Kết quả Google Sheets"
+	switch toolName {
+	case "sheets.createSpreadsheet":
+		title = "Đã tạo Google Sheets"
+	case "sheets.updateValues":
+		title = "Đã cập nhật Google Sheets"
+	case "sheets.appendValues":
+		title = "Đã thêm dữ liệu vào Google Sheets"
+	}
+	return append([]string{title + "."}, payloadBullets(payload, []fieldLabel{
+		{"Title", "Tiêu đề"},
+		{"SpreadsheetID", "Spreadsheet ID"},
+		{"SpreadsheetURL", "Link"},
+		{"Range", "Vùng dữ liệu"},
+		{"UpdatedRange", "Vùng đã cập nhật"},
+		{"UpdatedRows", "Số dòng"},
+		{"UpdatedCells", "Số ô"},
+	})...)
+}
+
 func renderPayloadList(_ string, title string, items []any) []string {
 	if title == "" {
 		title = "Kết quả"
@@ -374,6 +498,9 @@ func renderPayloadScalar(value any) string {
 }
 
 func compactPayloadItem(payload map[string]any) string {
+	if text := compactDriveFileItem(payload); text != "" {
+		return text
+	}
 	for _, key := range []string{"Title", "Subject", "DisplayName", "Email", "Name", "ID", "Text", "Snippet"} {
 		if text := renderPayloadScalar(payload[key]); text != "" {
 			return text
@@ -392,6 +519,23 @@ func compactPayloadItem(payload map[string]any) string {
 		return strings.Join(parts, ", ")
 	}
 	return "một mục"
+}
+
+func compactDriveFileItem(payload map[string]any) string {
+	name := renderPayloadScalar(payload["Name"])
+	link := renderPayloadScalar(payload["WebViewLink"])
+	modified := renderPayloadScalar(payload["ModifiedTime"])
+	if name == "" || (link == "" && modified == "") {
+		return ""
+	}
+	parts := []string{name}
+	if link != "" {
+		parts = append(parts, "Link: "+link)
+	}
+	if modified != "" {
+		parts = append(parts, "Cập nhật: "+modified)
+	}
+	return strings.Join(parts, " - ")
 }
 
 func payloadMap(payload map[string]any, key string) (map[string]any, bool) {
@@ -434,6 +578,12 @@ func payloadTitle(toolName string, prefix string) string {
 		return "Kết quả Google Chat"
 	case strings.HasPrefix(toolName, "people."):
 		return "Kết quả danh bạ Workspace"
+	case strings.HasPrefix(toolName, "drive."):
+		return "Kết quả Google Drive"
+	case strings.HasPrefix(toolName, "docs."):
+		return "Kết quả Google Docs"
+	case strings.HasPrefix(toolName, "sheets."):
+		return "Kết quả Google Sheets"
 	case strings.HasPrefix(toolName, "web."):
 		return "Kết quả web"
 	default:

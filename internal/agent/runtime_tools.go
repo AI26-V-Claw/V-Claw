@@ -93,26 +93,32 @@ func (r *Runtime) prepareParallelBatch(toolCalls []providers.ToolCall, enabled b
 	}
 
 	batch := make([]parallelToolCall, 0, len(toolCalls))
-	for _, toolCall := range toolCalls {
+	now := r.now()
+	for _, originalCall := range toolCalls {
+		toolCall := originalCall
+		toolCall.Arguments = cloneArguments(originalCall.Arguments)
 		toolCall = sanitizeUnsupportedOptionalArguments(toolCall, evidenceText)
 		if isClarifyToolCall(toolCall) {
 			return nil, false
 		}
-		toolCall = normalizeProviderToolCall(r.now(), toolCall, userText)
+		toolCall = normalizeProviderToolCall(now, toolCall, userText)
 
 		definition, found := r.registry.GetDefinition(toolCall.Name)
 		if !found {
 			return nil, false
 		}
+		if definition.Name == "" {
+			definition.Name = toolCall.Name
+		}
 		if len(pendingMissingFieldsForToolCall(toolCall, definition, found, activeClarification, userText)) > 0 {
 			return nil, false
 		}
-		decision := r.policy.DecideToolCall(toolCall.ID, definition, found, r.now())
-		if decision.Decision != contracts.RiskDecisionAllow || decision.RequiresApproval {
+		decision := r.policy.DecideToolCall(toolCall.ID, definition, found, now)
+		if decision.Decision != contracts.RiskDecisionAllow || decision.RequiresApproval || definition.RequiresApproval {
 			return nil, false
 		}
 		tool, ok := r.registry.GetTool(toolCall.Name)
-		if !ok || !r.policy.CanRunInParallel(tool) {
+		if !ok || tool == nil || !r.policy.CanRunInParallel(tool) {
 			return nil, false
 		}
 		batch = append(batch, parallelToolCall{
@@ -150,4 +156,32 @@ func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall
 		return tools.PermissionDeniedResult(providerToolCallToToolCall(toolCall))
 	}
 	return r.executeAllowedTool(ctx, toolCall, definition)
+}
+
+func sanitizeToolResult(result tools.ToolResult, definition tools.ToolDefinition) tools.ToolResult {
+	return tools.RedactResult(result, definition.RiskLevel)
+}
+
+func convertToolArtifactRef(ref *tools.ToolArtifactRef) *contracts.ArtifactRef {
+	if ref == nil {
+		return nil
+	}
+	return &contracts.ArtifactRef{
+		Kind:  ref.Kind,
+		Label: ref.Label,
+		URI:   ref.URI,
+		ID:    ref.ID,
+		Meta:  ref.Meta,
+	}
+}
+
+func cloneMetadataMap(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
 }

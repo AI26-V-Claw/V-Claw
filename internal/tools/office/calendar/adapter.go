@@ -129,7 +129,28 @@ func (t *CreateEventTool) Execute(ctx context.Context, call tools.ToolCall) tool
 		return toToolError(call, errShape)
 	}
 
-	return toToolSuccess(call, formatCreateEventOutput(output))
+	result := toToolSuccess(call, formatCreateEventOutput(output))
+	result.ArtifactRef = calendarEventArtifactRef(output.Event)
+	return result
+}
+
+// calendarEventArtifactRef returns a typed reference to a created calendar event,
+// carrying the Meet link (when present) through Meta so the messenger no longer
+// has to parse it back out of the result text.
+func calendarEventArtifactRef(event EventSummary) *tools.ToolArtifactRef {
+	if event.ID == "" {
+		return nil
+	}
+	ref := &tools.ToolArtifactRef{
+		Kind:  "calendar.event",
+		Label: "Google Calendar event",
+		ID:    event.ID,
+		URI:   "https://calendar.google.com/calendar/r/eventedit/" + event.ID,
+	}
+	if event.MeetLink != "" {
+		ref.Meta = map[string]any{"meetLink": event.MeetLink}
+	}
+	return ref
 }
 
 // --- UpdateEvent Tool ---

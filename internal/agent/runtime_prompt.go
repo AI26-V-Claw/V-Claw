@@ -14,6 +14,7 @@ import (
 )
 
 func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution) []providers.Message {
+	transcript = compactProviderTranscriptForPrompt(transcript)
 	messages := make([]providers.Message, 0, len(transcript)+4)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
@@ -86,6 +87,20 @@ For Google Chat tools:
 - For requests like "gửi tin nhắn vào nhóm chat VClaw" or "gửi file này vào nhóm VClaw", call chat.listSpaces first, match the requested group/display name from the returned spaces, then call chat.sendMessage with the matched spaces/... resource.
 - Do not ask the user to provide spaces/AAAA until chat.listSpaces or member resolution has already failed or returned ambiguous matches.
 - If the target space is still ambiguous after read-tool resolution, ask one concise clarification question before calling a write tool.
+- CRITICAL: When sending to a named person, you MUST call people.searchDirectory then chat.findSpacesByMembers BEFORE attempting chat.sendMessage — even for a person you have sent to before in this session. Only fall back to chat.createSpace if findSpacesByMembers returns no match. Never reuse or assume a spaces/... value from history, memory, or transcript. Skipping findSpacesByMembers is the most common cause of sending to the wrong person or triggering unnecessary space creation.
+For Google Drive tools:
+- Do not use drive.updateFileMetadata for moving files or folders. Use drive.moveFile for one source or drive.moveFiles for multiple sources.
+- For requests that move multiple files or folders into one destination folder, resolve every source and the destination folder with drive.listFiles first, then call drive.moveFiles with fileIds and targetParentId.
+- When resolving a Drive name with drive.listFiles, pass either the plain file/folder name in query or a valid Drive query like name contains 'X' and trashed = false. Do not pass an arbitrary sentence as a Drive query.
+- Example: "di chuyển file X vào folder Y" means resolve X and Y with drive.listFiles, then call drive.moveFile or drive.moveFiles.
+- Example: "tạo thư mục X" means call drive.createFolder. If the user names a destination parent folder, resolve it first and pass parentIds.
+For filesystem and sandbox tools:
+- When the user refers to a file by name only (e.g. "xóa file notes.txt", "đọc file report.txt"), do not ask for the exact path. Call filesystem.fileInfo with just the filename to locate it (e.g. filesystem.fileInfo path="notes.txt").
+- filesystem.fileInfo works on files and directories. Do NOT call filesystem.listDir on a filename — listDir requires a directory path, not a file path.
+- NEVER use a previous filesystem.fileInfo result from conversation history to answer a new file request. Always call the tool again.
+- If filesystem.fileInfo returns not found, call filesystem.listDir on the workspace root (path=".") to list all files, then use the correct path from the listing.
+- To delete a file, call filesystem.fileInfo first to confirm it exists. Then use sandbox.runShell with command "rm <filename>" where <filename> is just the relative filename (e.g. "rm data.txt"), NOT the absolute Windows path. sandbox.runShell runs inside Docker/Linux and cannot use Windows absolute paths like "D:\...". For directories use "rm -r <dirname>".
+- The sandbox workspace is the default location for all user files. Files outside this workspace cannot be accessed by filesystem tools.
 For channel attachments:
 - If the user message contains "Attachment paths:", those are local files sent through the current channel.
 - If the user says "file này", "file tôi đã gửi", "ảnh này", or asks to attach/send/upload the current file, use those paths in tool arguments that accept attachments.
@@ -247,7 +262,8 @@ func isSideEffectToolName(name string) bool {
 		"chat.addMember",
 		"chat.removeMember",
 		"sandbox.runPython",
-		"sandbox.runShell":
+		"sandbox.runShell",
+		"filesystem.writeFile":
 		return true
 	default:
 		return false

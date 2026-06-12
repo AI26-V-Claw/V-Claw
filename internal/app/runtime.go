@@ -14,9 +14,12 @@ import (
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
+	gdocs "vclaw/internal/connectors/google/docs"
+	gdrive "vclaw/internal/connectors/google/drive"
 	ggmail "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeople "vclaw/internal/connectors/google/people"
+	gsheets "vclaw/internal/connectors/google/sheets"
 	"vclaw/internal/connectors/tavily"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
@@ -27,9 +30,12 @@ import (
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
+	docstool "vclaw/internal/tools/office/docs"
+	drivetool "vclaw/internal/tools/office/drive"
 	gmailtool "vclaw/internal/tools/office/gmail"
-	fstool "vclaw/internal/tools/os/filesystem"
 	peopletool "vclaw/internal/tools/office/people"
+	sheetstool "vclaw/internal/tools/office/sheets"
+	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
 )
@@ -149,14 +155,14 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),
 		),
-		SessionStore:          sessionStore,
-		Policy:                userPolicy,
-		StateStore:            stateStore,
-		Logger:                config.Logger,
-		MaxIterations:         config.MaxIterations,
-		Model:                 model,
-		Compactor:             compactor,
-		MemoryClassifierModel: compactorModel,
+		SessionStore:               sessionStore,
+		Policy:                     userPolicy,
+		StateStore:                 stateStore,
+		Logger:                     config.Logger,
+		MaxIterations:              config.MaxIterations,
+		Model:                      model,
+		Compactor:                  compactor,
+		MemoryClassifierModel:      compactorModel,
 		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,
@@ -177,8 +183,12 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	if err := tools.RegisterBuiltInTools(registry); err != nil {
 		return nil, err
 	}
+	// filesystem tools must use the same directory that sandbox.runShell mounts as /workspace.
+	// sandbox.runShell calls PrepareSessionWorkspace(DefaultSessionID) → <root>/<session>/workspace/.
+	// Aligning AllowedRoots here ensures writeFile/readFile/deleteFile operate on the same path.
+	fsRoot := sandboxWorkspaceFSRoot(config)
 	fstoolConfig := fstool.Config{
-		AllowedRoots: []string{strings.TrimSpace(config.SandboxWorkspaceDir)},
+		AllowedRoots: []string{fsRoot},
 	}
 	if err := fstool.RegisterTools(registry, fstoolConfig); err != nil {
 		return nil, fmt.Errorf("register filesystem tools: %w", err)
@@ -252,6 +262,18 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient))); err != nil {
 		return err
 	}
+	// drive.uploadFile may only read local files from the same sandbox workspace
+	// the filesystem tools are restricted to — never arbitrary host paths.
+	driveUploadGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)), driveUploadGuard); err != nil {
+		return err
+	}
+	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
+		return err
+	}
+	if err := sheetstool.RegisterTools(registry, sheetstool.NewService(gsheets.NewClient(httpClient))); err != nil {
+		return err
+	}
 	calendarClient, err := gcal.NewClient(ctx, httpClient)
 	if err != nil {
 		return fmt.Errorf("create calendar connector: %w", err)
@@ -264,6 +286,17 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 		return err
 	}
 	return peopletool.RegisterTools(registry, peopletool.NewService(peopleClient))
+}
+
+// sandboxWorkspaceFSRoot returns the single workspace directory that both the
+// filesystem tools and drive.uploadFile are restricted to. It must match what
+// sandbox.runShell mounts as /workspace so all local file access stays aligned.
+func sandboxWorkspaceFSRoot(config AgentRuntimeConfig) string {
+	sandboxRoot := strings.TrimSpace(config.SandboxWorkspaceDir)
+	if sandboxRoot == "" {
+		sandboxRoot = ".sandbox-workspace"
+	}
+	return filepath.Join(sandboxRoot, sandboxtool.DefaultSessionID, "workspace")
 }
 
 func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error) {
