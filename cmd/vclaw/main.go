@@ -352,7 +352,7 @@ func printUsage() {
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
   vclaw google gmail <labels|profile|list|get|list-threads|get-thread|list-drafts|get-draft|create-draft|update-draft|send-draft|delete-draft|reply-draft|forward-draft|download-attachments|modify-message|batch-modify|trash-message|untrash-message>
-  vclaw google drive <list|get|export|download|create-folder|create-file|upload|share|move|permissions|revoke|trash|untrash>
+  vclaw google drive <list|get|export|download|create-folder|create-file|upload|share|move|move-files|permissions|revoke|trash|untrash>
   vclaw google docs <get|create|append|replace|insert|delete>
   vclaw google sheets <get|read|batch-get|create|update|batch-update|append|clear|add-sheet|rename-sheet|delete-sheet|duplicate-sheet>
   vclaw google people <search-directory>

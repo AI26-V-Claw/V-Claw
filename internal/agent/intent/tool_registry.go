@@ -346,6 +346,12 @@ var Registry = map[string]ToolDefinition{
 		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 60000,
 		Parameters: []ParamDef{{Name: "fileId", Type: "string", Required: true, Description: "Drive file ID"}, {Name: "targetParentId", Type: "string", Required: true, Description: "Destination folder ID"}},
 	},
+	"drive.moveFiles": {
+		Name: "drive.moveFiles", Category: CategoryDangerousWrite,
+		Description: "Move multiple Google Drive files or folders into another Drive folder",
+		Dangerous:   true, RequiresApproval: true, RequiresConfirm: true, TimeoutMs: 120000,
+		Parameters: []ParamDef{{Name: "fileIds", Type: "array", Required: true, Description: "Drive file IDs"}, {Name: "targetParentId", Type: "string", Required: true, Description: "Destination folder ID"}},
+	},
 	"drive.trashFile": {
 		Name: "drive.trashFile", Category: CategoryDangerousWrite,
 		Description:      "Move a Google Drive file or folder to trash",

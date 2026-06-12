@@ -362,6 +362,7 @@ func TestDriveDocsSheetsReadFirstAndWriteToolsRequireHITL(t *testing.T) {
 		drive.ToolNameShareFile,
 		drive.ToolNameRevokePermission,
 		drive.ToolNameMoveFile,
+		drive.ToolNameMoveFiles,
 		drive.ToolNameTrashFile,
 		drive.ToolNameUntrashFile,
 		docs.ToolNameCreateDocument,

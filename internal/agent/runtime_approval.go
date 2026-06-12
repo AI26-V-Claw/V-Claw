@@ -278,14 +278,16 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 	return r.Run(ctx, revisionMessage)
 }
 
-func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision) contracts.ApprovalRequest {
+func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision, transcript []providers.Message) contracts.ApprovalRequest {
 	now := r.now()
+	input := cloneArguments(toolCall.Arguments)
+	input = enrichApprovalInput(toolCall.Name, input, transcript)
 	contractCall := contracts.ToolCall{
 		ToolCallID: toolCall.ID,
 		RequestID:  message.RequestID,
 		SessionID:  message.SessionID,
 		ToolName:   toolCall.Name,
-		Input:      cloneArguments(toolCall.Arguments),
+		Input:      input,
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
 	parentApprovalID := ""
@@ -310,6 +312,103 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(approvalTTL),
 	}
+}
+
+func enrichApprovalInput(toolName string, input map[string]any, transcript []providers.Message) map[string]any {
+	switch strings.TrimSpace(toolName) {
+	case "drive.moveFile", "drive.moveFiles":
+		return enrichDriveMoveApprovalInput(input, transcript)
+	default:
+		return input
+	}
+}
+
+func enrichDriveMoveApprovalInput(input map[string]any, transcript []providers.Message) map[string]any {
+	if len(input) == 0 {
+		return input
+	}
+	driveFiles := driveFilesByIDFromTranscript(transcript)
+	if len(driveFiles) == 0 {
+		return input
+	}
+
+	enriched := cloneArguments(input)
+	fileIDs := stringSliceArg(enriched, "fileIds")
+	if len(fileIDs) == 0 {
+		if fileID := strings.TrimSpace(stringArgument(enriched, "fileId")); fileID != "" {
+			fileIDs = []string{fileID}
+		}
+	}
+	if len(fileIDs) > 0 {
+		sources := make([]string, 0, len(fileIDs))
+		for _, fileID := range fileIDs {
+			sources = append(sources, driveApprovalDisplayName(fileID, driveFiles[fileID]))
+		}
+		enriched["sourceFiles"] = sources
+	}
+	if targetParentID := strings.TrimSpace(stringArgument(enriched, "targetParentId")); targetParentID != "" {
+		enriched["targetFolder"] = driveApprovalDisplayName(targetParentID, driveFiles[targetParentID])
+	}
+	return enriched
+}
+
+type driveApprovalFileRef struct {
+	ID       string
+	Name     string
+	MimeType string
+}
+
+func driveFilesByIDFromTranscript(transcript []providers.Message) map[string]driveApprovalFileRef {
+	files := map[string]driveApprovalFileRef{}
+	for _, message := range transcript {
+		if message.Role != providers.MessageRoleTool || strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(message.Content), &payload); err != nil {
+			continue
+		}
+		items, ok := payload["Files"].([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range items {
+			fileMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			ref := driveApprovalFileRef{
+				ID:       firstStringMapValue(fileMap, "id", "ID"),
+				Name:     firstStringMapValue(fileMap, "name", "Name"),
+				MimeType: firstStringMapValue(fileMap, "mimeType", "MimeType"),
+			}
+			if strings.TrimSpace(ref.ID) != "" {
+				files[ref.ID] = ref
+			}
+		}
+	}
+	return files
+}
+
+func driveApprovalDisplayName(id string, ref driveApprovalFileRef) string {
+	id = strings.TrimSpace(id)
+	name := strings.TrimSpace(ref.Name)
+	if name == "" {
+		return id
+	}
+	if id == "" {
+		return name
+	}
+	return fmt.Sprintf("%s (ID: %s)", name, id)
+}
+
+func firstStringMapValue(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (r *Runtime) storePendingApproval(pending pendingApproval) {
@@ -772,7 +871,7 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi chia sẻ file Google Drive."
 	case "drive.revokePermission":
 		return "Tôi cần bạn xác nhận trước khi thu hồi quyền chia sẻ file Google Drive."
-	case "drive.moveFile":
+	case "drive.moveFile", "drive.moveFiles":
 		return "Tôi cần bạn xác nhận trước khi di chuyển file hoặc folder Google Drive."
 	case "drive.trashFile":
 		return "Tôi cần bạn xác nhận trước khi chuyển file hoặc folder Google Drive vào thùng rác."

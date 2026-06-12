@@ -72,6 +72,33 @@ func (artifactDriveConnector) DownloadFile(context.Context, string, int64) (gdri
 	}, nil
 }
 
+type listFilesConnector struct {
+	fakeDriveConnector
+}
+
+func (listFilesConnector) ListFiles(context.Context, string, string, int64, string) (gdrive.ListFilesOutput, error) {
+	return gdrive.ListFilesOutput{Files: []gdrive.FileSummary{{
+		ID:           "file_1",
+		Name:         "Long metadata doc",
+		MimeType:     "application/vnd.google-apps.document",
+		Description:  strings.Repeat("verbose description ", 80),
+		WebViewLink:  "https://drive.google.com/file/d/file_1/view",
+		Owners:       []string{"owner@example.com"},
+		ModifiedTime: "2026-06-12T02:58:37.000Z",
+		Parents:      []string{"folder_1"},
+	}}}, nil
+}
+
+type moveFilesConnector struct {
+	fakeDriveConnector
+	moved []string
+}
+
+func (c *moveFilesConnector) MoveFile(_ context.Context, fileID string, targetParentID string, _ []string) (gdrive.FileSummary, error) {
+	c.moved = append(c.moved, fileID)
+	return gdrive.FileSummary{ID: fileID, Name: fileID + " name", Parents: []string{targetParentID}}, nil
+}
+
 func TestRegisterToolsMetadata(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	if err := RegisterTools(registry, NewService(fakeDriveConnector{})); err != nil {
@@ -90,8 +117,61 @@ func TestRegisterToolsMetadata(t *testing.T) {
 	assertToolMetadata(t, registry, ToolNameListPermissions, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
 	assertToolMetadata(t, registry, ToolNameRevokePermission, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameMoveFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameMoveFiles, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameTrashFile, tools.CapabilityMutating, tools.RiskLevelDestructive, true)
 	assertToolMetadata(t, registry, ToolNameUntrashFile, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+}
+
+func TestMoveFilesMovesEveryFileID(t *testing.T) {
+	connector := &moveFilesConnector{}
+	tool := NewTool(ToolNameMoveFiles, NewService(connector))
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "call_move_files",
+		Name: ToolNameMoveFiles,
+		Arguments: map[string]any{
+			"fileIds":        []any{"file_1", "file_2"},
+			"targetParentId": "folder_1",
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	if strings.Join(connector.moved, ",") != "file_1,file_2" {
+		t.Fatalf("moved = %#v, want [file_1 file_2]", connector.moved)
+	}
+	if result.Metadata["file_count"] != 2 {
+		t.Fatalf("expected file_count metadata, got %#v", result.Metadata)
+	}
+	if !strings.Contains(result.ContentForUser, "file_1") || !strings.Contains(result.ContentForUser, "file_2") {
+		t.Fatalf("result should include moved files, got %s", result.ContentForUser)
+	}
+}
+
+func TestListFilesUsesCompactContentForLLM(t *testing.T) {
+	tool := NewTool(ToolNameListFiles, NewService(listFilesConnector{}))
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:        "call_list",
+		Name:      ToolNameListFiles,
+		Arguments: map[string]any{"query": "name contains 'doc'"},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	for _, want := range []string{"file_1", "Long metadata doc", "folder_1"} {
+		if !strings.Contains(result.ContentForLLM, want) {
+			t.Fatalf("ContentForLLM missing %q: %s", want, result.ContentForLLM)
+		}
+	}
+	for _, verbose := range []string{"verbose description", "owner@example.com", `"Description"`} {
+		if strings.Contains(result.ContentForLLM, verbose) {
+			t.Fatalf("ContentForLLM should omit verbose field %q: %s", verbose, result.ContentForLLM)
+		}
+		if !strings.Contains(result.ContentForUser, verbose) {
+			t.Fatalf("ContentForUser should keep verbose field %q: %s", verbose, result.ContentForUser)
+		}
+	}
 }
 
 func TestUpdateMetadataDescriptionRejectsMoveUse(t *testing.T) {

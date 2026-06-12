@@ -25,6 +25,7 @@ const (
 	ToolNameListPermissions    = "drive.listPermissions"
 	ToolNameRevokePermission   = "drive.revokePermission"
 	ToolNameMoveFile           = "drive.moveFile"
+	ToolNameMoveFiles          = "drive.moveFiles"
 	ToolNameTrashFile          = "drive.trashFile"
 	ToolNameUntrashFile        = "drive.untrashFile"
 
@@ -53,6 +54,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameListPermissions, Owner: "integration", Description: "List sharing permissions for a Google Drive file.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameRevokePermission, Owner: "integration", Description: "Revoke a Google Drive file permission.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameMoveFile, Owner: "integration", Description: "Move a Google Drive file or folder to another folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameMoveFiles, Owner: "integration", Description: "Move multiple Google Drive files or folders to another folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameTrashFile, Owner: "integration", Description: "Move a Google Drive file or folder to trash.", DefaultRiskLevel: "destructive", RequiresApproval: true},
 	{Name: ToolNameUntrashFile, Owner: "integration", Description: "Restore a Google Drive file or folder from trash.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 }
@@ -147,6 +149,12 @@ type RevokePermissionInput struct {
 
 type MoveFileInput struct {
 	FileID          string
+	TargetParentID  string
+	RemoveParentIDs []string
+}
+
+type MoveFilesInput struct {
+	FileIDs         []string
 	TargetParentID  string
 	RemoveParentIDs []string
 }
@@ -348,6 +356,28 @@ func (s *Service) MoveFile(ctx context.Context, input MoveFileInput) (gdrive.Fil
 	return file, nil
 }
 
+func (s *Service) MoveFiles(ctx context.Context, input MoveFilesInput) ([]gdrive.FileSummary, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return nil, errShape
+	}
+	fileIDs := cleanStrings(input.FileIDs)
+	if len(fileIDs) == 0 {
+		return nil, invalidInput("fileIds is required")
+	}
+	if strings.TrimSpace(input.TargetParentID) == "" {
+		return nil, invalidInput("targetParentId is required")
+	}
+	moved := make([]gdrive.FileSummary, 0, len(fileIDs))
+	for _, fileID := range fileIDs {
+		file, err := s.connector.MoveFile(ctx, fileID, input.TargetParentID, input.RemoveParentIDs)
+		if err != nil {
+			return nil, mapError(fmt.Errorf("move file %s: %w", fileID, err))
+		}
+		moved = append(moved, file)
+	}
+	return moved, nil
+}
+
 func (s *Service) TrashFile(ctx context.Context, input FileIDInput) (gdrive.FileSummary, *ErrorShape) {
 	if errShape := s.validateConnector(); errShape != nil {
 		return gdrive.FileSummary{}, errShape
@@ -397,7 +427,7 @@ func (t DriveTool) Name() string { return t.name }
 func (t DriveTool) Description() string {
 	switch t.name {
 	case ToolNameListFiles:
-		return "List Google Drive files by Drive query or MIME type. This is read-only and returns metadata only."
+		return "List Google Drive files by Drive query, MIME type, or a plain file/folder name. Plain text is treated as a name search. This is read-only and returns metadata only."
 	case ToolNameGetFile:
 		return "Read metadata for one Google Drive file by fileId."
 	case ToolNameExportFile:
@@ -420,6 +450,8 @@ func (t DriveTool) Description() string {
 		return "Revoke a Google Drive file permission. Requires human approval before execution."
 	case ToolNameMoveFile:
 		return "Move a Google Drive file or folder into another Drive folder. Use this for requests like move/di chuyển/chuyển file X vào folder Y. Requires human approval before execution."
+	case ToolNameMoveFiles:
+		return "Move multiple Google Drive files or folders into one destination Drive folder. Resolve every file/folder name and the destination folder with drive.listFiles before calling this tool. Requires human approval before execution."
 	case ToolNameTrashFile:
 		return "Move a Google Drive file or folder to trash. Requires human approval before execution."
 	case ToolNameUntrashFile:
@@ -433,7 +465,7 @@ func (t DriveTool) Parameters() tools.ToolSchema {
 	switch t.name {
 	case ToolNameListFiles:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{
-			"query":      map[string]any{"type": "string", "description": "Optional Drive query, e.g. name contains 'report' and trashed = false."},
+			"query":      map[string]any{"type": "string", "description": "Optional Drive query or plain file/folder name. Plain text such as Nhập môn lập trình is treated as name contains 'Nhập môn lập trình' and trashed = false."},
 			"mimeType":   map[string]any{"type": "string", "description": "Optional exact MIME type filter."},
 			"maxResults": maxResultsSchema(),
 			"pageToken":  map[string]any{"type": "string"},
@@ -492,6 +524,12 @@ func (t DriveTool) Parameters() tools.ToolSchema {
 			"targetParentId":  map[string]any{"type": "string", "description": "Destination folder ID. Resolve folder names with drive.listFiles before calling this tool."},
 			"removeParentIds": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional current parent folder IDs to remove. Omit to let the connector remove existing parents."},
 		}, "required": []string{"fileId", "targetParentId"}, "additionalProperties": false}
+	case ToolNameMoveFiles:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{
+			"fileIds":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "IDs of the files or folders to move."},
+			"targetParentId":  map[string]any{"type": "string", "description": "Destination folder ID. Resolve folder names with drive.listFiles before calling this tool."},
+			"removeParentIds": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional current parent folder IDs to remove from every source. Omit to let the connector remove existing parents per file."},
+		}, "required": []string{"fileIds", "targetParentId"}, "additionalProperties": false}
 	case ToolNameTrashFile, ToolNameUntrashFile:
 		return idSchema("fileId")
 	default:
@@ -559,6 +597,9 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	case ToolNameMoveFile:
 		output, errShape := t.service.MoveFile(ctx, MoveFileInput{FileID: stringArg(call.Arguments, "fileId"), TargetParentID: stringArg(call.Arguments, "targetParentId"), RemoveParentIDs: stringSliceArg(call.Arguments, "removeParentIds")})
 		return outputToolResult(call, map[string]any{"File": output}, errShape)
+	case ToolNameMoveFiles:
+		output, errShape := t.service.MoveFiles(ctx, MoveFilesInput{FileIDs: stringSliceArg(call.Arguments, "fileIds"), TargetParentID: stringArg(call.Arguments, "targetParentId"), RemoveParentIDs: stringSliceArg(call.Arguments, "removeParentIds")})
+		return outputToolResult(call, map[string]any{"Files": output}, errShape)
 	case ToolNameTrashFile:
 		output, errShape := t.service.TrashFile(ctx, FileIDInput{FileID: stringArg(call.Arguments, "fileId")})
 		return outputToolResult(call, map[string]any{"File": output}, errShape)
@@ -571,7 +612,7 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	for _, name := range []string{ToolNameListFiles, ToolNameGetFile, ToolNameExportFile, ToolNameDownloadFile, ToolNameCreateFolder, ToolNameCreateFile, ToolNameUploadFile, ToolNameUpdateFileMetadata, ToolNameShareFile, ToolNameListPermissions, ToolNameRevokePermission, ToolNameMoveFile, ToolNameTrashFile, ToolNameUntrashFile} {
+	for _, name := range []string{ToolNameListFiles, ToolNameGetFile, ToolNameExportFile, ToolNameDownloadFile, ToolNameCreateFolder, ToolNameCreateFile, ToolNameUploadFile, ToolNameUpdateFileMetadata, ToolNameShareFile, ToolNameListPermissions, ToolNameRevokePermission, ToolNameMoveFile, ToolNameMoveFiles, ToolNameTrashFile, ToolNameUntrashFile} {
 		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
@@ -587,16 +628,71 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 	if err != nil {
 		data = []byte(fmt.Sprintf("%#v", output))
 	}
+	contentForLLM := string(data)
+	if compact := compactDriveContentForLLM(call.Name, output); compact != "" {
+		contentForLLM = compact
+	}
 	return tools.ToolResult{
 		ToolCallID:     call.ID,
 		ToolName:       call.Name,
 		Success:        true,
-		ContentForLLM:  string(data),
+		ContentForLLM:  contentForLLM,
 		ContentForUser: string(data),
 		ArtifactRef:    driveArtifactRef(output),
 		Metadata:       driveResultMetadata(call, output),
 		Truncated:      driveResultTruncated(output),
 	}
+}
+
+func compactDriveContentForLLM(toolName string, output any) string {
+	switch toolName {
+	case ToolNameListFiles:
+		if files, ok := output.(gdrive.ListFilesOutput); ok {
+			return compactDriveListFilesForLLM(files)
+		}
+	}
+	return ""
+}
+
+func compactDriveListFilesForLLM(output gdrive.ListFilesOutput) string {
+	type compactFile struct {
+		ID           string   `json:"id"`
+		Name         string   `json:"name"`
+		MimeType     string   `json:"mimeType"`
+		WebViewLink  string   `json:"webViewLink,omitempty"`
+		Parents      []string `json:"parents,omitempty"`
+		ModifiedTime string   `json:"modifiedTime,omitempty"`
+	}
+	const maxLLMFiles = 20
+	limit := len(output.Files)
+	if limit > maxLLMFiles {
+		limit = maxLLMFiles
+	}
+	files := make([]compactFile, 0, limit)
+	for _, file := range output.Files[:limit] {
+		files = append(files, compactFile{
+			ID:           file.ID,
+			Name:         file.Name,
+			MimeType:     file.MimeType,
+			WebViewLink:  file.WebViewLink,
+			Parents:      file.Parents,
+			ModifiedTime: file.ModifiedTime,
+		})
+	}
+	payload := map[string]any{
+		"Files": files,
+	}
+	if output.NextPageToken != "" {
+		payload["NextPageToken"] = output.NextPageToken
+	}
+	if omitted := len(output.Files) - limit; omitted > 0 {
+		payload["OmittedFileCount"] = omitted
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func driveArtifactRef(output any) *tools.ToolArtifactRef {
@@ -653,6 +749,9 @@ func driveResultMetadata(call tools.ToolCall, output any) map[string]any {
 	case map[string]any:
 		if permissions, ok := v["Permissions"].([]gdrive.PermissionSummary); ok {
 			meta["permission_count"] = len(permissions)
+		}
+		if files, ok := v["Files"].([]gdrive.FileSummary); ok {
+			meta["file_count"] = len(files)
 		}
 		if permission, ok := v["Permission"].(gdrive.PermissionSummary); ok {
 			meta["permission_type"] = permission.Type

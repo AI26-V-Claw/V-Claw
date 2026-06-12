@@ -107,6 +107,15 @@ func runGoogleDrive(ctx context.Context, args []string) error {
 		}
 		output, toolErr := service.MoveFile(ctx, drivetool.MoveFileInput{FileID: *fileID, TargetParentID: *targetParentID, RemoveParentIDs: splitCSV(*removeParentIDs)})
 		return printWorkspaceOutput(output, toolErr)
+	case "move-files":
+		fileIDs := flags.String("ids", "", "comma-separated Drive file IDs")
+		targetParentID := flags.String("target-parent", "", "destination parent folder ID")
+		removeParentIDs := flags.String("remove-parents", "", "optional comma-separated parent IDs to remove from every source")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		output, toolErr := service.MoveFiles(ctx, drivetool.MoveFilesInput{FileIDs: splitCSV(*fileIDs), TargetParentID: *targetParentID, RemoveParentIDs: splitCSV(*removeParentIDs)})
+		return printWorkspaceOutput(output, toolErr)
 	case "permissions":
 		fileID := flags.String("id", "", "Drive file ID")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -406,7 +415,7 @@ func parseRangesJSON(value string) (map[string][][]any, error) {
 }
 
 func printGoogleDriveUsage() {
-	fmt.Println("Usage: vclaw google drive <list|get|export|download|create-folder|create-file|upload|share|move|permissions|revoke|trash|untrash> [flags]")
+	fmt.Println("Usage: vclaw google drive <list|get|export|download|create-folder|create-file|upload|share|move|move-files|permissions|revoke|trash|untrash> [flags]")
 }
 
 func printGoogleDocsUsage() {

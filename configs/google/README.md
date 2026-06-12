@@ -257,6 +257,7 @@ Manual write checks, for developer testing only:
 ```powershell
 go run ./cmd/vclaw google drive create-folder -name "V-Claw Smoke"
 go run ./cmd/vclaw google drive create-file -name "vclaw-smoke.txt" -content "hello"
+go run ./cmd/vclaw google drive move-files -ids "FILE_ID_1,FILE_ID_2" -target-parent FOLDER_ID
 go run ./cmd/vclaw google docs create -title "V-Claw Smoke Doc"
 go run ./cmd/vclaw google docs append -id DOCUMENT_ID -text "Smoke text"
 go run ./cmd/vclaw google docs replace -id DOCUMENT_ID -old "Smoke" -new "Verified"

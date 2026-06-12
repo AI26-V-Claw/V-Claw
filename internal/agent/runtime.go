@@ -600,7 +600,7 @@ If required information is missing, ask one concise clarification question inste
 				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,
-					Content:    truncateToolContentForLLM("WRONG_TOOL_FOR_INTENT: drive.updateFileMetadata cannot move files or folders. Resolve the source file and destination folder with drive.listFiles if needed, then call drive.moveFile with fileId and targetParentId."),
+					Content:    truncateToolContentForLLM("WRONG_TOOL_FOR_INTENT: drive.updateFileMetadata cannot move files or folders. Resolve the source file(s) and destination folder with drive.listFiles if needed, then call drive.moveFile for one source or drive.moveFiles for multiple sources."),
 				}); err != nil {
 					base.Error = err
 					base.Message = err.Message
@@ -618,7 +618,7 @@ If required information is missing, ask one concise clarification question inste
 					toolMessage := providers.Message{
 						Role:       providers.MessageRoleTool,
 						ToolCallID: providerToolCall.ID,
-						Content:    truncateToolContentForLLM(driveMoveResolutionObservation([]string{"fileId", "targetParentId"})),
+						Content:    truncateToolContentForLLM(driveMoveResolutionObservation([]string{"fileId/fileIds", "targetParentId"})),
 					}
 					transcript = append(transcript, toolMessage)
 					providerTranscript = append(providerTranscript, toolMessage)
@@ -822,7 +822,7 @@ If required information is missing, ask one concise clarification question inste
 				}
 
 			case contracts.RiskDecisionRequiresApproval:
-				approval := r.approvalRequest(message, providerToolCall, decision)
+				approval := r.approvalRequest(message, providerToolCall, decision, providerTranscript)
 				action, errShape := r.createApprovalAction(ctx, runState, message, providerToolCall, decision, approval)
 				if errShape != nil {
 					base.Error = errShape
@@ -1211,6 +1211,7 @@ func (r *Runtime) legacyReviseApproval(ctx context.Context, sessionID string, re
 }
 
 func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution, route *TurnRoute) []providers.Message {
+	transcript = compactProviderTranscriptForPrompt(transcript)
 	messages := make([]providers.Message, 0, len(transcript)+4)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
@@ -1236,6 +1237,25 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory
 	}
 	messages = append(messages, sanitizeProviderTranscriptForToolProtocol(transcript)...)
 	return messages
+}
+
+func compactProviderTranscriptForPrompt(transcript []providers.Message) []providers.Message {
+	const maxMessages = 12
+	const maxToolContent = 1600
+	if len(transcript) == 0 {
+		return nil
+	}
+	start := 0
+	if len(transcript) > maxMessages {
+		start = len(transcript) - maxMessages
+	}
+	compacted := cloneProviderMessages(transcript[start:])
+	for i := range compacted {
+		if compacted[i].Role == providers.MessageRoleTool {
+			compacted[i].Content = truncateStringBytes(strings.TrimSpace(compacted[i].Content), maxToolContent)
+		}
+	}
+	return compacted
 }
 
 func routeContextPrompt(route *TurnRoute) string {
@@ -1303,6 +1323,8 @@ For Google Chat tools:
 - If the target space is still ambiguous after read-tool resolution, ask one concise clarification question before calling a write tool.
 For Google Drive tools:
 - For requests like "move file X into folder Y", "di chuyển file X vào folder Y", or "chuyển file X vào thư mục Y", resolve the source file and target folder with drive.listFiles first, then call drive.moveFile with fileId and targetParentId.
+- For requests that move multiple files or folders into one destination folder, resolve every source and the destination folder with drive.listFiles first, then call drive.moveFiles with fileIds and targetParentId.
+- When resolving a Drive name with drive.listFiles, pass either the plain file/folder name in query or a valid Drive query like name contains 'X' and trashed = false. Do not pass an arbitrary sentence as a Drive query.
 - For requests like "create folder X", "tạo folder X", or "tạo thư mục X", call drive.createFolder with name. If the user names a parent folder/location, resolve that parent folder with drive.listFiles first, then pass its Drive ID in parentIds.
 - Do NOT call clarify to ask for file or folder names when the user has already provided them as natural-language text (e.g. "Thuật toán binary search", "Nhập môn lập trình"). Those names are sufficient; always resolve them with drive.listFiles first.
 - Do not use drive.updateFileMetadata for moving files, changing folders, or changing parents. drive.updateFileMetadata is only for name, description, or starred metadata.

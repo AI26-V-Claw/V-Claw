@@ -29,6 +29,13 @@ func truncateToolContentForLLM(content string) string {
 	return content[:maxToolContentForLLM] + fmt.Sprintf("\n...[truncated %d bytes]", len(content)-maxToolContentForLLM)
 }
 
+func truncateStringBytes(content string, limit int) string {
+	if limit <= 0 || len(content) <= limit {
+		return content
+	}
+	return content[:limit] + fmt.Sprintf("\n...[truncated %d bytes]", len(content)-limit)
+}
+
 func extractPlannerJSONObject(text string) string {
 	return extractJSONObject(text)
 }

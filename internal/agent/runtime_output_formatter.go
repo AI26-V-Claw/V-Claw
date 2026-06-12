@@ -333,7 +333,7 @@ func renderDrivePayload(toolName string, payload map[string]any) []string {
 
 func driveFileTitle(toolName string) string {
 	switch toolName {
-	case "drive.moveFile":
+	case "drive.moveFile", "drive.moveFiles":
 		return "Đã di chuyển tệp Google Drive."
 	case "drive.trashFile":
 		return "Đã chuyển tệp Google Drive vào thùng rác."

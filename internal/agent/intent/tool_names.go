@@ -65,6 +65,7 @@ var toolNameAliases = map[string]string{
 	"list_drive_permissions":     "drive.listPermissions",
 	"revoke_drive_permission":    "drive.revokePermission",
 	"move_drive_file":            "drive.moveFile",
+	"move_drive_files":           "drive.moveFiles",
 	"trash_drive_file":           "drive.trashFile",
 	"untrash_drive_file":         "drive.untrashFile",
 	"get_document":               "docs.getDocument",

@@ -79,10 +79,10 @@ func hasDriveMoveResolutionIntent(requestText string) bool {
 }
 
 func shouldResolveDriveMoveBeforeClarification(toolCall providers.ToolCall, requestText string, missing []string) bool {
-	if strings.TrimSpace(toolCall.Name) != "drive.moveFile" {
+	if !isDriveMoveTool(toolCall.Name) {
 		return false
 	}
-	if !containsString(missing, "fileId") && !containsString(missing, "targetParentId") {
+	if !containsString(missing, "fileId") && !containsString(missing, "fileIds") && !containsString(missing, "targetParentId") {
 		return false
 	}
 	return hasDriveMoveResolutionIntent(requestText)
@@ -105,12 +105,22 @@ func shouldRedirectClarifyToDriveMove(requestText, evidenceText string) bool {
 
 func driveMoveResolutionObservation(missing []string) string {
 	return fmt.Sprintf(`NEEDS_DRIVE_MOVE_RESOLUTION: The current request is a Google Drive move request, but %s is not resolved to a Drive ID yet.
-Do not ask the user for fileId or targetParentId when they gave file/folder names.
+Do not ask the user for fileId, fileIds, or targetParentId when they gave file/folder names.
 First call safe read tools to resolve names:
-- Call drive.listFiles to find the source file by its title/name. If the user says "docs" or "Google Docs", prefer the Google Docs MIME type.
+- Call drive.listFiles to find each source file by its title/name. If the user says "docs" or "Google Docs", prefer the Google Docs MIME type.
 - Call drive.listFiles to find the destination folder by its title/name, with folder MIME type application/vnd.google-apps.folder.
 After resolving exactly one source file and one destination folder, retry drive.moveFile with fileId and targetParentId.
+After resolving multiple source files and one destination folder, call drive.moveFiles with fileIds and targetParentId.
 If read-tool resolution returns no match or multiple plausible matches, then ask one concise clarification question.`, strings.Join(missing, ", "))
+}
+
+func isDriveMoveTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "drive.moveFile", "drive.moveFiles":
+		return true
+	default:
+		return false
+	}
 }
 
 func chatSpaceResolutionObservation(toolCall providers.ToolCall) string {

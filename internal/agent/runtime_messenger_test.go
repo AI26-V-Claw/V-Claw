@@ -381,6 +381,37 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 	})
 }
 
+func TestApprovalTextShowsDriveMoveSourceAndTarget(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_drive_move",
+			Summary:    "Tôi cần bạn xác nhận trước khi di chuyển file hoặc folder Google Drive.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "drive.moveFile",
+				Input: map[string]any{
+					"sourceFiles":    []any{"Thuật toán segment tree (ID: file_1)"},
+					"targetFolder":   "Nhập môn lập trình (ID: folder_1)",
+					"fileId":         "file_1",
+					"targetParentId": "folder_1",
+				},
+			},
+		},
+	}
+
+	text := renderAgentResponse(response)
+	for _, want := range []string{
+		"Nguồn di chuyển: Thuật toán segment tree",
+		"Thư mục đích: Nhập môn lập trình",
+		"Drive file ID: file_1",
+		"Folder đích ID: folder_1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("approval text missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestParseApprovalCommandApprovesPendingRequest(t *testing.T) {
 	command, ok := parseApprovalCommand("đồng ý", true)
 	if !ok {

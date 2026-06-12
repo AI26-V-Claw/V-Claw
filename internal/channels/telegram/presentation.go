@@ -411,7 +411,7 @@ func telegramActionLabel(toolName string) string {
 		return "Chia sẻ tệp Google Drive"
 	case "drive.revokePermission":
 		return "Thu hồi quyền Google Drive"
-	case "drive.moveFile":
+	case "drive.moveFile", "drive.moveFiles":
 		return "Di chuyển tệp Google Drive"
 	case "drive.trashFile":
 		return "Chuyển tệp Google Drive vào thùng rác"

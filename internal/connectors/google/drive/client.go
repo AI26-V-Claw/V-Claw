@@ -147,7 +147,7 @@ func ListFiles(ctx context.Context, client *http.Client, query, mimeType string,
 		maxResults = 50
 	}
 
-	q := strings.TrimSpace(query)
+	q := normalizeDriveListQuery(query)
 	if mt := strings.TrimSpace(mimeType); mt != "" {
 		mimeQuery := fmt.Sprintf("mimeType = '%s'", escapeDriveQueryValue(mt))
 		if q == "" {
@@ -159,6 +159,8 @@ func ListFiles(ctx context.Context, client *http.Client, query, mimeType string,
 
 	call := service.Files.List().
 		PageSize(maxResults).
+		SupportsAllDrives(true).
+		IncludeItemsFromAllDrives(true).
 		Fields("nextPageToken, files(id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed)").
 		OrderBy("modifiedTime desc")
 	if q != "" {
@@ -498,6 +500,31 @@ func readLimited(reader io.Reader, limit int64) ([]byte, int64, bool, error) {
 
 func escapeDriveQueryValue(value string) string {
 	return strings.ReplaceAll(value, "'", "\\'")
+}
+
+func normalizeDriveListQuery(query string) string {
+	q := strings.TrimSpace(query)
+	if q == "" || looksLikeDriveQuery(q) {
+		return q
+	}
+	return fmt.Sprintf("name contains '%s' and trashed = false", escapeDriveQueryValue(q))
+}
+
+func looksLikeDriveQuery(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"=", "!=", "<", ">", " contains ", " in ", " and ", " or ", " not ",
+		"name ", "mimetype", "trashed", "fulltext", "modifiedtime",
+		"viewedbyme", "starred", "parents", "owners", "writers", "readers",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "'")
 }
 
 func cleanStrings(values []string) []string {

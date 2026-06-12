@@ -243,7 +243,7 @@ func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
 			}
 			return ref
 		}
-	case "drive.createFolder", "drive.createFile", "drive.uploadFile", "drive.updateFileMetadata", "drive.moveFile", "drive.trashFile", "drive.untrashFile":
+	case "drive.createFolder", "drive.createFile", "drive.uploadFile", "drive.updateFileMetadata", "drive.moveFile", "drive.moveFiles", "drive.trashFile", "drive.untrashFile":
 		if file, ok := nestedMap(value, "File"); ok {
 			return artifactRefFromFile(file)
 		}
@@ -384,6 +384,7 @@ var approvalSkipFields = map[string]bool{
 var approvalFieldPriority = map[string]int{
 	"subject": 1, "title": 1,
 	"name": 1, "fileName": 1, "newTitle": 1,
+	"sourceFiles": 1, "targetFolder": 2,
 	"to": 2, "attendees": 2, "emailAddress": 2,
 	"textBody": 3, "htmlBody": 3, "text": 3, "body": 3, "content": 3, "oldText": 3, "newText": 4, "values": 4, "ranges": 4,
 	"start": 4, "end": 5,
@@ -391,7 +392,7 @@ var approvalFieldPriority = map[string]int{
 	"range": 6, "role": 7, "type": 8,
 	"description": 8, "location": 9,
 	"attachments": 10,
-	"fileId":      20, "documentId": 20, "spreadsheetId": 20, "targetParentId": 21, "permissionId": 21, "sheetId": 21, "sourceSheetId": 21,
+	"fileId":      20, "fileIds": 20, "documentId": 20, "spreadsheetId": 20, "targetParentId": 21, "permissionId": 21, "sheetId": 21, "sourceSheetId": 21,
 }
 
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
@@ -469,6 +470,12 @@ func approvalFieldLabel(key string) string {
 		return "Loại chia sẻ"
 	case "fileId":
 		return "Drive file ID"
+	case "fileIds":
+		return "Drive file IDs"
+	case "sourceFiles":
+		return "Nguồn di chuyển"
+	case "targetFolder":
+		return "Thư mục đích"
 	case "documentId":
 		return "Document ID"
 	case "spreadsheetId":

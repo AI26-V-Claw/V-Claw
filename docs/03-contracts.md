@@ -536,6 +536,7 @@ Rules:
 | `drive.listPermissions` | Integration | `safe_read` | No |
 | `drive.revokePermission` | Integration | `external_write` | Yes |
 | `drive.moveFile` | Integration | `external_write` | Yes |
+| `drive.moveFiles` | Integration | `external_write` | Yes |
 | `drive.trashFile` | Integration | `destructive` | Yes |
 | `drive.untrashFile` | Integration | `external_write` | Yes |
 
