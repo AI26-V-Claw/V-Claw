@@ -104,6 +104,15 @@ For Google Chat tools:
 - For requests like "gửi tin nhắn vào nhóm chat VClaw" or "gửi file này vào nhóm VClaw", call chat.listSpaces first, match the requested group/display name from the returned spaces, then call chat.sendMessage with the matched spaces/... resource.
 - Do not ask the user to provide spaces/AAAA until chat.listSpaces or member resolution has already failed or returned ambiguous matches.
 - If the target space is still ambiguous after read-tool resolution, ask one concise clarification question before calling a write tool.
+- CRITICAL: When sending to a named person, you MUST call people.searchDirectory then chat.findSpacesByMembers BEFORE attempting chat.sendMessage — even for a person you have sent to before in this session. Only fall back to chat.createSpace if findSpacesByMembers returns no match. Never reuse or assume a spaces/... value from history, memory, or transcript. Skipping findSpacesByMembers is the most common cause of sending to the wrong person or triggering unnecessary space creation.
+For filesystem and sandbox tools:
+- When the user refers to a file by name only (e.g. "xóa file notes.txt", "đọc file report.txt"), do not ask for the exact path. Call filesystem.fileInfo with the filename first to locate it in the sandbox workspace.
+- NEVER use a previous filesystem.fileInfo or filesystem.listDir result from the conversation history to answer a new file request. Always call the tool again — the file system changes between requests.
+- If filesystem.fileInfo returns not found, call filesystem.listDir to search for the file, then proceed with the correct path.
+- To delete a file or directory, use filesystem.deleteFile (not sandbox.runShell). Pass the same path you would use for filesystem.fileInfo or filesystem.writeFile.
+- filesystem.deleteFile and filesystem.writeFile operate on the same sandbox workspace. Do not use shell rm/rmdir to delete files that were created by filesystem tools.
+- Before deleting, verify the target exists first with filesystem.fileInfo. If the target does not exist in the sandbox workspace, tell the user clearly instead of attempting deletion.
+- The sandbox workspace is the default location for all user files created or managed by tools in this session. Files outside this workspace cannot be accessed or deleted by filesystem tools.
 For channel attachments:
 - If the user message contains "Attachment paths:", those are local files sent through the current channel.
 - If the user says "file này", "file tôi đã gửi", "ảnh này", or asks to attach/send/upload the current file, use those paths in tool arguments that accept attachments.
@@ -356,7 +365,9 @@ func isSideEffectToolName(name string) bool {
 		"chat.addMember",
 		"chat.removeMember",
 		"sandbox.runPython",
-		"sandbox.runShell":
+		"sandbox.runShell",
+		"filesystem.writeFile",
+		"filesystem.deleteFile":
 		return true
 	default:
 		return false

@@ -39,6 +39,7 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 Use this memory to answer follow-up questions and maintain conversational continuity.
 Do not use memory alone to fill required parameters for a new write, destructive, local file, or code execution action.
 If the current user message does not explicitly provide required write parameters, ask a concise clarification question.
+HARD RULE — chat.sendMessage space parameter: a spaces/... value from these results or from anywhere in conversation history must NEVER be reused as the destination for a new chat.sendMessage to a named person. Always call people.searchDirectory then chat.findSpacesByMembers to obtain the correct space. Only call chat.createSpace if chat.findSpacesByMembers returns no match. Never skip the findSpacesByMembers step even if a spaces/... value is visible in history or memory.
 
 ` + strings.Join(parts, "\n\n"))
 }
@@ -443,6 +444,10 @@ func isPotentialWriteRequest(text string) bool {
 	}
 	if containsAnyText(lower, "chat", "nhóm chat", "nhom chat", "google chat", "space") &&
 		containsAnyText(lower, "gửi", "gui", "nhắn", "nhan", "thông báo", "thong bao", "send", "reply", "file") {
+		return true
+	}
+	// "gửi cho X" / "nhắn cho X" without explicit "tin nhắn" keyword — still a write request.
+	if containsAnyText(lower, "gửi cho", "gui cho", "nhắn cho", "nhan cho", "nhắn tin cho", "nhan tin cho") {
 		return true
 	}
 	return containsAnyText(lower,

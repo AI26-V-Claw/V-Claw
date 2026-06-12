@@ -19,7 +19,10 @@ const (
 )
 
 const (
-	defaultSessionID = "agent"
+	// DefaultSessionID is the session ID used when none is provided in the tool call arguments.
+	// filesystem tools should use the same session workspace path as their AllowedRoot.
+	DefaultSessionID = "agent"
+	defaultSessionID = DefaultSessionID
 )
 
 type Config struct {
