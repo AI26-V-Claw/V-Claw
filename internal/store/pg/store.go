@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -15,8 +14,6 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/audit"
 	"vclaw/internal/contracts"
-	"vclaw/internal/providers"
-	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 )
 
@@ -52,136 +49,6 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
-}
-
-func (s *Store) LoadTranscript(ctx context.Context, sessionID string) ([]providers.Message, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT role, content, COALESCE(tool_call_id, ''), tool_calls
-		FROM session_messages
-		WHERE session_id = $1 AND archived_at IS NULL
-		ORDER BY created_at, id`, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var messages []providers.Message
-	for rows.Next() {
-		message, err := scanMessage(rows)
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, message)
-	}
-	return messages, rows.Err()
-}
-
-func (s *Store) AppendMessage(ctx context.Context, sessionID string, message providers.Message) error {
-	return s.AppendMessageForRun(ctx, sessionID, "", "", message)
-}
-
-func (s *Store) AppendMessageForRun(ctx context.Context, sessionID string, runID string, requestID string, message providers.Message) error {
-	toolCalls, err := json.Marshal(message.ToolCalls)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO session_messages (session_id, run_id, request_id, role, content, tool_call_id, tool_calls)
-		VALUES ($1, nullif($2, ''), nullif($3, ''), $4, $5, nullif($6, ''), $7::jsonb)`,
-		sessionID, runID, requestID, string(message.Role), message.Content, message.ToolCallID, string(toolCalls))
-	return err
-}
-
-func (s *Store) SetTranscript(ctx context.Context, sessionID string, messages []providers.Message) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer rollback(tx)
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE session_messages
-		SET archived_at = now()
-		WHERE session_id = $1 AND archived_at IS NULL`, sessionID); err != nil {
-		return err
-	}
-	for _, message := range messages {
-		if err := insertSessionMessageTx(ctx, tx, sessionID, "", "", message); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func (s *Store) ReplaceTranscriptIfUnchanged(ctx context.Context, sessionID string, expected, replacement []providers.Message) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return false, err
-	}
-	defer rollback(tx)
-	current, err := loadTranscriptTx(ctx, tx, sessionID)
-	if err != nil {
-		return false, err
-	}
-	if !reflect.DeepEqual(current, expected) {
-		return false, tx.Commit()
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE session_messages
-		SET archived_at = now()
-		WHERE session_id = $1 AND archived_at IS NULL`, sessionID); err != nil {
-		return false, err
-	}
-	for _, message := range replacement {
-		if err := insertSessionMessageTx(ctx, tx, sessionID, "", "", message); err != nil {
-			return false, err
-		}
-	}
-	return true, tx.Commit()
-}
-
-func (s *Store) ClearSession(ctx context.Context, sessionID string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer rollback(tx)
-	for _, query := range []string{
-		`DELETE FROM session_messages WHERE session_id = $1`,
-		`DELETE FROM session_memory WHERE session_id = $1`,
-	} {
-		if _, err := tx.ExecContext(ctx, query, sessionID); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func (s *Store) LoadMemory(ctx context.Context, sessionID string) (sessions.SessionMemory, error) {
-	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT memory FROM session_memory WHERE session_id = $1`, sessionID).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return sessions.SessionMemory{}, nil
-	}
-	if err != nil {
-		return sessions.SessionMemory{}, err
-	}
-	var memory sessions.SessionMemory
-	if len(raw) > 0 {
-		err = json.Unmarshal(raw, &memory)
-	}
-	return memory, err
-}
-
-func (s *Store) SaveMemory(ctx context.Context, sessionID string, memory sessions.SessionMemory) error {
-	data, err := json.Marshal(memory)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO session_memory (session_id, memory, updated_at)
-		VALUES ($1, $2::jsonb, now())
-		ON CONFLICT (session_id) DO UPDATE
-		SET memory = EXCLUDED.memory, updated_at = now()`, sessionID, string(data))
-	return err
 }
 
 func (s *Store) CreateRun(ctx context.Context, state agent.RunState) error {
@@ -230,24 +97,40 @@ func (s *Store) UpdateRun(ctx context.Context, state agent.RunState) error {
 	if err != nil {
 		return err
 	}
-	switch state.Status {
-	case agent.RuntimeRunStatusCompleted, agent.RuntimeRunStatusFailed, agent.RuntimeRunStatusBlocked, agent.RuntimeRunStatusMaxIterations, agent.RuntimeRunStatusWaitingApproval, agent.RuntimeRunStatusWaitingClarification:
-		return s.insertAuditEntry(ctx, auditEntry{
-			EventID:   state.RunID + ":agent.run." + string(state.Status),
-			EventType: "agent.run." + string(state.Status),
-			RunID:     state.RunID,
-			RequestID: state.RequestID,
-			SessionID: state.SessionID,
-			Details: map[string]any{
-				"status":                 string(state.Status),
-				"iterationCount":         state.IterationCount,
-				"pendingActionId":        state.PendingActionID,
-				"pendingClarificationId": state.PendingClarificationID,
-			},
-			Timestamp: zeroNow(state.UpdatedAt),
-		})
-	default:
+	eventType, ok := runStatusEventType(state.Status)
+	if !ok {
 		return nil
+	}
+	return s.insertAuditEntry(ctx, auditEntry{
+		EventID:   state.RunID + ":" + eventType,
+		EventType: eventType,
+		RunID:     state.RunID,
+		RequestID: state.RequestID,
+		SessionID: state.SessionID,
+		Details: map[string]any{
+			"status":                 string(state.Status),
+			"iterationCount":         state.IterationCount,
+			"pendingActionId":        state.PendingActionID,
+			"pendingClarificationId": state.PendingClarificationID,
+		},
+		Timestamp: zeroNow(state.UpdatedAt),
+	})
+}
+
+// runStatusEventType maps a terminal run status to the contract run event
+// (docs/03-contracts.md §5). Non-terminal statuses such as waiting_approval and
+// waiting_clarification are not run events — they are persisted in
+// agent_runs.status and surfaced via approval.requested / clarify.requested.
+func runStatusEventType(status agent.RuntimeRunStatus) (string, bool) {
+	switch status {
+	case agent.RuntimeRunStatusCompleted:
+		return "agent.run.completed", true
+	case agent.RuntimeRunStatusFailed, agent.RuntimeRunStatusMaxIterations:
+		return "agent.run.failed", true
+	case agent.RuntimeRunStatusBlocked:
+		return "agent.run.cancelled", true
+	default:
+		return "", false
 	}
 }
 
@@ -556,15 +439,12 @@ func (s *Store) UpsertToolRegistryEntries(ctx context.Context, definitions []too
 	return tx.Commit()
 }
 
-func (s *Store) AppendRunEvent(ctx context.Context, event agent.RunEvent) error {
-	data, err := json.Marshal(event.Data)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO run_events (run_id, event_type, data, created_at)
-		VALUES ($1, $2, $3::jsonb, $4)`, event.RunID, event.Type, string(data), zeroNow(event.CreatedAt))
-	return err
+// AppendRunEvent is a no-op for the PostgreSQL store. The run-event stream is
+// not part of the persistence schema (see docs/05-erd.md); durable run/tool/
+// approval lifecycle is traced through audit_entries instead. The File and
+// in-memory state stores keep this stream for local debugging.
+func (s *Store) AppendRunEvent(_ context.Context, _ agent.RunEvent) error {
+	return nil
 }
 
 func (s *Store) Log(event audit.AuditEvent) error {
@@ -644,27 +524,6 @@ func (s *Store) Query(filter audit.Filter) ([]audit.AuditEvent, error) {
 		out = append(out, event)
 	}
 	return out, rows.Err()
-}
-
-func (s *Store) ListMessagesByRun(ctx context.Context, runID string) ([]providers.Message, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT role, content, COALESCE(tool_call_id, ''), tool_calls
-		FROM session_messages
-		WHERE run_id = $1
-		ORDER BY created_at, id`, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var messages []providers.Message
-	for rows.Next() {
-		message, err := scanMessage(rows)
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, message)
-	}
-	return messages, rows.Err()
 }
 
 func (s *Store) ListToolCallsByRun(ctx context.Context, runID string) ([]agent.ToolCallRecord, error) {
@@ -847,54 +706,6 @@ func (s *Store) recordToolExecution(ctx context.Context, record agent.ToolCallRe
 		record.RunID, record.RequestID, record.SessionID, record.ToolCallID, record.ApprovalID,
 		record.ToolName, mustJSON(record.ArgsSnapshot), status, resultSuccess, resultData, errorData, zeroNow(record.CreatedAt))
 	return err
-}
-
-func insertSessionMessageTx(ctx context.Context, tx *sql.Tx, sessionID, runID, requestID string, message providers.Message) error {
-	toolCalls, err := json.Marshal(message.ToolCalls)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO session_messages (session_id, run_id, request_id, role, content, tool_call_id, tool_calls)
-		VALUES ($1, nullif($2, ''), nullif($3, ''), $4, $5, nullif($6, ''), $7::jsonb)`,
-		sessionID, runID, requestID, string(message.Role), message.Content, message.ToolCallID, string(toolCalls))
-	return err
-}
-
-func loadTranscriptTx(ctx context.Context, tx *sql.Tx, sessionID string) ([]providers.Message, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT role, content, COALESCE(tool_call_id, ''), tool_calls
-		FROM session_messages
-		WHERE session_id = $1 AND archived_at IS NULL
-		ORDER BY created_at, id`, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var messages []providers.Message
-	for rows.Next() {
-		message, err := scanMessage(rows)
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, message)
-	}
-	return messages, rows.Err()
-}
-
-func scanMessage(scanner interface{ Scan(dest ...any) error }) (providers.Message, error) {
-	var role, content, toolCallID string
-	var raw []byte
-	if err := scanner.Scan(&role, &content, &toolCallID, &raw); err != nil {
-		return providers.Message{}, err
-	}
-	var toolCalls []providers.ToolCall
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &toolCalls); err != nil {
-			return providers.Message{}, err
-		}
-	}
-	return providers.Message{Role: providers.MessageRole(role), Content: content, ToolCallID: toolCallID, ToolCalls: toolCalls}, nil
 }
 
 func scanRunState(scanner interface{ Scan(dest ...any) error }) (agent.RunState, error) {
@@ -1158,9 +969,5 @@ func rollback(tx *sql.Tx) {
 	_ = tx.Rollback()
 }
 
-var _ sessions.Store = (*Store)(nil)
-var _ sessions.MemoryStore = (*Store)(nil)
-var _ sessions.CompareAndSetStore = (*Store)(nil)
-var _ sessions.RunMessageAppender = (*Store)(nil)
 var _ agent.RuntimeStateStore = (*Store)(nil)
 var _ audit.AuditEventLogger = (*Store)(nil)

@@ -118,7 +118,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				Error:     internalError("approve action: "+err.Error(), contracts.ErrorSourceAgent),
 			}, nil
 		}
-		r.appendRunEvent(ctx, pending.runID, "approval_approved", map[string]any{
+		r.appendRunEvent(ctx, pending.runID, "approval.approved", map[string]any{
 			"approvalId": pending.request.ApprovalID,
 			"toolName":   pending.request.ToolCall.ToolName,
 		})
@@ -137,7 +137,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			}
 			r.recordApprovalObservation(ActionStatusRejected)
 		}
-		r.appendRunEvent(ctx, pending.runID, "approval_rejected", map[string]any{
+		r.appendRunEvent(ctx, pending.runID, "approval.rejected", map[string]any{
 			"approvalId": pending.request.ApprovalID,
 			"toolName":   pending.request.ToolCall.ToolName,
 			"comment":    strings.TrimSpace(decision.Comment),
@@ -619,7 +619,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 				Error:     internalError("complete action: "+err.Error(), contracts.ErrorSourceAgent),
 			}, nil
 		}
-		r.appendRunEvent(ctx, record.RunID, "approval_executed", map[string]any{
+		r.appendRunEvent(ctx, record.RunID, "approval.resolved", map[string]any{
 			"approvalId": pending.request.ApprovalID,
 			"toolName":   pending.toolCall.Name,
 			"success":    true,
@@ -633,7 +633,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 			Error:     internalError("fail action: "+err.Error(), contracts.ErrorSourceAgent),
 		}, nil
 	} else {
-		r.appendRunEvent(ctx, record.RunID, "approval_executed", map[string]any{
+		r.appendRunEvent(ctx, record.RunID, "approval.resolved", map[string]any{
 			"approvalId": pending.request.ApprovalID,
 			"toolName":   pending.toolCall.Name,
 			"success":    false,
