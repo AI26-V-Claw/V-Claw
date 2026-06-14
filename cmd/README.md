@@ -1,8 +1,9 @@
 # cmd
 
-Future local command entrypoints for V-Claw.
+Executable entrypoints for V-Claw.
 
-Planned entrypoints:
+## Current Entrypoints
 
-- `vclaw`: local assistant CLI/chat command.
-- `vclaw-admin`: local setup, diagnostics, migrations, provider config, and account linking utilities.
+- `vclaw`: main local assistant CLI and channel runtime commands.
+- `evaluate`: legacy/auxiliary evaluation command.
+- `vclaw-admin`: reserved for future admin commands.

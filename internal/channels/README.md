@@ -30,21 +30,6 @@ go run ./cmd/vclaw agent -google-tools required -session calendar-cli-test -prom
 
 Use `--google-tools required` when startup should fail if Google OAuth is not ready. Use `--google-tools auto` during local development when Google tools should be registered only if credentials and token files exist.
 
-Intent classifier mode:
-
-```env
-VCLAW_INTENT_CLASSIFIER_MODE=fallback
-```
-
-Supported values:
-
-```text
-fallback  use LLM classifier first, then heuristic if classifier LLM fails
-llm       use only LLM classifier
-heuristic use heuristic classifier for quick local testing
-```
-
-Even in `heuristic` mode, the main agent response model still needs `OPENAI_API_KEY`.
 
 Session memory is kept in-process (no external server required). The transcript and pending clarification state are keyed by `sessionId`, so follow-ups like `11am`, `17h00`, or a natural answer to a previous clarification are interpreted in the same chat session. Sessions are lost on process restart, which is acceptable for a personal local assistant. File-based persistence is planned for Sprint 3.
 

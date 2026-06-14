@@ -80,8 +80,6 @@ func TestSlackProgressTextMapsKnownTools(t *testing.T) {
 
 func TestSlackProgressTextHidesInternalRoutingStages(t *testing.T) {
 	for _, stage := range []agent.ProgressStage{
-		agent.ProgressStageClassifying,
-		agent.ProgressStageClassified,
 		agent.ProgressStagePlanning,
 		agent.ProgressStagePlanned,
 		agent.ProgressStageThinking,

@@ -37,7 +37,6 @@ type RuntimeConfig struct {
 	Policy                     policies.ToolPolicy
 	SessionStore               sessions.Store
 	StateStore                 RuntimeStateStore
-	TurnRouter                 TurnRouter
 	Logger                     *slog.Logger
 	MaxIterations              int
 	ToolTimeout                time.Duration
@@ -59,7 +58,6 @@ type Runtime struct {
 	policy                     policies.ToolPolicy
 	sessionStore               sessions.Store
 	stateStore                 RuntimeStateStore
-	turnRouter                 TurnRouter
 	logger                     *slog.Logger
 	approvalMu                 sync.Mutex
 	pendingApprovals           map[string]pendingApproval
@@ -93,28 +91,6 @@ type pendingClarificationResolution struct {
 	ProvidedFields []string `json:"provided_fields"`
 	StillMissing   []string `json:"still_missing"`
 	Reason         string   `json:"reason"`
-}
-
-type TurnMode string
-
-const (
-	TurnModeNoTool      TurnMode = "no_tool"
-	TurnModeToolEnabled TurnMode = "tool_enabled"
-)
-
-type TurnRouteInput struct {
-	Message       string
-	RecentHistory []string
-	Now           time.Time
-}
-
-type TurnRoute struct {
-	Mode   TurnMode
-	Reason string
-}
-
-type TurnRouter interface {
-	RouteTurn(ctx context.Context, input TurnRouteInput) (TurnRoute, error)
 }
 
 type TaskPlanResult struct {
@@ -180,7 +156,6 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		policy:                     config.Policy,
 		sessionStore:               sessionStore,
 		stateStore:                 stateStore,
-		turnRouter:                 config.TurnRouter,
 		logger:                     logger,
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
@@ -425,7 +400,7 @@ agentLoop:
 		}
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference, nil)
+		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
 		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,

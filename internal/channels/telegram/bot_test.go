@@ -335,8 +335,6 @@ func TestTelegramTextFromResponseFormatsDownloadAttachmentsResult(t *testing.T) 
 
 func TestTelegramProgressTextHidesInternalRoutingStages(t *testing.T) {
 	for _, stage := range []agent.ProgressStage{
-		agent.ProgressStageClassifying,
-		agent.ProgressStageClassified,
 		agent.ProgressStagePlanning,
 		agent.ProgressStagePlanned,
 		agent.ProgressStageThinking,

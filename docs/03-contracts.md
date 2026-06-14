@@ -758,7 +758,7 @@ Expected:
 
 ```text
 UserMessage
--> Turn Router: tool_enabled
+-> Agent Runtime: tools available
 -> Agent Loop
 -> calendar.createEvent proposed
 -> RiskDecision: external_write, requires_approval
@@ -796,7 +796,7 @@ Expected:
 
 ```text
 UserMessage
--> Turn Router: tool_enabled
+-> Agent Runtime: tools available
 -> Agent Loop
 -> gmail.listEmails proposed
 -> RiskDecision: safe_read, allow

@@ -42,3 +42,13 @@ configs/intent_classifier_prompt.md
 .codeboarding/
 
 .codegraph/
+
+# Harness durable layer
+harness.db
+harness.db-wal
+harness.db-shm
+scripts/bin/harness-cli
+scripts/bin/harness-cli.exe
+
+# Personal harnesses
+docs/khang-harness/

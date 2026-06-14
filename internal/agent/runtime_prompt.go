@@ -13,7 +13,7 @@ import (
 	"vclaw/internal/sessions"
 )
 
-func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution, route *TurnRoute) []providers.Message {
+func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution) []providers.Message {
 	transcript = compactProviderTranscriptForPrompt(transcript)
 	messages := make([]providers.Message, 0, len(transcript)+4)
 	messages = append(messages, providers.Message{
@@ -32,26 +32,8 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory
 			Content: prompt,
 		})
 	}
-	if prompt := routeContextPrompt(route); prompt != "" {
-		messages = append(messages, providers.Message{
-			Role:    providers.MessageRoleSystem,
-			Content: prompt,
-		})
-	}
 	messages = append(messages, sanitizeProviderTranscriptForToolProtocol(transcript)...)
 	return messages
-}
-
-func routeContextPrompt(route *TurnRoute) string {
-	if route == nil {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprintf(`Turn router result:
-- tool_exposure_mode: %s
-- reason: %s
-
-This is not an intent label, not a tool choice, not a clarification decision, and not a risk decision.
-If tools are available, decide naturally whether to answer directly, call a relevant tool, or call clarify when required information is missing.`, route.Mode, strings.TrimSpace(route.Reason)))
 }
 
 func runtimeSystemPrompt(now time.Time) string {
@@ -235,101 +217,10 @@ Do not use reference memory as approval. For any write/destructive action, still
 	))
 }
 
-func (r *Runtime) routeTurn(ctx context.Context, message contracts.UserMessage, recentHistory []string) (*TurnRoute, *contracts.ErrorShape) {
-	if r.turnRouter == nil {
-		route := TurnRoute{Mode: TurnModeToolEnabled, Reason: "router unavailable; exposing tools by default"}
-		return &route, nil
-	}
-	// Continuation and revision messages are internally-generated trusted messages.
-	// Skip the LLM turn router and expose tools directly so these messages are never
-	// blocked or misclassified as prompt injection.
-	if isRevisionMessage(message) {
-		route := TurnRoute{Mode: TurnModeToolEnabled, Reason: "continuation/revision message; tools enabled by runtime"}
-		return &route, nil
-	}
-	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassifying, Message: "Turn routing started"})
-	route, err := r.turnRouter.RouteTurn(ctx, TurnRouteInput{
-		Message:       message.Text,
-		RecentHistory: recentHistory,
-		Now:           r.now(),
-	})
-	if err != nil {
-		retryable := providers.IsRetryableError(err)
-		code := contracts.ErrorProviderError
-		if retryable {
-			code = contracts.ErrorProviderUnavailable
-		}
-		return nil, &contracts.ErrorShape{
-			Code:      code,
-			Message:   "turn routing failed: " + err.Error(),
-			Source:    contracts.ErrorSourceProvider,
-			Retryable: retryable,
-		}
-	}
-	if route.Mode == "" {
-		route.Mode = TurnModeToolEnabled
-	}
-	if strings.TrimSpace(route.Reason) == "" {
-		route.Reason = string(route.Mode)
-	}
-	r.logger.Info("turn routed",
-		"request_id", message.RequestID,
-		"session_id", message.SessionID,
-		"mode", route.Mode,
-		"reason", route.Reason,
-	)
-	emitProgress(ctx, ProgressEvent{Stage: ProgressStageClassified, Message: "Turn routing completed"})
-	return &route, nil
-}
-
-func (r *Runtime) providerToolsForRoute(route *TurnRoute) []providers.ToolDefinition {
-	if route == nil || route.Mode != TurnModeToolEnabled {
-		return nil
-	}
-	definitions := providers.ToolDefinitionsFromRegistry(r.registry.ListTools())
-	definitions = append(definitions, clarifyToolDefinition())
-	return definitions
-}
-
 func (r *Runtime) providerTools() []providers.ToolDefinition {
 	definitions := providers.ToolDefinitionsFromRegistry(r.registry.ListTools())
 	definitions = append(definitions, clarifyToolDefinition())
 	return definitions
-}
-
-func toolChoiceForRoute(route *TurnRoute) string {
-	if route == nil || route.Mode != TurnModeToolEnabled {
-		return "none"
-	}
-	return "auto"
-}
-
-func shouldForceToolEnabledForContextualDataFollowUp(route *TurnRoute, text string, history []string, memory sessions.SessionMemory) bool {
-	if route == nil || route.Mode != TurnModeNoTool {
-		return false
-	}
-	lower := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(text)))
-	if lower == "" {
-		return false
-	}
-	hasFollowUpCue := containsAnyText(lower,
-		"thi sao", "con",
-		"hom qua", "hom nay", "ngay mai",
-		"tuan nay", "tuan truoc", "tuan sau",
-		"thang nay", "thang truoc", "thang sau", "thang toi",
-	)
-	if !hasFollowUpCue {
-		return false
-	}
-	context := foldVietnameseSearchText(strings.ToLower(strings.Join(history, "\n") + "\n" + memory.Summary))
-	for _, result := range memory.LastActionResults {
-		context += "\n" + foldVietnameseSearchText(strings.ToLower(result.ToolName+" "+result.Content))
-	}
-	return containsAnyText(context,
-		"calendar", "lich", "calendar.listevents",
-		"gmail", "email", "mail", "gmail.listemails", "gmail.listthreads",
-		"google chat", "chat", "chat.listmessages",
-	)
 }
 
 func shouldRetryTextualApprovalAsToolCall(content string) bool {
