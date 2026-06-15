@@ -97,16 +97,38 @@ func (r *Runtime) traceData(parts ...any) map[string]any {
 	return data
 }
 
+func (r *Runtime) appendTranscriptMessage(ctx context.Context, state RunState, message providers.Message) *contracts.ErrorShape {
+	return r.appendTranscriptMessageForRun(ctx, state.SessionID, state.RunID, state.RequestID, message)
+}
+
+func (r *Runtime) appendTranscriptMessageForRun(ctx context.Context, sessionID string, runID string, requestID string, message providers.Message) *contracts.ErrorShape {
+	if runAppender, ok := r.sessionStore.(sessions.RunMessageAppender); ok {
+		if err := runAppender.AppendMessageForRun(ctx, sessionID, runID, requestID, message); err != nil {
+			return internalError("append message: "+err.Error(), contracts.ErrorSourceSession)
+		}
+		return nil
+	}
+	if err := r.sessionStore.AppendMessage(ctx, sessionID, message); err != nil {
+		return internalError("append message: "+err.Error(), contracts.ErrorSourceSession)
+	}
+	return nil
+}
+
 func (r *Runtime) appendAssistantTranscript(ctx context.Context, sessionID string, content string) *contracts.ErrorShape {
+	return r.appendAssistantTranscriptForRun(ctx, sessionID, "", "", content)
+}
+
+func (r *Runtime) appendAssistantTranscriptForRun(ctx context.Context, sessionID string, runID string, requestID string, content string) *contracts.ErrorShape {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
 	}
-	if err := r.sessionStore.AppendMessage(ctx, sessionID, providers.Message{
+	if err := r.appendTranscriptMessageForRun(ctx, sessionID, runID, requestID, providers.Message{
 		Role:    providers.MessageRoleAssistant,
 		Content: content,
 	}); err != nil {
-		return internalError("append assistant message: "+err.Error(), contracts.ErrorSourceSession)
+		err.Message = strings.Replace(err.Message, "append message:", "append assistant message:", 1)
+		return err
 	}
 	return nil
 }

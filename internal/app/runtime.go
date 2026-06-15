@@ -11,6 +11,7 @@ import (
 
 	"vclaw/internal/agent"
 	"vclaw/internal/agent/reference"
+	"vclaw/internal/audit"
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
@@ -27,6 +28,7 @@ import (
 	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
+	pgstore "vclaw/internal/store/pg"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
@@ -56,6 +58,8 @@ type AgentRuntimeConfig struct {
 	Provider     providers.Provider
 	SessionStore sessions.Store
 	StateStore   agent.RuntimeStateStore
+	AuditLogger  audit.AuditEventLogger
+	DatabaseURL  string
 
 	Logger        *slog.Logger
 	MaxIterations int
@@ -89,6 +93,10 @@ type RuntimeBundle struct {
 	TavilyConfigured      bool
 }
 
+type toolRegistryPersister interface {
+	UpsertToolRegistryEntries(context.Context, []tools.ToolDefinition) error
+}
+
 func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle, error) {
 	provider := config.Provider
 	model := strings.TrimSpace(config.OpenAIModel)
@@ -111,15 +119,32 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		provider = openAI
 	}
 
-	registry, err := NewAgentToolRegistry(ctx, config)
-	if err != nil {
-		return RuntimeBundle{}, err
-	}
-
 	dataDir := strings.TrimSpace(config.DataDir)
 	if dataDir == "" {
 		dataDir = "./data"
 	}
+	databaseURL := strings.TrimSpace(config.DatabaseURL)
+	if databaseURL != "" && (config.StateStore == nil || config.AuditLogger == nil) {
+		store, err := pgstore.New(ctx, databaseURL)
+		if err != nil {
+			return RuntimeBundle{}, fmt.Errorf("connect database store: %w", err)
+		}
+		if config.StateStore == nil {
+			config.StateStore = store
+		}
+		if config.AuditLogger == nil {
+			config.AuditLogger = store
+		}
+	}
+
+	registry, err := NewAgentToolRegistry(ctx, config)
+	if err != nil {
+		return RuntimeBundle{}, err
+	}
+	if err := persistToolRegistry(ctx, registry, config.SessionStore, config.StateStore, config.AuditLogger); err != nil {
+		return RuntimeBundle{}, err
+	}
+
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
 		sessionStore, err = sessions.NewFileStore(dataDir)
@@ -176,6 +201,19 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		GoogleOAuthConfigured: googleOAuthConfigured(config),
 		TavilyConfigured:      strings.TrimSpace(config.TavilyAPIKey) != "",
 	}, nil
+}
+
+func persistToolRegistry(ctx context.Context, registry *tools.ToolRegistry, stores ...any) error {
+	for _, store := range stores {
+		persister, ok := store.(toolRegistryPersister)
+		if !ok || persister == nil {
+			continue
+		}
+		if err := persister.UpsertToolRegistryEntries(ctx, registry.ListTools()); err != nil {
+			return fmt.Errorf("persist tool registry: %w", err)
+		}
+	}
+	return nil
 }
 
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {
@@ -333,6 +371,7 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 	gatedRunner := sandboxgate.NewGatedRunner(sandboxgate.Config{
 		Checker:          policies.DefaultChecker,
 		Detector:         safety.DefaultScanner,
+		Logger:           config.AuditLogger,
 		Runner:           dockerRunner,
 		SkipApprovalGate: true,
 	})
