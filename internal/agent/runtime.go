@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -3833,29 +3834,75 @@ func (r *heuristicFirstResolver) Resolve(ctx context.Context, input reference.In
 	return r.fallback.Resolve(ctx, input)
 }
 func (r *Runtime) handleContextError(ctx context.Context, runState RunState, toolResults []contracts.ToolResult) *contracts.AgentResponse {
-	err := ctx.Err()
-	if err == nil {
-		return nil
-	}
-	statusCode := contracts.ErrorInternal
-	messageText := "request canceled"
-	if err == context.DeadlineExceeded {
-		statusCode = contracts.ErrorProviderTimeout
-		messageText = "request timed out"
-	}
-	if finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); finishErr != nil {
-		return &contracts.AgentResponse{Error: finishErr, Message: finishErr.Message, Status: contracts.AgentStatusFailed}
-	}
-	return &contracts.AgentResponse{
-		Status:      contracts.AgentStatusFailed,
-		ToolResults: toolResults,
-		Error: &contracts.ErrorShape{
-			Code:      statusCode,
-			Message:   messageText,
-			Source:    contracts.ErrorSourceAgent,
-			Retryable: false,
-		},
-		Message: messageText,
-	}
+	
+err := ctx.Err()
+	
+if err == nil {
+	
+	
+return nil
+	
+}
+	
+runStatus := RuntimeRunStatusFailed
+	
+statusCode := contracts.ErrorProviderTimeout
+	
+messageText := "request timed out"
+	
+if errors.Is(err, context.Canceled) {
+	
+	
+runStatus = RuntimeRunStatusCancelled
+	
+	
+statusCode = contracts.ErrorInternal
+	
+	
+messageText = "request canceled"
+	
+}
+	
+if finishErr := r.finishRunState(ctx, runState, runStatus); finishErr != nil {
+	
+	
+return &contracts.AgentResponse{Error: finishErr, Message: finishErr.Message, Status: contracts.AgentStatusFailed}
+	
+}
+	
+return &contracts.AgentResponse{
+	
+	
+Status:      contracts.AgentStatusFailed,
+	
+	
+ToolResults: toolResults,
+	
+	
+Error: &contracts.ErrorShape{
+	
+	
+	
+Code:      statusCode,
+	
+	
+	
+Message:   messageText,
+	
+	
+	
+Source:    contracts.ErrorSourceAgent,
+	
+	
+	
+Retryable: false,
+	
+	
+},
+	
+	
+Message: messageText,
+	
+}
 }
 

@@ -22,6 +22,7 @@ const (
 	RuntimeRunStatusFailed               RuntimeRunStatus = "failed"
 	RuntimeRunStatusBlocked              RuntimeRunStatus = "blocked"
 	RuntimeRunStatusMaxIterations        RuntimeRunStatus = "max_iterations"
+	RuntimeRunStatusCancelled            RuntimeRunStatus = "cancelled"
 )
 
 type ActionStatus string
@@ -497,3 +498,5 @@ func cloneToolResultPtr(result *tools.ToolResult) *tools.ToolResult {
 	}
 	return &cloned
 }
+
+
