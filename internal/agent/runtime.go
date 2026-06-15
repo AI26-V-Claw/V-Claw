@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -13,7 +12,6 @@ import (
 	agentintent "vclaw/internal/agent/intent"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
-	"vclaw/internal/orchestration"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
@@ -420,11 +418,6 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	toolResults := []contracts.ToolResult{}
 agentLoop:
 	for iteration := 1; iteration <= r.maxIterations; iteration++ {
-		if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
-			resp.RequestID = message.RequestID
-			resp.SessionID = message.SessionID
-			return *resp, nil
-		}
 		runState.IterationCount = iteration
 		if errShape := r.updateRunState(ctx, runState); errShape != nil {
 			base.Error = errShape
@@ -440,11 +433,6 @@ agentLoop:
 			Tools:      r.providerTools(),
 			ToolChoice: "auto",
 		})
-		if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
-			resp.RequestID = message.RequestID
-			resp.SessionID = message.SessionID
-			return *resp, nil
-		}
 		if err != nil {
 			code := contracts.ErrorProviderError
 			retryable := providers.IsRetryableError(err)
@@ -3849,10 +3837,9 @@ func (r *Runtime) handleContextError(ctx context.Context, runState RunState, too
 	if err == nil {
 		return nil
 	}
-	reason := orchestration.FromContextError(err)
 	statusCode := contracts.ErrorInternal
 	messageText := "request canceled"
-	if reason == orchestration.FailureReasonTimeout {
+	if err == context.DeadlineExceeded {
 		statusCode = contracts.ErrorProviderTimeout
 		messageText = "request timed out"
 	}
@@ -3871,3 +3858,4 @@ func (r *Runtime) handleContextError(ctx context.Context, runState RunState, too
 		Message: messageText,
 	}
 }
+
