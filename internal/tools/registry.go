@@ -187,7 +187,10 @@ func inferGroup(toolName string) string {
 	case strings.HasPrefix(toolName, "gmail.") ||
 		strings.HasPrefix(toolName, "calendar.") ||
 		strings.HasPrefix(toolName, "chat.") ||
-		strings.HasPrefix(toolName, "people."):
+		strings.HasPrefix(toolName, "people.") ||
+		strings.HasPrefix(toolName, "drive.") ||
+		strings.HasPrefix(toolName, "docs.") ||
+		strings.HasPrefix(toolName, "sheets."):
 		return "google_workspace"
 	case strings.HasPrefix(toolName, "web."):
 		return "web"

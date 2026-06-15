@@ -7,7 +7,7 @@ Practical notes for starting, checking, and debugging the current V-Claw codebas
 ### Go and local services
 
 - Go `1.26` (`go.mod`)
-- PostgreSQL 16 is the repo default in [docker-compose.yml](/home/nxhai/V_Claw/docker-compose.yml)
+- PostgreSQL 16 is the repo default in `docker-compose.yml`
 - A writable data directory. Default is `./data`
 - Google OAuth credentials and token if you want Google tools enabled
 - Tavily API key if you want web search/fetch enabled
@@ -16,7 +16,7 @@ Practical notes for starting, checking, and debugging the current V-Claw codebas
 
 - The runtime itself stores transcript and runtime state on local files under `DATA_DIR`
 - `vclaw logs`, `vclaw approvals`, and `GET /metrics/history` read from Postgres audit tables
-- The repo does not currently contain a CLI migration command for those audit tables. Apply [migrations/001_init_vclaw_schema.sql](/home/nxhai/V_Claw/migrations/001_init_vclaw_schema.sql) yourself before expecting audit data
+- The repo does not currently contain a CLI migration command for those audit tables. Apply `migrations/001_init_vclaw_schema.sql` yourself before expecting audit data
 
 ### Required env vars
 

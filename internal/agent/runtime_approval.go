@@ -119,6 +119,10 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				Error:     internalError("approve action: "+err.Error(), contracts.ErrorSourceAgent),
 			}, nil
 		}
+		r.appendRunEvent(ctx, pending.runID, "approval_approved", map[string]any{
+			"approvalId": pending.request.ApprovalID,
+			"toolName":   pending.request.ToolCall.ToolName,
+		})
 		r.recordApprovalObservation(ActionStatusApproved)
 		return r.resumeApprovedAction(ctx, pending)
 	case contracts.ApprovalDecisionRejected:
@@ -134,6 +138,11 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			}
 			r.recordApprovalObservation(ActionStatusRejected)
 		}
+		r.appendRunEvent(ctx, pending.runID, "approval_rejected", map[string]any{
+			"approvalId": pending.request.ApprovalID,
+			"toolName":   pending.request.ToolCall.ToolName,
+			"comment":    strings.TrimSpace(decision.Comment),
+		})
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
@@ -270,14 +279,16 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 	return r.Run(ctx, revisionMessage)
 }
 
-func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision) contracts.ApprovalRequest {
+func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision, transcript []providers.Message) contracts.ApprovalRequest {
 	now := r.now()
+	input := cloneArguments(toolCall.Arguments)
+	input = enrichApprovalInput(toolCall.Name, input, transcript)
 	contractCall := contracts.ToolCall{
 		ToolCallID: toolCall.ID,
 		RequestID:  message.RequestID,
 		SessionID:  message.SessionID,
 		ToolName:   toolCall.Name,
-		Input:      cloneArguments(toolCall.Arguments),
+		Input:      input,
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
 	parentApprovalID := ""
@@ -302,6 +313,103 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(approvalTTL),
 	}
+}
+
+func enrichApprovalInput(toolName string, input map[string]any, transcript []providers.Message) map[string]any {
+	switch strings.TrimSpace(toolName) {
+	case "drive.moveFile", "drive.moveFiles":
+		return enrichDriveMoveApprovalInput(input, transcript)
+	default:
+		return input
+	}
+}
+
+func enrichDriveMoveApprovalInput(input map[string]any, transcript []providers.Message) map[string]any {
+	if len(input) == 0 {
+		return input
+	}
+	driveFiles := driveFilesByIDFromTranscript(transcript)
+	if len(driveFiles) == 0 {
+		return input
+	}
+
+	enriched := cloneArguments(input)
+	fileIDs := stringSliceArg(enriched, "fileIds")
+	if len(fileIDs) == 0 {
+		if fileID := strings.TrimSpace(stringArgument(enriched, "fileId")); fileID != "" {
+			fileIDs = []string{fileID}
+		}
+	}
+	if len(fileIDs) > 0 {
+		sources := make([]string, 0, len(fileIDs))
+		for _, fileID := range fileIDs {
+			sources = append(sources, driveApprovalDisplayName(fileID, driveFiles[fileID]))
+		}
+		enriched["sourceFiles"] = sources
+	}
+	if targetParentID := strings.TrimSpace(stringArgument(enriched, "targetParentId")); targetParentID != "" {
+		enriched["targetFolder"] = driveApprovalDisplayName(targetParentID, driveFiles[targetParentID])
+	}
+	return enriched
+}
+
+type driveApprovalFileRef struct {
+	ID       string
+	Name     string
+	MimeType string
+}
+
+func driveFilesByIDFromTranscript(transcript []providers.Message) map[string]driveApprovalFileRef {
+	files := map[string]driveApprovalFileRef{}
+	for _, message := range transcript {
+		if message.Role != providers.MessageRoleTool || strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(message.Content), &payload); err != nil {
+			continue
+		}
+		items, ok := payload["Files"].([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range items {
+			fileMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			ref := driveApprovalFileRef{
+				ID:       firstStringMapValue(fileMap, "id", "ID"),
+				Name:     firstStringMapValue(fileMap, "name", "Name"),
+				MimeType: firstStringMapValue(fileMap, "mimeType", "MimeType"),
+			}
+			if strings.TrimSpace(ref.ID) != "" {
+				files[ref.ID] = ref
+			}
+		}
+	}
+	return files
+}
+
+func driveApprovalDisplayName(id string, ref driveApprovalFileRef) string {
+	id = strings.TrimSpace(id)
+	name := strings.TrimSpace(ref.Name)
+	if name == "" {
+		return id
+	}
+	if id == "" {
+		return name
+	}
+	return fmt.Sprintf("%s (ID: %s)", name, id)
+}
+
+func firstStringMapValue(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (r *Runtime) storePendingApproval(pending pendingApproval) {
@@ -511,6 +619,11 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 				Error:     internalError("complete action: "+err.Error(), contracts.ErrorSourceAgent),
 			}, nil
 		}
+		r.appendRunEvent(ctx, record.RunID, "approval_executed", map[string]any{
+			"approvalId": pending.request.ApprovalID,
+			"toolName":   pending.toolCall.Name,
+			"success":    true,
+		})
 	} else if _, err := r.stateStore.FailAction(ctx, pending.actionID, result); err != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
@@ -519,6 +632,12 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 			Message:   "Không thể lưu lỗi action.",
 			Error:     internalError("fail action: "+err.Error(), contracts.ErrorSourceAgent),
 		}, nil
+	} else {
+		r.appendRunEvent(ctx, record.RunID, "approval_executed", map[string]any{
+			"approvalId": pending.request.ApprovalID,
+			"toolName":   pending.toolCall.Name,
+			"success":    false,
+		})
 	}
 
 	if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
@@ -748,6 +867,36 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi thêm thành viên Google Chat."
 	case "chat.removeMember":
 		return "Tôi cần bạn xác nhận trước khi xóa thành viên Google Chat."
+	case "drive.createFolder":
+		return "Tôi cần bạn xác nhận trước khi tạo folder trên Google Drive."
+	case "drive.createFile", "drive.uploadFile":
+		return "Tôi cần bạn xác nhận trước khi tạo hoặc upload file lên Google Drive."
+	case "drive.updateFileMetadata":
+		return "Tôi cần bạn xác nhận trước khi sửa metadata file Google Drive."
+	case "drive.shareFile":
+		return "Tôi cần bạn xác nhận trước khi chia sẻ file Google Drive."
+	case "drive.revokePermission":
+		return "Tôi cần bạn xác nhận trước khi thu hồi quyền chia sẻ file Google Drive."
+	case "drive.moveFile", "drive.moveFiles":
+		return "Tôi cần bạn xác nhận trước khi di chuyển file hoặc folder Google Drive."
+	case "drive.trashFile":
+		return "Tôi cần bạn xác nhận trước khi chuyển file hoặc folder Google Drive vào thùng rác."
+	case "drive.untrashFile":
+		return "Tôi cần bạn xác nhận trước khi khôi phục file hoặc folder Google Drive."
+	case "docs.createDocument":
+		return "Tôi cần bạn xác nhận trước khi tạo Google Docs document."
+	case "docs.appendText", "docs.replaceText", "docs.insertText":
+		return "Tôi cần bạn xác nhận trước khi sửa nội dung Google Docs document."
+	case "docs.deleteContent":
+		return "Tôi cần bạn xác nhận trước khi xóa nội dung trong Google Docs document."
+	case "sheets.createSpreadsheet":
+		return "Tôi cần bạn xác nhận trước khi tạo Google Sheets spreadsheet."
+	case "sheets.updateValues", "sheets.batchUpdateValues", "sheets.appendValues", "sheets.clearValues":
+		return "Tôi cần bạn xác nhận trước khi thay đổi dữ liệu trong Google Sheets."
+	case "sheets.addSheet", "sheets.renameSheet", "sheets.duplicateSheet":
+		return "Tôi cần bạn xác nhận trước khi thay đổi tab trong Google Sheets."
+	case "sheets.deleteSheet":
+		return "Tôi cần bạn xác nhận trước khi xóa tab trong Google Sheets."
 	case "sandbox.runPython", "sandbox.runShell":
 		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
 	default:

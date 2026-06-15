@@ -27,7 +27,6 @@ func TestRuntimePromptOrdersSystemMemoryReferenceAndTranscript(t *testing.T) {
 			Confidence:      0.9,
 			ResolvedContext: map[string]any{"title": "planning"},
 		},
-		nil,
 	)
 
 	if len(messages) != 4 {
@@ -49,5 +48,31 @@ func TestRuntimePromptOrdersSystemMemoryReferenceAndTranscript(t *testing.T) {
 	}
 	if messages[3].Role != providers.MessageRoleUser || messages[3].Content != "continue" {
 		t.Fatalf("transcript should follow runtime context, got %#v", messages[3])
+	}
+}
+
+func TestRuntimePromptRoutesDriveMoveToMoveFile(t *testing.T) {
+	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 11, 18, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
+	for _, want := range []string{
+		"di chuyển file X vào folder Y",
+		"drive.moveFile",
+		"Do not use drive.updateFileMetadata for moving files",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected runtime prompt to contain %q", want)
+		}
+	}
+}
+
+func TestRuntimePromptRoutesDriveFolderCreationToCreateFolder(t *testing.T) {
+	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 11, 18, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
+	for _, want := range []string{
+		"tạo thư mục X",
+		"drive.createFolder",
+		"parentIds",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected runtime prompt to contain %q", want)
+		}
 	}
 }

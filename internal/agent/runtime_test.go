@@ -43,7 +43,7 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}
 }
 
-func TestRuntimeBypassesIntentClarificationForSafeChat(t *testing.T) {
+func TestRuntimeBypassesRedundantClarificationForSafeChat(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Tôi là V-Claw."},
 	}}}
@@ -224,7 +224,7 @@ func TestRuntimeStoresClarificationInSessionTranscript(t *testing.T) {
 	}
 }
 
-func TestRuntimeActiveFollowUpBypassesClassifierClarification(t *testing.T) {
+func TestRuntimeActiveFollowUpBypassesRedundantClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
@@ -262,7 +262,7 @@ func TestRuntimeActiveFollowUpBypassesClassifierClarification(t *testing.T) {
 	}
 }
 
-func TestRuntimeCalendarTimeRangeFollowUpBypassesClassifierClarification(t *testing.T) {
+func TestRuntimeCalendarTimeRangeFollowUpBypassesRedundantClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
@@ -359,7 +359,7 @@ func TestRuntimePendingClarificationPreservesOriginalRequestParams(t *testing.T)
 	}
 }
 
-func TestRuntimeActiveFollowUpIgnoresClassifierClarification(t *testing.T) {
+func TestRuntimeActiveFollowUpIgnoresRedundantClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
@@ -3207,8 +3207,7 @@ func TestRuntimeBlocksDestructiveToolByUserPolicy(t *testing.T) {
 		Policy: policies.NewToolPolicyWithConfig(policies.UserPolicyConfig{
 			AlwaysBlock: []contracts.RiskLevel{contracts.RiskLevelDestructive},
 		}),
-		TurnRouter: testToolEnabledRouter(),
-		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+		Now: func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())

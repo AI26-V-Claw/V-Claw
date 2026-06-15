@@ -13,8 +13,11 @@ import (
 	"vclaw/internal/connectors/google"
 	"vclaw/internal/connectors/google/calendar"
 	"vclaw/internal/connectors/google/chat"
+	gdocs "vclaw/internal/connectors/google/docs"
+	gdrive "vclaw/internal/connectors/google/drive"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
+	gsheets "vclaw/internal/connectors/google/sheets"
 )
 
 const (
@@ -96,6 +99,8 @@ func runGoogle(ctx context.Context, args []string) error {
 		credentialsPath, tokenPath := addGoogleAuthFlags(fs)
 		chatSpace := fs.String("chat-space", "", "optional Google Chat space resource name, for example spaces/AAAA...")
 		chatText := fs.String("chat-text", "V-Claw Google Chat smoke test", "text to send when -chat-space is provided")
+		docsID := fs.String("docs-id", "", "optional Google Docs document ID to read")
+		sheetsID := fs.String("sheets-id", "", "optional Google Sheets spreadsheet ID to read")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -165,9 +170,46 @@ func runGoogle(ctx context.Context, args []string) error {
 			fmt.Printf("Sent Google Chat message: %s\n", message.Name)
 		}
 
+		fmt.Println()
+		fmt.Println("Google Drive files:")
+		driveOutput, err := gdrive.ListFiles(ctx, httpClient, "trashed = false", "", 10, "")
+		if err != nil {
+			return fmt.Errorf("drive smoke test failed: %w", err)
+		}
+		if len(driveOutput.Files) == 0 {
+			fmt.Println("- no files found")
+		}
+		for _, file := range driveOutput.Files {
+			fmt.Printf("- %s | %s | %s\n", file.ID, file.Name, file.MimeType)
+		}
+
+		if strings.TrimSpace(*docsID) != "" {
+			document, err := gdocs.GetDocument(ctx, httpClient, *docsID)
+			if err != nil {
+				return fmt.Errorf("docs smoke test failed: %w", err)
+			}
+			fmt.Println()
+			fmt.Printf("Google Docs document: %s | %s\n", document.ID, document.Title)
+		}
+
+		if strings.TrimSpace(*sheetsID) != "" {
+			spreadsheet, err := gsheets.GetSpreadsheet(ctx, httpClient, *sheetsID)
+			if err != nil {
+				return fmt.Errorf("sheets smoke test failed: %w", err)
+			}
+			fmt.Println()
+			fmt.Printf("Google Sheets spreadsheet: %s | %s\n", spreadsheet.ID, spreadsheet.Title)
+		}
+
 		return nil
 	case "gmail":
 		return runGoogleGmail(ctx, args[1:])
+	case "drive":
+		return runGoogleDrive(ctx, args[1:])
+	case "docs":
+		return runGoogleDocs(ctx, args[1:])
+	case "sheets":
+		return runGoogleSheets(ctx, args[1:])
 	case "chat":
 		return runGoogleChat(ctx, args[1:])
 	case "people":
@@ -310,6 +352,9 @@ func printUsage() {
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]
   vclaw google gmail <labels|profile|list|get|list-threads|get-thread|list-drafts|get-draft|create-draft|update-draft|send-draft|delete-draft|reply-draft|forward-draft|download-attachments|modify-message|batch-modify|trash-message|untrash-message>
+  vclaw google drive <list|get|export|download|create-folder|create-file|upload|share|move|move-files|permissions|revoke|trash|untrash>
+  vclaw google docs <get|create|append|replace|insert|delete>
+  vclaw google sheets <get|read|batch-get|create|update|batch-update|append|clear|add-sheet|rename-sheet|delete-sheet|duplicate-sheet>
   vclaw google people <search-directory>
   vclaw google chat <list-spaces|list-members|find-spaces-by-members|list-messages|send|update-message|delete-message|create-space|add-member|remove-member>
 
@@ -324,13 +369,22 @@ func printGoogleUsage() {
       Run the OAuth user flow and save a local refresh token.
 
   vclaw google smoke
-      List Gmail labels, upcoming Calendar events, and Google Chat spaces.
+      List Gmail labels, upcoming Calendar events, Google Chat spaces, and Drive files.
 
   vclaw google smoke -chat-space spaces/AAAA...
-      Also send a text-only smoke-test message to the given Chat space.`)
+      Also send a text-only smoke-test message to the given Chat space.
+
+  vclaw google smoke -docs-id <document-id> -sheets-id <spreadsheet-id>
+      Also read one Google Docs document and one Google Sheets spreadsheet.`)
 
 	fmt.Println()
 	printGoogleGmailUsage()
+	fmt.Println()
+	printGoogleDriveUsage()
+	fmt.Println()
+	printGoogleDocsUsage()
+	fmt.Println()
+	printGoogleSheetsUsage()
 	fmt.Println()
 	printGooglePeopleUsage()
 	fmt.Println()
