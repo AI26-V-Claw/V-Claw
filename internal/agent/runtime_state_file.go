@@ -12,10 +12,12 @@ import (
 )
 
 type fileRuntimeStateSnapshot struct {
-	Runs      map[string]RunState     `json:"runs"`
-	Actions   map[string]ActionRecord `json:"actions"`
-	ToolCalls []ToolCallRecord        `json:"toolCalls,omitempty"`
-	Events    []RunEvent              `json:"events,omitempty"`
+	Runs              map[string]RunState      `json:"runs"`
+	Actions           map[string]ActionRecord  `json:"actions"`
+	ToolCalls         []ToolCallRecord         `json:"toolCalls,omitempty"`
+	RiskDecisions     []RiskDecisionRecord     `json:"riskDecisions,omitempty"`
+	ApprovalDecisions []ApprovalDecisionRecord `json:"approvalDecisions,omitempty"`
+	Events            []RunEvent               `json:"events,omitempty"`
 }
 
 // FileRuntimeStateStore persists run and approval state so pending actions can
@@ -95,15 +97,15 @@ func (s *FileRuntimeStateStore) FindLatestPendingApproval(ctx context.Context, s
 	return s.memory.FindLatestPendingApproval(ctx, sessionID)
 }
 
-func (s *FileRuntimeStateStore) MarkActionApproved(ctx context.Context, actionID string) (ActionRecord, error) {
+func (s *FileRuntimeStateStore) MarkActionApproved(ctx context.Context, actionID string, decision ApprovalDecisionRecord) (ActionRecord, error) {
 	return s.updateAction(func() (ActionRecord, error) {
-		return s.memory.MarkActionApproved(ctx, actionID)
+		return s.memory.MarkActionApproved(ctx, actionID, decision)
 	})
 }
 
-func (s *FileRuntimeStateStore) MarkActionRejected(ctx context.Context, actionID string) (ActionRecord, error) {
+func (s *FileRuntimeStateStore) MarkActionRejected(ctx context.Context, actionID string, decision ApprovalDecisionRecord) (ActionRecord, error) {
 	return s.updateAction(func() (ActionRecord, error) {
-		return s.memory.MarkActionRejected(ctx, actionID)
+		return s.memory.MarkActionRejected(ctx, actionID, decision)
 	})
 }
 
@@ -144,6 +146,15 @@ func (s *FileRuntimeStateStore) RecordToolCall(ctx context.Context, record ToolC
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.memory.RecordToolCall(ctx, record); err != nil {
+		return err
+	}
+	return s.persist()
+}
+
+func (s *FileRuntimeStateStore) RecordRiskDecision(ctx context.Context, record RiskDecisionRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.memory.RecordRiskDecision(ctx, record); err != nil {
 		return err
 	}
 	return s.persist()
@@ -190,6 +201,8 @@ func (s *FileRuntimeStateStore) load() error {
 		s.memory.actions = snapshot.Actions
 	}
 	s.memory.toolCalls = snapshot.ToolCalls
+	s.memory.riskDecisions = snapshot.RiskDecisions
+	s.memory.approvalDecisions = snapshot.ApprovalDecisions
 	s.memory.events = snapshot.Events
 	for actionID, action := range s.memory.actions {
 		if action.ApprovalID != "" {
@@ -205,10 +218,12 @@ func (s *FileRuntimeStateStore) load() error {
 func (s *FileRuntimeStateStore) persist() error {
 	s.memory.mu.Lock()
 	snapshot := fileRuntimeStateSnapshot{
-		Runs:      make(map[string]RunState, len(s.memory.runs)),
-		Actions:   make(map[string]ActionRecord, len(s.memory.actions)),
-		ToolCalls: make([]ToolCallRecord, len(s.memory.toolCalls)),
-		Events:    make([]RunEvent, len(s.memory.events)),
+		Runs:              make(map[string]RunState, len(s.memory.runs)),
+		Actions:           make(map[string]ActionRecord, len(s.memory.actions)),
+		ToolCalls:         make([]ToolCallRecord, len(s.memory.toolCalls)),
+		RiskDecisions:     make([]RiskDecisionRecord, len(s.memory.riskDecisions)),
+		ApprovalDecisions: make([]ApprovalDecisionRecord, len(s.memory.approvalDecisions)),
+		Events:            make([]RunEvent, len(s.memory.events)),
 	}
 	for key, state := range s.memory.runs {
 		snapshot.Runs[key] = cloneRunState(state)
@@ -219,6 +234,10 @@ func (s *FileRuntimeStateStore) persist() error {
 	for i, record := range s.memory.toolCalls {
 		snapshot.ToolCalls[i] = cloneToolCallRecord(record)
 	}
+	for i, record := range s.memory.riskDecisions {
+		snapshot.RiskDecisions[i] = cloneRiskDecisionRecord(record)
+	}
+	copy(snapshot.ApprovalDecisions, s.memory.approvalDecisions)
 	for i, event := range s.memory.events {
 		snapshot.Events[i] = cloneRunEvent(event)
 	}

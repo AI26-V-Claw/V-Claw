@@ -29,6 +29,7 @@ import (
 	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
 	"vclaw/internal/toolhooks"
+	pgstore "vclaw/internal/store/pg"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
@@ -58,9 +59,10 @@ type AgentRuntimeConfig struct {
 	Provider     providers.Provider
 	SessionStore sessions.Store
 	StateStore   agent.RuntimeStateStore
+	AuditLogger  audit.AuditEventLogger
+	DatabaseURL  string
 
 	Logger        *slog.Logger
-	AuditLogger   audit.AuditEventLogger
 	ToolHooks     toolhooks.Hooks
 	MaxIterations int
 	Observer      agent.RuntimeObserver
@@ -93,18 +95,15 @@ type RuntimeBundle struct {
 	TavilyConfigured      bool
 }
 
+type toolRegistryPersister interface {
+	UpsertToolRegistryEntries(context.Context, []tools.ToolDefinition) error
+}
+
 func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle, error) {
 	dataDir := strings.TrimSpace(config.DataDir)
 	if dataDir == "" {
 		dataDir = "./data"
 	}
-	auditLogger, err := resolveAuditLogger(dataDir, config.AuditLogger)
-	if err != nil {
-		return RuntimeBundle{}, fmt.Errorf("create audit logger: %w", err)
-	}
-	config.AuditLogger = auditLogger
-	auditHooks := toolhooks.AuditHooks{Logger: auditLogger}
-
 	provider := config.Provider
 	model := strings.TrimSpace(config.OpenAIModel)
 	if model == "" {
@@ -126,8 +125,30 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		provider = openAI
 	}
 
+	databaseURL := strings.TrimSpace(config.DatabaseURL)
+	if databaseURL != "" && (config.StateStore == nil || config.AuditLogger == nil) {
+		store, err := pgstore.New(ctx, databaseURL)
+		if err != nil {
+			return RuntimeBundle{}, fmt.Errorf("connect database store: %w", err)
+		}
+		if config.StateStore == nil {
+			config.StateStore = store
+		}
+		if config.AuditLogger == nil {
+			config.AuditLogger = store
+		}
+	}
+	auditLogger, err := resolveAuditLogger(dataDir, config.AuditLogger)
+	if err != nil {
+		return RuntimeBundle{}, fmt.Errorf("create audit logger: %w", err)
+	}
+	config.AuditLogger = auditLogger
+	auditHooks := toolhooks.AuditHooks{Logger: auditLogger}
 	registry, err := NewAgentToolRegistry(ctx, config)
 	if err != nil {
+		return RuntimeBundle{}, err
+	}
+	if err := persistToolRegistry(ctx, registry, config.SessionStore, config.StateStore, config.AuditLogger); err != nil {
 		return RuntimeBundle{}, err
 	}
 
@@ -192,6 +213,19 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		GoogleOAuthConfigured: googleOAuthConfigured(config),
 		TavilyConfigured:      strings.TrimSpace(config.TavilyAPIKey) != "",
 	}, nil
+}
+
+func persistToolRegistry(ctx context.Context, registry *tools.ToolRegistry, stores ...any) error {
+	for _, store := range stores {
+		persister, ok := store.(toolRegistryPersister)
+		if !ok || persister == nil {
+			continue
+		}
+		if err := persister.UpsertToolRegistryEntries(ctx, registry.ListTools()); err != nil {
+			return fmt.Errorf("persist tool registry: %w", err)
+		}
+	}
+	return nil
 }
 
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {

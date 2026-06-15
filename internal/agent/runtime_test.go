@@ -1933,6 +1933,84 @@ func TestRuntimeCompletedWriteActionIsNotRepeatedInContinuation(t *testing.T) {
 	}
 }
 
+func TestRuntimeCompletedApprovalCannotBeApprovedAgain(t *testing.T) {
+	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write",
+					Name:      "danger.count",
+					Arguments: map[string]any{"value": "x"},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role:    providers.MessageRoleAssistant,
+				Content: "Đã hoàn thành yêu cầu.",
+			},
+		},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+		SessionStore: sessions.NewInMemoryStore(),
+		StateStore:   stateStore,
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if pending.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", pending)
+	}
+	first, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if first.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected first approval completed, got %#v", first)
+	}
+	if executions != 1 {
+		t.Fatalf("expected first approval to execute once, got %d", executions)
+	}
+
+	second, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval_repeat",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve repeated approval: %v", err)
+	}
+	if second.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected repeated completed approval to fail, got %#v", second)
+	}
+	if second.Error == nil || second.Error.Code != contracts.ErrorApprovalNotFound {
+		t.Fatalf("expected approval not found error for repeated approval, got %#v", second.Error)
+	}
+	if executions != 1 {
+		t.Fatalf("completed approval must not execute again, got %d executions", executions)
+	}
+}
+
 func TestRuntimeWorkspaceGmailCalendarChatFlowUsesCascadingApprovals(t *testing.T) {
 	gmailExecutions := 0
 	calendarExecutions := 0
@@ -2126,8 +2204,11 @@ func TestRuntimeApprovalResumeIsAtomicUnderConcurrentRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve second approval: %v", err)
 	}
-	if second.Status != contracts.AgentStatusBlocked {
-		t.Fatalf("expected second concurrent approval to be blocked while executing, got %#v", second)
+	if second.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected second concurrent approval to fail after pending was claimed, got %#v", second)
+	}
+	if second.Error == nil || second.Error.Code != contracts.ErrorApprovalNotFound {
+		t.Fatalf("expected second concurrent approval to report not found, got %#v", second.Error)
 	}
 	close(release)
 

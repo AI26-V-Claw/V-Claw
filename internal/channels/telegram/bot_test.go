@@ -120,6 +120,82 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 	}
 }
 
+func TestTelegramApproveCallbackFallsBackToPersistedApprovalWhenStateIsMissing(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "approval handled",
+		},
+	}
+
+	type telegramCall struct {
+		path    string
+		payload map[string]any
+	}
+
+	var calls []telegramCall
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+		}
+		calls = append(calls, telegramCall{path: r.URL.Path, payload: payload})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/answerCallbackQuery"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageReplyMarkup"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":89}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	processed, err := bot.processCallbackQuery(context.Background(), telegramUpdate{
+		UpdateID: 13,
+		CallbackQuery: &telegramCallbackQuery{
+			ID:   "cb4",
+			From: &telegramUser{ID: 123},
+			Data: telegramApprovalCallbackData("approve", "appr_db"),
+			Message: &telegramMessage{
+				MessageID: 43,
+				Chat:      telegramChat{ID: 55},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("processCallbackQuery() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected callback to be processed")
+	}
+	if handler.received.Text != "approve appr_db" {
+		t.Fatalf("unexpected approval command: %q", handler.received.Text)
+	}
+	if handler.received.SessionID != "telegram_chat_55" {
+		t.Fatalf("expected fallback session id from chat, got %q", handler.received.SessionID)
+	}
+	if got := handler.received.Metadata["approvalId"]; got != "appr_db" {
+		t.Fatalf("expected approvalId metadata, got %#v", got)
+	}
+	if len(calls) < 4 {
+		t.Fatalf("expected stale keyboard dismissal, callback answer, processing message, and final update, got %#v", calls)
+	}
+	if !strings.HasSuffix(calls[0].path, "/editMessageReplyMarkup") {
+		t.Fatalf("expected stale keyboard dismissal first, got %#v", calls)
+	}
+	if !strings.HasSuffix(calls[1].path, "/answerCallbackQuery") {
+		t.Fatalf("expected callback answer after stale fallback, got %#v", calls)
+	}
+}
+
 func (f *fakeHandler) HandleMessage(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
 	f.calls++
 	f.received = message

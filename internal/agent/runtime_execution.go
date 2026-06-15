@@ -13,18 +13,27 @@ import (
 )
 
 func (r *Runtime) appendToolObservation(ctx context.Context, sessionID string, _ []providers.Message, message providers.Message) *contracts.ErrorShape {
+	return r.appendToolObservationForRun(ctx, sessionID, "", "", message)
+}
+
+func (r *Runtime) appendToolObservationForRun(ctx context.Context, sessionID string, runID string, requestID string, message providers.Message) *contracts.ErrorShape {
 	if strings.TrimSpace(message.ToolCallID) == "" {
 		return internalError("append tool message: missing tool call id", contracts.ErrorSourceSession)
 	}
-	if err := r.sessionStore.AppendMessage(ctx, sessionID, message); err != nil {
-		return internalError("append tool message: "+err.Error(), contracts.ErrorSourceSession)
+	if err := r.appendTranscriptMessageForRun(ctx, sessionID, runID, requestID, message); err != nil {
+		err.Message = strings.Replace(err.Message, "append message:", "append tool message:", 1)
+		return err
 	}
 	return nil
 }
 
 func (r *Runtime) appendSkippedToolObservations(ctx context.Context, sessionID string, toolCalls []providers.ToolCall, content string) *contracts.ErrorShape {
+	return r.appendSkippedToolObservationsForRun(ctx, sessionID, "", "", toolCalls, content)
+}
+
+func (r *Runtime) appendSkippedToolObservationsForRun(ctx context.Context, sessionID string, runID string, requestID string, toolCalls []providers.ToolCall, content string) *contracts.ErrorShape {
 	for _, message := range skippedToolObservationMessages(toolCalls, content) {
-		if err := r.appendToolObservation(ctx, sessionID, nil, message); err != nil {
+		if err := r.appendToolObservationForRun(ctx, sessionID, runID, requestID, message); err != nil {
 			return err
 		}
 	}

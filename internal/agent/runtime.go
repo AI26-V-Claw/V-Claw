@@ -348,11 +348,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		}
 	}
 	transcript = append(transcript, userMessage)
-	if err := r.sessionStore.AppendMessage(ctx, message.SessionID, userMessage); err != nil {
-		return failStartedRun(internalError("append user message: "+err.Error(), contracts.ErrorSourceSession))
+	if errShape := r.appendTranscriptMessage(ctx, runState, userMessage); errShape != nil {
+		errShape.Message = strings.Replace(errShape.Message, "append message:", "append user message:", 1)
+		return failStartedRun(errShape)
 	}
 	if clarification := r.referenceClarificationResponse(message, referenceResolution); clarification != nil {
-		if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.Message); errShape != nil {
+		if errShape := r.appendAssistantTranscriptForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, clarification.Message); errShape != nil {
 			clarification.Error = errShape
 			clarification.Message = errShape.Message
 			clarification.Status = contracts.AgentStatusFailed
@@ -441,8 +442,9 @@ agentLoop:
 		}
 		transcript = append(transcript, assistantMessage)
 		providerTranscript = append(providerTranscript, assistantMessage)
-		if err := r.sessionStore.AppendMessage(ctx, message.SessionID, assistantMessage); err != nil {
-			return failStartedRun(internalError("append assistant message: "+err.Error(), contracts.ErrorSourceSession))
+		if errShape := r.appendTranscriptMessage(ctx, runState, assistantMessage); errShape != nil {
+			errShape.Message = strings.Replace(errShape.Message, "append message:", "append assistant message:", 1)
+			return failStartedRun(errShape)
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
@@ -532,13 +534,23 @@ If required information is missing, ask one concise clarification question inste
 					"duration", outcome.duration,
 					"content_preview", logPreview(result.ContentForLLM, 260),
 				)
+				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, r.policy.DecideToolCall(call.ID, batch[i].definition, true, r.now())); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, call, ToolCallStatusAllowed, "safe parallel tool", ""); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
 				emitProgress(ctx, ProgressEvent{
 					Stage:      stage,
 					ToolName:   call.Name,
 					ToolCallID: call.ID,
 					Message:    "Tool finished",
 				})
-				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, call, result, outcome.duration); errShape != nil {
+				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, call, result, outcome.duration, ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -556,8 +568,9 @@ If required information is missing, ask one concise clarification question inste
 				}
 				transcript = append(transcript, toolMessage)
 				providerTranscript = append(providerTranscript, toolMessage)
-				if err := r.sessionStore.AppendMessage(ctx, message.SessionID, toolMessage); err != nil {
-					base.Error = internalError("append tool message: "+err.Error(), contracts.ErrorSourceSession)
+				if errShape := r.appendTranscriptMessage(ctx, runState, toolMessage); errShape != nil {
+					base.Error = errShape
+					base.Error.Message = strings.Replace(base.Error.Message, "append message:", "append tool message:", 1)
 					base.Message = base.Error.Message
 					return base, nil
 				}
@@ -587,7 +600,7 @@ If required information is missing, ask one concise clarification question inste
 			providerToolCall = applyChannelToolDefaults(message, providerToolCall)
 			if isClarifyToolCall(providerToolCall) {
 				clarification := clarificationFromToolCall(providerToolCall)
-				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
+				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,
 					Content:    truncateToolContentForLLM("CLARIFICATION_REQUESTED: " + clarification.question),
@@ -596,12 +609,12 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = err.Message
 					return base, nil
 				}
-				if err := r.appendSkippedToolObservations(ctx, message.SessionID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because clarification is required first"); err != nil {
+				if err := r.appendSkippedToolObservationsForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because clarification is required first"); err != nil {
 					base.Error = err
 					base.Message = err.Message
 					return base, nil
 				}
-				if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.question); errShape != nil {
+				if errShape := r.appendAssistantTranscriptForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, clarification.question); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -644,7 +657,17 @@ If required information is missing, ask one concise clarification question inste
 				"arguments", logToolArguments(providerToolCall.Name, providerToolCall.Arguments),
 			)
 			toolCallMissingFields := pendingMissingFieldsForToolCall(providerToolCall, definition, found, activeClarification, currentRequestText)
+			if errShape := r.recordRuntimeRiskDecision(ctx, runState, providerToolCall, decision); errShape != nil {
+				base.Error = errShape
+				base.Message = errShape.Message
+				return base, nil
+			}
 			if clarification := r.toolCallClarificationResponse(message, providerToolCall, definition, found, activeClarification, currentRequestText); clarification != nil {
+				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusWaitingClarification, clarification.Message, ""); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
 				if shouldResolveChatSpaceBeforeClarification(providerToolCall) {
 					toolMessage := providers.Message{
 						Role:       providers.MessageRoleTool,
@@ -653,7 +676,7 @@ If required information is missing, ask one concise clarification question inste
 					}
 					transcript = append(transcript, toolMessage)
 					providerTranscript = append(providerTranscript, toolMessage)
-					if err := r.appendToolObservation(ctx, message.SessionID, transcript, toolMessage); err != nil {
+					if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, toolMessage); err != nil {
 						base.Error = err
 						base.Message = err.Message
 						return base, nil
@@ -661,7 +684,7 @@ If required information is missing, ask one concise clarification question inste
 					for _, skipped := range skippedToolObservationMessages(assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the current Google Chat target must be resolved first") {
 						transcript = append(transcript, skipped)
 						providerTranscript = append(providerTranscript, skipped)
-						if err := r.appendToolObservation(ctx, message.SessionID, transcript, skipped); err != nil {
+						if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, skipped); err != nil {
 							base.Error = err
 							base.Message = err.Message
 							return base, nil
@@ -669,7 +692,7 @@ If required information is missing, ask one concise clarification question inste
 					}
 					continue agentLoop
 				}
-				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
+				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,
 					Content:    truncateToolContentForLLM("MISSING_REQUIRED_FIELD: " + clarification.Message),
@@ -678,12 +701,12 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = err.Message
 					return base, nil
 				}
-				if err := r.appendSkippedToolObservations(ctx, message.SessionID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the current tool call needs clarification"); err != nil {
+				if err := r.appendSkippedToolObservationsForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the current tool call needs clarification"); err != nil {
 					base.Error = err
 					base.Message = err.Message
 					return base, nil
 				}
-				if errShape := r.appendAssistantTranscript(ctx, message.SessionID, clarification.Message); errShape != nil {
+				if errShape := r.appendAssistantTranscriptForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, clarification.Message); errShape != nil {
 					clarification.Error = errShape
 					clarification.Message = errShape.Message
 					clarification.Status = contracts.AgentStatusFailed
@@ -706,9 +729,14 @@ If required information is missing, ask one concise clarification question inste
 			switch decision.Decision {
 			case contracts.RiskDecisionAllow:
 				providerToolCall = normalizeProviderToolCall(r.now(), providerToolCall, message.Text)
+				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusAllowed, decision.Reason, ""); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
 				startedAt := time.Now()
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
-				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, providerToolCall, result, time.Since(startedAt)); errShape != nil {
+				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, providerToolCall, result, time.Since(startedAt), ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -728,8 +756,9 @@ If required information is missing, ask one concise clarification question inste
 				}
 				transcript = append(transcript, toolMessage)
 				providerTranscript = append(providerTranscript, toolMessage)
-				if err := r.sessionStore.AppendMessage(ctx, message.SessionID, toolMessage); err != nil {
-					base.Error = internalError("append tool message: "+err.Error(), contracts.ErrorSourceSession)
+				if errShape := r.appendTranscriptMessage(ctx, runState, toolMessage); errShape != nil {
+					base.Error = errShape
+					base.Error.Message = strings.Replace(base.Error.Message, "append message:", "append tool message:", 1)
 					base.Message = base.Error.Message
 					return base, nil
 				}
@@ -753,6 +782,11 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
+				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusRequiresApproval, decision.Reason, action.ApprovalID); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
 				if action.Status == ActionStatusCompleted && action.Result != nil {
 					toolMessage := providers.Message{
 						Role:       providers.MessageRoleTool,
@@ -761,7 +795,7 @@ If required information is missing, ask one concise clarification question inste
 					}
 					transcript = append(transcript, toolMessage)
 					providerTranscript = append(providerTranscript, toolMessage)
-					if err := r.appendToolObservation(ctx, message.SessionID, transcript, toolMessage); err != nil {
+					if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, toolMessage); err != nil {
 						base.Error = err
 						base.Message = err.Message
 						return base, nil
@@ -784,7 +818,7 @@ If required information is missing, ask one concise clarification question inste
 					remainingToolCalls: cloneProviderToolCalls(assistantMessage.ToolCalls[index+1:]),
 				})
 				r.recordApprovalObservation(ActionStatusPendingApproval)
-				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
+				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,
 					Content:    truncateToolContentForLLM("ACTION_REQUIRES_APPROVAL: " + approval.Summary),
@@ -793,7 +827,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = err.Message
 					return base, nil
 				}
-				if err := r.appendSkippedToolObservations(ctx, message.SessionID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because another tool call requires approval"); err != nil {
+				if err := r.appendSkippedToolObservationsForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because another tool call requires approval"); err != nil {
 					base.Error = err
 					base.Message = err.Message
 					return base, nil
@@ -836,7 +870,12 @@ If required information is missing, ask one concise clarification question inste
 				if strings.TrimSpace(reason) == "" {
 					reason = "tool blocked by policy"
 				}
-				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
+				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusBlocked, reason, ""); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,
 					Content:    truncateToolContentForLLM(policyErrorCode(found) + ": " + reason),
@@ -845,7 +884,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = err.Message
 					return base, nil
 				}
-				if err := r.appendSkippedToolObservations(ctx, message.SessionID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because another tool call was blocked"); err != nil {
+				if err := r.appendSkippedToolObservationsForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because another tool call was blocked"); err != nil {
 					base.Error = err
 					base.Message = err.Message
 					return base, nil

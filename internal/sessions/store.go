@@ -27,6 +27,10 @@ type CompareAndSetStore interface {
 	ReplaceTranscriptIfUnchanged(ctx context.Context, sessionID string, expected, replacement []providers.Message) (bool, error)
 }
 
+type RunMessageAppender interface {
+	AppendMessageForRun(ctx context.Context, sessionID string, runID string, requestID string, message providers.Message) error
+}
+
 type SessionMemory struct {
 	Summary              string                `json:"summary,omitempty"`
 	LastActionResults    []ActionResult        `json:"lastActionResults,omitempty"`

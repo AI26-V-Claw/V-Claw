@@ -40,8 +40,15 @@ const (
 type ToolCallStatus string
 
 const (
-	ToolCallStatusCompleted ToolCallStatus = "completed"
-	ToolCallStatusFailed    ToolCallStatus = "failed"
+	ToolCallStatusProposed             ToolCallStatus = "proposed"
+	ToolCallStatusAllowed              ToolCallStatus = "allowed"
+	ToolCallStatusRequiresApproval     ToolCallStatus = "requires_approval"
+	ToolCallStatusBlocked              ToolCallStatus = "blocked"
+	ToolCallStatusWaitingClarification ToolCallStatus = "waiting_clarification"
+	ToolCallStatusSkipped              ToolCallStatus = "skipped"
+	ToolCallStatusExecuting            ToolCallStatus = "executing"
+	ToolCallStatusCompleted            ToolCallStatus = "completed"
+	ToolCallStatusFailed               ToolCallStatus = "failed"
 )
 
 type RunState struct {
@@ -69,6 +76,8 @@ type ActionRecord struct {
 	RiskLevel         contracts.RiskLevel
 	Status            ActionStatus
 	ApprovalID        string
+	ApprovalSummary   string
+	ApprovalDetails   string
 	ApprovalExpiresAt time.Time
 	IdempotencyKey    string
 	Result            *tools.ToolResult
@@ -79,13 +88,41 @@ type ActionRecord struct {
 type ToolCallRecord struct {
 	ToolCallID   string
 	RunID        string
+	RequestID    string
+	SessionID    string
 	ToolName     string
 	ArgsSnapshot map[string]any
 	Status       ToolCallStatus
+	Reason       string
+	ApprovalID   string
 	Result       *tools.ToolResult
 	ErrorMessage string
 	LatencyMS    int64
 	CreatedAt    time.Time
+}
+
+type RiskDecisionRecord struct {
+	RunID            string
+	RequestID        string
+	SessionID        string
+	ToolCallID       string
+	ToolName         string
+	RiskLevel        contracts.RiskLevel
+	Decision         contracts.RiskDecisionStatus
+	RequiresApproval bool
+	Reason           string
+	PolicyReasons    []string
+	CheckedAt        time.Time
+}
+
+type ApprovalDecisionRecord struct {
+	RequestID string
+	SessionID string
+	Decision  contracts.ApprovalDecisionStatus
+	DecidedBy string
+	Channel   string
+	Comment   string
+	DecidedAt time.Time
 }
 
 type RunEvent struct {
@@ -104,14 +141,15 @@ type RuntimeStateStore interface {
 	GetAction(ctx context.Context, actionID string) (ActionRecord, error)
 	GetActionByApprovalID(ctx context.Context, approvalID string) (ActionRecord, error)
 	FindLatestPendingApproval(ctx context.Context, sessionID string) (ActionRecord, error)
-	MarkActionApproved(ctx context.Context, actionID string) (ActionRecord, error)
-	MarkActionRejected(ctx context.Context, actionID string) (ActionRecord, error)
+	MarkActionApproved(ctx context.Context, actionID string, decision ApprovalDecisionRecord) (ActionRecord, error)
+	MarkActionRejected(ctx context.Context, actionID string, decision ApprovalDecisionRecord) (ActionRecord, error)
 	MarkActionExpired(ctx context.Context, actionID string) (ActionRecord, error)
 	TryMarkActionExecuting(ctx context.Context, actionID string) (ActionRecord, bool, error)
 	CompleteAction(ctx context.Context, actionID string, result tools.ToolResult) (ActionRecord, error)
 	FailAction(ctx context.Context, actionID string, result tools.ToolResult) (ActionRecord, error)
 
 	RecordToolCall(ctx context.Context, record ToolCallRecord) error
+	RecordRiskDecision(ctx context.Context, record RiskDecisionRecord) error
 	AppendRunEvent(ctx context.Context, event RunEvent) error
 }
 
@@ -122,6 +160,8 @@ type InMemoryRuntimeStateStore struct {
 	actionsByApprovalID  map[string]string
 	actionsByIdempotency map[string]string
 	toolCalls            []ToolCallRecord
+	riskDecisions        []RiskDecisionRecord
+	approvalDecisions    []ApprovalDecisionRecord
 	events               []RunEvent
 }
 
@@ -236,7 +276,7 @@ func (s *InMemoryRuntimeStateStore) FindLatestPendingApproval(_ context.Context,
 	return cloneActionRecord(latest), nil
 }
 
-func (s *InMemoryRuntimeStateStore) MarkActionApproved(_ context.Context, actionID string) (ActionRecord, error) {
+func (s *InMemoryRuntimeStateStore) MarkActionApproved(_ context.Context, actionID string, decision ApprovalDecisionRecord) (ActionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.actions[actionID]
@@ -248,10 +288,12 @@ func (s *InMemoryRuntimeStateStore) MarkActionApproved(_ context.Context, action
 		record.UpdatedAt = time.Now()
 		s.actions[actionID] = record
 	}
+	decision.SessionID = record.SessionID
+	s.approvalDecisions = append(s.approvalDecisions, decision)
 	return cloneActionRecord(record), nil
 }
 
-func (s *InMemoryRuntimeStateStore) MarkActionRejected(_ context.Context, actionID string) (ActionRecord, error) {
+func (s *InMemoryRuntimeStateStore) MarkActionRejected(_ context.Context, actionID string, decision ApprovalDecisionRecord) (ActionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.actions[actionID]
@@ -263,6 +305,16 @@ func (s *InMemoryRuntimeStateStore) MarkActionRejected(_ context.Context, action
 		record.UpdatedAt = time.Now()
 		s.actions[actionID] = record
 	}
+	for i, call := range s.toolCalls {
+		if call.ToolCallID == record.ToolCallID && call.Status == ToolCallStatusRequiresApproval {
+			call.Status = ToolCallStatusBlocked
+			call.ErrorMessage = "approval rejected"
+			call.CreatedAt = time.Now()
+			s.toolCalls[i] = call
+		}
+	}
+	decision.SessionID = record.SessionID
+	s.approvalDecisions = append(s.approvalDecisions, decision)
 	return cloneActionRecord(record), nil
 }
 
@@ -309,6 +361,13 @@ func (s *InMemoryRuntimeStateStore) RecordToolCall(_ context.Context, record Too
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.toolCalls = append(s.toolCalls, cloneToolCallRecord(record))
+	return nil
+}
+
+func (s *InMemoryRuntimeStateStore) RecordRiskDecision(_ context.Context, record RiskDecisionRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.riskDecisions = append(s.riskDecisions, cloneRiskDecisionRecord(record))
 	return nil
 }
 
@@ -389,6 +448,13 @@ func cloneActionRecord(record ActionRecord) ActionRecord {
 func cloneToolCallRecord(record ToolCallRecord) ToolCallRecord {
 	record.ArgsSnapshot = cloneArguments(record.ArgsSnapshot)
 	record.Result = cloneToolResultPtr(record.Result)
+	return record
+}
+
+func cloneRiskDecisionRecord(record RiskDecisionRecord) RiskDecisionRecord {
+	if len(record.PolicyReasons) > 0 {
+		record.PolicyReasons = append([]string(nil), record.PolicyReasons...)
+	}
 	return record
 }
 
