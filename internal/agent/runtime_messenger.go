@@ -45,6 +45,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 			RequestID:  msg.RequestID,
 			Decision:   command.decision,
 			DecidedBy:  "owner",
+			Channel:    msg.Channel,
 			DecidedAt:  time.Now().UTC(),
 			Comment:    command.comment,
 		})
@@ -151,7 +152,7 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 
 	for _, result := range response.ToolResults {
 		if result.Success {
-			if artifactRef := buildArtifactRef(result.ToolName, result.Data); artifactRef != nil {
+			if artifactRef := preferredArtifactRef(result); artifactRef != nil {
 				if text := extractUserText(result.Data); strings.TrimSpace(text) != "" {
 					return &contracts.UserOutput{
 						Kind:        contracts.UserOutputKindSuccess,
@@ -166,7 +167,7 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 						Kind: contracts.UserOutputKindSuccess,
 						Text: limitOutboundText(renderToolFallback(result.ToolName, text)),
 					}
-					if artifactRef := buildArtifactRef(result.ToolName, result.Data); artifactRef != nil {
+					if artifactRef := preferredArtifactRef(result); artifactRef != nil {
 						output.ArtifactRef = artifactRef
 					}
 					return output
@@ -181,65 +182,12 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 	}
 }
 
-func buildArtifactRef(toolName string, data any) *contracts.ArtifactRef {
-	payload, ok := data.(map[string]any)
-	if !ok {
-		return nil
-	}
-	content, ok := payload["contentForUser"].(string)
-	if !ok || strings.TrimSpace(content) == "" {
-		return nil
-	}
-	value, ok := extractJSONValue(content)
-	if !ok {
-		return nil
-	}
-
-	switch strings.TrimSpace(toolName) {
-	case "chat.sendMessage":
-		if message, ok := nestedMap(value, "Message"); ok {
-			id := firstStringValue(message, "Name", "name")
-			if id == "" {
-				return nil
-			}
-			return &contracts.ArtifactRef{
-				Kind:  "chat.message",
-				Label: "Google Chat message",
-				ID:    id,
-			}
-		}
-	case "gmail.sendDraft":
-		if message, ok := nestedMap(value, "Message"); ok {
-			id := firstStringValue(message, "ID", "Id", "id")
-			if id == "" {
-				return nil
-			}
-			return &contracts.ArtifactRef{
-				Kind:  "gmail.message",
-				Label: "Gmail message",
-				ID:    id,
-				URI:   "https://mail.google.com/mail/u/0/#sent/" + id,
-			}
-		}
-	case "calendar.createEvent":
-		if event, ok := nestedMap(value, "Event"); ok {
-			id := firstStringValue(event, "ID", "Id", "id")
-			if id == "" {
-				return nil
-			}
-			ref := &contracts.ArtifactRef{
-				Kind:  "calendar.event",
-				Label: "Google Calendar event",
-				ID:    id,
-				URI:   "https://calendar.google.com/calendar/r/eventedit/" + id,
-			}
-			if meetLink := firstStringValue(event, "MeetLink", "meetLink"); meetLink != "" {
-				ref.Meta = map[string]any{"meetLink": meetLink}
-			}
-			return ref
-		}
-	}
-	return nil
+// preferredArtifactRef returns the artifact reference the tool attached to its
+// result. Tools set this directly at the tool layer (see each office tool's
+// *ArtifactRef helper), so the messenger never reverse-engineers it from result
+// text. Returns nil when the tool produced no referenceable artifact.
+func preferredArtifactRef(result contracts.ToolResult) *contracts.ArtifactRef {
+	return result.ArtifactRef
 }
 
 func extractUserText(data any) string {
@@ -322,17 +270,22 @@ var approvalSkipFields = map[string]bool{
 	"threadId": true, "threadKey": true, "threadName": true,
 	"space": true, "calendarId": true, "messageName": true,
 	"replyToMessageId": true, "messageReplyOption": true, "requestId": true,
+	"pageToken": true, "previewChars": true, "full": true,
 }
 
 // approvalFieldPriority controls display order; lower = shown first.
 var approvalFieldPriority = map[string]int{
 	"subject": 1, "title": 1,
-	"to": 2, "attendees": 2,
-	"textBody": 3, "htmlBody": 3, "text": 3, "body": 3, "content": 3,
+	"name": 1, "fileName": 1, "newTitle": 1,
+	"sourceFiles": 1, "targetFolder": 2,
+	"to": 2, "attendees": 2, "emailAddress": 2,
+	"textBody": 3, "htmlBody": 3, "text": 3, "body": 3, "content": 3, "oldText": 3, "newText": 4, "values": 4, "ranges": 4,
 	"start": 4, "end": 5,
 	"cc": 6, "bcc": 7,
+	"range": 6, "role": 7, "type": 8,
 	"description": 8, "location": 9,
 	"attachments": 10,
+	"fileId":      20, "fileIds": 20, "documentId": 20, "spreadsheetId": 20, "targetParentId": 21, "permissionId": 21, "sheetId": 21, "sourceSheetId": 21,
 }
 
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
@@ -376,8 +329,14 @@ func approvalFieldLabel(key string) string {
 	switch key {
 	case "subject", "title":
 		return "Tiêu đề"
+	case "name", "fileName":
+		return "Tên"
+	case "newTitle":
+		return "Tiêu đề mới"
 	case "to":
 		return "Người nhận"
+	case "emailAddress":
+		return "Email được chia sẻ"
 	case "cc":
 		return "CC"
 	case "bcc":
@@ -388,6 +347,40 @@ func approvalFieldLabel(key string) string {
 		return "Nội dung"
 	case "text":
 		return "Tin nhắn"
+	case "oldText":
+		return "Nội dung cần thay"
+	case "newText":
+		return "Nội dung thay thế"
+	case "range":
+		return "Vùng dữ liệu"
+	case "ranges":
+		return "Các vùng dữ liệu"
+	case "values":
+		return "Giá trị"
+	case "role":
+		return "Quyền"
+	case "type":
+		return "Loại chia sẻ"
+	case "fileId":
+		return "Drive file ID"
+	case "fileIds":
+		return "Drive file IDs"
+	case "sourceFiles":
+		return "Nguồn di chuyển"
+	case "targetFolder":
+		return "Thư mục đích"
+	case "documentId":
+		return "Document ID"
+	case "spreadsheetId":
+		return "Spreadsheet ID"
+	case "targetParentId":
+		return "Folder đích ID"
+	case "permissionId":
+		return "Permission ID"
+	case "sheetId":
+		return "Sheet ID"
+	case "sourceSheetId":
+		return "Sheet nguồn ID"
 	case "start":
 		return "Bắt đầu"
 	case "end":
@@ -431,14 +424,22 @@ func formatApprovalValue(key string, v any) string {
 				parts = append(parts, fmt.Sprintf("%v", item))
 			}
 		}
-		return strings.Join(parts, ", ")
+		return truncateApprovalText(strings.Join(parts, ", "))
 	default:
 		data, err := json.Marshal(v)
 		if err != nil {
-			return fmt.Sprintf("%v", v)
+			return truncateApprovalText(fmt.Sprintf("%v", v))
 		}
-		return string(data)
+		return truncateApprovalText(string(data))
 	}
+}
+
+func truncateApprovalText(s string) string {
+	s = strings.TrimSpace(s)
+	if runes := []rune(s); len(runes) > maxApprovalFieldRunes {
+		return string(runes[:maxApprovalFieldRunes]) + "..."
+	}
+	return s
 }
 
 func renderError(errorShape *contracts.ErrorShape) string {

@@ -109,6 +109,25 @@ func (s *telegramChannelState) lookupApproval(approvalID string, chatID int64, m
 	return ctx, true
 }
 
+func (s *telegramChannelState) hasApproval(approvalID string) bool {
+	if s == nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, ok := s.approvals[strings.TrimSpace(approvalID)]
+	if !ok {
+		return false
+	}
+	if isExpiredTelegramState(ctx.RegisteredAt) {
+		delete(s.approvals, ctx.ApprovalID)
+		return false
+	}
+	return true
+}
+
 func (s *telegramChannelState) approvalForChat(chatID int64) (telegramApprovalContext, bool) {
 	if s == nil || chatID == 0 {
 		return telegramApprovalContext{}, false
@@ -278,10 +297,7 @@ func telegramDownloadAttachmentsResultText(results []contracts.ToolResult) strin
 }
 
 func telegramDownloadOutputDir() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
+	homeDir := telegramHomeDir()
 
 	downloadsDir := filepath.Join(homeDir, "Downloads")
 	if info, err := os.Stat(downloadsDir); err == nil && info.IsDir() {
@@ -299,8 +315,8 @@ func telegramDisplayDownloadDir(path string) string {
 		return "~/Downloads/Vclaw/"
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err == nil && strings.TrimSpace(homeDir) != "" {
+	homeDir := telegramHomeDir()
+	if strings.TrimSpace(homeDir) != "" {
 		homeDir = filepath.Clean(homeDir)
 		cleanDir := filepath.Clean(dir)
 		if cleanDir == homeDir {
@@ -317,6 +333,20 @@ func telegramDisplayDownloadDir(path string) string {
 		dir += "/"
 	}
 	return dir
+}
+
+func telegramHomeDir() string {
+	if homeDir := strings.TrimSpace(os.Getenv("HOME")); homeDir != "" {
+		return homeDir
+	}
+	if homeDir := strings.TrimSpace(os.Getenv("USERPROFILE")); homeDir != "" {
+		return homeDir
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return homeDir
 }
 
 func telegramIsUserCancelledApproval(response contracts.AgentResponse) bool {
@@ -388,6 +418,38 @@ func telegramActionLabel(toolName string) string {
 		return "Cập nhật sự kiện Google Calendar"
 	case "calendar.deleteEvent":
 		return "Xóa sự kiện Google Calendar"
+	case "drive.createFolder":
+		return "Tạo thư mục Google Drive"
+	case "drive.createFile":
+		return "Tạo tệp Google Drive"
+	case "drive.uploadFile":
+		return "Upload tệp lên Google Drive"
+	case "drive.updateFileMetadata":
+		return "Cập nhật metadata Google Drive"
+	case "drive.shareFile":
+		return "Chia sẻ tệp Google Drive"
+	case "drive.revokePermission":
+		return "Thu hồi quyền Google Drive"
+	case "drive.moveFile", "drive.moveFiles":
+		return "Di chuyển tệp Google Drive"
+	case "drive.trashFile":
+		return "Chuyển tệp Google Drive vào thùng rác"
+	case "drive.untrashFile":
+		return "Khôi phục tệp Google Drive"
+	case "docs.createDocument":
+		return "Tạo Google Docs"
+	case "docs.appendText", "docs.replaceText", "docs.insertText":
+		return "Cập nhật nội dung Google Docs"
+	case "docs.deleteContent":
+		return "Xóa nội dung Google Docs"
+	case "sheets.createSpreadsheet":
+		return "Tạo Google Sheets"
+	case "sheets.updateValues", "sheets.batchUpdateValues", "sheets.appendValues", "sheets.clearValues":
+		return "Cập nhật dữ liệu Google Sheets"
+	case "sheets.addSheet", "sheets.renameSheet", "sheets.duplicateSheet":
+		return "Cập nhật tab Google Sheets"
+	case "sheets.deleteSheet":
+		return "Xóa tab Google Sheets"
 	case "chat.sendMessage":
 		return "Gửi tin nhắn Google Chat"
 	case "chat.updateMessage":
@@ -931,7 +993,7 @@ func telegramApprovalTextAction(text string) string {
 		return "approve"
 	case "reject", "/reject":
 		return "reject"
-	case "revise", "/revise", "sửa", "sua", "chỉnh", "chinh", "sÃ¡Â»Â­a", "chÃ¡Â»â€°nh":
+	case "revise", "/revise", "sửa", "sua", "chỉnh", "chinh":
 		return "revise"
 	default:
 		return ""
@@ -950,9 +1012,10 @@ func looksLikeTelegramApprovalCommand(text string) bool {
 
 	first := strings.ToLower(strings.TrimSpace(strings.Fields(trimmed)[0]))
 	switch first {
-	case "approve", "/approve", "reject", "/reject", "revise", "/revise", "sửa", "sua", "chỉnh", "chinh", "sÃ¡Â»Â­a", "chÃ¡Â»â€°nh":
+	case "approve", "/approve", "reject", "/reject", "revise", "/revise", "sửa", "sua", "chỉnh", "chinh":
 		return true
 	default:
 		return false
 	}
 }
+

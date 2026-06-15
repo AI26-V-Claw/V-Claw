@@ -14,6 +14,7 @@ import (
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 )
 
@@ -42,7 +43,7 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}
 }
 
-func TestRuntimeBypassesIntentClarificationForSafeChat(t *testing.T) {
+func TestRuntimeBypassesRedundantClarificationForSafeChat(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Tôi là V-Claw."},
 	}}}
@@ -223,7 +224,7 @@ func TestRuntimeStoresClarificationInSessionTranscript(t *testing.T) {
 	}
 }
 
-func TestRuntimeActiveFollowUpBypassesClassifierClarification(t *testing.T) {
+func TestRuntimeActiveFollowUpBypassesRedundantClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
@@ -261,7 +262,7 @@ func TestRuntimeActiveFollowUpBypassesClassifierClarification(t *testing.T) {
 	}
 }
 
-func TestRuntimeCalendarTimeRangeFollowUpBypassesClassifierClarification(t *testing.T) {
+func TestRuntimeCalendarTimeRangeFollowUpBypassesRedundantClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
@@ -358,7 +359,7 @@ func TestRuntimePendingClarificationPreservesOriginalRequestParams(t *testing.T)
 	}
 }
 
-func TestRuntimeActiveFollowUpIgnoresClassifierClarification(t *testing.T) {
+func TestRuntimeActiveFollowUpIgnoresRedundantClarification(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "continuing"},
 	}}}
@@ -1581,6 +1582,119 @@ func TestRuntimeResolvesApprovedPendingApprovalExecutesTool(t *testing.T) {
 	}
 }
 
+func TestRuntimeApprovedActionRechecksHookBeforeExecution(t *testing.T) {
+	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_write",
+				Name:      "danger.count",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	hooks := &stubToolHooks{
+		preResult: toolhooks.PreToolResult{Decision: toolhooks.DecisionAllow},
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		StateStore:   stateStore,
+		SessionStore: sessions.NewInMemoryStore(),
+		ToolHooks:    hooks,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	hooks.preResult = toolhooks.PreToolResult{
+		Decision: toolhooks.DecisionBlock,
+		Reason:   "blocked at execution",
+	}
+
+	response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval_recheck_hook",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected failed response, got %#v", response)
+	}
+	if response.Error == nil || response.Error.Code != contracts.ErrorActionBlockedByPolicy {
+		t.Fatalf("expected blocked-by-policy error, got %#v", response.Error)
+	}
+	if executions != 0 {
+		t.Fatalf("tool must not execute when recheck hook blocks, executions=%d", executions)
+	}
+}
+
+func TestRuntimeApprovedActionRechecksPolicyBeforeExecution(t *testing.T) {
+	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
+	provider := &fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_write",
+				Name:      "danger.count",
+				Arguments: map[string]any{"value": "x"},
+			}},
+		},
+	}}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		StateStore:   stateStore,
+		SessionStore: sessions.NewInMemoryStore(),
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	runtime.policy = policies.NewToolPolicyWithConfig(policies.UserPolicyConfig{
+		AlwaysBlock: []contracts.RiskLevel{contracts.RiskLevelExternalWrite},
+	})
+
+	response, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval_recheck_policy",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected failed response, got %#v", response)
+	}
+	if response.Error == nil || response.Error.Code != contracts.ErrorActionBlockedByPolicy {
+		t.Fatalf("expected blocked-by-policy error, got %#v", response.Error)
+	}
+	if executions != 0 {
+		t.Fatalf("tool must not execute when recheck policy blocks, executions=%d", executions)
+	}
+}
+
 func TestRuntimeApprovedActionSurvivesRestart(t *testing.T) {
 	executions := 0
 	dataDir := t.TempDir()
@@ -1819,6 +1933,84 @@ func TestRuntimeCompletedWriteActionIsNotRepeatedInContinuation(t *testing.T) {
 	}
 }
 
+func TestRuntimeCompletedApprovalCannotBeApprovedAgain(t *testing.T) {
+	executions := 0
+	stateStore := NewInMemoryRuntimeStateStore()
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_write",
+					Name:      "danger.count",
+					Arguments: map[string]any{"value": "x"},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role:    providers.MessageRoleAssistant,
+				Content: "Đã hoàn thành yêu cầu.",
+			},
+		},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(countingDangerousTool{executions: &executions}); err != nil {
+		t.Fatalf("register dangerous tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+		SessionStore: sessions.NewInMemoryStore(),
+		StateStore:   stateStore,
+	})
+
+	pending, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if pending.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", pending)
+	}
+	first, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve approval: %v", err)
+	}
+	if first.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected first approval completed, got %#v", first)
+	}
+	if executions != 1 {
+		t.Fatalf("expected first approval to execute once, got %d", executions)
+	}
+
+	second, err := runtime.ResolveApproval(context.Background(), runtimeTestMessage().SessionID, contracts.ApprovalDecision{
+		ApprovalID: pending.ApprovalID,
+		RequestID:  "req_approval_repeat",
+		Decision:   contracts.ApprovalDecisionApproved,
+		DecidedBy:  "owner",
+		DecidedAt:  runtimeTestMessage().Timestamp.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resolve repeated approval: %v", err)
+	}
+	if second.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected repeated completed approval to fail, got %#v", second)
+	}
+	if second.Error == nil || second.Error.Code != contracts.ErrorApprovalNotFound {
+		t.Fatalf("expected approval not found error for repeated approval, got %#v", second.Error)
+	}
+	if executions != 1 {
+		t.Fatalf("completed approval must not execute again, got %d executions", executions)
+	}
+}
+
 func TestRuntimeWorkspaceGmailCalendarChatFlowUsesCascadingApprovals(t *testing.T) {
 	gmailExecutions := 0
 	calendarExecutions := 0
@@ -2012,8 +2204,11 @@ func TestRuntimeApprovalResumeIsAtomicUnderConcurrentRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve second approval: %v", err)
 	}
-	if second.Status != contracts.AgentStatusBlocked {
-		t.Fatalf("expected second concurrent approval to be blocked while executing, got %#v", second)
+	if second.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected second concurrent approval to fail after pending was claimed, got %#v", second)
+	}
+	if second.Error == nil || second.Error.Code != contracts.ErrorApprovalNotFound {
+		t.Fatalf("expected second concurrent approval to report not found, got %#v", second.Error)
 	}
 	close(release)
 
@@ -3093,8 +3288,7 @@ func TestRuntimeBlocksDestructiveToolByUserPolicy(t *testing.T) {
 		Policy: policies.NewToolPolicyWithConfig(policies.UserPolicyConfig{
 			AlwaysBlock: []contracts.RiskLevel{contracts.RiskLevelDestructive},
 		}),
-		TurnRouter: testToolEnabledRouter(),
-		Now:        func() time.Time { return runtimeTestMessage().Timestamp },
+		Now: func() time.Time { return runtimeTestMessage().Timestamp },
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())

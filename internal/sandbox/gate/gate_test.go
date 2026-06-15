@@ -10,6 +10,8 @@ import (
 	"vclaw/internal/safety"
 	"vclaw/internal/sandbox/gate"
 	"vclaw/internal/sandbox/runtime"
+	"vclaw/internal/toolhooks"
+	"vclaw/internal/tools"
 )
 
 // ─── Stub runner ─────────────────────────────────────────────────────────────
@@ -20,6 +22,34 @@ type stubRunner struct {
 	result *runtime.JobResult
 	err    error
 	calls  int // number of times RunPython or RunShell was called
+}
+
+type stubToolHooks struct {
+	preResult toolhooks.PreToolResult
+	preErr    error
+	postErr   error
+	before    []toolhooks.PreToolInput
+	after     []toolhooks.PostToolInput
+}
+
+func (s *stubToolHooks) BeforeTool(_ context.Context, input toolhooks.PreToolInput) (toolhooks.PreToolResult, error) {
+	s.before = append(s.before, input)
+	return s.preResult, s.preErr
+}
+
+func (s *stubToolHooks) AfterTool(_ context.Context, input toolhooks.PostToolInput) error {
+	s.after = append(s.after, input)
+	return s.postErr
+}
+
+type allowChecker struct{}
+
+func (allowChecker) Check(req policies.Request) policies.Result {
+	return policies.Result{
+		RequestID: req.RequestID,
+		Decision:  policies.DecisionAllow,
+		RiskLevel: policies.RiskCodeExecution,
+	}
 }
 
 func (s *stubRunner) RunPython(_ context.Context, req *runtime.RunPythonRequest) (*runtime.JobResult, error) {
@@ -496,7 +526,117 @@ func TestGate_NilLogger_DoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestGate_RunShell_PreHookBlockPreventsExecution(t *testing.T) {
+	stub := &stubRunner{}
+	hooks := &stubToolHooks{
+		preResult: toolhooks.PreToolResult{
+			Decision: toolhooks.DecisionBlock,
+			Reason:   "blocked by pre-hook",
+		},
+	}
+	g := gate.NewGatedRunner(gate.Config{
+		Checker:   policies.DefaultChecker,
+		Detector:  safety.DefaultScanner,
+		Logger:    audit.NewMemoryLogger(),
+		ToolHooks: hooks,
+		Runner:    stub,
+	})
+
+	_, err := g.RunShell(context.Background(), shellReq("req_hook_block", "ls /workspace"))
+	if !gate.IsBlocked(err) {
+		t.Fatalf("expected blocked error, got %v", err)
+	}
+	if stub.calls != 0 {
+		t.Fatalf("runner must not execute when pre-hook blocks, calls=%d", stub.calls)
+	}
+}
+
+func TestGate_RunShell_PreHookErrorPreventsExecution(t *testing.T) {
+	stub := &stubRunner{}
+	g := gate.NewGatedRunner(gate.Config{
+		Checker:  policies.DefaultChecker,
+		Detector: safety.DefaultScanner,
+		Logger:   audit.NewMemoryLogger(),
+		ToolHooks: &stubToolHooks{
+			preErr: errors.New("hook storage unavailable"),
+		},
+		Runner: stub,
+	})
+
+	_, err := g.RunShell(context.Background(), shellReq("req_hook_error", "ls /workspace"))
+	if !gate.IsBlocked(err) {
+		t.Fatalf("expected blocked error, got %v", err)
+	}
+	if stub.calls != 0 {
+		t.Fatalf("runner must not execute when pre-hook errors, calls=%d", stub.calls)
+	}
+}
+
+func TestGate_RunShell_PostHookCalledOnSuccessfulExecution(t *testing.T) {
+	stub := &stubRunner{}
+	hooks := &stubToolHooks{
+		preResult: toolhooks.PreToolResult{Decision: toolhooks.DecisionAllow},
+	}
+	g := gate.NewGatedRunner(gate.Config{
+		Checker:   allowChecker{},
+		Detector:  safety.DefaultScanner,
+		Logger:    audit.NewMemoryLogger(),
+		ToolHooks: hooks,
+		Runner:    stub,
+	})
+
+	result, err := g.RunShell(context.Background(), shellReq("req_hook_post", "echo hello"))
+	if err != nil {
+		t.Fatalf("run shell: %v", err)
+	}
+	if result == nil || result.Status != runtime.JobSuccess {
+		t.Fatalf("expected successful job result, got %#v", result)
+	}
+	if len(hooks.after) != 1 {
+		t.Fatalf("expected one post-hook call, got %d", len(hooks.after))
+	}
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+func TestGate_RunShell_PostHookMapsTimeoutResult(t *testing.T) {
+	stub := &stubRunner{
+		result: &runtime.JobResult{
+			RequestID: "req_hook_timeout",
+			JobID:     "stub-job-timeout",
+			Status:    runtime.JobTimeout,
+			ExitCode:  -1,
+			Stderr:    "timed out",
+		},
+	}
+	hooks := &stubToolHooks{
+		preResult: toolhooks.PreToolResult{Decision: toolhooks.DecisionAllow},
+	}
+	g := gate.NewGatedRunner(gate.Config{
+		Checker:   allowChecker{},
+		Detector:  safety.DefaultScanner,
+		Logger:    audit.NewMemoryLogger(),
+		ToolHooks: hooks,
+		Runner:    stub,
+	})
+
+	result, err := g.RunShell(context.Background(), shellReq("req_hook_timeout", "echo hello"))
+	if err != nil {
+		t.Fatalf("run shell: %v", err)
+	}
+	if result == nil || result.Status != runtime.JobTimeout {
+		t.Fatalf("expected timeout job result, got %#v", result)
+	}
+	if len(hooks.after) != 1 {
+		t.Fatalf("expected one post-hook call, got %d", len(hooks.after))
+	}
+	if hooks.after[0].Result.Success {
+		t.Fatalf("timeout result must not be marked successful: %#v", hooks.after[0].Result)
+	}
+	if hooks.after[0].Result.Error == nil || hooks.after[0].Result.Error.Code != tools.ErrorTimeout {
+		t.Fatalf("expected timeout tool error, got %#v", hooks.after[0].Result.Error)
+	}
+}
 
 func containsAny(s string, subs ...string) bool {
 	for _, sub := range subs {

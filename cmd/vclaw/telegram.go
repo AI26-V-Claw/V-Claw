@@ -74,6 +74,7 @@ func runTelegramRun(ctx context.Context, args []string) error {
 		OpenAIModel:                envFirst("OPENAI_MODEL", "LLM_MODEL"),
 		OpenAIBaseURL:              envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
 		CompactorModel:             envFirst("VCLAW_COMPACTOR_MODEL"),
+		DatabaseURL:                envFirst("DATABASE_URL"),
 		MaxIterations:              *maxIterations,
 		GoogleToolsMode:            *googleToolsMode,
 		WebToolsMode:               *webToolsMode,

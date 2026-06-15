@@ -63,6 +63,66 @@ func shouldResolveChatSpaceBeforeClarification(toolCall providers.ToolCall) bool
 	}
 }
 
+func hasDriveMoveResolutionIntent(requestText string) bool {
+	lower := strings.ToLower(strings.TrimSpace(requestText))
+	if lower == "" {
+		return false
+	}
+	return containsAnyText(lower,
+		"di chuyển", "di chuyen",
+		"chuyển", "chuyen",
+		"move",
+		"vào folder", "vao folder",
+		"vào thư mục", "vao thu muc",
+		"sang folder", "sang thư mục", "sang thu muc",
+	)
+}
+
+func shouldResolveDriveMoveBeforeClarification(toolCall providers.ToolCall, requestText string, missing []string) bool {
+	if !isDriveMoveTool(toolCall.Name) {
+		return false
+	}
+	if !containsString(missing, "fileId") && !containsString(missing, "fileIds") && !containsString(missing, "targetParentId") {
+		return false
+	}
+	return hasDriveMoveResolutionIntent(requestText)
+}
+
+// shouldRedirectClarifyToDriveMove returns true when the LLM called clarify on a request
+// that has clear drive-move intent and the user already supplied file/folder names as text.
+// In that case the clarification should be intercepted and replaced with a drive.listFiles
+// resolution loop instead of surfacing a confirmation question to the user.
+//
+// evidenceText is the accumulated transcript text for the current turn. If it already
+// contains the NEEDS_DRIVE_MOVE_RESOLUTION marker the redirect was already injected once,
+// so we allow subsequent clarify calls to surface normally and avoid an infinite loop.
+func shouldRedirectClarifyToDriveMove(requestText, evidenceText string) bool {
+	if strings.Contains(evidenceText, "NEEDS_DRIVE_MOVE_RESOLUTION") {
+		return false
+	}
+	return hasDriveMoveResolutionIntent(requestText)
+}
+
+func driveMoveResolutionObservation(missing []string) string {
+	return fmt.Sprintf(`NEEDS_DRIVE_MOVE_RESOLUTION: The current request is a Google Drive move request, but %s is not resolved to a Drive ID yet.
+Do not ask the user for fileId, fileIds, or targetParentId when they gave file/folder names.
+First call safe read tools to resolve names:
+- Call drive.listFiles to find each source file by its title/name. If the user says "docs" or "Google Docs", prefer the Google Docs MIME type.
+- Call drive.listFiles to find the destination folder by its title/name, with folder MIME type application/vnd.google-apps.folder.
+After resolving exactly one source file and one destination folder, retry drive.moveFile with fileId and targetParentId.
+After resolving multiple source files and one destination folder, call drive.moveFiles with fileIds and targetParentId.
+If read-tool resolution returns no match or multiple plausible matches, then ask one concise clarification question.`, strings.Join(missing, ", "))
+}
+
+func isDriveMoveTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "drive.moveFile", "drive.moveFiles":
+		return true
+	default:
+		return false
+	}
+}
+
 func chatSpaceResolutionObservation(toolCall providers.ToolCall) string {
 	target := strings.TrimSpace(fmt.Sprint(toolCall.Arguments["space"]))
 	if target == "" {
@@ -108,6 +168,24 @@ func sanitizeUnsupportedOptionalArguments(toolCall providers.ToolCall, evidenceT
 	delete(args, "attendees")
 	toolCall.Arguments = args
 	return toolCall
+}
+
+func shouldRerouteDriveMetadataMove(toolCall providers.ToolCall, requestText string) bool {
+	if strings.TrimSpace(toolCall.Name) != "drive.updateFileMetadata" {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(requestText))
+	if lower == "" {
+		return false
+	}
+	return containsAnyText(lower,
+		"di chuyển", "di chuyen",
+		"chuyển", "chuyen",
+		"move",
+		"vào folder", "vao folder",
+		"vào thư mục", "vao thu muc",
+		"sang folder", "sang thư mục", "sang thu muc",
+	)
 }
 
 func hasAttendeeEvidence(evidenceText string, attendees any) bool {

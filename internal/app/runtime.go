@@ -11,12 +11,16 @@ import (
 
 	"vclaw/internal/agent"
 	"vclaw/internal/agent/reference"
+	"vclaw/internal/audit"
 	"vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	gchat "vclaw/internal/connectors/google/chat"
+	gdocs "vclaw/internal/connectors/google/docs"
+	gdrive "vclaw/internal/connectors/google/drive"
 	ggmail "vclaw/internal/connectors/google/gmail"
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeople "vclaw/internal/connectors/google/people"
+	gsheets "vclaw/internal/connectors/google/sheets"
 	"vclaw/internal/connectors/tavily"
 	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
@@ -25,11 +29,16 @@ import (
 	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
+	"vclaw/internal/toolhooks"
+	pgstore "vclaw/internal/store/pg"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
+	docstool "vclaw/internal/tools/office/docs"
+	drivetool "vclaw/internal/tools/office/drive"
 	gmailtool "vclaw/internal/tools/office/gmail"
 	peopletool "vclaw/internal/tools/office/people"
+	sheetstool "vclaw/internal/tools/office/sheets"
 	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
@@ -51,8 +60,11 @@ type AgentRuntimeConfig struct {
 	Provider     providers.Provider
 	SessionStore sessions.Store
 	StateStore   agent.RuntimeStateStore
+	AuditLogger  audit.AuditEventLogger
+	DatabaseURL  string
 
 	Logger        *slog.Logger
+	ToolHooks     toolhooks.Hooks
 	MaxIterations int
 	Observer      agent.RuntimeObserver
 	Telemetry     agent.RuntimeTelemetry
@@ -89,7 +101,15 @@ type RuntimeBundle struct {
 	TavilyConfigured      bool
 }
 
+type toolRegistryPersister interface {
+	UpsertToolRegistryEntries(context.Context, []tools.ToolDefinition) error
+}
+
 func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle, error) {
+	dataDir := strings.TrimSpace(config.DataDir)
+	if dataDir == "" {
+		dataDir = "./data"
+	}
 	provider := config.Provider
 	model := strings.TrimSpace(config.OpenAIModel)
 	if model == "" {
@@ -128,15 +148,33 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		provider = telemetry.WrapProvider(provider)
 	}
 
+	databaseURL := strings.TrimSpace(config.DatabaseURL)
+	if databaseURL != "" && (config.StateStore == nil || config.AuditLogger == nil) {
+		store, err := pgstore.New(ctx, databaseURL)
+		if err != nil {
+			return RuntimeBundle{}, fmt.Errorf("connect database store: %w", err)
+		}
+		if config.StateStore == nil {
+			config.StateStore = store
+		}
+		if config.AuditLogger == nil {
+			config.AuditLogger = store
+		}
+	}
+	auditLogger, err := resolveAuditLogger(dataDir, config.AuditLogger)
+	if err != nil {
+		return RuntimeBundle{}, fmt.Errorf("create audit logger: %w", err)
+	}
+	config.AuditLogger = auditLogger
+	auditHooks := toolhooks.AuditHooks{Logger: auditLogger}
 	registry, err := NewAgentToolRegistry(ctx, config)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
-
-	dataDir := strings.TrimSpace(config.DataDir)
-	if dataDir == "" {
-		dataDir = "./data"
+	if err := persistToolRegistry(ctx, registry, config.SessionStore, config.StateStore, config.AuditLogger); err != nil {
+		return RuntimeBundle{}, err
 	}
+
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
 		sessionStore, err = sessions.NewFileStore(dataDir)
@@ -163,6 +201,10 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	compactor := sessions.NewCompactor(provider, sessions.CompactorConfig{
 		SummarizeModel: compactorModel,
 	}, config.Logger)
+	var runtimeHooks toolhooks.Hooks = auditHooks
+	if config.ToolHooks != nil {
+		runtimeHooks = toolhooks.ChainHooks{config.ToolHooks, auditHooks}
+	}
 
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
 		Provider:  provider,
@@ -177,6 +219,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		Policy:                     userPolicy,
 		StateStore:                 stateStore,
 		Logger:                     config.Logger,
+		ToolHooks:                  runtimeHooks,
 		MaxIterations:              config.MaxIterations,
 		Model:                      model,
 		Compactor:                  compactor,
@@ -196,19 +239,36 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	}, nil
 }
 
+func persistToolRegistry(ctx context.Context, registry *tools.ToolRegistry, stores ...any) error {
+	for _, store := range stores {
+		persister, ok := store.(toolRegistryPersister)
+		if !ok || persister == nil {
+			continue
+		}
+		if err := persister.UpsertToolRegistryEntries(ctx, registry.ListTools()); err != nil {
+			return fmt.Errorf("persist tool registry: %w", err)
+		}
+	}
+	return nil
+}
+
 func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tools.ToolRegistry, error) {
 	registry := tools.NewToolRegistry()
 	if err := tools.RegisterBuiltInTools(registry); err != nil {
 		return nil, err
 	}
+	// filesystem tools must use the same directory that sandbox.runShell mounts as /workspace.
+	// sandbox.runShell calls PrepareSessionWorkspace(DefaultSessionID) → <root>/<session>/workspace/.
+	// Aligning AllowedRoots here ensures writeFile/readFile/deleteFile operate on the same path.
+	fsRoot := sandboxWorkspaceFSRoot(config)
 	fstoolConfig := fstool.Config{
-		AllowedRoots: []string{strings.TrimSpace(config.SandboxWorkspaceDir)},
+		AllowedRoots: []string{fsRoot},
 	}
 	if err := fstool.RegisterTools(registry, fstoolConfig); err != nil {
 		return nil, fmt.Errorf("register filesystem tools: %w", err)
 	}
 	if config.EnableSandboxTools {
-		sandboxConfig, err := newSandboxToolConfig(config)
+		sandboxConfig, err := newSandboxToolConfig(config, config.ToolHooks)
 		if err != nil {
 			return nil, fmt.Errorf("configure sandbox tools: %w", err)
 		}
@@ -276,6 +336,18 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient))); err != nil {
 		return err
 	}
+	// drive.uploadFile may only read local files from the same sandbox workspace
+	// the filesystem tools are restricted to — never arbitrary host paths.
+	driveUploadGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)), driveUploadGuard); err != nil {
+		return err
+	}
+	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
+		return err
+	}
+	if err := sheetstool.RegisterTools(registry, sheetstool.NewService(gsheets.NewClient(httpClient))); err != nil {
+		return err
+	}
 	calendarClient, err := gcal.NewClient(ctx, httpClient)
 	if err != nil {
 		return fmt.Errorf("create calendar connector: %w", err)
@@ -290,10 +362,21 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	return peopletool.RegisterTools(registry, peopletool.NewService(peopleClient))
 }
 
-func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error) {
+// sandboxWorkspaceFSRoot returns the single workspace directory that both the
+// filesystem tools and drive.uploadFile are restricted to. It must match what
+// sandbox.runShell mounts as /workspace so all local file access stays aligned.
+func sandboxWorkspaceFSRoot(config AgentRuntimeConfig) string {
+	sandboxRoot := strings.TrimSpace(config.SandboxWorkspaceDir)
+	if sandboxRoot == "" {
+		sandboxRoot = ".sandbox-workspace"
+	}
+	return filepath.Join(sandboxRoot, sandboxtool.DefaultSessionID, "workspace")
+}
+
+func newSandboxToolConfig(config AgentRuntimeConfig, hooks toolhooks.Hooks) (sandboxtool.Config, error) {
 	if config.SandboxRunner != nil {
 		return sandboxtool.Config{
-			Runner:              config.SandboxRunner,
+			Runner:              newSandboxGate(config, hooks, config.SandboxRunner),
 			DefaultWorkspaceDir: strings.TrimSpace(config.SandboxWorkspaceDir),
 		}, nil
 	}
@@ -321,17 +404,52 @@ func newSandboxToolConfig(config AgentRuntimeConfig) (sandboxtool.Config, error)
 		Image: strings.TrimSpace(config.SandboxImage),
 		Guard: guard,
 	})
-	gatedRunner := sandboxgate.NewGatedRunner(sandboxgate.Config{
-		Checker:          policies.DefaultChecker,
-		Detector:         safety.DefaultScanner,
-		Runner:           dockerRunner,
-		SkipApprovalGate: true,
-	})
 	return sandboxtool.Config{
-		Runner:              gatedRunner,
+		Runner:              newSandboxGate(config, hooks, dockerRunner),
 		Guard:               guard,
 		DefaultWorkspaceDir: guard.Root(),
 	}, nil
+}
+
+func newSandboxGate(config AgentRuntimeConfig, hooks toolhooks.Hooks, runner sandboxruntime.Runner) sandboxruntime.Runner {
+	baseHooks := toolhooks.SandboxPolicyHooks{
+		Checker:          policies.DefaultChecker,
+		Detector:         safety.DefaultScanner,
+		Logger:           config.AuditLogger,
+		SkipApprovalGate: true,
+	}
+	var sandboxHooks toolhooks.Hooks = baseHooks
+	if hooks != nil {
+		sandboxHooks = toolhooks.ChainHooks{hooks, baseHooks}
+	}
+	for {
+		gated, ok := runner.(*sandboxgate.GatedRunner)
+		if !ok {
+			break
+		}
+		existingHooks := gated.Hooks()
+		runner = gated.Runner()
+		if existingHooks != nil {
+			sandboxHooks = toolhooks.ChainHooks{existingHooks, sandboxHooks}
+		}
+	}
+	return sandboxgate.NewGatedRunner(sandboxgate.Config{
+		ToolHooks: sandboxHooks,
+		Runner:    runner,
+	})
+}
+
+func resolveAuditLogger(dataDir string, provided audit.AuditEventLogger) (audit.AuditEventLogger, error) {
+	if provided != nil {
+		return provided, nil
+	}
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = "."
+	}
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return nil, err
+	}
+	return audit.NewFileLogger(filepath.Join(dataDir, "tool_audit.jsonl"))
 }
 
 func loadToolPolicy(logger *slog.Logger) (policies.ToolPolicy, *policies.UserPolicyStore, error) {

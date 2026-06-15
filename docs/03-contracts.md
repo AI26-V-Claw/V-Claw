@@ -222,8 +222,18 @@ Tool Layer -> Agent Core
   "toolName": "calendar.createEvent",
   "success": true,
   "data": {
-    "eventId": "event_001"
+    "contentForUser": "Created calendar event: Sprint Review",
+    "contentForLLM": "{\"Event\":{\"ID\":\"event_001\",\"Title\":\"Sprint Review\"}}"
   },
+  "artifactRef": {
+    "kind": "calendar.event",
+    "label": "Google Calendar event",
+    "id": "event_001",
+    "uri": "https://calendar.google.com/calendar/r/eventedit/event_001"
+  },
+  "metadata": {},
+  "truncated": false,
+  "redacted": false,
   "error": null
 }
 ```
@@ -243,6 +253,16 @@ Error:
   }
 }
 ```
+
+`data` carries the result **content** payload (`contentForUser` and `contentForLLM`). The sibling fields — `artifactRef`, `metadata`, `truncated`, `redacted` — are typed **metadata about that payload**. The two axes are independent: `data` is the content channel (and the only field the agent transcript/memory reads, via `contentForLLM`), while the typed fields describe it. Do not duplicate content into the typed fields, and do not store flags inside `data`.
+
+`artifactRef` is required when the tool reads or writes a concrete primary resource that can be referenced safely, such as a file, URL, Gmail message, Chat message, Calendar event, Drive file, Docs document, or Sheets spreadsheet. **The tool that produces the resource sets `artifactRef` directly from its typed output** (e.g. each office tool's `*ArtifactRef` helper). Downstream consumers (messenger, channels) read it as-is; they MUST NOT reverse-engineer a reference by re-parsing `contentForLLM`/`contentForUser`. `artifactRef.meta` carries optional secondary references tied to the resource, e.g. a Calendar event's Google Meet link.
+
+`metadata` is for structured non-sensitive execution details such as byte counts, line counts, query parameters, and pagination state. It MUST NOT carry control flags such as redaction state.
+
+`truncated=true` means one or more result payloads were shortened before crossing the contract boundary.
+
+`redacted=true` means sensitive content was removed or masked before the result was added to LLM context. `redacted` is a typed boolean and is the single source of truth for redaction state (it is never stored as a `metadata` key). User-facing text can remain more detailed when appropriate, but logs, session observations, and LLM-visible content must use the sanitized result.
 
 ---
 
@@ -502,6 +522,60 @@ Rules:
 > `gmail.batchModifyMessages` applies the same modify actions to 1-50 messages. `gmail.deleteDraft` and `gmail.trashMessage` are destructive and require approval; `gmail.untrashMessage` is an external write and also requires approval.
 > These additions use the existing G1 Gmail scopes: `gmail.readonly`, `gmail.compose`, `gmail.send`, and `gmail.modify`; no new OAuth scope is required.
 
+### Google Drive
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `drive.listFiles` | Integration | `safe_read` | No |
+| `drive.getFile` | Integration | `safe_read` | No |
+| `drive.exportFile` | Integration | `safe_read` | No |
+| `drive.downloadFile` | Integration | `safe_read` | No |
+| `drive.createFolder` | Integration | `external_write` | Yes |
+| `drive.createFile` | Integration | `external_write` | Yes |
+| `drive.uploadFile` | Integration | `external_write` | Yes |
+| `drive.updateFileMetadata` | Integration | `external_write` | Yes |
+| `drive.shareFile` | Integration | `external_write` | Yes |
+| `drive.listPermissions` | Integration | `safe_read` | No |
+| `drive.revokePermission` | Integration | `external_write` | Yes |
+| `drive.moveFile` | Integration | `external_write` | Yes |
+| `drive.moveFiles` | Integration | `external_write` | Yes |
+| `drive.trashFile` | Integration | `destructive` | Yes |
+| `drive.untrashFile` | Integration | `external_write` | Yes |
+
+### Google Docs
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `docs.getDocument` | Integration | `safe_read` | No |
+| `docs.createDocument` | Integration | `external_write` | Yes |
+| `docs.appendText` | Integration | `external_write` | Yes |
+| `docs.replaceText` | Integration | `external_write` | Yes |
+| `docs.insertText` | Integration | `external_write` | Yes |
+| `docs.deleteContent` | Integration | `external_write` | Yes |
+
+### Google Sheets
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `sheets.getSpreadsheet` | Integration | `safe_read` | No |
+| `sheets.readValues` | Integration | `safe_read` | No |
+| `sheets.batchGetValues` | Integration | `safe_read` | No |
+| `sheets.createSpreadsheet` | Integration | `external_write` | Yes |
+| `sheets.updateValues` | Integration | `external_write` | Yes |
+| `sheets.batchUpdateValues` | Integration | `external_write` | Yes |
+| `sheets.appendValues` | Integration | `external_write` | Yes |
+| `sheets.clearValues` | Integration | `external_write` | Yes |
+| `sheets.addSheet` | Integration | `external_write` | Yes |
+| `sheets.renameSheet` | Integration | `external_write` | Yes |
+| `sheets.deleteSheet` | Integration | `destructive` | Yes |
+| `sheets.duplicateSheet` | Integration | `external_write` | Yes |
+
+> Drive/Docs/Sheets remain read-first: list/get/read/export/download tools are safe reads with bounded output. Create/update/append/share/move/upload/revoke/clear/tab-management tools must pass the same HITL approval boundary before execution. `drive.trashFile` and `sheets.deleteSheet` are destructive because they remove content from normal user views.
+>
+> Two additional safety constraints apply beyond approval:
+> - **`drive.uploadFile` is sandboxed.** Its `localPath` is resolved through the same workspace `PathGuard` as the filesystem tools; a path outside the sandbox workspace is rejected with `INVALID_INPUT`. The tool must be constructed with a guard — without one, upload is refused. This prevents the agent from uploading host files such as `configs/google/token.json` or `.env`.
+> - **`drive.shareFile` cannot grant public write access.** When `type=anyone`, `role` must be `reader`; `writer` or `commenter` for `anyone` is rejected with `INVALID_INPUT`. Public links are read-only.
+
 ### Calendar
 
 | Tool | Owner | Risk | Approval |
@@ -684,7 +758,7 @@ Expected:
 
 ```text
 UserMessage
--> Turn Router: tool_enabled
+-> Agent Runtime: tools available
 -> Agent Loop
 -> calendar.createEvent proposed
 -> RiskDecision: external_write, requires_approval
@@ -722,7 +796,7 @@ Expected:
 
 ```text
 UserMessage
--> Turn Router: tool_enabled
+-> Agent Runtime: tools available
 -> Agent Loop
 -> gmail.listEmails proposed
 -> RiskDecision: safe_read, allow

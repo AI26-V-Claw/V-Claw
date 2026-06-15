@@ -41,12 +41,12 @@ type Config struct {
 }
 
 // DefaultConfig returns a production-ready configuration for Gemini 1.5 Flash.
-// This is the recommended model for intent classification due to its speed and cost.
+// This is the recommended model for low-latency assistant tasks due to its speed and cost.
 func DefaultConfig() *Config {
 	return &Config{
 		Provider:           "gemini",
 		Model:              "gemini-1.5-flash",
-		DefaultTemperature: 0.3, // Low temperature for consistent classification
+		DefaultTemperature: 0.3, // Low temperature for consistent responses
 		DefaultMaxTokens:   2048,
 		Timeout:            30 * time.Second,
 	}

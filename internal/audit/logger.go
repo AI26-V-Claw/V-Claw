@@ -141,27 +141,34 @@ func (m *MemoryLogger) Clear() {
 type FileLogger struct {
 	mu   sync.Mutex
 	path string
-	f    *os.File
-	enc  *json.Encoder
 }
 
-// NewFileLogger opens (or creates) the file at path and returns a FileLogger.
-// The file is opened in append mode so existing entries are preserved.
+// NewFileLogger ensures the file exists and returns a FileLogger.
 func NewFileLogger(path string) (*FileLogger, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
 	if err != nil {
 		return nil, fmt.Errorf("audit file logger: cannot open %q: %w", path, err)
 	}
-	enc := json.NewEncoder(f)
-	enc.SetEscapeHTML(false)
-	return &FileLogger{path: path, f: f, enc: enc}, nil
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("audit file logger: cannot close %q: %w", path, err)
+	}
+	return &FileLogger{path: path}, nil
 }
 
 // Log serialises event as a JSON line and appends it to the file.
 func (fl *FileLogger) Log(event AuditEvent) error {
 	fl.mu.Lock()
 	defer fl.mu.Unlock()
-	if err := fl.enc.Encode(event); err != nil {
+
+	f, err := os.OpenFile(fl.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
+	if err != nil {
+		return fmt.Errorf("audit file logger: cannot open %q: %w", fl.path, err)
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(event); err != nil {
 		return fmt.Errorf("audit file logger: encode failed: %w", err)
 	}
 	return nil
@@ -197,11 +204,9 @@ func (fl *FileLogger) Query(filter Filter) ([]AuditEvent, error) {
 	return results, nil
 }
 
-// Close flushes and closes the underlying file.
+// Close is a no-op because FileLogger does not keep an open file handle.
 func (fl *FileLogger) Close() error {
-	fl.mu.Lock()
-	defer fl.mu.Unlock()
-	return fl.f.Close()
+	return nil
 }
 
 // ─── MultiLogger ──────────────────────────────────────────────────────────────

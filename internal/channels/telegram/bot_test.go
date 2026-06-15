@@ -33,7 +33,7 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 	handler := &fakeHandler{
 		outbound: contracts.AgentResponse{
 			Status:  contracts.AgentStatusCompleted,
-			Message: "ÄÃ£ cháº¡y xong.",
+			Message: "Đã chạy xong.",
 		},
 	}
 
@@ -50,7 +50,7 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 		ChatID:     55,
 		MessageID:  42,
 		ToolName:   "sandbox.runPython",
-		PromptText: "HÃ nh Ä‘á»™ng: Cháº¡y mÃ£ Python trong sandbox\n\nMÃ£ Python sáº½ cháº¡y:\n\nprint('hello')",
+		PromptText: "Hành động: Chạy mã Python trong sandbox\n\nMã Python sẽ chạy:\n\nprint('hello')",
 	})
 	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		var payload map[string]any
@@ -117,6 +117,82 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 	}
 	if got := fmt.Sprint(last.payload["message_id"]); got != "88" {
 		t.Fatalf("expected final edit to target the new processing message, got message_id=%q payload=%#v", got, last.payload)
+	}
+}
+
+func TestTelegramApproveCallbackFallsBackToPersistedApprovalWhenStateIsMissing(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "approval handled",
+		},
+	}
+
+	type telegramCall struct {
+		path    string
+		payload map[string]any
+	}
+
+	var calls []telegramCall
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+		}
+		calls = append(calls, telegramCall{path: r.URL.Path, payload: payload})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/answerCallbackQuery"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageReplyMarkup"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":89}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	processed, err := bot.processCallbackQuery(context.Background(), telegramUpdate{
+		UpdateID: 13,
+		CallbackQuery: &telegramCallbackQuery{
+			ID:   "cb4",
+			From: &telegramUser{ID: 123},
+			Data: telegramApprovalCallbackData("approve", "appr_db"),
+			Message: &telegramMessage{
+				MessageID: 43,
+				Chat:      telegramChat{ID: 55},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("processCallbackQuery() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected callback to be processed")
+	}
+	if handler.received.Text != "approve appr_db" {
+		t.Fatalf("unexpected approval command: %q", handler.received.Text)
+	}
+	if handler.received.SessionID != "telegram_chat_55" {
+		t.Fatalf("expected fallback session id from chat, got %q", handler.received.SessionID)
+	}
+	if got := handler.received.Metadata["approvalId"]; got != "appr_db" {
+		t.Fatalf("expected approvalId metadata, got %#v", got)
+	}
+	if len(calls) < 4 {
+		t.Fatalf("expected stale keyboard dismissal, callback answer, processing message, and final update, got %#v", calls)
+	}
+	if !strings.HasSuffix(calls[0].path, "/editMessageReplyMarkup") {
+		t.Fatalf("expected stale keyboard dismissal first, got %#v", calls)
+	}
+	if !strings.HasSuffix(calls[1].path, "/answerCallbackQuery") {
+		t.Fatalf("expected callback answer after stale fallback, got %#v", calls)
 	}
 }
 
@@ -259,8 +335,6 @@ func TestTelegramTextFromResponseFormatsDownloadAttachmentsResult(t *testing.T) 
 
 func TestTelegramProgressTextHidesInternalRoutingStages(t *testing.T) {
 	for _, stage := range []agent.ProgressStage{
-		agent.ProgressStageClassifying,
-		agent.ProgressStageClassified,
 		agent.ProgressStagePlanning,
 		agent.ProgressStagePlanned,
 		agent.ProgressStageThinking,
@@ -841,6 +915,29 @@ func TestTelegramTextFromResponsePreservesMultilineFormatting(t *testing.T) {
 	}
 }
 
+func TestTelegramTextFromResponsePrefersFinalMessageOverOutputFallback(t *testing.T) {
+	message := "Dưới đây là các thư mục Google Drive bạn đang có:\n1. **Vclaw** - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)"
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+		Output: &contracts.UserOutput{
+			Kind: contracts.UserOutputKindSuccess,
+			Text: "Kết quả:\n- Files: Vclaw",
+		},
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "drive.listFiles",
+			Success:  true,
+			Data: map[string]any{
+				"contentForUser": `{"Files":[{"ID":"folder_1","Name":"Vclaw","WebViewLink":"https://drive.google.com/drive/folders/folder_1"}]}`,
+			},
+		}},
+	})
+
+	if text != message {
+		t.Fatalf("expected final message to win, got %q want %q", text, message)
+	}
+}
+
 func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 	body := "Chào bạn,\n\nMời bạn tham dự cuộc họp chiều nay.\n\nThân mến,\nV-Claw"
 	text := telegramTextFromResponse(contracts.AgentResponse{
@@ -1386,6 +1483,29 @@ func TestTelegramRenderHTMLFormatsMarkdownHeading(t *testing.T) {
 	}
 }
 
+func TestTelegramRenderHTMLFormatsDriveFolderMarkdown(t *testing.T) {
+	rendered := telegramRenderHTML(strings.Join([]string{
+		"Dưới đây là các thư mục Google Drive bạn đang có:",
+		"",
+		"1. **Vclaw**",
+		"   - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)",
+		"   - Được chỉnh sửa lần cuối: 10 tháng 6, 2026",
+	}, "\n"))
+
+	for _, want := range []string{
+		"1. <b>Vclaw</b>",
+		"   • Link: <a href=\"https://drive.google.com/drive/folders/folder_1\">Mở thư mục</a>",
+		"   • Được chỉnh sửa lần cuối: 10 tháng 6, 2026",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered Drive markdown to contain %q, got %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "**Vclaw**") || strings.Contains(rendered, "[Mở thư mục]") {
+		t.Fatalf("expected markdown markers to be rendered away, got %q", rendered)
+	}
+}
+
 func XTestTelegramRenderHTMLConvertsDashListsToBullets(t *testing.T) {
 	rendered := telegramRenderHTML("- Mục lớn\n - Mục con")
 
@@ -1431,3 +1551,4 @@ func TestTelegramRenderHTMLConvertsTextFieldMarkers(t *testing.T) {
 		t.Fatalf("expected text field to avoid code markup, got %q", rendered)
 	}
 }
+

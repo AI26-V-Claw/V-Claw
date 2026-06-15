@@ -200,6 +200,23 @@ func TestToolPolicyDecideToolCallRequiresApprovalForSideEffectTool(t *testing.T)
 	}
 }
 
+func TestToolPolicyDecideToolCallUsesRiskMatrixWhenRequiresApprovalMissing(t *testing.T) {
+	policy := NewToolPolicy()
+	decision := policy.DecideToolCall("call_write", tools.ToolDefinition{
+		Name:       "filesystem.writeFile",
+		Capability: tools.CapabilityMutating,
+		RiskLevel:  tools.RiskLevelLocalWrite,
+		Enabled:    true,
+	}, true, time.Now())
+
+	if decision.Decision != contracts.RiskDecisionRequiresApproval {
+		t.Fatalf("expected local write to require approval by risk matrix, got %#v", decision)
+	}
+	if !decision.RequiresApproval {
+		t.Fatalf("expected RequiresApproval=true")
+	}
+}
+
 func TestToolPolicyDecideToolCallBlocksDisabledOrUnknownTool(t *testing.T) {
 	policy := NewToolPolicy()
 
@@ -224,23 +241,33 @@ func TestToolPolicyDecideToolCallBlocksDisabledOrUnknownTool(t *testing.T) {
 
 func TestToolPolicyDecideToolCallHonorsUserPolicyConfig(t *testing.T) {
 	policy := NewToolPolicyWithConfig(UserPolicyConfig{
-		AutoAllow:       []contracts.RiskLevel{contracts.RiskLevelExternalWrite},
+		AutoAllow:       []contracts.RiskLevel{contracts.RiskLevelSafeCompute, contracts.RiskLevelExternalWrite},
 		RequireApproval: []contracts.RiskLevel{contracts.RiskLevelSafeRead},
 		AlwaysBlock:     []contracts.RiskLevel{contracts.RiskLevelLocalWrite},
 	})
 
-	allow := policy.DecideToolCall("call_allow", tools.ToolDefinition{
+	lowRiskAllow := policy.DecideToolCall("call_low_risk_allow", tools.ToolDefinition{
+		Name:       "safe.compute",
+		Capability: tools.CapabilityReadOnly,
+		RiskLevel:  tools.RiskLevelSafeCompute,
+		Enabled:    true,
+	}, true, time.Now())
+	if lowRiskAllow.Decision != contracts.RiskDecisionAllow {
+		t.Fatalf("expected low-risk auto-allow, got %#v", lowRiskAllow)
+	}
+	if lowRiskAllow.RequiresApproval {
+		t.Fatalf("low-risk auto-allow should skip approval, got %#v", lowRiskAllow)
+	}
+
+	highRiskAllow := policy.DecideToolCall("call_high_risk_allow", tools.ToolDefinition{
 		Name:             "calendar.createEvent",
 		Capability:       tools.CapabilityMutating,
 		RiskLevel:        tools.RiskLevelExternalWrite,
 		RequiresApproval: true,
 		Enabled:          true,
 	}, true, time.Now())
-	if allow.Decision != contracts.RiskDecisionAllow {
-		t.Fatalf("expected auto-allow, got %#v", allow)
-	}
-	if allow.RequiresApproval {
-		t.Fatalf("auto-allow should skip approval, got %#v", allow)
+	if highRiskAllow.Decision != contracts.RiskDecisionRequiresApproval {
+		t.Fatalf("expected high-risk auto-allow to fall back to approval, got %#v", highRiskAllow)
 	}
 
 	block := policy.DecideToolCall("call_block", tools.ToolDefinition{

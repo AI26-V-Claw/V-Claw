@@ -1,6 +1,9 @@
 package contracts
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type AgentStatus string
 
@@ -138,12 +141,46 @@ type ToolCall struct {
 	Reason     string         `json:"reason,omitempty"`
 }
 
+// ToolResult carries the outcome of a single tool execution across the contract
+// boundary (e.g. from agent to channel, or into audit/approval flows).
 type ToolResult struct {
 	ToolCallID string      `json:"toolCallId"`
 	ToolName   string      `json:"toolName"`
 	Success    bool        `json:"success"`
 	Data       any         `json:"data,omitempty"`
 	Error      *ErrorShape `json:"error,omitempty"`
+
+	// ArtifactRef references the primary resource this tool accessed or produced.
+	// Mirrors tools.ToolArtifactRef but scoped to the shared contracts package.
+	ArtifactRef *ArtifactRef   `json:"artifactRef,omitempty"`
+	// Metadata holds optional structured key-value pairs (e.g. line counts, byte sizes).
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	// Truncated is true when the content payload was cut short due to size limits.
+	Truncated   bool           `json:"truncated,omitempty"`
+	// Redacted is true when ContentForLLM was sanitized before inclusion in the LLM context.
+	Redacted    bool           `json:"redacted,omitempty"`
+}
+
+// ValidateToolResult checks that r satisfies the ToolResult contract invariants:
+//   - ToolCallID and ToolName must not be empty.
+//   - If Success is false, Error must be non-nil.
+//   - If Success is true, Error must be nil.
+//
+// Returns a descriptive error on violation, nil otherwise.
+func ValidateToolResult(r ToolResult) error {
+	if r.ToolCallID == "" {
+		return fmt.Errorf("ToolResult.ToolCallID must not be empty")
+	}
+	if r.ToolName == "" {
+		return fmt.Errorf("ToolResult.ToolName must not be empty")
+	}
+	if !r.Success && r.Error == nil {
+		return fmt.Errorf("ToolResult.Error must not be nil when Success is false (tool=%s)", r.ToolName)
+	}
+	if r.Success && r.Error != nil {
+		return fmt.Errorf("ToolResult.Error must be nil when Success is true (tool=%s, code=%s)", r.ToolName, r.Error.Code)
+	}
+	return nil
 }
 
 type RiskDecision struct {
@@ -176,6 +213,7 @@ type ApprovalDecision struct {
 	RequestID  string                 `json:"requestId"`
 	Decision   ApprovalDecisionStatus `json:"decision"`
 	DecidedBy  string                 `json:"decidedBy,omitempty"`
+	Channel    string                 `json:"channel,omitempty"`
 	DecidedAt  time.Time              `json:"decidedAt"`
 	Comment    string                 `json:"comment,omitempty"`
 }
