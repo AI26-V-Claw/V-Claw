@@ -9,6 +9,8 @@ This directory contains the shared V-Claw documentation used by the team and by 
 - `02-usecase-diagram.md`: user-facing capabilities and risk categories.
 - `03-contracts.md`: intended runtime contracts between channel, agent, safety, and tools.
 - `04-sequences.md`: canonical sequence scenarios for review and E2E planning.
+- `scenarios/05-drive-docs-sheets-hitl.md`: canonical Drive/Docs/Sheets read-before-write + HITL sequence.
+- `testing-e2e/`: Telegram-first manual E2E testing plan, feature discovery, demo stories, and readiness checklist.
 - `TEST_MATRIX.md`: current V-Claw behavior-to-proof matrix.
 - `runbook.md`: local operation and troubleshooting notes.
 - `../ACTIVE_MODULES.md`: current implementation scope, ownership, and frozen areas.
@@ -17,6 +19,8 @@ This directory contains the shared V-Claw documentation used by the team and by 
 ## Personal Harnesses
 
 Personal workflow harnesses should stay outside shared docs. Khang's local harness, when present, lives under ignored path `docs/khang-harness/`. Other contributors and coding agents should not treat that folder as team policy.
+
+Repository-harness files inside `docs/khang-harness/` may mention paths such as `docs/HARNESS.md`, `docs/product-Khang/*`, `docs/stories-Khang/*`, `docs/decisions-Khang/*`, and `docs/templates-Khang/*`. In this V-Claw checkout, those are Khang-harness aliases that resolve under `docs/khang-harness/`, not shared documentation paths, unless a task explicitly promotes a rule into the shared docs.
 
 ## Current State
 

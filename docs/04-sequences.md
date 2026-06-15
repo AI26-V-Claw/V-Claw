@@ -46,3 +46,81 @@ Khi review implementation, dùng mỗi scenario như checklist:
 7. Audit/session state có được ghi ở mức tối thiểu theo module hiện hành không?
 
 Nếu một use case mới dùng cùng pattern với scenario đã có, ưu tiên thêm test case/fixture thay vì thêm sequence diagram mới.
+
+---
+
+## 4. Agent Runtime Flow Tổng Quát
+
+Luồng này là processing flow cho lõi AI Agent. Nó bổ sung cho component diagram
+trong `01-system-design.md` và bám vào boundary contract trong
+`03-contracts.md`.
+
+```mermaid
+sequenceDiagram
+    participant User as Người dùng
+    participant Channel as Channel
+    participant Backend as Backend
+    participant Agent as Agent Core
+    participant LLM as Model Router / LLM
+    participant Tools as Tool Layer
+    participant Policy as Tool Policy
+    participant HITL as HITL Manager
+    participant External as External Service / Sandbox
+    participant Store as Storage / Audit
+
+    User->>Channel: Gửi tin nhắn
+    Channel->>Backend: Channel payload
+    Backend->>Agent: UserMessage
+    Agent->>Store: Load session / memory context
+    Agent->>LLM: Prompt + available tools
+
+    alt Model trả lời trực tiếp
+        LLM-->>Agent: Final answer
+        Agent-->>Backend: AgentResponse(completed)
+        Backend-->>Channel: Render response
+        Channel-->>User: Phản hồi
+    else Model cần thông tin bắt buộc
+        LLM-->>Agent: clarify request
+        Agent-->>Backend: AgentResponse(need_clarification)
+        Backend-->>Channel: Render clarify question
+        Channel-->>User: Hỏi lại người dùng
+    else Model gọi tool
+        LLM-->>Agent: ToolCall candidate
+        Agent->>Tools: Validate tool schema
+        Tools->>Policy: RiskDecision request
+
+        alt RiskDecision = allow
+            Policy-->>Tools: allow
+            Tools->>External: Execute tool
+            External-->>Tools: Tool output
+            Tools-->>Agent: ToolResult
+            Agent->>Store: Persist tool/audit/session state
+            Agent->>LLM: Observe ToolResult and continue
+            LLM-->>Agent: Final answer
+            Agent-->>Backend: AgentResponse(completed)
+            Backend-->>Channel: Render response
+            Channel-->>User: Phản hồi
+        else RiskDecision = approval_required
+            Policy->>HITL: Create ApprovalRequest
+            HITL->>Store: Persist pending approval
+            HITL-->>Agent: Pending approval state
+            Agent-->>Backend: AgentResponse(approval_required)
+            Backend-->>Channel: Render approval UI
+            Channel-->>User: Yêu cầu approve/reject/revise
+        else RiskDecision = block
+            Policy-->>Tools: block
+            Tools-->>Agent: ToolResult(error)
+            Agent-->>Backend: AgentResponse(blocked/failed)
+            Backend-->>Channel: Render safe error
+            Channel-->>User: Thông báo bị chặn/lỗi
+        end
+    end
+```
+
+Ghi chú:
+
+- `Plan` chỉ là advisory; không cấp quyền execute tool.
+- Side-effect tools chỉ được chạy sau khi `RiskDecision` cho phép hoặc approval hợp lệ được duyệt.
+- Nếu policy, hook, tool hoặc provider lỗi trong nhánh side-effect, runtime phải fail closed.
+- Sau approval, runtime tiếp tục từ pending state đã lưu thay vì tạo tool call mới không liên quan.
+- Các scenario chi tiết bên trên là checklist cụ thể cho từng lớp rủi ro/use case.
