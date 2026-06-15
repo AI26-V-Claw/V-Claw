@@ -27,7 +27,7 @@ const (
 var (
 	emailAnswerPattern  = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
 	timeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
-	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giờ)(\s*\d{1,2})?\b`)
+	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giá»)(\s*\d{1,2})?\b`)
 )
 
 type RuntimeConfig struct {
@@ -356,9 +356,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
 		completedTool, _ := message.Metadata["completedTool"].(string)
 		if completedTool != "" {
-			userMessage.Content = fmt.Sprintf("[Tiếp tục sau khi %s được xác nhận và thực thi]", completedTool)
+			userMessage.Content = fmt.Sprintf("[Tiáº¿p tá»¥c sau khi %s Ä‘Æ°á»£c xÃ¡c nháº­n vÃ  thá»±c thi]", completedTool)
 		} else {
-			userMessage.Content = "[Tiếp tục sau khi hành động được xác nhận và thực thi]"
+			userMessage.Content = "[Tiáº¿p tá»¥c sau khi hÃ nh Ä‘á»™ng Ä‘Æ°á»£c xÃ¡c nháº­n vÃ  thá»±c thi]"
 		}
 	}
 	transcript = append(transcript, userMessage)
@@ -436,6 +436,11 @@ agentLoop:
 			Tools:      r.providerTools(),
 			ToolChoice: "auto",
 		})
+	if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
+		resp.RequestID = message.RequestID
+		resp.SessionID = message.SessionID
+		return *resp, nil
+	}
 		if err != nil {
 			code := contracts.ErrorProviderError
 			retryable := providers.IsRetryableError(err)
@@ -909,7 +914,7 @@ If required information is missing, ask one concise clarification question inste
 				}
 				base.ToolResults = toolResults
 				base.Status = contracts.AgentStatusBlocked
-				base.Message = "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại."
+				base.Message = "HÃ nh Ä‘á»™ng nÃ y khÃ´ng Ä‘Æ°á»£c phÃ©p thá»±c hiá»‡n do chÃ­nh sÃ¡ch báº£o máº­t hiá»‡n táº¡i."
 				base.Error = &contracts.ErrorShape{
 					Code:      policyErrorCode(found),
 					Message:   base.Message,
