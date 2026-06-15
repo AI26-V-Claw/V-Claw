@@ -993,7 +993,7 @@ func telegramApprovalTextAction(text string) string {
 		return "approve"
 	case "reject", "/reject":
 		return "reject"
-	case "revise", "/revise", "sửa", "sua", "chỉnh", "chinh", "sÃ¡Â»Â­a", "chÃ¡Â»â€°nh":
+	case "revise", "/revise", "sửa", "sua", "chỉnh", "chinh":
 		return "revise"
 	default:
 		return ""
@@ -1012,9 +1012,10 @@ func looksLikeTelegramApprovalCommand(text string) bool {
 
 	first := strings.ToLower(strings.TrimSpace(strings.Fields(trimmed)[0]))
 	switch first {
-	case "approve", "/approve", "reject", "/reject", "revise", "/revise", "sửa", "sua", "chỉnh", "chinh", "sÃ¡Â»Â­a", "chÃ¡Â»â€°nh":
+	case "approve", "/approve", "reject", "/reject", "revise", "/revise", "sửa", "sua", "chỉnh", "chinh":
 		return true
 	default:
 		return false
 	}
 }
+

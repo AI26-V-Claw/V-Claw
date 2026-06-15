@@ -434,32 +434,32 @@ func relativeDateRange(now time.Time, userText string) (time.Time, time.Time, bo
 	if now.IsZero() {
 		now = time.Now()
 	}
-	lower := strings.ToLower(strings.TrimSpace(userText))
-	if lower == "" {
+	text := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if text == "" {
 		return time.Time{}, time.Time{}, false
 	}
 
 	switch {
-	case containsAnyText(lower, "tuáº§n sau", "tuan sau", "next week"):
+	case containsAnyText(text, "tuan sau", "next week"):
 		start := startOfWeekMonday(now).AddDate(0, 0, 7)
 		return start, start.AddDate(0, 0, 7), true
-	case containsAnyText(lower, "tuáº§n nÃ y", "tuan nay", "this week", "trong tuáº§n", "trong tuan"):
+	case containsAnyText(text, "tuan nay", "this week", "trong tuan"):
 		start := startOfWeekMonday(now)
 		return start, start.AddDate(0, 0, 7), true
-	case containsAnyText(lower, "thÃ¡ng tá»›i", "thang toi", "thÃ¡ng sau", "thang sau", "next month"):
+	case containsAnyText(text, "thang toi", "thang sau", "next month"):
 		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		start := thisMonth.AddDate(0, 1, 0)
 		return start, start.AddDate(0, 1, 0), true
-	case containsAnyText(lower, "thÃ¡ng nÃ y", "thang nay", "this month"):
+	case containsAnyText(text, "thang nay", "this month"):
 		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		return start, start.AddDate(0, 1, 0), true
-	case containsAnyText(lower, "ngÃ y mai", "ngay mai", "tomorrow"):
+	case containsAnyText(text, "ngay mai", "tomorrow"):
 		start := startOfDay(now).AddDate(0, 0, 1)
 		return start, start.AddDate(0, 0, 1), true
-	case containsAnyText(lower, "hÃ´m qua", "hom qua", "yesterday"):
+	case containsAnyText(text, "hom qua", "yesterday"):
 		start := startOfDay(now).AddDate(0, 0, -1)
 		return start, start.AddDate(0, 0, 1), true
-	case containsAnyText(lower, "hÃ´m nay", "hom nay", "today"):
+	case containsAnyText(text, "hom nay", "today"):
 		start := startOfDay(now)
 		return start, start.AddDate(0, 0, 1), true
 	default:
@@ -471,34 +471,34 @@ func normalizeCalendarListEventsArgsLegacy(now time.Time, args map[string]any, u
 	if now.IsZero() {
 		now = time.Now()
 	}
-	lower := strings.ToLower(strings.TrimSpace(userText))
-	if lower == "" {
+	text := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if text == "" {
 		return nil
 	}
 
 	var start, end time.Time
 	switch {
-	case containsAnyText(lower, "tuáº§n sau", "tuan sau", "next week"):
+	case containsAnyText(text, "tuan sau", "next week"):
 		thisWeek := startOfWeekMonday(now)
 		start = thisWeek.AddDate(0, 0, 7)
 		end = start.AddDate(0, 0, 7)
-	case containsAnyText(lower, "tuáº§n nÃ y", "tuan nay", "this week", "trong tuáº§n", "trong tuan"):
+	case containsAnyText(text, "tuan nay", "this week", "trong tuan"):
 		start = startOfWeekMonday(now)
 		end = start.AddDate(0, 0, 7)
-	case containsAnyText(lower, "thÃ¡ng tá»›i", "thang toi", "thÃ¡ng sau", "thang sau", "next month"):
+	case containsAnyText(text, "thang toi", "thang sau", "next month"):
 		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		start = thisMonth.AddDate(0, 1, 0)
 		end = start.AddDate(0, 1, 0)
-	case containsAnyText(lower, "thÃ¡ng nÃ y", "thang nay", "this month"):
+	case containsAnyText(text, "thang nay", "this month"):
 		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		end = start.AddDate(0, 1, 0)
-	case containsAnyText(lower, "ngÃ y mai", "ngay mai", "tomorrow"):
+	case containsAnyText(text, "ngay mai", "tomorrow"):
 		start = startOfDay(now).AddDate(0, 0, 1)
 		end = start.AddDate(0, 0, 1)
-	case containsAnyText(lower, "hÃ´m qua", "hom qua", "yesterday"):
+	case containsAnyText(text, "hom qua", "yesterday"):
 		start = startOfDay(now).AddDate(0, 0, -1)
 		end = start.AddDate(0, 0, 1)
-	case containsAnyText(lower, "hÃ´m nay", "hom nay", "today"):
+	case containsAnyText(text, "hom nay", "today"):
 		start = startOfDay(now)
 		end = start.AddDate(0, 0, 1)
 	default:
@@ -522,13 +522,13 @@ func normalizeRelativeCalendarQuery(query string, userText string) string {
 	if trimmed == "" {
 		return ""
 	}
-	lowerQuery := strings.ToLower(trimmed)
-	lowerText := strings.ToLower(strings.TrimSpace(userText))
-	if lowerQuery == lowerText {
+	queryText := foldVietnameseSearchText(strings.ToLower(trimmed))
+	userText = foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if queryText == userText {
 		return ""
 	}
-	if containsAnyText(lowerQuery, "tuáº§n nÃ y", "tuan nay", "tuáº§n sau", "tuan sau", "thÃ¡ng nÃ y", "thang nay", "thÃ¡ng tá»›i", "thang toi", "hÃ´m nay", "hom nay", "today", "this week", "next week", "this month", "next month") &&
-		containsAnyText(lowerQuery, "lá»‹ch", "lich", "calendar", "sá»± kiá»‡n", "su kien", "event") {
+	if containsAnyText(queryText, relativeQueryTerms()...) &&
+		containsAnyText(queryText, calendarQueryPurposeTerms()...) {
 		return ""
 	}
 	return trimmed
@@ -539,13 +539,13 @@ func normalizeRelativeGmailQuery(query string, userText string) string {
 	if trimmed == "" {
 		return ""
 	}
-	lowerQuery := strings.ToLower(trimmed)
-	lowerText := strings.ToLower(strings.TrimSpace(userText))
-	if lowerQuery == lowerText {
+	queryText := foldVietnameseSearchText(strings.ToLower(trimmed))
+	userText = foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if queryText == userText {
 		return ""
 	}
-	if containsAnyText(lowerQuery, "tuáº§n nÃ y", "tuan nay", "tuáº§n sau", "tuan sau", "thÃ¡ng nÃ y", "thang nay", "thÃ¡ng tá»›i", "thang toi", "hÃ´m nay", "hom nay", "today", "this week", "next week", "this month", "next month") &&
-		containsAnyText(lowerQuery, "email", "mail", "gmail", "thÆ°", "thu", "há»™p thÆ°", "hop thu") {
+	if containsAnyText(queryText, relativeQueryTerms()...) &&
+		containsAnyText(queryText, gmailQueryPurposeTerms()...) {
 		return ""
 	}
 	return trimmed
@@ -572,3 +572,4 @@ func containsAnyText(text string, needles ...string) bool {
 	}
 	return false
 }
+

@@ -33,7 +33,7 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 	handler := &fakeHandler{
 		outbound: contracts.AgentResponse{
 			Status:  contracts.AgentStatusCompleted,
-			Message: "ÄÃ£ cháº¡y xong.",
+			Message: "Đã chạy xong.",
 		},
 	}
 
@@ -50,7 +50,7 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 		ChatID:     55,
 		MessageID:  42,
 		ToolName:   "sandbox.runPython",
-		PromptText: "HÃ nh Ä‘á»™ng: Cháº¡y mÃ£ Python trong sandbox\n\nMÃ£ Python sáº½ cháº¡y:\n\nprint('hello')",
+		PromptText: "Hành động: Chạy mã Python trong sandbox\n\nMã Python sẽ chạy:\n\nprint('hello')",
 	})
 	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		var payload map[string]any
@@ -1551,3 +1551,4 @@ func TestTelegramRenderHTMLConvertsTextFieldMarkers(t *testing.T) {
 		t.Fatalf("expected text field to avoid code markup, got %q", rendered)
 	}
 }
+
