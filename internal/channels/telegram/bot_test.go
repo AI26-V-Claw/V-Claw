@@ -921,8 +921,9 @@ func TestTelegramTextFromResponsePreservesCalendarEventLinks(t *testing.T) {
 		Status:  contracts.AgentStatusCompleted,
 		Message: message,
 	})
-	if text != message {
-		t.Fatalf("expected calendar link text to be preserved, got %q want %q", text, message)
+	want := "Đã tạo sự kiện Calendar.\n- Tiêu đề: Sprint Review\n- Link sự kiện: [Mở sự kiện](https://calendar.google.com/calendar/event?eid=evt_1)"
+	if text != want {
+		t.Fatalf("expected calendar link text to be compacted, got %q want %q", text, want)
 	}
 }
 
