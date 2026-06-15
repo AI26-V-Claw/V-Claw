@@ -35,6 +35,7 @@ type RuntimeConfig struct {
 	Provider                   providers.Provider
 	Registry                   *tools.ToolRegistry
 	Observer                   RuntimeObserver
+	Telemetry                  RuntimeTelemetry
 	ReferenceResolver          reference.Resolver
 	Policy                     policies.ToolPolicy
 	SessionStore               sessions.Store
@@ -57,6 +58,7 @@ type Runtime struct {
 	provider                   providers.Provider
 	registry                   *tools.ToolRegistry
 	observer                   RuntimeObserver
+	telemetry                  RuntimeTelemetry
 	referenceResolver          reference.Resolver
 	policy                     policies.ToolPolicy
 	sessionStore               sessions.Store
@@ -124,6 +126,10 @@ type TaskPlanResult struct {
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
+	provider := config.Provider
+	if config.Telemetry != nil && provider != nil {
+		provider = config.Telemetry.WrapProvider(provider)
+	}
 	maxIterations := config.MaxIterations
 	if maxIterations <= 0 {
 		maxIterations = DefaultMaxIterations
@@ -161,10 +167,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	}
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
-		if config.Provider != nil {
+		if provider != nil {
 			referenceResolver = newHeuristicFirstResolver(
 				reference.NewHeuristicResolver(),
-				reference.NewLLMResolver(config.Provider, config.Model),
+				reference.NewLLMResolver(provider, config.Model),
 			)
 		} else {
 			referenceResolver = reference.NewHeuristicResolver()
@@ -175,9 +181,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		contextWindow = 128_000
 	}
 	return &Runtime{
-		provider:                   config.Provider,
+		provider:                   provider,
 		registry:                   config.Registry,
 		observer:                   config.Observer,
+		telemetry:                  config.Telemetry,
 		referenceResolver:          referenceResolver,
 		policy:                     config.Policy,
 		sessionStore:               sessionStore,
@@ -795,6 +802,18 @@ If required information is missing, ask one concise clarification question inste
 					remainingToolCalls: cloneProviderToolCalls(assistantMessage.ToolCalls[index+1:]),
 				})
 				r.recordApprovalObservation(ActionStatusPendingApproval)
+				if r.telemetry != nil {
+					r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+						Status:     ActionStatusPendingApproval,
+						ApprovalID: approval.ApprovalID,
+						RequestID:  message.RequestID,
+						SessionID:  message.SessionID,
+						ToolCallID: approval.ToolCallID,
+						ToolName:   providerToolCall.Name,
+						RiskLevel:  approval.RiskLevel,
+						ExpiresAt:  approval.ExpiresAt,
+					})
+				}
 				if err := r.appendToolObservation(ctx, message.SessionID, transcript, providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: providerToolCall.ID,

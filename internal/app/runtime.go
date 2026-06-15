@@ -18,6 +18,7 @@ import (
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeople "vclaw/internal/connectors/google/people"
 	"vclaw/internal/connectors/tavily"
+	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/safety"
@@ -28,8 +29,8 @@ import (
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
 	gmailtool "vclaw/internal/tools/office/gmail"
-	fstool "vclaw/internal/tools/os/filesystem"
 	peopletool "vclaw/internal/tools/office/people"
+	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
 )
@@ -54,6 +55,7 @@ type AgentRuntimeConfig struct {
 	Logger        *slog.Logger
 	MaxIterations int
 	Observer      agent.RuntimeObserver
+	Telemetry     agent.RuntimeTelemetry
 
 	GoogleToolsMode       string
 	GoogleCredentialsPath string
@@ -67,6 +69,10 @@ type AgentRuntimeConfig struct {
 	SandboxWorkspaceDir string
 	SandboxImage        string
 	SandboxRunner       sandboxruntime.Runner
+
+	LangfusePublicKey string
+	LangfuseSecretKey string
+	LangfuseHost      string
 
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
@@ -103,6 +109,23 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			return RuntimeBundle{}, err
 		}
 		provider = openAI
+	}
+	telemetry := config.Telemetry
+	if telemetry == nil {
+		langfuse, err := monitoring.NewLangfuse(ctx, monitoring.LangfuseConfig{
+			PublicKey:   config.LangfusePublicKey,
+			SecretKey:   config.LangfuseSecretKey,
+			Host:        config.LangfuseHost,
+			ServiceName: "vclaw",
+			Logger:      config.Logger,
+		})
+		if err != nil {
+			return RuntimeBundle{}, err
+		}
+		telemetry = langfuse
+	}
+	if telemetry != nil && provider != nil {
+		provider = telemetry.WrapProvider(provider)
 	}
 
 	registry, err := NewAgentToolRegistry(ctx, config)
@@ -142,21 +165,22 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	}, config.Logger)
 
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Observer: config.Observer,
+		Provider:  provider,
+		Registry:  registry,
+		Observer:  config.Observer,
+		Telemetry: telemetry,
 		ReferenceResolver: reference.NewFallbackResolver(
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),
 		),
-		SessionStore:          sessionStore,
-		Policy:                userPolicy,
-		StateStore:            stateStore,
-		Logger:                config.Logger,
-		MaxIterations:         config.MaxIterations,
-		Model:                 model,
-		Compactor:             compactor,
-		MemoryClassifierModel: compactorModel,
+		SessionStore:               sessionStore,
+		Policy:                     userPolicy,
+		StateStore:                 stateStore,
+		Logger:                     config.Logger,
+		MaxIterations:              config.MaxIterations,
+		Model:                      model,
+		Compactor:                  compactor,
+		MemoryClassifierModel:      compactorModel,
 		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,

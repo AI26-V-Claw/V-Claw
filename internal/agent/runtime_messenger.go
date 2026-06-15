@@ -22,10 +22,12 @@ func NewRuntimeMessenger(runtime *Runtime) *RuntimeMessenger {
 	return &RuntimeMessenger{runtime: runtime}
 }
 
-func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error) {
+func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.UserMessage) (response contracts.AgentResponse, err error) {
 	if m == nil || m.runtime == nil {
 		return contracts.AgentResponse{}, fmt.Errorf("runtime is required")
 	}
+	ctx, finishTrace := m.runtime.startRequestTelemetry(ctx, msg)
+	defer func() { finishTrace(response, err) }()
 
 	msg.Text = strings.TrimSpace(msg.Text)
 	if command, ok := parseApprovalCommand(msg.Text, m.runtime.HasPendingApproval(ctx, msg.SessionID)); ok {
@@ -38,7 +40,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 				"comment", strings.TrimSpace(command.comment),
 			)
 		}
-		response, err := m.runtime.ResolveApproval(ctx, msg.SessionID, contracts.ApprovalDecision{
+		response, err = m.runtime.ResolveApproval(ctx, msg.SessionID, contracts.ApprovalDecision{
 			ApprovalID: command.approvalID,
 			RequestID:  msg.RequestID,
 			Decision:   command.decision,
@@ -61,7 +63,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 		return response, nil
 	}
 
-	response, err := m.runtime.Run(ctx, msg)
+	response, err = m.runtime.Run(ctx, msg)
 	if err != nil {
 		m.runtime.recordRequestObservation(contracts.AgentResponse{}, err)
 		return contracts.AgentResponse{}, err

@@ -74,6 +74,17 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				}, nil
 			}
 			r.recordApprovalObservation(ActionStatusExpired)
+			if r.telemetry != nil {
+				r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+					Status:     ActionStatusExpired,
+					ApprovalID: pending.request.ApprovalID,
+					RequestID:  pending.message.RequestID,
+					SessionID:  pending.message.SessionID,
+					ToolCallID: pending.request.ToolCallID,
+					ToolName:   pending.toolCall.Name,
+					RiskLevel:  pending.request.RiskLevel,
+				})
+			}
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
 			return contracts.AgentResponse{
@@ -119,6 +130,18 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			}, nil
 		}
 		r.recordApprovalObservation(ActionStatusApproved)
+		if r.telemetry != nil {
+			r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+				Status:     ActionStatusApproved,
+				ApprovalID: pending.request.ApprovalID,
+				RequestID:  pending.message.RequestID,
+				SessionID:  pending.message.SessionID,
+				ToolCallID: pending.request.ToolCallID,
+				ToolName:   pending.toolCall.Name,
+				RiskLevel:  pending.request.RiskLevel,
+				Comment:    decision.Comment,
+			})
+		}
 		return r.resumeApprovedAction(ctx, pending)
 	case contracts.ApprovalDecisionRejected:
 		if pending.actionID != "" {
@@ -132,6 +155,18 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				}, nil
 			}
 			r.recordApprovalObservation(ActionStatusRejected)
+			if r.telemetry != nil {
+				r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+					Status:     ActionStatusRejected,
+					ApprovalID: pending.request.ApprovalID,
+					RequestID:  pending.message.RequestID,
+					SessionID:  pending.message.SessionID,
+					ToolCallID: pending.request.ToolCallID,
+					ToolName:   pending.toolCall.Name,
+					RiskLevel:  pending.request.RiskLevel,
+					Comment:    decision.Comment,
+				})
+			}
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked); errShape != nil {
 			return contracts.AgentResponse{
@@ -227,6 +262,17 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 				}, nil
 			}
 			r.recordApprovalObservation(ActionStatusExpired)
+			if r.telemetry != nil {
+				r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+					Status:     ActionStatusExpired,
+					ApprovalID: pending.request.ApprovalID,
+					RequestID:  requestID,
+					SessionID:  sessionID,
+					ToolCallID: pending.request.ToolCallID,
+					ToolName:   pending.toolCall.Name,
+					RiskLevel:  pending.request.RiskLevel,
+				})
+			}
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
 			return contracts.AgentResponse{
