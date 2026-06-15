@@ -123,3 +123,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_entries_event_id
 CREATE INDEX IF NOT EXISTS idx_audit_entries_run_timestamp ON audit_entries(run_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_audit_entries_tool_call_id ON audit_entries(tool_call_id);
 CREATE INDEX IF NOT EXISTS idx_audit_entries_approval_id ON audit_entries(approval_id);
+
+-- Drop legacy columns that no runtime code writes.
+-- agent_runs: response envelope is file-backed (data/sessions transcript).
+-- audit_entries: legacy Telegram-style fields replaced by structured columns above.
+ALTER TABLE agent_runs
+    DROP COLUMN IF EXISTS channel,
+    DROP COLUMN IF EXISTS locale,
+    DROP COLUMN IF EXISTS response_status,
+    DROP COLUMN IF EXISTS response_message,
+    DROP COLUMN IF EXISTS data,
+    DROP COLUMN IF EXISTS plan,
+    DROP COLUMN IF EXISTS error;
+
+ALTER TABLE audit_entries
+    DROP COLUMN IF EXISTS update_id,
+    DROP COLUMN IF EXISTS chat_id,
+    DROP COLUMN IF EXISTS input,
+    DROP COLUMN IF EXISTS intent,
+    DROP COLUMN IF EXISTS system_op_type,
+    DROP COLUMN IF EXISTS confidence,
+    DROP COLUMN IF EXISTS action_taken,
+    DROP COLUMN IF EXISTS output,
+    DROP COLUMN IF EXISTS error;
