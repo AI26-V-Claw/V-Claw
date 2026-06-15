@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 )
 
@@ -38,6 +40,7 @@ type RuntimeConfig struct {
 	SessionStore               sessions.Store
 	StateStore                 RuntimeStateStore
 	Logger                     *slog.Logger
+	ToolHooks                  toolhooks.Hooks
 	MaxIterations              int
 	ToolTimeout                time.Duration
 	ParallelExecutionEnabled   bool
@@ -59,6 +62,7 @@ type Runtime struct {
 	sessionStore               sessions.Store
 	stateStore                 RuntimeStateStore
 	logger                     *slog.Logger
+	toolHooks                  toolhooks.Hooks
 	approvalMu                 sync.Mutex
 	pendingApprovals           map[string]pendingApproval
 	pendingBySession           map[string]string
@@ -129,6 +133,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	hooks := config.ToolHooks
+	if hooks == nil {
+		hooks = toolhooks.NoopHooks{}
+	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
@@ -157,6 +165,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		sessionStore:               sessionStore,
 		stateStore:                 stateStore,
 		logger:                     logger,
+		toolHooks:                  hooks,
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
 		maxIterations:              maxIterations,
@@ -180,6 +189,7 @@ func memoryClassifierModel(config RuntimeConfig) string {
 }
 
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
+	ctx = toolhooks.WithRequestContext(ctx, message.RequestID, message.SessionID)
 	if r.compactor != nil {
 		sessionID := message.SessionID
 		defer func() { go r.maybeCompactAsync(sessionID) }()
@@ -479,6 +489,7 @@ If required information is missing, ask one concise clarification question inste
 
 		evidenceText := providerTranscriptEvidenceText(providerTranscript)
 		if batch, ok := r.prepareParallelBatch(
+			ctx,
 			assistantMessage.ToolCalls,
 			r.parallelExecutionEnabled,
 			message.Text,
@@ -510,6 +521,11 @@ If required information is missing, ask one concise clarification question inste
 				if !result.Success {
 					stage = ProgressStageToolFailed
 				}
+				var execErr error
+				if result.Error != nil && !result.Success {
+					execErr = errors.New(result.Error.Message)
+				}
+				r.runPostToolHook(ctx, call, batch[i].definition, result, execErr, r.now().Add(-outcome.duration))
 				r.logger.Info("parallel tool execution completed",
 					"tool_call_id", call.ID,
 					"tool_name", call.Name,
@@ -629,7 +645,7 @@ If required information is missing, ask one concise clarification question inste
 				definition.Name = providerToolCall.Name
 			}
 
-			decision := r.policy.DecideToolCall(providerToolCall.ID, definition, found, r.now())
+			decision := r.decideToolCall(ctx, providerToolCall, definition, found)
 			r.logger.Info("agent tool call proposed",
 				"request_id", message.RequestID,
 				"session_id", message.SessionID,

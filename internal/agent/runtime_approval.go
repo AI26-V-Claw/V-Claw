@@ -10,6 +10,7 @@ import (
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 )
 
@@ -600,7 +601,12 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 	}
 
 	startedAt := time.Now()
-	result := r.executeAllowedTool(ctx, pending.toolCall, pending.definition)
+	execCtx := toolhooks.WithRequestContext(ctx, pending.message.RequestID, pending.message.SessionID)
+	decision := r.approvedToolDecision(execCtx, pending.toolCall, pending.definition, true)
+	result := toolDecisionDeniedResult(pending.toolCall, decision)
+	if decision.Decision != contracts.RiskDecisionBlock {
+		result = r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
+	}
 	if errShape := r.recordRuntimeToolCall(ctx, record.RunID, pending.toolCall, result, time.Since(startedAt), record.ApprovalID); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,

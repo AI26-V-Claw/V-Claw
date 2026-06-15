@@ -87,7 +87,7 @@ func prependToolResultIfMissing(results []contracts.ToolResult, result contracts
 	return merged
 }
 
-func (r *Runtime) prepareParallelBatch(toolCalls []providers.ToolCall, enabled bool, userText string, evidenceText string, activeClarification bool) ([]parallelToolCall, bool) {
+func (r *Runtime) prepareParallelBatch(ctx context.Context, toolCalls []providers.ToolCall, enabled bool, userText string, evidenceText string, activeClarification bool) ([]parallelToolCall, bool) {
 	if !enabled || len(toolCalls) < 2 || r == nil || r.registry == nil {
 		return nil, false
 	}
@@ -113,8 +113,8 @@ func (r *Runtime) prepareParallelBatch(toolCalls []providers.ToolCall, enabled b
 		if len(pendingMissingFieldsForToolCall(toolCall, definition, found, activeClarification, userText)) > 0 {
 			return nil, false
 		}
-		decision := r.policy.DecideToolCall(toolCall.ID, definition, found, now)
-		if decision.Decision != contracts.RiskDecisionAllow || decision.RequiresApproval || definition.RequiresApproval {
+		decision := r.decideToolCall(ctx, toolCall, definition, found)
+		if decision.Decision != contracts.RiskDecisionAllow || decision.RequiresApproval {
 			return nil, false
 		}
 		tool, ok := r.registry.GetTool(toolCall.Name)
@@ -138,11 +138,7 @@ func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall
 	if !found {
 		definition.Name = toolCall.Name
 	}
-	now := time.Now
-	if r.now != nil {
-		now = r.now
-	}
-	decision := r.policy.DecideToolCall(toolCall.ID, definition, found, now())
+	decision := r.decideToolCall(ctx, toolCall, definition, found)
 	if r.logger != nil {
 		r.logger.Info("internal tool call proposed",
 			"tool_call_id", toolCall.ID,
@@ -153,7 +149,7 @@ func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall
 		)
 	}
 	if decision.Decision != contracts.RiskDecisionAllow {
-		return tools.PermissionDeniedResult(providerToolCallToToolCall(toolCall))
+		return toolDecisionDeniedResult(toolCall, decision)
 	}
 	return r.executeAllowedTool(ctx, toolCall, definition)
 }

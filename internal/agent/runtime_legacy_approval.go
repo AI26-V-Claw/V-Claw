@@ -9,6 +9,7 @@ import (
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 )
 
@@ -418,7 +419,12 @@ func (r *Runtime) legacyResolveApproval(ctx context.Context, sessionID string, d
 			"approval_id", pending.request.ApprovalID,
 			"tool_call_id", pending.request.ToolCallID,
 		)
-		result := r.executeAllowedTool(ctx, pending.toolCall, pending.definition)
+		execCtx := toolhooks.WithRequestContext(ctx, pending.message.RequestID, pending.message.SessionID)
+		decision := r.approvedToolDecision(execCtx, pending.toolCall, pending.definition, true)
+		result := toolDecisionDeniedResult(pending.toolCall, decision)
+		if decision.Decision != contracts.RiskDecisionBlock {
+			result = r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
+		}
 		if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
