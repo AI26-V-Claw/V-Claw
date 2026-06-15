@@ -68,18 +68,18 @@ func QueryLogs(ctx context.Context, databaseURL string, query LogQuery) ([]LogEv
 
 	if tables["agent_runs"] {
 		parts = append(parts, fmt.Sprintf(`SELECT started_at AS ts,
-CASE WHEN response_status = 'failed' OR error IS NOT NULL THEN 'error' ELSE 'info' END AS level,
+CASE WHEN status IN ('failed', 'blocked', 'max_iterations') THEN 'error' ELSE 'info' END AS level,
 'run' AS event_type,
-COALESCE(response_status, '') AS status,
+COALESCE(status, '') AS status,
 request_id,
 session_id,
 '' AS tool_name,
 '' AS approval_id,
-COALESCE(response_message, '') AS message,
-COALESCE(error::text, '') AS error_text
+COALESCE(original_goal, '') AS message,
+'' AS error_text
 FROM agent_runs
 WHERE ($1::timestamptz IS NULL OR started_at >= $1)
-  AND ($%d::text IS NULL OR CASE WHEN response_status = 'failed' OR error IS NOT NULL THEN 'error' ELSE 'info' END = $%d)
+  AND ($%d::text IS NULL OR CASE WHEN status IN ('failed', 'blocked', 'max_iterations') THEN 'error' ELSE 'info' END = $%d)
 `, argLevel, argLevel))
 	}
 	if tables["tool_executions"] {
@@ -136,18 +136,18 @@ WHERE ($1::timestamptz IS NULL OR decided_at >= $1)
 		parts = append(parts, fmt.Sprintf(`SELECT timestamp AS ts,
 'error' AS level,
 'error' AS event_type,
-action_taken AS status,
+COALESCE(policy_decision, '') AS status,
 COALESCE(request_id, '') AS request_id,
 COALESCE(session_id, '') AS session_id,
-system_op_type AS tool_name,
-'' AS approval_id,
-output AS message,
-error AS error_text
+COALESCE(tool_name, '') AS tool_name,
+COALESCE(approval_id, '') AS approval_id,
+COALESCE(output_summary, '') AS message,
+error_message AS error_text
 FROM audit_entries
-WHERE error IS NOT NULL AND error <> ''
+WHERE error_message IS NOT NULL AND error_message <> ''
   AND ($1::timestamptz IS NULL OR timestamp >= $1)
   AND ($%d::text IS NULL OR $%d = 'error')
-  AND ($%d::text IS NULL OR system_op_type = $%d)
+  AND ($%d::text IS NULL OR tool_name = $%d)
 `, argLevel, argLevel, argTool, argTool))
 	}
 

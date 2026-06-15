@@ -464,7 +464,7 @@ func (s *Store) Log(event audit.AuditEvent) error {
 		        $17::jsonb, nullif($18, ''), nullif($19, ''))
 		ON CONFLICT (event_id) WHERE event_id IS NOT NULL AND event_id <> '' DO NOTHING`,
 		event.EventID, string(event.EventType), zeroNow(event.Timestamp), event.RequestID, event.SessionID,
-		"", event.HITLApprovalID, event.JobID, "", event.UserID, event.Tool, string(event.ActionType),
+		"", event.HITLApprovalID, event.JobID, channelFromSessionID(event.SessionID), event.UserID, event.Tool, string(event.ActionType),
 		event.RiskLevel, event.PolicyDecision, string(reasons), string(resources), string(details),
 		event.OutputSummary, event.ErrorMessage)
 	return err
@@ -552,10 +552,10 @@ func (s *Store) ListToolCallsByRun(ctx context.Context, runID string) ([]agent.T
 func (s *Store) upsertRun(ctx context.Context, state agent.RunState) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_runs (
-			run_id, request_id, session_id, channel, input_text, original_goal, status,
+			run_id, request_id, session_id, input_text, original_goal, status,
 			iteration_count, pending_action_id, pending_clarification_id, created_at, updated_at, completed_at
 		)
-		VALUES ($1, $2, $3, '', $4, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (run_id) DO UPDATE
 		SET request_id = EXCLUDED.request_id,
 		    session_id = EXCLUDED.session_id,
@@ -910,6 +910,21 @@ func coalesce(values ...string) string {
 	return ""
 }
 
+// channelFromSessionID derives the originating channel from the session id
+// prefix (telegram_chat_*, slack_channel_*). Returns "" when the prefix is
+// unrecognized so the column stays NULL rather than holding a guess.
+func channelFromSessionID(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	switch {
+	case strings.HasPrefix(sessionID, "telegram_"):
+		return "telegram"
+	case strings.HasPrefix(sessionID, "slack_"):
+		return "slack"
+	default:
+		return ""
+	}
+}
+
 type auditEntry struct {
 	EventID        string
 	EventType      string
@@ -945,6 +960,9 @@ func (s *Store) insertAuditEntry(ctx context.Context, entry auditEntry) error {
 	details, err := json.Marshal(entry.Details)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(entry.Channel) == "" {
+		entry.Channel = channelFromSessionID(entry.SessionID)
 	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO audit_entries (

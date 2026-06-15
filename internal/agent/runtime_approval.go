@@ -320,6 +320,7 @@ func approvalDecisionRecord(sessionID string, decision contracts.ApprovalDecisio
 		SessionID: sessionID,
 		Decision:  decision.Decision,
 		DecidedBy: decision.DecidedBy,
+		Channel:   decision.Channel,
 		Comment:   decision.Comment,
 		DecidedAt: decision.DecidedAt,
 	}
