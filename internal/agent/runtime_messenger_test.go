@@ -54,6 +54,37 @@ func TestRenderAgentResponseFormatsApprovalForChat(t *testing.T) {
 	}
 }
 
+func TestRenderAgentResponseFormatsCalendarCreatePayloadWithEventLink(t *testing.T) {
+	got := renderAgentResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: `Event created: {"Event":{"id":"evt_1","title":"Sprint Review","start":"2026-06-05T09:30:00+07:00","end":"2026-06-05T10:30:00+07:00","eventLink":"https://calendar.google.com/calendar/event?eid=evt_1"}}`,
+	})
+	if strings.Contains(got, "{") {
+		t.Fatalf("expected friendly calendar output, got %q", got)
+	}
+	if !strings.Contains(got, "https://calendar.google.com/calendar/event?eid=evt_1") {
+		t.Fatalf("expected calendar event link in rendered output, got %q", got)
+	}
+}
+
+func TestRenderAgentResponseFormatsCalendarListPayloadWithEventLinks(t *testing.T) {
+	got := renderAgentResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: `[{"id":"evt_1","title":"Sprint Review","eventLink":"https://calendar.google.com/calendar/event?eid=evt_1"},{"id":"evt_2","title":"Demo","eventLink":"https://calendar.google.com/calendar/event?eid=evt_2"}]`,
+	})
+	if strings.Contains(got, "{") {
+		t.Fatalf("expected friendly calendar list output, got %q", got)
+	}
+	for _, want := range []string{
+		"https://calendar.google.com/calendar/event?eid=evt_1",
+		"https://calendar.google.com/calendar/event?eid=evt_2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected calendar event link %q in rendered output, got %q", want, got)
+		}
+	}
+}
+
 // func TestRenderAgentResponseCleansAndLimitsMessage(t *testing.T) {
 // 	longLine := strings.Repeat("x", maxOutboundTextRunes+20)
 // 	response := contracts.AgentResponse{
@@ -314,7 +345,7 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 					Kind:  "calendar.event",
 					Label: "Google Calendar event",
 					ID:    "event_1",
-					URI:   "https://calendar.google.com/calendar/r/eventedit/event_1",
+					URI:   "https://calendar.google.com/calendar/event?eid=event_1",
 					Meta:  map[string]any{"meetLink": "https://meet.google.com/abc-defg-hij"},
 				},
 				Data: map[string]any{
@@ -325,7 +356,7 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 		if output == nil || output.ArtifactRef == nil {
 			t.Fatalf("expected calendar artifact ref, got %#v", output)
 		}
-		if output.ArtifactRef.ID != "event_1" || output.ArtifactRef.URI != "https://calendar.google.com/calendar/r/eventedit/event_1" {
+		if output.ArtifactRef.ID != "event_1" || output.ArtifactRef.URI != "https://calendar.google.com/calendar/event?eid=event_1" {
 			t.Fatalf("unexpected calendar artifact ref: %#v", output.ArtifactRef)
 		}
 		if got := output.ArtifactRef.Meta["meetLink"]; got != "https://meet.google.com/abc-defg-hij" {

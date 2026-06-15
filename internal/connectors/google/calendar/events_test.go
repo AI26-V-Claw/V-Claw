@@ -102,8 +102,8 @@ func TestListEvents_Success(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(gcal.Events{
 			Items: []*gcal.Event{
-				{Id: "1", Summary: "Event 1"},
-				{Id: "2", Summary: "Event 2"},
+				{Id: "1", Summary: "Event 1", HtmlLink: "https://calendar.google.com/calendar/event?eid=event_1"},
+				{Id: "2", Summary: "Event 2", HtmlLink: "https://calendar.google.com/calendar/event?eid=event_2"},
 			},
 		})
 	})
@@ -120,14 +120,18 @@ func TestListEvents_Success(t *testing.T) {
 	if events[0].ID != "1" || events[1].ID != "2" {
 		t.Errorf("unexpected event IDs")
 	}
+	if events[0].EventLink != "https://calendar.google.com/calendar/event?eid=event_1" {
+		t.Errorf("unexpected event link: %q", events[0].EventLink)
+	}
 }
 
 func TestCreateEvent_Success(t *testing.T) {
 	client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(gcal.Event{
-			Id:      "new_id",
-			Summary: "Created Event",
+			Id:       "new_id",
+			Summary:  "Created Event",
+			HtmlLink: "https://calendar.google.com/calendar/event?eid=created_event",
 		})
 	})
 	defer ts.Close()
@@ -140,14 +144,18 @@ func TestCreateEvent_Success(t *testing.T) {
 	if e.ID != "new_id" || e.Title != "Created Event" {
 		t.Errorf("unexpected event returned: %+v", e)
 	}
+	if e.EventLink != "https://calendar.google.com/calendar/event?eid=created_event" {
+		t.Errorf("unexpected event link: %q", e.EventLink)
+	}
 }
 
 func TestUpdateEvent_Success(t *testing.T) {
 	client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(gcal.Event{
-			Id:      "updated_id",
-			Summary: "Updated Event",
+			Id:       "updated_id",
+			Summary:  "Updated Event",
+			HtmlLink: "https://calendar.google.com/calendar/event?eid=updated_event",
 		})
 	})
 	defer ts.Close()
@@ -159,6 +167,9 @@ func TestUpdateEvent_Success(t *testing.T) {
 
 	if e.ID != "updated_id" || e.Title != "Updated Event" {
 		t.Errorf("unexpected event returned: %+v", e)
+	}
+	if e.EventLink != "https://calendar.google.com/calendar/event?eid=updated_event" {
+		t.Errorf("unexpected event link: %q", e.EventLink)
 	}
 }
 

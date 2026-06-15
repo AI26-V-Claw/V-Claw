@@ -180,7 +180,7 @@ func renderPayloadMap(toolName string, prefix string, payload map[string]any) []
 		return renderSheetsPayload(toolName, payload)
 	case hasAnyPayloadKey(payload, "Draft", "Drafts"):
 		return renderGmailPayload(toolName, payload)
-	case hasAnyPayloadKey(payload, "Event", "Title", "StartTime", "EndTime"):
+	case hasAnyPayloadKey(payload, "Event", "Title", "StartTime", "EndTime", "title", "start", "end", "eventLink", "EventLink"):
 		return renderCalendarPayload(toolName, prefix, payload)
 	case hasAnyPayloadKey(payload, "Space", "Spaces", "Message", "Messages", "Membership"):
 		return renderChatPayload(toolName, payload)
@@ -262,6 +262,7 @@ func renderCalendarPayload(toolName string, prefix string, payload map[string]an
 		{"StartTime", "Bắt đầu"},
 		{"EndTime", "Kết thúc"},
 		{"Location", "Địa điểm"},
+		{"EventLink", "Link sự kiện"},
 		{"MeetLink", "Google Meet"},
 		{"Attendees", "Người tham gia"},
 	})...)
@@ -454,7 +455,7 @@ func payloadBullets(payload map[string]any, labels []fieldLabel) []string {
 }
 
 func payloadBullet(payload map[string]any, label fieldLabel) string {
-	value, ok := payload[label.Key]
+	value, ok := payloadValueByKey(payload, label.Key)
 	if !ok {
 		return ""
 	}
@@ -463,6 +464,41 @@ func payloadBullet(payload map[string]any, label fieldLabel) string {
 		return ""
 	}
 	return "- " + label.Label + ": " + rendered
+}
+
+func payloadValueByKey(payload map[string]any, key string) (any, bool) {
+	if value, ok := payload[key]; ok {
+		return value, true
+	}
+	for _, alias := range payloadKeyAliases(key) {
+		if value, ok := payload[alias]; ok {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func payloadKeyAliases(key string) []string {
+	switch key {
+	case "Title":
+		return []string{"title", "Summary", "summary"}
+	case "ID":
+		return []string{"id"}
+	case "StartTime":
+		return []string{"start"}
+	case "EndTime":
+		return []string{"end"}
+	case "Location":
+		return []string{"location"}
+	case "EventLink":
+		return []string{"eventLink"}
+	case "MeetLink":
+		return []string{"meetLink"}
+	case "Attendees":
+		return []string{"attendees"}
+	default:
+		return nil
+	}
 }
 
 func renderPayloadScalar(value any) string {
@@ -498,6 +534,9 @@ func renderPayloadScalar(value any) string {
 }
 
 func compactPayloadItem(payload map[string]any) string {
+	if text := compactCalendarEventItem(payload); text != "" {
+		return text
+	}
 	if text := compactDriveFileItem(payload); text != "" {
 		return text
 	}
@@ -519,6 +558,33 @@ func compactPayloadItem(payload map[string]any) string {
 		return strings.Join(parts, ", ")
 	}
 	return "một mục"
+}
+
+func compactCalendarEventItem(payload map[string]any) string {
+	title := firstPayloadText(payload, "Title", "title", "Summary", "summary")
+	link := firstPayloadText(payload, "EventLink", "eventLink")
+	if title == "" && link == "" {
+		return ""
+	}
+	if title == "" {
+		title = firstPayloadText(payload, "ID", "id")
+	}
+	if title == "" {
+		title = "Sự kiện"
+	}
+	if link == "" {
+		return title
+	}
+	return title + " - Link: " + link
+}
+
+func firstPayloadText(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if text := renderPayloadScalar(payload[key]); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func compactDriveFileItem(payload map[string]any) string {
