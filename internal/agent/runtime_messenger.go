@@ -43,6 +43,7 @@ func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.User
 			RequestID:  msg.RequestID,
 			Decision:   command.decision,
 			DecidedBy:  "owner",
+			Channel:    msg.Channel,
 			DecidedAt:  time.Now().UTC(),
 			Comment:    command.comment,
 		})

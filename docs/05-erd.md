@@ -36,7 +36,10 @@ top of the current baseline:
   `agent_runs.id uuid`.
 - Add runtime state fields to `agent_runs`: `status`, `original_goal`,
   `iteration_count`, `pending_action_id`, `pending_clarification_id`,
-  `created_at`, and `updated_at`.
+  `created_at`, and `updated_at`. The legacy response-envelope columns
+  (`channel`, `locale`, `response_status`, `response_message`, `data`, `plan`,
+  `error`) are dropped in `003_drop_legacy_columns.sql`: responses go to the
+  channel and the file-backed transcript, not PostgreSQL.
 - Add `run_id` to `risk_decisions`, `approval_requests`,
   `approval_decisions`, `tool_executions`, and `audit_entries` so records can be
   queried directly by `run_id`, not only by `session_id` or `request_id`.
@@ -50,7 +53,10 @@ top of the current baseline:
   approval lookup must be possible after process restart.
 - Extend `audit_entries` from the legacy Telegram-style fields to structured
   audit events that can reference run, tool call, approval, execution, and
-  policy data.
+  policy data. The legacy columns (`update_id`, `chat_id`, `input`, `intent`,
+  `system_op_type`, `confidence`, `action_taken`, `output`, `error`) are dropped
+  in `003_drop_legacy_columns.sql`; they had no PostgreSQL writer (the legacy
+  `audit.Entry` shape is written to a file logger only).
 
 ## Target ERD
 
@@ -61,19 +67,12 @@ erDiagram
         text run_id UK
         text request_id UK
         text session_id
-        text channel
         text original_goal
         text input_text
-        text locale
         text status
         integer iteration_count
         text pending_action_id
         text pending_clarification_id
-        text response_status
-        text response_message
-        jsonb data
-        jsonb plan
-        jsonb error
         timestamptz started_at
         timestamptz created_at
         timestamptz updated_at
@@ -241,9 +240,10 @@ erDiagram
 
 ### `agent_runs`
 
-Stores `agent.RunState` plus the user-facing response envelope. This is the
-primary lookup for run state by `run_id`, and the main join point for all
-run-scoped records.
+Stores `agent.RunState`. This is the primary lookup for run state by `run_id`,
+and the main join point for all run-scoped records. The user-facing response is
+not stored here — it is returned to the channel and captured in the file-backed
+transcript under `data/sessions`.
 
 Runtime status values should match `agent.RuntimeRunStatus`:
 
@@ -355,8 +355,8 @@ blocked
 ### `audit_entries`
 
 Stores audit evidence for run, policy, approval, and execution lifecycle
-events. This table should support both the legacy `audit.Entry` style and the
-newer structured `audit.AuditEvent` style.
+events. This table holds the structured `audit.AuditEvent` style only; the
+legacy `audit.Entry` columns were dropped in `003_drop_legacy_columns.sql`.
 
 Recommended event types:
 

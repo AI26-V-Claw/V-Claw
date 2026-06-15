@@ -213,6 +213,7 @@ type ApprovalDecision struct {
 	RequestID  string                 `json:"requestId"`
 	Decision   ApprovalDecisionStatus `json:"decision"`
 	DecidedBy  string                 `json:"decidedBy,omitempty"`
+	Channel    string                 `json:"channel,omitempty"`
 	DecidedAt  time.Time              `json:"decidedAt"`
 	Comment    string                 `json:"comment,omitempty"`
 }

@@ -177,9 +177,9 @@ func (s *Server) loadHistory(ctx context.Context, limit int, since time.Time) ([
 	parts := make([]string, 0, 5)
 	if tables["agent_runs"] {
 		parts = append(parts, `SELECT started_at AS ts, 'run' AS event_type,
-request_id, session_id, response_status AS status, NULL::text AS tool_name,
-NULL::text AS approval_id, NULL::text AS decision, completed_at, error::text AS error_text,
-jsonb_build_object('message', response_message, 'channel', channel) AS payload
+request_id, session_id, status, NULL::text AS tool_name,
+NULL::text AS approval_id, NULL::text AS decision, completed_at, NULL::text AS error_text,
+jsonb_build_object('goal', original_goal, 'iterationCount', iteration_count) AS payload
 FROM agent_runs
 WHERE ($1::timestamptz IS NULL OR started_at >= $1)`)
 	}
@@ -209,11 +209,11 @@ WHERE ($1::timestamptz IS NULL OR decided_at >= $1)`)
 	}
 	if tables["audit_entries"] {
 		parts = append(parts, `SELECT timestamp AS ts, 'error' AS event_type,
-request_id, session_id, action_taken AS status, system_op_type AS tool_name,
-NULL::text AS approval_id, NULL::text AS decision, NULL::timestamptz AS completed_at, error AS error_text,
-jsonb_build_object('channel', channel, 'input', input, 'output', output, 'hitlRequired', hitl_required) AS payload
+request_id, session_id, policy_decision AS status, tool_name,
+approval_id, NULL::text AS decision, NULL::timestamptz AS completed_at, error_message AS error_text,
+jsonb_build_object('channel', channel, 'eventType', event_type, 'outputSummary', output_summary, 'riskLevel', risk_level) AS payload
 FROM audit_entries
-WHERE error IS NOT NULL AND error <> '' AND ($1::timestamptz IS NULL OR timestamp >= $1)`)
+WHERE error_message IS NOT NULL AND error_message <> '' AND ($1::timestamptz IS NULL OR timestamp >= $1)`)
 	}
 	if len(parts) == 0 {
 		return []map[string]any{}, nil
