@@ -1,11 +1,84 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
+	"vclaw/internal/sessions"
+	"vclaw/internal/tools"
 )
+
+// TestContinuationMessageFullTextReachesProvider verifies that when r.Run() is called
+// as an approval continuation the full message.Text (with "do not repeat" instructions)
+// is sent to the provider, not the stripped "[Tiếp tục...]" placeholder stored in the
+// transcript.
+func TestContinuationMessageFullTextReachesProvider(t *testing.T) {
+	ctx := context.Background()
+	store := sessions.NewInMemoryStore()
+	sessionID := "sess_cont_fix"
+
+	// Seed: user request → assistant tool_use → ACTION_REQUIRES_APPROVAL placeholder.
+	for _, msg := range []providers.Message{
+		{Role: providers.MessageRoleUser, Content: "chạy python"},
+		{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID: "call_1", Name: "sandbox.runPython",
+				Arguments: map[string]any{"code": "print(42)"},
+			}},
+		},
+		{Role: providers.MessageRoleTool, ToolCallID: "call_1", Content: "ACTION_REQUIRES_APPROVAL: Python sandbox requires approval"},
+	} {
+		_ = store.AppendMessage(ctx, sessionID, msg)
+	}
+
+	provider := &fakeProvider{
+		responses: []providers.ChatResponse{
+			{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Kết quả là 42."}},
+		},
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
+		Now:          fixedTestTime,
+	})
+
+	const continuationInstructions = "Do not repeat the tool that was just executed."
+	continuation := contracts.UserMessage{
+		RequestID: "req_cont",
+		SessionID: sessionID,
+		Channel:   "dev",
+		Text:      "An approved tool just completed. Completed tool: sandbox.runPython. Result: 42. " + continuationInstructions,
+		Metadata: map[string]any{
+			"continuationOf": "approval_abc",
+			"completedTool":  "sandbox.runPython",
+		},
+		Timestamp: fixedTestTime(),
+	}
+
+	_, _ = runtime.Run(ctx, continuation)
+
+	if len(provider.calls) == 0 {
+		t.Fatal("expected at least one provider call")
+	}
+	lastCall := provider.calls[len(provider.calls)-1]
+	lastUserContent := ""
+	for _, msg := range lastCall.Messages {
+		if msg.Role == providers.MessageRoleUser {
+			lastUserContent = msg.Content
+		}
+	}
+	if !strings.Contains(lastUserContent, continuationInstructions) {
+		t.Fatalf("continuation instructions not found in provider messages\nlast user content: %q", lastUserContent)
+	}
+	if strings.Contains(lastUserContent, "Tiếp tục sau khi") {
+		t.Fatalf("provider received stripped placeholder instead of full continuation text\nlast user content: %q", lastUserContent)
+	}
+}
 
 func TestEnrichDriveMoveApprovalInputUsesRecentListFilesResults(t *testing.T) {
 	input := map[string]any{

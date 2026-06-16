@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	DefaultMaxIterations = 8
-	DefaultToolTimeout   = 30 * time.Second
-	approvalTTL          = 10 * time.Minute
+	DefaultMaxIterations       = 8
+	DefaultToolTimeout         = 30 * time.Second
+	approvalTTL                = 10 * time.Minute
+	pendingClarificationTTL    = 30 * time.Minute
 )
 
 var (
@@ -256,7 +257,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	pendingClarificationResolution := pendingClarificationResolution{}
 	pendingClarificationActive := false
 	pendingMemoryChanged := false
-	if isUsablePendingClarification(pendingClarification) {
+	if isUsablePendingClarification(pendingClarification, r.now()) {
 		pendingClarificationResolution = r.resolvePendingClarification(ctx, *pendingClarification, message.Text, history)
 		if pendingClarificationResolution.IsAnswer {
 			pendingClarificationActive = true
@@ -387,7 +388,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	providerTranscript := transcript
 	providerMemory := sessionMemory
 	providerReference := referenceResolution
-	if isolatedNewWriteRequest || standaloneReadRequest {
+	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
+		// Restore the full continuation instructions (including "do not repeat tool") for the
+		// provider. The stored transcript holds the short "[Tiếp tục...]" placeholder; the
+		// provider needs the full text from buildApprovalContinuationMessage.
+		providerTranscript = transcriptWithLastUserContent(transcript, message.Text)
+	} else if isolatedNewWriteRequest || standaloneReadRequest {
 		providerTranscript = []providers.Message{userMessage}
 		providerMemory = sessions.SessionMemory{}
 		providerReference = nil

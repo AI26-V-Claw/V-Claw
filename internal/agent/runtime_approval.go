@@ -291,6 +291,11 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		Input:      input,
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
+	if toolCall.Name == "chat.sendMessage" {
+		if email, ok := input["recipientEmail"].(string); ok && strings.TrimSpace(email) != "" {
+			summary = fmt.Sprintf("Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat đến %s. Nếu chưa có DM space, sẽ tự động tạo.", strings.TrimSpace(email))
+		}
+	}
 	parentApprovalID := ""
 	if message.Metadata != nil {
 		if value, ok := message.Metadata["parentApprovalId"].(string); ok && strings.TrimSpace(value) != "" {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
@@ -568,9 +569,24 @@ func pendingClarificationTranscript(pending sessions.PendingClarification) []pro
 	return messages
 }
 
-func isUsablePendingClarification(pending *sessions.PendingClarification) bool {
-	return pending != nil &&
-		(strings.TrimSpace(pending.OriginalRequest) != "" || strings.TrimSpace(pending.Question) != "")
+// isUsablePendingClarification returns true when pending is non-nil, has content,
+// and has not exceeded pendingClarificationTTL. Stale clarifications are treated
+// as expired so the next user message starts fresh instead of being misread as an
+// answer to a long-forgotten question.
+// Backward compat: a zero CreatedAt (old memory.json files) skips the TTL check.
+func isUsablePendingClarification(pending *sessions.PendingClarification, now time.Time) bool {
+	if pending == nil {
+		return false
+	}
+	hasContent := strings.TrimSpace(pending.OriginalRequest) != "" ||
+		strings.TrimSpace(pending.Question) != ""
+	if !hasContent {
+		return false
+	}
+	if !pending.CreatedAt.IsZero() && now.Sub(pending.CreatedAt) >= pendingClarificationTTL {
+		return false
+	}
+	return true
 }
 
 func clonePendingClarification(pending *sessions.PendingClarification) *sessions.PendingClarification {
