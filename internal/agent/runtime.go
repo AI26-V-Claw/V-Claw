@@ -21,10 +21,10 @@ import (
 )
 
 const (
-	DefaultMaxIterations       = 8
-	DefaultToolTimeout         = 30 * time.Second
-	approvalTTL                = 10 * time.Minute
-	pendingClarificationTTL    = 30 * time.Minute
+	DefaultMaxIterations    = 8
+	DefaultToolTimeout      = 30 * time.Second
+	approvalTTL             = 10 * time.Minute
+	pendingClarificationTTL = 30 * time.Minute
 )
 
 var (
@@ -48,6 +48,10 @@ type RuntimeConfig struct {
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
 	ParallelToolTimeoutDefault time.Duration
+	SubtaskMaxChildren         int
+	SubtaskMaxDepth            int
+	SubtaskDefaultTimeout      time.Duration
+	SubtaskMaxTimeout          time.Duration
 	Model                      string
 	Now                        func() time.Time
 	Compactor                  *sessions.Compactor
@@ -84,11 +88,15 @@ type Runtime struct {
 	parallelExecutionEnabled   bool
 	parallelMaxWorkers         int
 	parallelToolTimeoutDefault time.Duration
+	subtaskMaxDepth            int
+	subtaskDefaultTimeout      time.Duration
+	subtaskMaxTimeout          time.Duration
 	model                      string
 	now                        func() time.Time
 	compactor                  *sessions.Compactor
 	contextWindow              int
 	memoryClassifierModel      string
+	subtasks                   *subtaskCoordinator
 	ltMemLoader                longTermMemoryLoader  // nil = disabled
 	ltMemFlusher               longTermMemoryFlusher // nil = disabled
 }
@@ -136,6 +144,21 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if parallelToolTimeoutDefault <= 0 {
 		parallelToolTimeoutDefault = toolTimeout
 	}
+	subtaskMaxDepth := config.SubtaskMaxDepth
+	if subtaskMaxDepth <= 0 {
+		subtaskMaxDepth = defaultSubtaskMaxDepth
+	}
+	subtaskDefaultTimeout := config.SubtaskDefaultTimeout
+	if subtaskDefaultTimeout <= 0 {
+		subtaskDefaultTimeout = defaultSubtaskTimeout
+	}
+	subtaskMaxTimeout := config.SubtaskMaxTimeout
+	if subtaskMaxTimeout <= 0 {
+		subtaskMaxTimeout = maxSubtaskTimeout
+	}
+	if subtaskDefaultTimeout > subtaskMaxTimeout {
+		subtaskDefaultTimeout = subtaskMaxTimeout
+	}
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
 		sessionStore = sessions.NewInMemoryStore()
@@ -171,6 +194,8 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
+	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
+	subtasks.now = now
 	var ltLoader longTermMemoryLoader
 	var ltFlusher longTermMemoryFlusher
 	if dir := strings.TrimSpace(config.LongMemDir); dir != "" && config.Provider != nil {
@@ -194,11 +219,15 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		parallelMaxWorkers:         parallelMaxWorkers,
 		parallelToolTimeoutDefault: parallelToolTimeoutDefault,
+		subtaskMaxDepth:            subtaskMaxDepth,
+		subtaskDefaultTimeout:      subtaskDefaultTimeout,
+		subtaskMaxTimeout:          subtaskMaxTimeout,
 		model:                      config.Model,
 		now:                        now,
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
+		subtasks:                   subtasks,
 		ltMemLoader:                ltLoader,
 		ltMemFlusher:               ltFlusher,
 	}
@@ -254,6 +283,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		base.Message = errShape.Message
 		return base, nil
 	}
+	ctx = withParentRunID(ctx, runState.RunID)
 	failStartedRun := func(errShape *contracts.ErrorShape) (contracts.AgentResponse, error) {
 		if finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); finishErr != nil {
 			errShape = finishErr
