@@ -915,6 +915,18 @@ func TestTelegramTextFromResponsePreservesMultilineFormatting(t *testing.T) {
 	}
 }
 
+func TestTelegramTextFromResponsePreservesCalendarEventLinks(t *testing.T) {
+	message := "Đã tạo sự kiện Calendar.\n- Tiêu đề: Sprint Review\n- Link sự kiện: https://calendar.google.com/calendar/event?eid=evt_1"
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+	})
+	want := "Đã tạo sự kiện Calendar.\n- Tiêu đề: Sprint Review\n- Link sự kiện: [Mở sự kiện](https://calendar.google.com/calendar/event?eid=evt_1)"
+	if text != want {
+		t.Fatalf("expected calendar link text to be compacted, got %q want %q", text, want)
+	}
+}
+
 func TestTelegramTextFromResponsePrefersFinalMessageOverOutputFallback(t *testing.T) {
 	message := "Dưới đây là các thư mục Google Drive bạn đang có:\n1. **Vclaw** - Link: [Mở thư mục](https://drive.google.com/drive/folders/folder_1)"
 	text := telegramTextFromResponse(contracts.AgentResponse{
@@ -1551,4 +1563,3 @@ func TestTelegramRenderHTMLConvertsTextFieldMarkers(t *testing.T) {
 		t.Fatalf("expected text field to avoid code markup, got %q", rendered)
 	}
 }
-

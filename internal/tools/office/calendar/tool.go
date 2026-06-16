@@ -102,6 +102,7 @@ type EventSummary struct {
 	Start       string         `json:"start"`
 	End         string         `json:"end"`
 	Attendees   []AttendeeInfo `json:"attendees,omitempty"`
+	EventLink   string         `json:"eventLink,omitempty"`
 	MeetLink    string         `json:"meetLink,omitempty"`
 	IsRecurring bool           `json:"isRecurring,omitempty"`
 }
@@ -327,6 +328,7 @@ func toEventSummary(e gcal.Event) EventSummary {
 		Description: e.Description,
 		Location:    e.Location,
 		Attendees:   attendees,
+		EventLink:   e.EventLink,
 		MeetLink:    e.MeetLink,
 		IsRecurring: e.IsRecurring,
 	}
