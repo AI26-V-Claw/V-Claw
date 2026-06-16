@@ -16,6 +16,8 @@ const (
 	defaultKeepTokenRatio           = 0.20
 	defaultContextWindow            = 128_000
 	defaultMaxSummaryTokens         = 2048
+	defaultMaxMergedSummaryBytes    = 8192
+	defaultMessageCountThreshold    = 150
 )
 
 // CompactorConfig holds tunable parameters for the compactor.
@@ -42,6 +44,19 @@ type CompactorConfig struct {
 	// ContextWindow is the LLM context window size in tokens.
 	// Default: 128_000 (safe for gpt-4o / claude-3.5).
 	ContextWindow int
+
+	// MaxMergedSummaryBytes caps the byte length of the merged summary after each
+	// compaction (existing summary + new LLM-generated summary). When the merged
+	// result exceeds this limit, the oldest portion of the existing summary is
+	// trimmed to make room, preserving the new LLM summary intact.
+	// Default: 8192 bytes (~4 compaction cycles × 2048 token output).
+	MaxMergedSummaryBytes int
+
+	// MessageCountThreshold triggers compaction when the transcript reaches at
+	// least this many messages, regardless of token count. This ensures compaction
+	// fires for sessions with many short messages that never exceed the token
+	// threshold. Default: 150. Set to a very large number to disable.
+	MessageCountThreshold int
 }
 
 // CompactorGuard carries runtime callbacks that the compactor checks before
@@ -124,6 +139,12 @@ func NewCompactor(provider providers.Provider, config CompactorConfig, logger *s
 	if config.ContextWindow <= 0 {
 		config.ContextWindow = defaultContextWindow
 	}
+	if config.MaxMergedSummaryBytes <= 0 {
+		config.MaxMergedSummaryBytes = defaultMaxMergedSummaryBytes
+	}
+	if config.MessageCountThreshold <= 0 {
+		config.MessageCountThreshold = defaultMessageCountThreshold
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -161,10 +182,15 @@ func (c *Compactor) MaybeCompact(
 		return CompactionResult{SkipReason: "pending_clarification"}, nil
 	}
 
-	// --- Check token threshold ---
+	// --- Check token threshold OR message count threshold ---
+	// Token threshold protects the LLM context window from overflow.
+	// Message count threshold ensures compaction fires for sessions with many
+	// short messages that never push the token estimate past 80% of 128k.
 	threshold := int(float64(c.config.ContextWindow) * c.config.ThresholdRatio)
 	estimated := EstimateMessagesTokens(transcript)
-	if estimated < threshold {
+	tokenExceeds := estimated >= threshold
+	countExceeds := c.config.MessageCountThreshold > 0 && len(transcript) >= c.config.MessageCountThreshold
+	if !tokenExceeds && !countExceeds {
 		return CompactionResult{SkipReason: "below_threshold"}, nil
 	}
 
@@ -205,9 +231,29 @@ func (c *Compactor) MaybeCompact(
 		return CompactionResult{SkipReason: "empty_summary"}, nil
 	}
 
-	// Merge with existing summary (cumulative — new summary appends, not replaces)
+	// Merge with existing summary, capped to MaxMergedSummaryBytes.
+	// Plain append causes unbounded growth after many compaction cycles; trimming
+	// the oldest prefix keeps the total size stable while preserving the newest
+	// (most authoritative) LLM-generated content intact.
 	if existing := strings.TrimSpace(memory.Summary); existing != "" {
-		newSummary = existing + "\n\n" + newSummary
+		candidate := existing + "\n\n" + newSummary
+		if len(candidate) <= c.config.MaxMergedSummaryBytes {
+			newSummary = candidate
+		} else {
+			budget := c.config.MaxMergedSummaryBytes - len(newSummary) - 2 // 2 for "\n\n"
+			if budget > 0 {
+				tail := existing
+				if len(tail) > budget {
+					tail = tail[len(tail)-budget:]
+					// Snap forward to the next newline to avoid a mid-sentence cut.
+					if nl := strings.IndexByte(tail, '\n'); nl >= 0 && nl < budget/4 {
+						tail = tail[nl+1:]
+					}
+				}
+				newSummary = tail + "\n\n" + newSummary
+			}
+			// else: newSummary alone already fills the budget; keep only new summary.
+		}
 	}
 
 	stats := CompactionStats{
@@ -218,8 +264,13 @@ func (c *Compactor) MaybeCompact(
 		KeptMessageCount:   len(kept),
 	}
 
+	triggerReason := "token"
+	if !tokenExceeds {
+		triggerReason = "message_count"
+	}
 	c.logger.Info("session compacted",
 		"session_id", sessionID,
+		"trigger", triggerReason,
 		"strategy", strategy,
 		"original_messages", len(transcript),
 		"summarized_messages", stats.SummarizedMessages,

@@ -84,3 +84,48 @@ func TestRuntimeCompactionDoesNotOverwriteNewTranscriptMessages(t *testing.T) {
 		t.Fatalf("summary should not persist when compare-and-set fails: %#v", memory)
 	}
 }
+
+func TestRefreshSessionSummaryDoesNotOverwriteLLMSummary(t *testing.T) {
+	ctx := context.Background()
+	store := sessions.NewInMemoryStore()
+	sessionID := "sess_summary_overwrite"
+
+	// Build a transcript long enough for buildExtractiveSessionSummary to produce output
+	// (needs more than 12 messages — the recentWindow default).
+	for i := 0; i < 16; i++ {
+		_ = store.AppendMessage(ctx, sessionID, providers.Message{
+			Role:    providers.MessageRoleUser,
+			Content: "user message with enough words for extractive summary to include it",
+		})
+		_ = store.AppendMessage(ctx, sessionID, providers.Message{
+			Role:    providers.MessageRoleAssistant,
+			Content: "assistant reply with enough words for extractive summary to include it",
+		})
+	}
+
+	// Simulate a compactor-written LLM summary already present in memory.
+	const llmSummary = "LLM-generated summary: user discussed the project timeline in detail"
+	_ = store.SaveMemory(ctx, sessionID, sessions.SessionMemory{Summary: llmSummary})
+
+	transcript, err := store.LoadTranscript(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     &blockingCompactionProvider{started: make(chan struct{}), release: make(chan struct{})},
+		SessionStore: store,
+	})
+
+	if errShape := runtime.refreshSessionSummary(ctx, sessionID, transcript); errShape != nil {
+		t.Fatalf("refreshSessionSummary: %v", errShape)
+	}
+
+	memory, err := store.LoadMemory(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("LoadMemory: %v", err)
+	}
+	if memory.Summary != llmSummary {
+		t.Fatalf("LLM summary was overwritten by heuristic\ngot:  %q\nwant: %q", memory.Summary, llmSummary)
+	}
+}
