@@ -11,6 +11,7 @@ import (
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/governance"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
@@ -48,6 +49,11 @@ type RuntimeConfig struct {
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
 	MemoryClassifierModel      string
+	// SoulPrompt is the optional SOUL.md content loaded at startup. It is
+	// hashed together with runtimeSystemPrompt() to produce the prompt
+	// version. If empty, only runtimeSystemPrompt() contributes — useful for
+	// tests that don't want to load the file.
+	SoulPrompt string
 }
 
 type Runtime struct {
@@ -72,6 +78,10 @@ type Runtime struct {
 	compactor                  *sessions.Compactor
 	contextWindow              int
 	memoryClassifierModel      string
+	// promptVersion is the content-hash fingerprint of the effective system
+	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
+	// is constructed and stamped onto every record this Runtime produces.
+	promptVersion string
 }
 
 type pendingApproval struct {
@@ -148,6 +158,11 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
+	// Compute the prompt version once at construction. We pass a zero time so
+	// the dynamic "current time" segment of runtimeSystemPrompt doesn't shift
+	// the hash on every Runtime creation. SOUL.md is hashed alongside so any
+	// edit there bumps the version automatically.
+	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
 	return &Runtime{
 		provider:                   config.Provider,
 		registry:                   config.Registry,
@@ -169,6 +184,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
+		promptVersion:              promptVersion,
 	}
 }
 
@@ -518,7 +534,8 @@ If required information is missing, ask one concise clarification question inste
 					"duration", outcome.duration,
 					"content_preview", logPreview(result.ContentForLLM, 260),
 				)
-				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, r.policy.DecideToolCall(call.ID, batch[i].definition, true, r.now())); errShape != nil {
+				decision := r.stampPolicyRef(runState.RunID, call.ID, r.policy.DecideToolCall(call.ID, batch[i].definition, true, r.now()))
+				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, decision); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -534,6 +551,10 @@ If required information is missing, ask one concise clarification question inste
 					ToolCallID: call.ID,
 					Message:    "Tool finished",
 				})
+				// Stamp the policy reference onto the result so the persisted
+				// tool_calls row carries the same provenance as the risk_decisions row.
+				result.PolicyDecisionRef = decision.PolicyDecisionRef
+				batchResults[i].result = result
 				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, call, result, outcome.duration, ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -630,6 +651,7 @@ If required information is missing, ask one concise clarification question inste
 			}
 
 			decision := r.policy.DecideToolCall(providerToolCall.ID, definition, found, r.now())
+			decision.PolicyDecisionRef = governance.PolicyRef(runState.RunID, providerToolCall.ID, decision.CheckedAt)
 			r.logger.Info("agent tool call proposed",
 				"request_id", message.RequestID,
 				"session_id", message.SessionID,
@@ -720,6 +742,9 @@ If required information is missing, ask one concise clarification question inste
 				}
 				startedAt := time.Now()
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
+				// Stamp the policy reference on the result so audit/N4 can
+				// trace the result row back to the risk decision that allowed it.
+				result.PolicyDecisionRef = decision.PolicyDecisionRef
 				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, providerToolCall, result, time.Since(startedAt), ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message

@@ -112,6 +112,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	select {
 	case result := <-resultCh:
 		result = sanitizeToolResult(result, definition)
+		result = stampToolResultSource(result, definition)
 		stage := ProgressStageToolCompleted
 		if !result.Success {
 			stage = ProgressStageToolFailed
@@ -137,7 +138,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 			ToolCallID: toolCall.ID,
 			Message:    toolCtx.Err().Error(),
 		})
-		return tools.ToolResult{
+		return stampToolResultSource(tools.ToolResult{
 			ToolCallID:     toolCall.ID,
 			ToolName:       toolCall.Name,
 			Success:        false,
@@ -147,7 +148,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 				Code:    tools.ErrorTimeout,
 				Message: toolCtx.Err().Error(),
 			},
-		}
+		}, definition)
 	}
 }
 

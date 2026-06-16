@@ -601,6 +601,9 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 
 	startedAt := time.Now()
 	result := r.executeAllowedTool(ctx, pending.toolCall, pending.definition)
+	// Carry the policy reference recorded on the action so the persisted
+	// tool_calls row matches the risk_decisions row and N4 can join on it.
+	result.PolicyDecisionRef = record.PolicyDecisionRef
 	if errShape := r.recordRuntimeToolCall(ctx, record.RunID, pending.toolCall, result, time.Since(startedAt), record.ApprovalID); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,

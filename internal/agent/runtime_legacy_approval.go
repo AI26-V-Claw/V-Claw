@@ -285,9 +285,15 @@ func contractToolResult(result tools.ToolResult) contracts.ToolResult {
 		Metadata:    cloneMetadataMap(result.Metadata),
 		Truncated:   result.Truncated,
 		Redacted:    result.Redacted,
+		Source:      result.Source,
 	}
 	if result.Error != nil {
 		contractResult.Error = toolErrorShape(result)
+	}
+	if result.PolicyDecisionRef != "" {
+		contractResult.Governance = &contracts.GovernanceMetadata{
+			PolicyDecisionRef: result.PolicyDecisionRef,
+		}
 	}
 	return contractResult
 }

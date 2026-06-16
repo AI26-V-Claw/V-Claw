@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vclaw/internal/contracts"
+	"vclaw/internal/governance"
 	"vclaw/internal/providers"
 	"vclaw/internal/tools"
 )
@@ -160,6 +161,24 @@ func (r *Runtime) executeInternalPolicyCheckedTool(ctx context.Context, toolCall
 
 func sanitizeToolResult(result tools.ToolResult, definition tools.ToolDefinition) tools.ToolResult {
 	return tools.RedactResult(result, definition.RiskLevel)
+}
+
+// stampToolResultSource fills result.Source from the registered tool's Group
+// when the tool layer didn't already provide one. This keeps tool
+// implementations free of governance bookkeeping while still producing a
+// usable Source attribution (e.g. "tool:google_workspace", "tool:sandbox")
+// for audit/N4. Tools may set their own Source — e.g. a wrapper that calls a
+// raw connector — and that value is preserved.
+func stampToolResultSource(result tools.ToolResult, definition tools.ToolDefinition) tools.ToolResult {
+	if strings.TrimSpace(result.Source) != "" {
+		return result
+	}
+	group := strings.TrimSpace(definition.Group)
+	if group == "" {
+		return result
+	}
+	result.Source = governance.SourceToolPrefix + group
+	return result
 }
 
 func convertToolArtifactRef(ref *tools.ToolArtifactRef) *contracts.ArtifactRef {

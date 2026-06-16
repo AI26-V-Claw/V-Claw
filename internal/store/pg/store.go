@@ -56,11 +56,13 @@ func (s *Store) CreateRun(ctx context.Context, state agent.RunState) error {
 		return err
 	}
 	return s.insertAuditEntry(ctx, auditEntry{
-		EventID:   state.RunID + ":agent.run.started",
-		EventType: "agent.run.started",
-		RunID:     state.RunID,
-		RequestID: state.RequestID,
-		SessionID: state.SessionID,
+		EventID:       state.RunID + ":agent.run.started",
+		EventType:     "agent.run.started",
+		RunID:         state.RunID,
+		RequestID:     state.RequestID,
+		SessionID:     state.SessionID,
+		Model:         state.Model,
+		PromptVersion: state.PromptVersion,
 		Details: map[string]any{
 			"status": string(state.Status),
 			"goal":   state.OriginalGoal,
@@ -72,21 +74,28 @@ func (s *Store) CreateRun(ctx context.Context, state agent.RunState) error {
 func (s *Store) GetRun(ctx context.Context, runID string) (agent.RunState, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT run_id, session_id, request_id, original_goal, status, iteration_count,
-		       pending_action_id, pending_clarification_id, created_at, updated_at, completed_at
+		       pending_action_id, pending_clarification_id, created_at, updated_at, completed_at,
+		       COALESCE(model, ''), COALESCE(prompt_version, '')
 		FROM agent_runs
 		WHERE run_id = $1`, runID)
 	return scanRunState(row)
 }
 
 func (s *Store) UpdateRun(ctx context.Context, state agent.RunState) error {
+	// Governance columns are kept in sync on every update so a run that started
+	// before the governance code was wired in still ends up with non-empty
+	// values once the runtime fills them in mid-flight.
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE agent_runs
 		SET session_id = $2, request_id = $3, original_goal = $4, status = $5,
 		    iteration_count = $6, pending_action_id = $7, pending_clarification_id = $8,
-		    updated_at = $9, completed_at = $10
+		    updated_at = $9, completed_at = $10,
+		    model = COALESCE(NULLIF($11, ''), model),
+		    prompt_version = COALESCE(NULLIF($12, ''), prompt_version)
 		WHERE run_id = $1`,
 		state.RunID, state.SessionID, state.RequestID, state.OriginalGoal, string(state.Status),
-		state.IterationCount, state.PendingActionID, state.PendingClarificationID, zeroNow(state.UpdatedAt), state.CompletedAt)
+		state.IterationCount, state.PendingActionID, state.PendingClarificationID, zeroNow(state.UpdatedAt), state.CompletedAt,
+		state.Model, state.PromptVersion)
 	if err != nil {
 		return err
 	}
@@ -102,11 +111,13 @@ func (s *Store) UpdateRun(ctx context.Context, state agent.RunState) error {
 		return nil
 	}
 	return s.insertAuditEntry(ctx, auditEntry{
-		EventID:   state.RunID + ":" + eventType,
-		EventType: eventType,
-		RunID:     state.RunID,
-		RequestID: state.RequestID,
-		SessionID: state.SessionID,
+		EventID:       state.RunID + ":" + eventType,
+		EventType:     eventType,
+		RunID:         state.RunID,
+		RequestID:     state.RequestID,
+		SessionID:     state.SessionID,
+		Model:         state.Model,
+		PromptVersion: state.PromptVersion,
 		Details: map[string]any{
 			"status":                 string(state.Status),
 			"iterationCount":         state.IterationCount,
@@ -159,14 +170,17 @@ func (s *Store) FindOrCreateAction(ctx context.Context, record agent.ActionRecor
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO approval_actions (
 			action_id, run_id, request_id, session_id, tool_call_id, tool_name, args_snapshot,
-			risk_level, status, approval_id, approval_expires_at, idempotency_key, result, created_at, updated_at
+			risk_level, status, approval_id, approval_expires_at, idempotency_key, result, created_at, updated_at,
+			model, prompt_version, tool_schema_version, policy_decision_ref
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, nullif($12, ''), $13::jsonb, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, nullif($12, ''), $13::jsonb, $14, $15,
+		        $16, $17, $18, $19)
 		ON CONFLICT (action_id) DO NOTHING`,
 		record.ActionID, record.RunID, record.RequestID, record.SessionID, record.ToolCallID, record.ToolName,
 		string(actionJSON), string(record.RiskLevel), string(record.Status), record.ApprovalID,
 		record.ApprovalExpiresAt, record.IdempotencyKey, toolResultJSON(record.Result),
-		zeroNow(record.CreatedAt), zeroNow(record.UpdatedAt))
+		zeroNow(record.CreatedAt), zeroNow(record.UpdatedAt),
+		record.Model, record.PromptVersion, record.ToolSchemaVersion, record.PolicyDecisionRef)
 	if err != nil {
 		return agent.ActionRecord{}, false, err
 	}
@@ -182,16 +196,20 @@ func (s *Store) FindOrCreateAction(ctx context.Context, record agent.ActionRecor
 	}
 	if created {
 		if err := s.insertAuditEntry(ctx, auditEntry{
-			EventID:        record.ApprovalID + ":approval.requested",
-			EventType:      "approval.requested",
-			RunID:          record.RunID,
-			RequestID:      record.RequestID,
-			SessionID:      record.SessionID,
-			ToolCallID:     record.ToolCallID,
-			ApprovalID:     record.ApprovalID,
-			ToolName:       record.ToolName,
-			RiskLevel:      string(record.RiskLevel),
-			PolicyDecision: string(contracts.RiskDecisionRequiresApproval),
+			EventID:           record.ApprovalID + ":approval.requested",
+			EventType:         "approval.requested",
+			RunID:             record.RunID,
+			RequestID:         record.RequestID,
+			SessionID:         record.SessionID,
+			ToolCallID:        record.ToolCallID,
+			ApprovalID:        record.ApprovalID,
+			ToolName:           record.ToolName,
+			RiskLevel:          string(record.RiskLevel),
+			PolicyDecision:     string(contracts.RiskDecisionRequiresApproval),
+			Model:              record.Model,
+			PromptVersion:      record.PromptVersion,
+			ToolSchemaVersion:  record.ToolSchemaVersion,
+			PolicyDecisionRef:  record.PolicyDecisionRef,
 			Details: map[string]any{
 				"actionId": record.ActionID,
 				"summary":  record.ApprovalSummary,
@@ -250,17 +268,21 @@ func (s *Store) MarkActionExpired(ctx context.Context, actionID string) (agent.A
 		SET status = 'expired', resolved_at = $2
 		WHERE approval_id = $1 AND status IN ('pending', 'approved')`, record.ApprovalID, now)
 	if err := s.insertAuditEntry(ctx, auditEntry{
-		EventID:    record.ApprovalID + ":approval.expired",
-		EventType:  "approval.expired",
-		RunID:      record.RunID,
-		RequestID:  record.RequestID,
-		SessionID:  record.SessionID,
-		ToolCallID: record.ToolCallID,
-		ApprovalID: record.ApprovalID,
-		ToolName:   record.ToolName,
-		RiskLevel:  string(record.RiskLevel),
-		Details:    map[string]any{"actionId": record.ActionID},
-		Timestamp:  now,
+		EventID:           record.ApprovalID + ":approval.expired",
+		EventType:         "approval.expired",
+		RunID:             record.RunID,
+		RequestID:         record.RequestID,
+		SessionID:         record.SessionID,
+		ToolCallID:        record.ToolCallID,
+		ApprovalID:        record.ApprovalID,
+		ToolName:          record.ToolName,
+		RiskLevel:         string(record.RiskLevel),
+		Model:             record.Model,
+		PromptVersion:     record.PromptVersion,
+		ToolSchemaVersion: record.ToolSchemaVersion,
+		PolicyDecisionRef: record.PolicyDecisionRef,
+		Details:           map[string]any{"actionId": record.ActionID},
+		Timestamp:         now,
 	}); err != nil {
 		return agent.ActionRecord{}, err
 	}
@@ -304,11 +326,13 @@ func (s *Store) RecordToolCall(ctx context.Context, record agent.ToolCallRecord)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO tool_calls (
 			run_id, request_id, session_id, tool_call_id, tool_name, args_snapshot,
-			status, reason, error_message, result, latency_ms, created_at, updated_at, completed_at
+			status, reason, error_message, result, latency_ms, created_at, updated_at, completed_at,
+			model, prompt_version, tool_schema_version, policy_decision_ref, source
 		)
 		VALUES ($1, nullif($2, ''), nullif($3, ''), $4, $5, $6::jsonb, $7::text, nullif($8, ''),
 		        nullif($9, ''), $10::jsonb, $11::bigint, $12::timestamptz, $12::timestamptz,
-		        CASE WHEN $7::text IN ('completed', 'failed') THEN $12::timestamptz ELSE NULL::timestamptz END)
+		        CASE WHEN $7::text IN ('completed', 'failed') THEN $12::timestamptz ELSE NULL::timestamptz END,
+		        $13, $14, $15, $16, $17)
 		ON CONFLICT (tool_call_id) DO UPDATE
 		SET run_id = EXCLUDED.run_id,
 		    request_id = COALESCE(EXCLUDED.request_id, tool_calls.request_id),
@@ -321,10 +345,16 @@ func (s *Store) RecordToolCall(ctx context.Context, record agent.ToolCallRecord)
 		    result = COALESCE(EXCLUDED.result, tool_calls.result),
 		    latency_ms = COALESCE(EXCLUDED.latency_ms, tool_calls.latency_ms),
 		    updated_at = EXCLUDED.updated_at,
-		    completed_at = COALESCE(EXCLUDED.completed_at, tool_calls.completed_at)`,
+		    completed_at = COALESCE(EXCLUDED.completed_at, tool_calls.completed_at),
+		    model = COALESCE(NULLIF(EXCLUDED.model, ''), tool_calls.model),
+		    prompt_version = COALESCE(NULLIF(EXCLUDED.prompt_version, ''), tool_calls.prompt_version),
+		    tool_schema_version = COALESCE(NULLIF(EXCLUDED.tool_schema_version, ''), tool_calls.tool_schema_version),
+		    policy_decision_ref = COALESCE(NULLIF(EXCLUDED.policy_decision_ref, ''), tool_calls.policy_decision_ref),
+		    source = COALESCE(NULLIF(EXCLUDED.source, ''), tool_calls.source)`,
 		record.RunID, record.RequestID, record.SessionID, record.ToolCallID, record.ToolName,
 		string(args), string(record.Status), record.Reason, record.ErrorMessage, resultJSON,
-		nullInt64(record.LatencyMS), now)
+		nullInt64(record.LatencyMS), now,
+		record.Model, record.PromptVersion, record.ToolSchemaVersion, record.PolicyDecisionRef, record.Source)
 	if err != nil {
 		return err
 	}
@@ -337,14 +367,19 @@ func (s *Store) RecordToolCall(ctx context.Context, record agent.ToolCallRecord)
 		eventType = "safety.action.blocked"
 	}
 	if err := s.insertAuditEntry(ctx, auditEntry{
-		EventID:    record.ToolCallID + ":" + eventType,
-		EventType:  eventType,
-		RunID:      record.RunID,
-		RequestID:  record.RequestID,
-		SessionID:  record.SessionID,
-		ToolCallID: record.ToolCallID,
-		ApprovalID: record.ApprovalID,
-		ToolName:   record.ToolName,
+		EventID:           record.ToolCallID + ":" + eventType,
+		EventType:         eventType,
+		RunID:             record.RunID,
+		RequestID:         record.RequestID,
+		SessionID:         record.SessionID,
+		ToolCallID:        record.ToolCallID,
+		ApprovalID:        record.ApprovalID,
+		ToolName:          record.ToolName,
+		Model:             record.Model,
+		PromptVersion:     record.PromptVersion,
+		ToolSchemaVersion: record.ToolSchemaVersion,
+		PolicyDecisionRef: record.PolicyDecisionRef,
+		Source:            record.Source,
 		Details: map[string]any{
 			"status":       string(record.Status),
 			"reason":       record.Reason,
@@ -370,26 +405,27 @@ func (s *Store) RecordRiskDecision(ctx context.Context, record agent.RiskDecisio
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO risk_decisions (
 			run_id, request_id, session_id, tool_call_id, tool_name, risk_level,
-			decision, requires_approval, reason, policy_reasons, checked_at
+			decision, requires_approval, reason, policy_reasons, checked_at, policy_decision_ref
 		)
-		VALUES (nullif($1, ''), nullif($2, ''), nullif($3, ''), $4, $5, $6, $7, $8, nullif($9, ''), $10::jsonb, $11)`,
+		VALUES (nullif($1, ''), nullif($2, ''), nullif($3, ''), $4, $5, $6, $7, $8, nullif($9, ''), $10::jsonb, $11, $12)`,
 		record.RunID, record.RequestID, record.SessionID, record.ToolCallID, record.ToolName,
 		string(record.RiskLevel), string(record.Decision), record.RequiresApproval, record.Reason,
-		string(reasons), zeroNow(record.CheckedAt))
+		string(reasons), zeroNow(record.CheckedAt), record.PolicyDecisionRef)
 	if err != nil {
 		return err
 	}
 	return s.insertAuditEntry(ctx, auditEntry{
-		EventID:        record.ToolCallID + ":safety.risk.checked",
-		EventType:      "safety.risk.checked",
-		RunID:          record.RunID,
-		RequestID:      record.RequestID,
-		SessionID:      record.SessionID,
-		ToolCallID:     record.ToolCallID,
-		ToolName:       record.ToolName,
-		RiskLevel:      string(record.RiskLevel),
-		PolicyDecision: string(record.Decision),
-		PolicyReasons:  record.PolicyReasons,
+		EventID:           record.ToolCallID + ":safety.risk.checked",
+		EventType:         "safety.risk.checked",
+		RunID:             record.RunID,
+		RequestID:         record.RequestID,
+		SessionID:         record.SessionID,
+		ToolCallID:        record.ToolCallID,
+		ToolName:          record.ToolName,
+		RiskLevel:         string(record.RiskLevel),
+		PolicyDecision:    string(record.Decision),
+		PolicyDecisionRef: record.PolicyDecisionRef,
+		PolicyReasons:     record.PolicyReasons,
 		Details: map[string]any{
 			"requiresApproval": record.RequiresApproval,
 			"reason":           record.Reason,
@@ -456,17 +492,20 @@ func (s *Store) Log(event audit.AuditEvent) error {
 			event_id, event_type, timestamp, request_id, session_id, tool_call_id,
 			approval_id, execution_id, channel, actor_ref, tool_name, action_type,
 			risk_level, policy_decision, policy_reasons, affected_resources, details,
-			output_summary, error_message
+			output_summary, error_message,
+			model, prompt_version, tool_schema_version, policy_decision_ref, source
 		)
 		VALUES (nullif($1, ''), nullif($2, ''), $3, nullif($4, ''), nullif($5, ''), nullif($6, ''),
 		        nullif($7, ''), nullif($8, ''), nullif($9, ''), nullif($10, ''), nullif($11, ''),
 		        nullif($12, ''), nullif($13, ''), nullif($14, ''), $15::jsonb, $16::jsonb,
-		        $17::jsonb, nullif($18, ''), nullif($19, ''))
+		        $17::jsonb, nullif($18, ''), nullif($19, ''),
+		        $20, $21, $22, $23, $24)
 		ON CONFLICT (event_id) WHERE event_id IS NOT NULL AND event_id <> '' DO NOTHING`,
 		event.EventID, string(event.EventType), zeroNow(event.Timestamp), event.RequestID, event.SessionID,
 		"", event.HITLApprovalID, event.JobID, channelFromSessionID(event.SessionID), event.UserID, event.Tool, string(event.ActionType),
 		event.RiskLevel, event.PolicyDecision, string(reasons), string(resources), string(details),
-		event.OutputSummary, event.ErrorMessage)
+		event.OutputSummary, event.ErrorMessage,
+		event.Model, event.PromptVersion, event.ToolSchemaVersion, event.PolicyDecisionRef, event.Source)
 	return err
 }
 
@@ -530,7 +569,10 @@ func (s *Store) ListToolCallsByRun(ctx context.Context, runID string) ([]agent.T
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT tool_call_id, run_id, COALESCE(request_id, ''), COALESCE(session_id, ''), tool_name,
 		       args_snapshot, status, COALESCE(reason, ''), COALESCE(error_message, ''), result,
-		       COALESCE(latency_ms, 0), created_at
+		       COALESCE(latency_ms, 0), created_at,
+		       COALESCE(model, ''), COALESCE(prompt_version, ''),
+		       COALESCE(tool_schema_version, ''), COALESCE(policy_decision_ref, ''),
+		       COALESCE(source, '')
 		FROM tool_calls
 		WHERE run_id = $1
 		ORDER BY created_at, id`, runID)
@@ -553,9 +595,10 @@ func (s *Store) upsertRun(ctx context.Context, state agent.RunState) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_runs (
 			run_id, request_id, session_id, input_text, original_goal, status,
-			iteration_count, pending_action_id, pending_clarification_id, created_at, updated_at, completed_at
+			iteration_count, pending_action_id, pending_clarification_id, created_at, updated_at, completed_at,
+			model, prompt_version
 		)
-		VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (run_id) DO UPDATE
 		SET request_id = EXCLUDED.request_id,
 		    session_id = EXCLUDED.session_id,
@@ -565,10 +608,13 @@ func (s *Store) upsertRun(ctx context.Context, state agent.RunState) error {
 		    pending_action_id = EXCLUDED.pending_action_id,
 		    pending_clarification_id = EXCLUDED.pending_clarification_id,
 		    updated_at = EXCLUDED.updated_at,
-		    completed_at = EXCLUDED.completed_at`,
+		    completed_at = EXCLUDED.completed_at,
+		    model = COALESCE(NULLIF(EXCLUDED.model, ''), agent_runs.model),
+		    prompt_version = COALESCE(NULLIF(EXCLUDED.prompt_version, ''), agent_runs.prompt_version)`,
 		state.RunID, state.RequestID, state.SessionID, state.OriginalGoal, string(state.Status),
 		state.IterationCount, state.PendingActionID, state.PendingClarificationID,
-		zeroNow(state.CreatedAt), zeroNow(state.UpdatedAt), state.CompletedAt)
+		zeroNow(state.CreatedAt), zeroNow(state.UpdatedAt), state.CompletedAt,
+		state.Model, state.PromptVersion)
 	return err
 }
 
@@ -632,15 +678,20 @@ func (s *Store) markActionDecision(ctx context.Context, actionID string, decisio
 		eventType = "approval.rejected"
 	}
 	if err := s.insertAuditEntry(ctx, auditEntry{
-		EventID:    record.ApprovalID + ":" + eventType,
-		EventType:  eventType,
-		RunID:      record.RunID,
-		RequestID:  coalesce(decision.RequestID, record.RequestID),
-		SessionID:  coalesce(decision.SessionID, record.SessionID),
-		ToolCallID: record.ToolCallID,
-		ApprovalID: record.ApprovalID,
-		ToolName:   record.ToolName,
-		RiskLevel:  string(record.RiskLevel),
+		EventID:           record.ApprovalID + ":" + eventType,
+		EventType:         eventType,
+		RunID:             record.RunID,
+		RequestID:         coalesce(decision.RequestID, record.RequestID),
+		SessionID:         coalesce(decision.SessionID, record.SessionID),
+		ToolCallID:        record.ToolCallID,
+		ApprovalID:        record.ApprovalID,
+		ToolName:          record.ToolName,
+		RiskLevel:         string(record.RiskLevel),
+		Model:             record.Model,
+		PromptVersion:     record.PromptVersion,
+		ToolSchemaVersion: record.ToolSchemaVersion,
+		PolicyDecisionRef: record.PolicyDecisionRef,
+		Channel:           decision.Channel,
 		Details: map[string]any{
 			"actionId":  record.ActionID,
 			"decision":  string(decision.Decision),
@@ -714,7 +765,8 @@ func scanRunState(scanner interface{ Scan(dest ...any) error }) (agent.RunState,
 	var completedAt sql.NullTime
 	err := scanner.Scan(&state.RunID, &state.SessionID, &state.RequestID, &state.OriginalGoal,
 		&status, &state.IterationCount, &state.PendingActionID, &state.PendingClarificationID,
-		&state.CreatedAt, &state.UpdatedAt, &completedAt)
+		&state.CreatedAt, &state.UpdatedAt, &completedAt,
+		&state.Model, &state.PromptVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return agent.RunState{}, agent.ErrRuntimeStateNotFound
 	}
@@ -732,7 +784,9 @@ func actionSelectSQL() string {
 	return `
 		SELECT action_id, run_id, request_id, session_id, tool_call_id, tool_name, args_snapshot,
 		       risk_level, status, approval_id, approval_expires_at, COALESCE(idempotency_key, ''),
-		       result, created_at, updated_at
+		       result, created_at, updated_at,
+		       COALESCE(model, ''), COALESCE(prompt_version, ''),
+		       COALESCE(tool_schema_version, ''), COALESCE(policy_decision_ref, '')
 		FROM approval_actions`
 }
 
@@ -742,7 +796,8 @@ func scanAction(scanner interface{ Scan(dest ...any) error }) (agent.ActionRecor
 	var riskLevel, status string
 	err := scanner.Scan(&record.ActionID, &record.RunID, &record.RequestID, &record.SessionID,
 		&record.ToolCallID, &record.ToolName, &argsRaw, &riskLevel, &status, &record.ApprovalID,
-		&record.ApprovalExpiresAt, &record.IdempotencyKey, &resultRaw, &record.CreatedAt, &record.UpdatedAt)
+		&record.ApprovalExpiresAt, &record.IdempotencyKey, &resultRaw, &record.CreatedAt, &record.UpdatedAt,
+		&record.Model, &record.PromptVersion, &record.ToolSchemaVersion, &record.PolicyDecisionRef)
 	if errors.Is(err, sql.ErrNoRows) {
 		return agent.ActionRecord{}, agent.ErrRuntimeStateNotFound
 	}
@@ -769,7 +824,9 @@ func scanToolCallRecord(scanner interface{ Scan(dest ...any) error }) (agent.Too
 	var status string
 	if err := scanner.Scan(&record.ToolCallID, &record.RunID, &record.RequestID, &record.SessionID,
 		&record.ToolName, &argsRaw, &status, &record.Reason, &record.ErrorMessage, &resultRaw,
-		&record.LatencyMS, &record.CreatedAt); err != nil {
+		&record.LatencyMS, &record.CreatedAt,
+		&record.Model, &record.PromptVersion, &record.ToolSchemaVersion, &record.PolicyDecisionRef,
+		&record.Source); err != nil {
 		return agent.ToolCallRecord{}, err
 	}
 	record.Status = agent.ToolCallStatus(status)
@@ -850,9 +907,10 @@ func upsertApprovalRequestTx(ctx context.Context, tx *sql.Tx, record agent.Actio
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO approval_requests (
 			approval_id, action_id, run_id, request_id, session_id, tool_call_id,
-			status, risk_level, summary, details, tool_call, created_at, expires_at
+			status, risk_level, summary, details, tool_call, created_at, expires_at,
+			model, prompt_version
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, nullif($10, ''), $11::jsonb, $12, $13)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, nullif($10, ''), $11::jsonb, $12, $13, $14, $15)
 		ON CONFLICT (approval_id) DO UPDATE
 		SET action_id = EXCLUDED.action_id,
 		    run_id = EXCLUDED.run_id,
@@ -861,10 +919,13 @@ func upsertApprovalRequestTx(ctx context.Context, tx *sql.Tx, record agent.Actio
 		    summary = EXCLUDED.summary,
 		    details = EXCLUDED.details,
 		    tool_call = EXCLUDED.tool_call,
-		    expires_at = EXCLUDED.expires_at`,
+		    expires_at = EXCLUDED.expires_at,
+		    model = COALESCE(NULLIF(EXCLUDED.model, ''), approval_requests.model),
+		    prompt_version = COALESCE(NULLIF(EXCLUDED.prompt_version, ''), approval_requests.prompt_version)`,
 		record.ApprovalID, record.ActionID, record.RunID, record.RequestID, record.SessionID,
 		record.ToolCallID, string(status), string(record.RiskLevel), record.ApprovalSummary,
-		record.ApprovalDetails, string(toolCallJSON), zeroNow(record.CreatedAt), record.ApprovalExpiresAt)
+		record.ApprovalDetails, string(toolCallJSON), zeroNow(record.CreatedAt), record.ApprovalExpiresAt,
+		record.Model, record.PromptVersion)
 	return err
 }
 
@@ -946,6 +1007,15 @@ type auditEntry struct {
 	OutputSummary  string
 	ErrorMessage   string
 	Timestamp      time.Time
+	// Governance fields — populated by callers when the originating record
+	// (run, tool call, risk decision) carries them. Empty values map to ''
+	// in the database (the column default), so existing audit lines that
+	// don't yet stamp governance still write cleanly.
+	Model             string
+	PromptVersion     string
+	ToolSchemaVersion string
+	PolicyDecisionRef string
+	Source            string
 }
 
 func (s *Store) insertAuditEntry(ctx context.Context, entry auditEntry) error {
@@ -969,17 +1039,20 @@ func (s *Store) insertAuditEntry(ctx context.Context, entry auditEntry) error {
 			event_id, event_type, run_id, request_id, session_id, tool_call_id,
 			approval_id, execution_id, channel, actor_ref, tool_name, action_type,
 			risk_level, policy_decision, policy_reasons, affected_resources, details,
-			output_summary, error_message, timestamp
+			output_summary, error_message, timestamp,
+			model, prompt_version, tool_schema_version, policy_decision_ref, source
 		)
 		VALUES (nullif($1, ''), nullif($2, ''), nullif($3, ''), nullif($4, ''), nullif($5, ''),
 		        nullif($6, ''), nullif($7, ''), nullif($8, ''), nullif($9, ''), nullif($10, ''),
 		        nullif($11, ''), nullif($12, ''), nullif($13, ''), nullif($14, ''), $15::jsonb,
-		        $16::jsonb, $17::jsonb, nullif($18, ''), nullif($19, ''), $20)
+		        $16::jsonb, $17::jsonb, nullif($18, ''), nullif($19, ''), $20,
+		        $21, $22, $23, $24, $25)
 		ON CONFLICT (event_id) WHERE event_id IS NOT NULL AND event_id <> '' DO NOTHING`,
 		entry.EventID, entry.EventType, entry.RunID, entry.RequestID, entry.SessionID, entry.ToolCallID,
 		entry.ApprovalID, entry.ExecutionID, entry.Channel, entry.ActorRef, entry.ToolName, entry.ActionType,
 		entry.RiskLevel, entry.PolicyDecision, string(policyReasons), string(resources), string(details),
-		entry.OutputSummary, entry.ErrorMessage, zeroNow(entry.Timestamp))
+		entry.OutputSummary, entry.ErrorMessage, zeroNow(entry.Timestamp),
+		entry.Model, entry.PromptVersion, entry.ToolSchemaVersion, entry.PolicyDecisionRef, entry.Source)
 	return err
 }
 
