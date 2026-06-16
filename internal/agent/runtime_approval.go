@@ -283,12 +283,18 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 	now := r.now()
 	input := cloneArguments(toolCall.Arguments)
 	input = enrichApprovalInput(toolCall.Name, input, transcript)
+	// Stamp the full governance bundle on the contract ToolCall before it
+	// leaves Agent Core (see docs/03-contracts.md §3.11). The same bundle is
+	// also attached to the ApprovalRequest so approval records are
+	// self-contained for audit/N4 without a join back to tool_calls.
+	governanceMeta := r.buildGovernanceMetadata(toolCall.Name, decision.PolicyDecisionRef)
 	contractCall := contracts.ToolCall{
 		ToolCallID: toolCall.ID,
 		RequestID:  message.RequestID,
 		SessionID:  message.SessionID,
 		ToolName:   toolCall.Name,
 		Input:      input,
+		Governance: governanceMeta,
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
 	if toolCall.Name == "chat.sendMessage" {
@@ -317,6 +323,7 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		ToolCall:         contractCall,
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(approvalTTL),
+		Governance:       governanceMeta,
 	}
 }
 
@@ -526,6 +533,11 @@ func (r *Runtime) pendingApprovalFromState(ctx context.Context, sessionID string
 	if runState, err := r.stateStore.GetRun(ctx, record.RunID); err == nil && strings.TrimSpace(runState.OriginalGoal) != "" {
 		message.Text = runState.OriginalGoal
 	}
+	// Rebuild the governance bundle from the persisted action record so the
+	// restored ApprovalRequest carries the same provenance the run had at
+	// approval time, even if the live runtime has been reconstructed with a
+	// different model/prompt/registry since then.
+	governanceMeta := GovernanceFromActionRecord(record)
 	request := contracts.ApprovalRequest{
 		ApprovalID: record.ApprovalID,
 		RequestID:  record.RequestID,
@@ -540,9 +552,11 @@ func (r *Runtime) pendingApprovalFromState(ctx context.Context, sessionID string
 			SessionID:  record.SessionID,
 			ToolName:   record.ToolName,
 			Input:      cloneArguments(record.ArgsSnapshot),
+			Governance: governanceMeta,
 		},
-		CreatedAt: record.CreatedAt,
-		ExpiresAt: record.ApprovalExpiresAt,
+		CreatedAt:  record.CreatedAt,
+		ExpiresAt:  record.ApprovalExpiresAt,
+		Governance: governanceMeta,
 	}
 	return pendingApproval{
 		runID:      record.RunID,
@@ -664,7 +678,10 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 			Error:     errShape,
 		}, nil
 	}
-	contractResult := contractToolResult(result)
+	// Carry the persisted ActionRecord governance through to the contract
+	// result so the response surfaced after approval keeps the same provenance
+	// as the original ToolCall (docs/03-contracts.md §3.11).
+	contractResult := contractToolResult(result, GovernanceFromActionRecord(record))
 	response := contracts.AgentResponse{
 		RequestID:   pending.message.RequestID,
 		SessionID:   pending.message.SessionID,
@@ -707,7 +724,9 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 
 func (r *Runtime) responseForUnclaimedApprovedAction(record ActionRecord, pending pendingApproval) contracts.AgentResponse {
 	if record.Status == ActionStatusCompleted && record.Result != nil {
-		contractResult := contractToolResult(*record.Result)
+		// Use the persisted ActionRecord's governance bundle so the contract
+		// result mirrors the run's state at the time it was approved.
+		contractResult := contractToolResult(*record.Result, GovernanceFromActionRecord(record))
 		return contracts.AgentResponse{
 			RequestID:   pending.message.RequestID,
 			SessionID:   pending.message.SessionID,

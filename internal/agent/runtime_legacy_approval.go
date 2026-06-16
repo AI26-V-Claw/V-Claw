@@ -15,12 +15,17 @@ import (
 
 func (r *Runtime) legacyApprovalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision) contracts.ApprovalRequest {
 	now := r.now()
+	// Stamp the governance bundle on the contract ToolCall before it leaves
+	// Agent Core (docs/03-contracts.md §3.11). The same bundle is mirrored on
+	// the ApprovalRequest so approval records are self-contained for audit.
+	governanceMeta := r.buildGovernanceMetadata(toolCall.Name, decision.PolicyDecisionRef)
 	contractCall := contracts.ToolCall{
 		ToolCallID: toolCall.ID,
 		RequestID:  message.RequestID,
 		SessionID:  message.SessionID,
 		ToolName:   toolCall.Name,
 		Input:      cloneArguments(toolCall.Arguments),
+		Governance: governanceMeta,
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
 	parentApprovalID := ""
@@ -44,6 +49,7 @@ func (r *Runtime) legacyApprovalRequest(message contracts.UserMessage, toolCall 
 		ToolCall:         contractCall,
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(approvalTTL),
+		Governance:       governanceMeta,
 	}
 	r.logger.Info("approval request created",
 		"request_id", message.RequestID,
@@ -273,7 +279,15 @@ func providerToolCallToToolCall(call providers.ToolCall) tools.ToolCall {
 	}
 }
 
-func contractToolResult(result tools.ToolResult) contracts.ToolResult {
+// contractToolResult converts a tools.ToolResult into the canonical
+// contracts.ToolResult that crosses Agent-Core boundaries (channel, audit,
+// store). The governance argument carries the full provenance bundle the
+// runtime stamped on the originating ToolCall (model, promptVersion,
+// toolSchemaVersion, policyDecisionRef) — pass nil from contexts where the
+// runtime cannot compute it (e.g. unit tests). The result's own
+// PolicyDecisionRef still wins when governance is nil so the tool layer's
+// policy stamp survives. See docs/03-contracts.md §3.11.
+func contractToolResult(result tools.ToolResult, governance *contracts.GovernanceMetadata) contracts.ToolResult {
 	contractResult := contracts.ToolResult{
 		ToolCallID: result.ToolCallID,
 		ToolName:   result.ToolName,
@@ -291,12 +305,31 @@ func contractToolResult(result tools.ToolResult) contracts.ToolResult {
 	if result.Error != nil {
 		contractResult.Error = toolErrorShape(result)
 	}
-	if result.PolicyDecisionRef != "" {
-		contractResult.Governance = &contracts.GovernanceMetadata{
-			PolicyDecisionRef: result.PolicyDecisionRef,
-		}
-	}
+	contractResult.Governance = mergeToolResultGovernance(governance, result.PolicyDecisionRef)
 	return contractResult
+}
+
+// mergeToolResultGovernance combines the runtime-supplied governance bundle
+// with the PolicyDecisionRef the tool layer stamped on the result. The result
+// stamp wins when both are present (the tool layer is the authoritative source
+// for the live policy reference at execution time). Returns nil when every
+// field is empty so JSON output stays compact for un-instrumented paths.
+func mergeToolResultGovernance(base *contracts.GovernanceMetadata, resultPolicyRef string) *contracts.GovernanceMetadata {
+	resultPolicyRef = strings.TrimSpace(resultPolicyRef)
+	if base == nil {
+		if resultPolicyRef == "" {
+			return nil
+		}
+		return &contracts.GovernanceMetadata{PolicyDecisionRef: resultPolicyRef}
+	}
+	merged := *base
+	if resultPolicyRef != "" {
+		merged.PolicyDecisionRef = resultPolicyRef
+	}
+	if merged.Model == "" && merged.PromptVersion == "" && merged.ToolSchemaVersion == "" && merged.PolicyDecisionRef == "" {
+		return nil
+	}
+	return &merged
 }
 
 func toolErrorShape(result tools.ToolResult) *contracts.ErrorShape {
@@ -440,7 +473,7 @@ func (r *Runtime) legacyResolveApproval(ctx context.Context, sessionID string, d
 				Error:     errShape,
 			}, nil
 		}
-		contractResult := contractToolResult(result)
+		contractResult := contractToolResult(result, r.buildGovernanceMetadata(pending.toolCall.Name, result.PolicyDecisionRef))
 		response := contracts.AgentResponse{
 			RequestID:   pending.message.RequestID,
 			SessionID:   pending.message.SessionID,

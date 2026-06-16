@@ -332,3 +332,45 @@ func (r *Runtime) stampPolicyRef(runID string, toolCallID string, decision contr
 	decision.PolicyDecisionRef = governance.PolicyRef(runID, toolCallID, decision.CheckedAt)
 	return decision
 }
+
+// buildGovernanceMetadata returns the full provenance bundle that this runtime
+// stamps onto every contract record (ToolCall, ToolResult, ApprovalRequest)
+// before it crosses an Agent-Core boundary. The bundle pulls Model and
+// PromptVersion from the live runtime, computes ToolSchemaVersion from the
+// registered tool's parameter schema, and carries through the PolicyDecisionRef
+// supplied by the caller (typically the live RiskDecision or the persisted
+// ActionRecord). Returns nil when every field is empty so JSON stays compact
+// for un-instrumented paths (tests, legacy entry points).
+func (r *Runtime) buildGovernanceMetadata(toolName string, policyDecisionRef string) *contracts.GovernanceMetadata {
+	if r == nil {
+		return nil
+	}
+	gm := &contracts.GovernanceMetadata{
+		Model:             strings.TrimSpace(r.model),
+		PromptVersion:     strings.TrimSpace(r.promptVersion),
+		ToolSchemaVersion: r.toolSchemaVersionFor(toolName),
+		PolicyDecisionRef: strings.TrimSpace(policyDecisionRef),
+	}
+	if gm.Model == "" && gm.PromptVersion == "" && gm.ToolSchemaVersion == "" && gm.PolicyDecisionRef == "" {
+		return nil
+	}
+	return gm
+}
+
+// GovernanceFromActionRecord rebuilds the provenance bundle from a persisted
+// ActionRecord. Use this on the restore-from-DB path where the values stored
+// when the run started are authoritative — the live runtime may have been
+// recreated with a different model/prompt/registry since then. Returns nil
+// when every field is empty so JSON stays compact.
+func GovernanceFromActionRecord(record ActionRecord) *contracts.GovernanceMetadata {
+	gm := &contracts.GovernanceMetadata{
+		Model:             strings.TrimSpace(record.Model),
+		PromptVersion:     strings.TrimSpace(record.PromptVersion),
+		ToolSchemaVersion: strings.TrimSpace(record.ToolSchemaVersion),
+		PolicyDecisionRef: strings.TrimSpace(record.PolicyDecisionRef),
+	}
+	if gm.Model == "" && gm.PromptVersion == "" && gm.ToolSchemaVersion == "" && gm.PolicyDecisionRef == "" {
+		return nil
+	}
+	return gm
+}

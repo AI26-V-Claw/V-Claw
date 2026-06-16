@@ -587,7 +587,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				toolResults = append(toolResults, contractToolResult(result))
+				toolResults = append(toolResults, contractToolResult(result, r.buildGovernanceMetadata(call.Name, decision.PolicyDecisionRef)))
 				toolMessage := providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: call.ID,
@@ -777,7 +777,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				contractResult := contractToolResult(result)
+				contractResult := contractToolResult(result, r.buildGovernanceMetadata(providerToolCall.Name, decision.PolicyDecisionRef))
 				toolResults = append(toolResults, contractResult)
 
 				toolMessage := providers.Message{

@@ -72,7 +72,7 @@ func TestContractToolResultPreservesArtifactMetadataAndFlags(t *testing.T) {
 		Redacted:       true,
 	}
 
-	contractResult := contractToolResult(result)
+	contractResult := contractToolResult(result, nil)
 
 	if contractResult.ArtifactRef == nil {
 		t.Fatal("expected ArtifactRef to survive contract conversion")
