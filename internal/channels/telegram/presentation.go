@@ -30,6 +30,7 @@ const (
 )
 
 var telegramSensitiveTextPattern = regexp.MustCompile(`(?i)(authorization:|bearer\s+[a-z0-9._\-]+|xox[baprs]-|xapp-|sk-[a-z0-9]|telegram-token|stack trace|traceback|panic:|provider chat failed|client secret|refresh token|access token|api[_ -]?key)`)
+var telegramCalendarEventURLPattern = regexp.MustCompile(`https?://(?:calendar\.google\.com|(?:www\.)?google\.com/calendar)/\S+`)
 
 type telegramChannelState struct {
 	mu        sync.Mutex
@@ -233,6 +234,7 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	}
 	text = sanitizeTelegramResponseText(text)
 	if text != "" {
+		text = telegramCompactCalendarEventLinksV2(text)
 		return text
 	}
 
@@ -294,6 +296,67 @@ func telegramDownloadAttachmentsResultText(results []contracts.ToolResult) strin
 		return fmt.Sprintf("Đã tải xuống: %s\nThư mục: %s", strings.Join(names, ", "), dir)
 	}
 	return ""
+}
+
+func telegramCompactCalendarEventLinks(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "](") {
+			continue
+		}
+		lines[i] = telegramCalendarEventURLPattern.ReplaceAllStringFunc(line, func(rawURL string) string {
+			return "[Mở sự kiện](" + rawURL + ")"
+		})
+	}
+	return strings.Join(lines, "\n")
+}
+
+func telegramCompactCalendarEventLinksV2(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "](") {
+			continue
+		}
+		lines[i] = telegramCompactCalendarEventLinksInLine(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func telegramCompactCalendarEventLinksInLine(line string) string {
+	matches := telegramCalendarEventURLPattern.FindAllStringIndex(line, -1)
+	if len(matches) == 0 {
+		return line
+	}
+	var builder strings.Builder
+	last := 0
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		start, end := match[0], match[1]
+		rawURL := line[start:end]
+		if !isTelegramCalendarEventURL(rawURL) {
+			continue
+		}
+		builder.WriteString(line[last:start])
+		builder.WriteString("[Mở sự kiện](")
+		builder.WriteString(rawURL)
+		builder.WriteString(")")
+		last = end
+	}
+	if last == 0 {
+		return line
+	}
+	builder.WriteString(line[last:])
+	return builder.String()
+}
+
+func isTelegramCalendarEventURL(rawURL string) bool {
+	lower := strings.ToLower(strings.TrimSpace(rawURL))
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return false
+	}
+	return strings.Contains(lower, "calendar.google.com/") || strings.Contains(lower, "google.com/calendar/")
 }
 
 func telegramDownloadOutputDir() (string, error) {
@@ -993,7 +1056,7 @@ func telegramApprovalTextAction(text string) string {
 		return "approve"
 	case "reject", "/reject":
 		return "reject"
-	case "revise", "/revise", "sửa", "sua", "chỉnh", "chinh", "sÃ¡Â»Â­a", "chÃ¡Â»â€°nh":
+	case "revise", "/revise", "sửa", "sua", "chỉnh", "chinh":
 		return "revise"
 	default:
 		return ""
@@ -1012,7 +1075,7 @@ func looksLikeTelegramApprovalCommand(text string) bool {
 
 	first := strings.ToLower(strings.TrimSpace(strings.Fields(trimmed)[0]))
 	switch first {
-	case "approve", "/approve", "reject", "/reject", "revise", "/revise", "sửa", "sua", "chỉnh", "chinh", "sÃ¡Â»Â­a", "chÃ¡Â»â€°nh":
+	case "approve", "/approve", "reject", "/reject", "revise", "/revise", "sửa", "sua", "chỉnh", "chinh":
 		return true
 	default:
 		return false

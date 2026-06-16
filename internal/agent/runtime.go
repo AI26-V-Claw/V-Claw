@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -15,13 +16,15 @@ import (
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 )
 
 const (
-	DefaultMaxIterations = 8
-	DefaultToolTimeout   = 30 * time.Second
-	approvalTTL          = 10 * time.Minute
+	DefaultMaxIterations       = 8
+	DefaultToolTimeout         = 30 * time.Second
+	approvalTTL                = 10 * time.Minute
+	pendingClarificationTTL    = 30 * time.Minute
 )
 
 var (
@@ -39,6 +42,7 @@ type RuntimeConfig struct {
 	SessionStore               sessions.Store
 	StateStore                 RuntimeStateStore
 	Logger                     *slog.Logger
+	ToolHooks                  toolhooks.Hooks
 	MaxIterations              int
 	ToolTimeout                time.Duration
 	ParallelExecutionEnabled   bool
@@ -65,6 +69,7 @@ type Runtime struct {
 	sessionStore               sessions.Store
 	stateStore                 RuntimeStateStore
 	logger                     *slog.Logger
+	toolHooks                  toolhooks.Hooks
 	approvalMu                 sync.Mutex
 	pendingApprovals           map[string]pendingApproval
 	pendingBySession           map[string]string
@@ -139,6 +144,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	hooks := config.ToolHooks
+	if hooks == nil {
+		hooks = toolhooks.NoopHooks{}
+	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
@@ -172,6 +181,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		sessionStore:               sessionStore,
 		stateStore:                 stateStore,
 		logger:                     logger,
+		toolHooks:                  hooks,
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
 		maxIterations:              maxIterations,
@@ -196,6 +206,7 @@ func memoryClassifierModel(config RuntimeConfig) string {
 }
 
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
+	ctx = toolhooks.WithRequestContext(ctx, message.RequestID, message.SessionID)
 	if r.compactor != nil {
 		sessionID := message.SessionID
 		defer func() { go r.maybeCompactAsync(sessionID) }()
@@ -262,7 +273,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	pendingClarificationResolution := pendingClarificationResolution{}
 	pendingClarificationActive := false
 	pendingMemoryChanged := false
-	if isUsablePendingClarification(pendingClarification) {
+	if isUsablePendingClarification(pendingClarification, r.now()) {
 		pendingClarificationResolution = r.resolvePendingClarification(ctx, *pendingClarification, message.Text, history)
 		if pendingClarificationResolution.IsAnswer {
 			pendingClarificationActive = true
@@ -393,7 +404,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	providerTranscript := transcript
 	providerMemory := sessionMemory
 	providerReference := referenceResolution
-	if isolatedNewWriteRequest || standaloneReadRequest {
+	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
+		// Restore the full continuation instructions (including "do not repeat tool") for the
+		// provider. The stored transcript holds the short "[Tiếp tục...]" placeholder; the
+		// provider needs the full text from buildApprovalContinuationMessage.
+		providerTranscript = transcriptWithLastUserContent(transcript, message.Text)
+	} else if isolatedNewWriteRequest || standaloneReadRequest {
 		providerTranscript = []providers.Message{userMessage}
 		providerMemory = sessions.SessionMemory{}
 		providerReference = nil
@@ -495,6 +511,7 @@ If required information is missing, ask one concise clarification question inste
 
 		evidenceText := providerTranscriptEvidenceText(providerTranscript)
 		if batch, ok := r.prepareParallelBatch(
+			ctx,
 			assistantMessage.ToolCalls,
 			r.parallelExecutionEnabled,
 			message.Text,
@@ -526,6 +543,11 @@ If required information is missing, ask one concise clarification question inste
 				if !result.Success {
 					stage = ProgressStageToolFailed
 				}
+				var execErr error
+				if result.Error != nil && !result.Success {
+					execErr = errors.New(result.Error.Message)
+				}
+				r.runPostToolHook(ctx, call, batch[i].definition, result, execErr, r.now().Add(-outcome.duration))
 				r.logger.Info("parallel tool execution completed",
 					"tool_call_id", call.ID,
 					"tool_name", call.Name,
@@ -650,7 +672,7 @@ If required information is missing, ask one concise clarification question inste
 				definition.Name = providerToolCall.Name
 			}
 
-			decision := r.policy.DecideToolCall(providerToolCall.ID, definition, found, r.now())
+			decision := r.decideToolCall(ctx, providerToolCall, definition, found)
 			decision.PolicyDecisionRef = governance.PolicyRef(runState.RunID, providerToolCall.ID, decision.CheckedAt)
 			r.logger.Info("agent tool call proposed",
 				"request_id", message.RequestID,

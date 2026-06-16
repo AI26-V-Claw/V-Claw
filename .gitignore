@@ -20,6 +20,7 @@ evaluation_results.json
 data/telegram_offset.txt
 data/sessions/
 data/telegram_attachments/
+data/user-policy.json
 data/
 logs/audit.jsonl
 .antigravity/
@@ -52,3 +53,4 @@ scripts/bin/harness-cli.exe
 
 # Personal harnesses
 docs/khang-harness/
+docs/testing-e2e/

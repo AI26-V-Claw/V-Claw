@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
@@ -491,9 +492,19 @@ func legacyPendingClarificationTranscript(pending sessions.PendingClarification)
 	return messages
 }
 
-func legacyIsUsablePendingClarification(pending *sessions.PendingClarification) bool {
-	return pending != nil &&
-		(strings.TrimSpace(pending.OriginalRequest) != "" || strings.TrimSpace(pending.Question) != "")
+func legacyIsUsablePendingClarification(pending *sessions.PendingClarification, now time.Time) bool {
+	if pending == nil {
+		return false
+	}
+	hasContent := strings.TrimSpace(pending.OriginalRequest) != "" ||
+		strings.TrimSpace(pending.Question) != ""
+	if !hasContent {
+		return false
+	}
+	if !pending.CreatedAt.IsZero() && now.Sub(pending.CreatedAt) >= pendingClarificationTTL {
+		return false
+	}
+	return true
 }
 
 func legacyClonePendingClarification(pending *sessions.PendingClarification) *sessions.PendingClarification {

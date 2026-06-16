@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -85,6 +86,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	if !ok {
 		return tools.ToolNotFoundResult(providerToolCallToToolCall(toolCall))
 	}
+	startedAt := r.now()
 	r.logger.Info("tool execution started",
 		"tool_call_id", toolCall.ID,
 		"tool_name", toolCall.Name,
@@ -113,6 +115,11 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	case result := <-resultCh:
 		result = sanitizeToolResult(result, definition)
 		result = stampToolResultSource(result, definition)
+		var execErr error
+		if result.Error != nil && !result.Success {
+			execErr = errors.New(result.Error.Message)
+		}
+		r.runPostToolHook(ctx, toolCall, definition, result, execErr, startedAt)
 		stage := ProgressStageToolCompleted
 		if !result.Success {
 			stage = ProgressStageToolFailed
@@ -132,23 +139,27 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 		})
 		return result
 	case <-toolCtx.Done():
+		result := tools.ToolResult{
+			ToolCallID:     toolCall.ID,
+			ToolName:       toolCall.Name,
+			Success:        false,
+			ContentForLLM:  "Tool execution error for " + toolCall.Name + ": " + toolCtx.Err().Error(),
+			ContentForUser: "Tool execution failed: " + toolCall.Name,
+			Error: &tools.ToolError{
+				Code:    tools.ErrorTimeout,
+				Message: toolCtx.Err().Error(),
+			},
+		}
+		result = sanitizeToolResult(result, definition)
+		result = stampToolResultSource(result, definition)
+		r.runPostToolHook(ctx, toolCall, definition, result, toolCtx.Err(), startedAt)
 		emitProgress(ctx, ProgressEvent{
 			Stage:      ProgressStageToolFailed,
 			ToolName:   toolCall.Name,
 			ToolCallID: toolCall.ID,
 			Message:    toolCtx.Err().Error(),
 		})
-		return stampToolResultSource(tools.ToolResult{
-			ToolCallID:     toolCall.ID,
-			ToolName:       toolCall.Name,
-			Success:        false,
-			ContentForLLM:  "Tool execution error for " + toolCall.Name + ": " + toolCtx.Err().Error(),
-			ContentForUser: "Tool lỗi khi chạy: " + toolCall.Name,
-			Error: &tools.ToolError{
-				Code:    tools.ErrorTimeout,
-				Message: toolCtx.Err().Error(),
-			},
-		}, definition)
+		return result
 	}
 }
 
@@ -425,32 +436,32 @@ func relativeDateRange(now time.Time, userText string) (time.Time, time.Time, bo
 	if now.IsZero() {
 		now = time.Now()
 	}
-	lower := strings.ToLower(strings.TrimSpace(userText))
-	if lower == "" {
+	text := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if text == "" {
 		return time.Time{}, time.Time{}, false
 	}
 
 	switch {
-	case containsAnyText(lower, "tuần sau", "tuan sau", "next week"):
+	case containsAnyText(text, "tuan sau", "next week"):
 		start := startOfWeekMonday(now).AddDate(0, 0, 7)
 		return start, start.AddDate(0, 0, 7), true
-	case containsAnyText(lower, "tuần này", "tuan nay", "this week", "trong tuần", "trong tuan"):
+	case containsAnyText(text, "tuan nay", "this week", "trong tuan"):
 		start := startOfWeekMonday(now)
 		return start, start.AddDate(0, 0, 7), true
-	case containsAnyText(lower, "tháng tới", "thang toi", "tháng sau", "thang sau", "next month"):
+	case containsAnyText(text, "thang toi", "thang sau", "next month"):
 		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		start := thisMonth.AddDate(0, 1, 0)
 		return start, start.AddDate(0, 1, 0), true
-	case containsAnyText(lower, "tháng này", "thang nay", "this month"):
+	case containsAnyText(text, "thang nay", "this month"):
 		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		return start, start.AddDate(0, 1, 0), true
-	case containsAnyText(lower, "ngày mai", "ngay mai", "tomorrow"):
+	case containsAnyText(text, "ngay mai", "tomorrow"):
 		start := startOfDay(now).AddDate(0, 0, 1)
 		return start, start.AddDate(0, 0, 1), true
-	case containsAnyText(lower, "hôm qua", "hom qua", "yesterday"):
+	case containsAnyText(text, "hom qua", "yesterday"):
 		start := startOfDay(now).AddDate(0, 0, -1)
 		return start, start.AddDate(0, 0, 1), true
-	case containsAnyText(lower, "hôm nay", "hom nay", "today"):
+	case containsAnyText(text, "hom nay", "today"):
 		start := startOfDay(now)
 		return start, start.AddDate(0, 0, 1), true
 	default:
@@ -462,34 +473,34 @@ func normalizeCalendarListEventsArgsLegacy(now time.Time, args map[string]any, u
 	if now.IsZero() {
 		now = time.Now()
 	}
-	lower := strings.ToLower(strings.TrimSpace(userText))
-	if lower == "" {
+	text := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if text == "" {
 		return nil
 	}
 
 	var start, end time.Time
 	switch {
-	case containsAnyText(lower, "tuần sau", "tuan sau", "next week"):
+	case containsAnyText(text, "tuan sau", "next week"):
 		thisWeek := startOfWeekMonday(now)
 		start = thisWeek.AddDate(0, 0, 7)
 		end = start.AddDate(0, 0, 7)
-	case containsAnyText(lower, "tuần này", "tuan nay", "this week", "trong tuần", "trong tuan"):
+	case containsAnyText(text, "tuan nay", "this week", "trong tuan"):
 		start = startOfWeekMonday(now)
 		end = start.AddDate(0, 0, 7)
-	case containsAnyText(lower, "tháng tới", "thang toi", "tháng sau", "thang sau", "next month"):
+	case containsAnyText(text, "thang toi", "thang sau", "next month"):
 		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		start = thisMonth.AddDate(0, 1, 0)
 		end = start.AddDate(0, 1, 0)
-	case containsAnyText(lower, "tháng này", "thang nay", "this month"):
+	case containsAnyText(text, "thang nay", "this month"):
 		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		end = start.AddDate(0, 1, 0)
-	case containsAnyText(lower, "ngày mai", "ngay mai", "tomorrow"):
+	case containsAnyText(text, "ngay mai", "tomorrow"):
 		start = startOfDay(now).AddDate(0, 0, 1)
 		end = start.AddDate(0, 0, 1)
-	case containsAnyText(lower, "hôm qua", "hom qua", "yesterday"):
+	case containsAnyText(text, "hom qua", "yesterday"):
 		start = startOfDay(now).AddDate(0, 0, -1)
 		end = start.AddDate(0, 0, 1)
-	case containsAnyText(lower, "hôm nay", "hom nay", "today"):
+	case containsAnyText(text, "hom nay", "today"):
 		start = startOfDay(now)
 		end = start.AddDate(0, 0, 1)
 	default:
@@ -513,13 +524,13 @@ func normalizeRelativeCalendarQuery(query string, userText string) string {
 	if trimmed == "" {
 		return ""
 	}
-	lowerQuery := strings.ToLower(trimmed)
-	lowerText := strings.ToLower(strings.TrimSpace(userText))
-	if lowerQuery == lowerText {
+	queryText := foldVietnameseSearchText(strings.ToLower(trimmed))
+	userText = foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if queryText == userText {
 		return ""
 	}
-	if containsAnyText(lowerQuery, "tuần này", "tuan nay", "tuần sau", "tuan sau", "tháng này", "thang nay", "tháng tới", "thang toi", "hôm nay", "hom nay", "today", "this week", "next week", "this month", "next month") &&
-		containsAnyText(lowerQuery, "lịch", "lich", "calendar", "sự kiện", "su kien", "event") {
+	if containsAnyText(queryText, relativeQueryTerms()...) &&
+		containsAnyText(queryText, calendarQueryPurposeTerms()...) {
 		return ""
 	}
 	return trimmed
@@ -530,13 +541,13 @@ func normalizeRelativeGmailQuery(query string, userText string) string {
 	if trimmed == "" {
 		return ""
 	}
-	lowerQuery := strings.ToLower(trimmed)
-	lowerText := strings.ToLower(strings.TrimSpace(userText))
-	if lowerQuery == lowerText {
+	queryText := foldVietnameseSearchText(strings.ToLower(trimmed))
+	userText = foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if queryText == userText {
 		return ""
 	}
-	if containsAnyText(lowerQuery, "tuần này", "tuan nay", "tuần sau", "tuan sau", "tháng này", "thang nay", "tháng tới", "thang toi", "hôm nay", "hom nay", "today", "this week", "next week", "this month", "next month") &&
-		containsAnyText(lowerQuery, "email", "mail", "gmail", "thư", "thu", "hộp thư", "hop thu") {
+	if containsAnyText(queryText, relativeQueryTerms()...) &&
+		containsAnyText(queryText, gmailQueryPurposeTerms()...) {
 		return ""
 	}
 	return trimmed
@@ -563,3 +574,4 @@ func containsAnyText(text string, needles ...string) bool {
 	}
 	return false
 }
+

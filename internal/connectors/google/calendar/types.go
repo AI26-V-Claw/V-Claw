@@ -15,6 +15,7 @@ type Event struct {
 	StartTime   time.Time
 	EndTime     time.Time
 	Attendees   []Attendee
+	EventLink   string
 	MeetLink    string
 	IsRecurring bool
 }
@@ -67,6 +68,7 @@ func toDomainEvent(gEvent *gcal.Event) Event {
 		StartTime:   startTime,
 		EndTime:     endTime,
 		Attendees:   attendees,
+		EventLink:   gEvent.HtmlLink,
 		MeetLink:    gEvent.HangoutLink,
 		IsRecurring: len(gEvent.Recurrence) > 0 || gEvent.RecurringEventId != "",
 	}

@@ -10,6 +10,7 @@ import (
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 )
 
@@ -290,6 +291,11 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		Input:      input,
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
+	if toolCall.Name == "chat.sendMessage" {
+		if email, ok := input["recipientEmail"].(string); ok && strings.TrimSpace(email) != "" {
+			summary = fmt.Sprintf("Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat đến %s. Nếu chưa có DM space, sẽ tự động tạo.", strings.TrimSpace(email))
+		}
+	}
 	parentApprovalID := ""
 	if message.Metadata != nil {
 		if value, ok := message.Metadata["parentApprovalId"].(string); ok && strings.TrimSpace(value) != "" {
@@ -600,7 +606,12 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 	}
 
 	startedAt := time.Now()
-	result := r.executeAllowedTool(ctx, pending.toolCall, pending.definition)
+	execCtx := toolhooks.WithRequestContext(ctx, pending.message.RequestID, pending.message.SessionID)
+	decision := r.approvedToolDecision(execCtx, pending.toolCall, pending.definition, true)
+	result := toolDecisionDeniedResult(pending.toolCall, decision)
+	if decision.Decision != contracts.RiskDecisionBlock {
+		result = r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
+	}
 	// Carry the policy reference recorded on the action so the persisted
 	// tool_calls row matches the risk_decisions row and N4 can join on it.
 	result.PolicyDecisionRef = record.PolicyDecisionRef

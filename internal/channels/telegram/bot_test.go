@@ -33,7 +33,7 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 	handler := &fakeHandler{
 		outbound: contracts.AgentResponse{
 			Status:  contracts.AgentStatusCompleted,
-			Message: "ÄÃ£ cháº¡y xong.",
+			Message: "Đã chạy xong.",
 		},
 	}
 
@@ -50,7 +50,7 @@ func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 		ChatID:     55,
 		MessageID:  42,
 		ToolName:   "sandbox.runPython",
-		PromptText: "HÃ nh Ä‘á»™ng: Cháº¡y mÃ£ Python trong sandbox\n\nMÃ£ Python sáº½ cháº¡y:\n\nprint('hello')",
+		PromptText: "Hành động: Chạy mã Python trong sandbox\n\nMã Python sẽ chạy:\n\nprint('hello')",
 	})
 	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		var payload map[string]any
@@ -912,6 +912,18 @@ func TestTelegramTextFromResponsePreservesMultilineFormatting(t *testing.T) {
 
 	if text != message {
 		t.Fatalf("expected response formatting to be preserved, got %q want %q", text, message)
+	}
+}
+
+func TestTelegramTextFromResponsePreservesCalendarEventLinks(t *testing.T) {
+	message := "Đã tạo sự kiện Calendar.\n- Tiêu đề: Sprint Review\n- Link sự kiện: https://calendar.google.com/calendar/event?eid=evt_1"
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+	})
+	want := "Đã tạo sự kiện Calendar.\n- Tiêu đề: Sprint Review\n- Link sự kiện: [Mở sự kiện](https://calendar.google.com/calendar/event?eid=evt_1)"
+	if text != want {
+		t.Fatalf("expected calendar link text to be compacted, got %q want %q", text, want)
 	}
 }
 
