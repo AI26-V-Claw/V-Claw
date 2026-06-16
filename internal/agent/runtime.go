@@ -12,6 +12,7 @@ import (
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/longmem"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
@@ -56,6 +57,17 @@ type RuntimeConfig struct {
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
 	MemoryClassifierModel      string
+	LongMemDir                 string // path to cache/memory/; empty disables long-term memory
+}
+
+// longTermMemoryLoader loads the long-term memory prompt for context injection.
+type longTermMemoryLoader interface {
+	Load() string
+}
+
+// longTermMemoryFlusher flushes a compaction summary to long-term memory files.
+type longTermMemoryFlusher interface {
+	Flush(ctx context.Context, summary string) error
 }
 
 type Runtime struct {
@@ -85,6 +97,8 @@ type Runtime struct {
 	contextWindow              int
 	memoryClassifierModel      string
 	subtasks                   *subtaskCoordinator
+	ltMemLoader                longTermMemoryLoader  // nil = disabled
+	ltMemFlusher               longTermMemoryFlusher // nil = disabled
 }
 
 type pendingApproval struct {
@@ -182,6 +196,12 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	}
 	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
 	subtasks.now = now
+	var ltLoader longTermMemoryLoader
+	var ltFlusher longTermMemoryFlusher
+	if dir := strings.TrimSpace(config.LongMemDir); dir != "" && config.Provider != nil {
+		ltLoader = longmem.NewLoader(dir)
+		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
+	}
 	return &Runtime{
 		provider:                   config.Provider,
 		registry:                   config.Registry,
@@ -208,6 +228,8 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
 		subtasks:                   subtasks,
+		ltMemLoader:                ltLoader,
+		ltMemFlusher:               ltFlusher,
 	}
 }
 

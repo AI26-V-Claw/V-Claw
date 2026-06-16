@@ -82,6 +82,13 @@ func (r *Runtime) maybeCompactAsync(sessionID string) {
 		return
 	}
 
+	if r.ltMemFlusher != nil {
+		if err := r.ltMemFlusher.Flush(ctx, result.Summary); err != nil {
+			r.logger.Warn("compaction: long-term memory flush failed", "session_id", sessionID, "error", err)
+			// do not return — compaction itself succeeded
+		}
+	}
+
 	r.logger.Info("session compacted",
 		"session_id", sessionID,
 		"messages_kept", len(result.KeptMessages),

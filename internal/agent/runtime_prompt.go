@@ -15,11 +15,19 @@ import (
 
 func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution) []providers.Message {
 	transcript = compactProviderTranscriptForPrompt(transcript)
-	messages := make([]providers.Message, 0, len(transcript)+4)
+	messages := make([]providers.Message, 0, len(transcript)+5)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
 		Content: runtimeSystemPrompt(r.now()),
 	})
+	if r.ltMemLoader != nil {
+		if ltm := r.ltMemLoader.Load(); ltm != "" {
+			messages = append(messages, providers.Message{
+				Role:    providers.MessageRoleSystem,
+				Content: ltm,
+			})
+		}
+	}
 	if prompt := sessionMemoryPrompt(memory); prompt != "" {
 		messages = append(messages, providers.Message{
 			Role:    providers.MessageRoleSystem,
