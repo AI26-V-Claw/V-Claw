@@ -2,11 +2,25 @@ package agent
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 )
+
+// fakeLTMemFlusher records Flush calls for assertions.
+type fakeLTMemFlusher struct {
+	calls   atomic.Int32
+	lastSummary string
+	err     error
+}
+
+func (f *fakeLTMemFlusher) Flush(_ context.Context, summary string) error {
+	f.calls.Add(1)
+	f.lastSummary = summary
+	return f.err
+}
 
 type blockingCompactionProvider struct {
 	started chan struct{}
@@ -82,6 +96,97 @@ func TestRuntimeCompactionDoesNotOverwriteNewTranscriptMessages(t *testing.T) {
 	}
 	if memory.Summary != "" {
 		t.Fatalf("summary should not persist when compare-and-set fails: %#v", memory)
+	}
+}
+
+func TestMaybeCompactAsyncCallsFlusher(t *testing.T) {
+	ctx := context.Background()
+	store := sessions.NewInMemoryStore()
+	sessionID := "sess_flush"
+
+	// Seed enough messages to trigger compaction.
+	for i := 0; i < 6; i++ {
+		_ = store.AppendMessage(ctx, sessionID, providers.Message{
+			Role:    providers.MessageRoleUser,
+			Content: "message with enough words to push token count above threshold for compaction",
+		})
+		_ = store.AppendMessage(ctx, sessionID, providers.Message{
+			Role:    providers.MessageRoleAssistant,
+			Content: "reply with enough words to push token count above threshold for compaction",
+		})
+	}
+
+	flusher := &fakeLTMemFlusher{}
+	provider := &fakeProvider{
+		responses: []providers.ChatResponse{
+			{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "compact summary"}},
+		},
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		SessionStore: store,
+		Compactor: sessions.NewCompactor(provider, sessions.CompactorConfig{
+			ContextWindow:    30,
+			ThresholdRatio:   0.5,
+			KeepTokenRatio:   0.2,
+			KeepLastMessages: 2,
+		}, nil),
+	})
+	runtime.ltMemFlusher = flusher
+
+	runtime.maybeCompactAsync(sessionID)
+
+	if flusher.calls.Load() != 1 {
+		t.Errorf("expected Flush called once, got %d", flusher.calls.Load())
+	}
+	if flusher.lastSummary == "" {
+		t.Error("Flush called with empty summary")
+	}
+}
+
+func TestMaybeCompactAsyncFlusherErrorDoesNotFailCompaction(t *testing.T) {
+	ctx := context.Background()
+	store := sessions.NewInMemoryStore()
+	sessionID := "sess_flush_err"
+
+	for i := 0; i < 6; i++ {
+		_ = store.AppendMessage(ctx, sessionID, providers.Message{
+			Role:    providers.MessageRoleUser,
+			Content: "message with enough words to push token count above threshold for compaction",
+		})
+		_ = store.AppendMessage(ctx, sessionID, providers.Message{
+			Role:    providers.MessageRoleAssistant,
+			Content: "reply with enough words to push token count above threshold for compaction",
+		})
+	}
+
+	flusher := &fakeLTMemFlusher{err: context.DeadlineExceeded}
+	provider := &fakeProvider{
+		responses: []providers.ChatResponse{
+			{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "compact summary"}},
+		},
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		SessionStore: store,
+		Compactor: sessions.NewCompactor(provider, sessions.CompactorConfig{
+			ContextWindow:    30,
+			ThresholdRatio:   0.5,
+			KeepTokenRatio:   0.2,
+			KeepLastMessages: 2,
+		}, nil),
+	})
+	runtime.ltMemFlusher = flusher
+
+	runtime.maybeCompactAsync(sessionID)
+
+	// Compaction should have succeeded even though flusher errored.
+	memory, err := store.LoadMemory(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("LoadMemory: %v", err)
+	}
+	if memory.Summary == "" {
+		t.Error("compaction summary should be saved even when flusher errors")
 	}
 }
 

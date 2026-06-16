@@ -13,6 +13,7 @@ import (
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
 	"vclaw/internal/governance"
+	"vclaw/internal/longmem"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
@@ -58,6 +59,17 @@ type RuntimeConfig struct {
 	// version. If empty, only runtimeSystemPrompt() contributes — useful for
 	// tests that don't want to load the file.
 	SoulPrompt string
+	LongMemDir string // path to cache/memory/; empty disables long-term memory
+}
+
+// longTermMemoryLoader loads the long-term memory prompt for context injection.
+type longTermMemoryLoader interface {
+	Load() string
+}
+
+// longTermMemoryFlusher flushes a compaction summary to long-term memory files.
+type longTermMemoryFlusher interface {
+	Flush(ctx context.Context, summary string) error
 }
 
 type Runtime struct {
@@ -87,6 +99,8 @@ type Runtime struct {
 	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
 	promptVersion string
+	ltMemLoader   longTermMemoryLoader  // nil = disabled
+	ltMemFlusher  longTermMemoryFlusher // nil = disabled
 }
 
 type pendingApproval struct {
@@ -172,6 +186,12 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	// the hash on every Runtime creation. SOUL.md is hashed alongside so any
 	// edit there bumps the version automatically.
 	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
+	var ltLoader longTermMemoryLoader
+	var ltFlusher longTermMemoryFlusher
+	if dir := strings.TrimSpace(config.LongMemDir); dir != "" && config.Provider != nil {
+		ltLoader = longmem.NewLoader(dir)
+		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
+	}
 	return &Runtime{
 		provider:                   config.Provider,
 		registry:                   config.Registry,
@@ -195,6 +215,8 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
 		promptVersion:              promptVersion,
+		ltMemLoader:                ltLoader,
+		ltMemFlusher:               ltFlusher,
 	}
 }
 
