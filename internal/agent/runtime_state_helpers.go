@@ -79,6 +79,12 @@ func (r *Runtime) finishRunState(ctx context.Context, state RunState, status Run
 	if err := r.stateStore.UpdateRun(ctx, state); err != nil {
 		return internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
+	switch status {
+	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusMaxIterations:
+		if r.subtasks != nil {
+			r.subtasks.complete(state.RunID)
+		}
+	}
 	return nil
 }
 

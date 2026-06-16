@@ -28,8 +28,8 @@ import (
 	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
-	"vclaw/internal/toolhooks"
 	pgstore "vclaw/internal/store/pg"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
@@ -83,6 +83,10 @@ type AgentRuntimeConfig struct {
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
 	ParallelToolTimeoutDefault time.Duration
+	SubtaskMaxChildren         int
+	SubtaskMaxDepth            int
+	SubtaskDefaultTimeout      time.Duration
+	SubtaskMaxTimeout          time.Duration
 }
 
 type RuntimeBundle struct {
@@ -148,10 +152,6 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
-	if err := persistToolRegistry(ctx, registry, config.SessionStore, config.StateStore, config.AuditLogger); err != nil {
-		return RuntimeBundle{}, err
-	}
-
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
 		sessionStore, err = sessions.NewFileStore(dataDir)
@@ -203,7 +203,17 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,
+		SubtaskMaxChildren:         config.SubtaskMaxChildren,
+		SubtaskMaxDepth:            config.SubtaskMaxDepth,
+		SubtaskDefaultTimeout:      config.SubtaskDefaultTimeout,
+		SubtaskMaxTimeout:          config.SubtaskMaxTimeout,
 	})
+	if err := registry.RegisterWithEntry(agent.NewSubtaskTool(runtime), tools.ToolRegistryEntry{Owner: "agent_core", Group: "delegation"}); err != nil {
+		return RuntimeBundle{}, fmt.Errorf("register subtask tool: %w", err)
+	}
+	if err := persistToolRegistry(ctx, registry, config.SessionStore, config.StateStore, config.AuditLogger); err != nil {
+		return RuntimeBundle{}, err
+	}
 	return RuntimeBundle{
 		Runtime:               runtime,
 		Registry:              registry,
