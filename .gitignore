@@ -28,6 +28,8 @@ logs/audit.jsonl
 .localappdata/
 AGENTS.md
 CLAUDE.md
+cache/memory/NOTES.md
+cache/memory/USER.md
 v_claw_architect_claude.pdf
 
 # sandbox

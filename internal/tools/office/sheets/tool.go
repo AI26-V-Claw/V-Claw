@@ -648,7 +648,14 @@ func valuesSchema() tools.ToolSchema {
 func batchValuesSchema() tools.ToolSchema {
 	return tools.ToolSchema{"type": "object", "properties": map[string]any{
 		"spreadsheetId":    map[string]any{"type": "string"},
-		"ranges":           map[string]any{"type": "object", "description": "Map of A1 range to row arrays."},
+		"ranges": map[string]any{
+				"type":                 "object",
+				"description":          "Map of A1 notation range to a 2D array of cell values. Each key is a range string (e.g. \"Sheet1!A1:B2\"), each value is an array of rows where each row is an array of cell values. Example: {\"Sheet1!A1:B2\": [[\"Name\", \"Score\"], [\"Alice\", 90]]}. Do NOT pass a flat array as the value — it must be a 2D array (array of rows).",
+				"additionalProperties": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"type": "array", "items": map[string]any{}},
+				},
+			},
 		"valueInputOption": map[string]any{"type": "string", "enum": []string{"USER_ENTERED", "RAW"}, "description": "Omit to use USER_ENTERED."},
 	}, "required": []string{"spreadsheetId", "ranges"}, "additionalProperties": false}
 }
