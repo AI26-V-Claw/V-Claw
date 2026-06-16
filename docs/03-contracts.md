@@ -100,6 +100,7 @@ Agent Core -> Channel / Integration
   "requestId": "req_001",
   "sessionId": "sess_001",
   "status": "approval_required",
+  "failureReason": "",
   "message": "Tôi cần bạn xác nhận trước khi tạo sự kiện lịch.",
   "output": {
     "kind": "approval",
@@ -163,6 +164,24 @@ expired
 ```
 
 Known artifact kinds in Sprint 1: `gmail.message`, `chat.message`, `calendar.event`.
+
+`failureReason` is a machine-readable string populated on every non-completed response. Values are typed constants from `orchestration.FailureReason`:
+
+| Value | Trigger |
+|---|---|
+| `` (empty) | Status is `completed` - happy path |
+| `timeout` | Context deadline exceeded |
+| `canceled` | Request was cancelled |
+| `max_iteration` | Agent exhausted iteration budget |
+| `provider_error` | LLM provider returned an error |
+| `provider_unavailable` | LLM provider returned retryable error |
+| `tool_error` | Tool execution failed |
+| `approval_expired` | Approval TTL (10 min) elapsed without decision |
+| `approval_rejected` | User explicitly rejected the approval |
+| `policy_blocked` | Action blocked by safety policy |
+| `aborted` | Internal setup failure or unclassified error |
+
+`failureReason` contains only typed constant values - never raw error messages or internal paths. Safe to expose to channel adapters (Telegram/Slack).
 
 ---
 

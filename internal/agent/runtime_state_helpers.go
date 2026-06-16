@@ -69,9 +69,10 @@ func (r *Runtime) updateRunState(ctx context.Context, state RunState) *contracts
 	return nil
 }
 
-func (r *Runtime) finishRunState(ctx context.Context, state RunState, status RuntimeRunStatus) *contracts.ErrorShape {
+func (r *Runtime) finishRunState(ctx context.Context, state RunState, status RuntimeRunStatus, reason string) *contracts.ErrorShape {
 	now := r.now()
 	state.Status = status
+	state.FailureReason = reason
 	state.UpdatedAt = now
 	switch status {
 	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusMaxIterations:
@@ -103,12 +104,12 @@ func (r *Runtime) resumeRunState(ctx context.Context, runID string) *contracts.E
 	return r.updateRunState(ctx, state)
 }
 
-func (r *Runtime) finishRunByID(ctx context.Context, runID string, status RuntimeRunStatus) *contracts.ErrorShape {
+func (r *Runtime) finishRunByID(ctx context.Context, runID string, status RuntimeRunStatus, reason string) *contracts.ErrorShape {
 	state, err := r.stateStore.GetRun(ctx, runID)
 	if err != nil {
 		return internalError("load run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
-	return r.finishRunState(ctx, state, status)
+	return r.finishRunState(ctx, state, status, reason)
 }
 
 func runIDForMessage(message contracts.UserMessage) string {

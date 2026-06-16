@@ -154,6 +154,8 @@ type AgentResponse struct {
 	Data            map[string]any   `json:"data,omitempty"`
 	ToolResults     []ToolResult     `json:"toolResults,omitempty"`
 	Error           *ErrorShape      `json:"error,omitempty"`
+	// FailureReason is a machine-readable reason for non-completed status. Empty when Status is completed.
+	FailureReason   string           `json:"failureReason,omitempty"`
 	Plan            *Plan            `json:"plan,omitempty"`
 	Output          *UserOutput      `json:"output,omitempty"`
 }

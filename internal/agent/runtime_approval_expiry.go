@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"vclaw/internal/contracts"
+	"vclaw/internal/orchestration"
 )
 
 func (r *Runtime) expirePendingApprovalIfNeeded(ctx context.Context, sessionID string) *contracts.ErrorShape {
@@ -39,7 +40,7 @@ func (r *Runtime) expirePendingApprovalIfNeeded(ctx context.Context, sessionID s
 			return internalError("expire pending approval action: "+err.Error(), contracts.ErrorSourceAgent)
 		}
 	}
-	if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+	if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonApprovalExpired)); errShape != nil {
 		return errShape
 	}
 	return &contracts.ErrorShape{

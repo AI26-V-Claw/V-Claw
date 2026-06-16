@@ -58,6 +58,7 @@ type RunState struct {
 	RequestID              string
 	OriginalGoal           string
 	Status                 RuntimeRunStatus
+	FailureReason          string
 	IterationCount         int
 	PendingActionID        string
 	PendingClarificationID string

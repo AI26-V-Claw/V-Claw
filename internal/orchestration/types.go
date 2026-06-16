@@ -12,8 +12,8 @@ const (
 	RunStatusFailed               RunStatus = "failed"
 	RunStatusBlocked              RunStatus = "blocked"
 	RunStatusTimeout              RunStatus = "timeout"
-	RunStatusCanceled             RunStatus = "canceled"
-	RunStatusMaxIteration         RunStatus = "max_iteration"
+	RunStatusCanceled             RunStatus = "cancelled"
+	RunStatusMaxIteration         RunStatus = "max_iterations"
 )
 
 type RunResult struct {

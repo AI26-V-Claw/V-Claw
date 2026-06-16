@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"vclaw/internal/contracts"
+	"vclaw/internal/orchestration"
 	"vclaw/internal/providers"
 	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
@@ -76,7 +77,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			}
 			r.recordApprovalObservation(ActionStatusExpired)
 		}
-		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonApprovalExpired)); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
 				SessionID: pending.message.SessionID,
@@ -90,6 +91,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			SessionID: pending.message.SessionID,
 			Status:    contracts.AgentStatusFailed,
 			Message:   "Yêu cầu xác nhận đã hết hạn. Vui lòng gửi lại yêu cầu.",
+			FailureReason: string(orchestration.FailureReasonApprovalExpired),
 			Error: &contracts.ErrorShape{
 				Code:      contracts.ErrorApprovalExpired,
 				Message:   "approval expired",
@@ -143,7 +145,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			"toolName":   pending.request.ToolCall.ToolName,
 			"comment":    strings.TrimSpace(decision.Comment),
 		})
-		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked); errShape != nil {
+		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked, string(orchestration.FailureReasonApprovalRejected)); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
 				SessionID: pending.message.SessionID,
@@ -167,6 +169,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			SessionID: pending.message.SessionID,
 			Status:    contracts.AgentStatusBlocked,
 			Message:   "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
+			FailureReason: string(orchestration.FailureReasonApprovalRejected),
 			Data:      r.traceData(nil),
 			Error: &contracts.ErrorShape{
 				Code:      contracts.ErrorActionBlockedByPolicy,
@@ -238,7 +241,7 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 			}
 			r.recordApprovalObservation(ActionStatusExpired)
 		}
-		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonApprovalExpired)); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: requestID,
 				SessionID: sessionID,
@@ -701,10 +704,11 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 		response.Message = errShape.Message
 	}
 	if response.Status == contracts.AgentStatusFailed {
-		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError)); errShape != nil {
 			response.Error = errShape
 			response.Message = errShape.Message
 		}
+		response.FailureReason = string(orchestration.FailureReasonToolError)
 		return response, nil
 	}
 	if result.Success {
@@ -714,11 +718,12 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 			return continuationResp, nil
 		}
 	}
-	if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+	if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError)); errShape != nil {
 		response.Status = contracts.AgentStatusFailed
 		response.Error = errShape
 		response.Message = errShape.Message
 	}
+	response.FailureReason = string(orchestration.FailureReasonToolError)
 	return response, nil
 }
 

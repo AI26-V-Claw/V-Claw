@@ -12,6 +12,7 @@ import (
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/orchestration"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
@@ -245,8 +246,23 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		base.Message = errShape.Message
 		return base, nil
 	}
+	// Panic guard: ensure finishRunState always runs if a panic occurs after runState is initialized.
+	defer func() {
+		if rec := recover(); rec != nil {
+			r.logger.Error("agent runtime panic recovered",
+				"run_id", runState.RunID,
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"panic", rec,
+			)
+			currentState, getErr := r.stateStore.GetRun(context.WithoutCancel(ctx), runState.RunID)
+			if getErr == nil && currentState.Status == RuntimeRunStatusRunning {
+				_ = r.finishRunState(context.WithoutCancel(ctx), currentState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted))
+			}
+		}
+	}()
 	failStartedRun := func(errShape *contracts.ErrorShape) (contracts.AgentResponse, error) {
-		if finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); finishErr != nil {
+		if finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted)); finishErr != nil {
 			errShape = finishErr
 		}
 		base.Error = errShape
@@ -278,9 +294,10 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			sessionMemory.PendingClarification = nil
 			pendingMemoryChanged = true
 			if pendingRunID := strings.TrimSpace(pendingClarification.RunID); pendingRunID != "" && pendingRunID != runState.RunID {
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted); errShape != nil {
+				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted, string(orchestration.FailureReasonNone)); errShape != nil {
 					return failStartedRun(errShape)
 				}
+				base.FailureReason = runState.FailureReason
 				if errShape := r.resumeRunState(ctx, pendingRunID); errShape != nil {
 					return failStartedRun(errShape)
 				}
@@ -453,7 +470,11 @@ agentLoop:
 				Source:    contracts.ErrorSourceProvider,
 				Retryable: retryable,
 			}
-			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+			reason := orchestration.FailureReasonProviderError
+			if retryable {
+				reason = orchestration.FailureReasonProviderUnavailable
+			}
+			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(reason)); errShape != nil {
 				base.Error = errShape
 			}
 			base.Message = base.Error.Message
@@ -496,7 +517,7 @@ If required information is missing, ask one concise clarification question inste
 				"content_preview", logPreview(assistantMessage.Content, 180),
 			)
 			emitProgress(ctx, ProgressEvent{Stage: ProgressStageFinalizing, Message: "Agent is finalizing the response"})
-			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted); errShape != nil {
+			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted, string(orchestration.FailureReasonNone)); errShape != nil {
 				base.Error = errShape
 				base.Message = errShape.Message
 				return base, nil
@@ -594,11 +615,12 @@ If required information is missing, ask one concise clarification question inste
 				}
 			}
 			if isBatchSystemError(batchResults) {
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError)); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
 				}
+				base.FailureReason = runState.FailureReason
 				base.ToolResults = toolResults
 				base.Error = toolErrorShape(batchResults[0].result)
 				base.Message = base.Error.Message
@@ -786,11 +808,12 @@ If required information is missing, ask one concise clarification question inste
 					return base, nil
 				}
 				if !result.Success {
-					if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+					if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError)); errShape != nil {
 						base.Error = errShape
 						base.Message = errShape.Message
 						return base, nil
 					}
+					base.FailureReason = runState.FailureReason
 					base.ToolResults = toolResults
 					base.Error = toolErrorShape(result)
 					base.Message = base.Error.Message
@@ -921,19 +944,21 @@ If required information is missing, ask one concise clarification question inste
 					Source:    contracts.ErrorSourcePolicy,
 					Retryable: false,
 				}
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusBlocked); errShape != nil {
+				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusBlocked, string(orchestration.FailureReasonPolicyBlocked)); errShape != nil {
 					base.Error = errShape
 				}
+				base.FailureReason = runState.FailureReason
 				return base, nil
 			}
 		}
 	}
 
-	if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations); errShape != nil {
+	if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations, string(orchestration.FailureReasonMaxIteration)); errShape != nil {
 		base.Error = errShape
 		base.Message = errShape.Message
 		return base, nil
 	}
+	base.FailureReason = runState.FailureReason
 	return contracts.AgentResponse{
 		RequestID:   message.RequestID,
 		SessionID:   message.SessionID,
@@ -1010,9 +1035,10 @@ messageText = "request canceled"
 	
 }
 	
-if finishErr := r.finishRunState(ctx, runState, runStatus); finishErr != nil {
+	contextReason := orchestration.FromContextError(err)
+	if finishErr := r.finishRunState(ctx, runState, runStatus, string(contextReason)); finishErr != nil {
 	
-	
+
 return &contracts.AgentResponse{Error: finishErr, Message: finishErr.Message, Status: contracts.AgentStatusFailed}
 	
 }
@@ -1021,6 +1047,7 @@ return &contracts.AgentResponse{
 	
 	
 Status:      contracts.AgentStatusFailed,
+	FailureReason: string(contextReason),
 	
 	
 ToolResults: toolResults,
