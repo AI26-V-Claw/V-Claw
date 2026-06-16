@@ -55,6 +55,7 @@ type AgentRuntimeConfig struct {
 	OpenAIModel    string
 	OpenAIBaseURL  string
 	CompactorModel string
+	LongMemDir     string // path to cache/memory/; defaults to ./cache/memory
 
 	Provider     providers.Provider
 	SessionStore sessions.Store
@@ -178,6 +179,13 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	compactor := sessions.NewCompactor(provider, sessions.CompactorConfig{
 		SummarizeModel: compactorModel,
 	}, config.Logger)
+	longMemDir := strings.TrimSpace(config.LongMemDir)
+	if longMemDir == "" {
+		longMemDir = "./cache/memory"
+	}
+	if err := os.MkdirAll(longMemDir, 0700); err != nil {
+		return RuntimeBundle{}, fmt.Errorf("create long-term memory dir: %w", err)
+	}
 	var runtimeHooks toolhooks.Hooks = auditHooks
 	if config.ToolHooks != nil {
 		runtimeHooks = toolhooks.ChainHooks{config.ToolHooks, auditHooks}
@@ -200,6 +208,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		Model:                      model,
 		Compactor:                  compactor,
 		MemoryClassifierModel:      compactorModel,
+		LongMemDir:                 longMemDir,
 		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,

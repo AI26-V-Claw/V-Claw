@@ -202,8 +202,8 @@ func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, resu
 		Content:   truncateToolContentForLLM(content),
 		CreatedAt: r.now(),
 	})
-	if len(memory.LastActionResults) > 5 {
-		memory.LastActionResults = memory.LastActionResults[len(memory.LastActionResults)-5:]
+	if len(memory.LastActionResults) > 10 {
+		memory.LastActionResults = memory.LastActionResults[len(memory.LastActionResults)-10:]
 	}
 	return r.saveSessionMemory(ctx, sessionID, memory)
 }
