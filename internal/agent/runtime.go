@@ -12,6 +12,7 @@ import (
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/governance"
 	"vclaw/internal/longmem"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
@@ -57,7 +58,12 @@ type RuntimeConfig struct {
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
 	MemoryClassifierModel      string
-	LongMemDir                 string // path to cache/memory/; empty disables long-term memory
+	// SoulPrompt is the optional SOUL.md content loaded at startup. It is
+	// hashed together with runtimeSystemPrompt() to produce the prompt
+	// version. If empty, only runtimeSystemPrompt() contributes — useful for
+	// tests that don't want to load the file.
+	SoulPrompt string
+	LongMemDir string // path to cache/memory/; empty disables long-term memory
 }
 
 // longTermMemoryLoader loads the long-term memory prompt for context injection.
@@ -96,6 +102,10 @@ type Runtime struct {
 	compactor                  *sessions.Compactor
 	contextWindow              int
 	memoryClassifierModel      string
+	// promptVersion is the content-hash fingerprint of the effective system
+	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
+	// is constructed and stamped onto every record this Runtime produces.
+	promptVersion              string
 	subtasks                   *subtaskCoordinator
 	ltMemLoader                longTermMemoryLoader  // nil = disabled
 	ltMemFlusher               longTermMemoryFlusher // nil = disabled
@@ -194,6 +204,11 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
+	// Compute the prompt version once at construction. We pass a zero time so
+	// the dynamic "current time" segment of runtimeSystemPrompt doesn't shift
+	// the hash on every Runtime creation. SOUL.md is hashed alongside so any
+	// edit there bumps the version automatically.
+	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
 	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
 	subtasks.now = now
 	var ltLoader longTermMemoryLoader
@@ -227,6 +242,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
+		promptVersion:              promptVersion,
 		subtasks:                   subtasks,
 		ltMemLoader:                ltLoader,
 		ltMemFlusher:               ltFlusher,
@@ -592,7 +608,8 @@ If required information is missing, ask one concise clarification question inste
 					"duration", outcome.duration,
 					"content_preview", logPreview(result.ContentForLLM, 260),
 				)
-				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, r.policy.DecideToolCall(call.ID, batch[i].definition, true, r.now())); errShape != nil {
+				decision := r.stampPolicyRef(runState.RunID, call.ID, r.policy.DecideToolCall(call.ID, batch[i].definition, true, r.now()))
+				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, decision); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -608,6 +625,10 @@ If required information is missing, ask one concise clarification question inste
 					ToolCallID: call.ID,
 					Message:    "Tool finished",
 				})
+				// Stamp the policy reference onto the result so the persisted
+				// tool_calls row carries the same provenance as the risk_decisions row.
+				result.PolicyDecisionRef = decision.PolicyDecisionRef
+				batchResults[i].result = result
 				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, call, result, outcome.duration, ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -618,7 +639,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				toolResults = append(toolResults, contractToolResult(result))
+				toolResults = append(toolResults, contractToolResult(result, r.buildGovernanceMetadata(call.Name, decision.PolicyDecisionRef)))
 				toolMessage := providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: call.ID,
@@ -704,6 +725,7 @@ If required information is missing, ask one concise clarification question inste
 			}
 
 			decision := r.decideToolCall(ctx, providerToolCall, definition, found)
+			decision.PolicyDecisionRef = governance.PolicyRef(runState.RunID, providerToolCall.ID, decision.CheckedAt)
 			r.logger.Info("agent tool call proposed",
 				"request_id", message.RequestID,
 				"session_id", message.SessionID,
@@ -794,6 +816,9 @@ If required information is missing, ask one concise clarification question inste
 				}
 				startedAt := time.Now()
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
+				// Stamp the policy reference on the result so audit/N4 can
+				// trace the result row back to the risk decision that allowed it.
+				result.PolicyDecisionRef = decision.PolicyDecisionRef
 				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, providerToolCall, result, time.Since(startedAt), ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -804,7 +829,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				contractResult := contractToolResult(result)
+				contractResult := contractToolResult(result, r.buildGovernanceMetadata(providerToolCall.Name, decision.PolicyDecisionRef))
 				toolResults = append(toolResults, contractResult)
 
 				toolMessage := providers.Message{

@@ -244,6 +244,35 @@ type AuditEvent struct {
 	// ErrorMessage contains the error description if the runner or policy
 	// layer returned an error (as opposed to the user command failing).
 	ErrorMessage string `json:"error_message,omitempty"`
+
+	// ── Governance ─────────────────────────────────────────────────────────
+
+	// Model is the LLM model ID that was active when this event was produced
+	// (e.g. "claude-opus-4-8"). Allows N4 to filter/group audit entries by
+	// the exact model version without joining run records.
+	Model string `json:"model,omitempty"`
+
+	// PromptVersion is the content-hash fingerprint of the system prompt that
+	// was active at this event. Changes automatically when runtimeSystemPrompt
+	// or SOUL.md changes. Computed by governance.PromptVersion().
+	PromptVersion string `json:"prompt_version,omitempty"`
+
+	// ToolSchemaVersion is the content-hash fingerprint of the tool's
+	// parameter schema at call time. Populated for tool.call.* and
+	// approval.* events. Computed by governance.ToolSchemaVersion().
+	ToolSchemaVersion string `json:"tool_schema_version,omitempty"`
+
+	// PolicyDecisionRef is the composite reference linking this audit entry
+	// back to the risk decision that classified the tool call. Format:
+	// "policy:<runID>:<toolCallID>:<unixSec>". Computed by governance.PolicyRef().
+	// Populated for all events except agent.run.* lifecycle events.
+	PolicyDecisionRef string `json:"policy_decision_ref,omitempty"`
+
+	// Source identifies the origin layer of the tool result, e.g.
+	// "tool:google_workspace", "connector:tavily", "tool:sandbox". Populated
+	// for tool.call.completed events. Use governance.SourceToolPrefix /
+	// SourceConnectorPrefix constants.
+	Source string `json:"source,omitempty"`
 }
 
 // ─── Constructor helpers ──────────────────────────────────────────────────────

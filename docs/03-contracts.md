@@ -184,7 +184,13 @@ Agent Core -> Tool Layer
     "end": "2026-05-30T11:00:00+07:00",
     "attendees": ["minh@example.com"]
   },
-  "reason": "Create a calendar event based on the meeting email that was found."
+  "reason": "Create a calendar event based on the meeting email that was found.",
+  "governance": {
+    "model": "claude-opus-4-8",
+    "promptVersion": "abc12345",
+    "toolSchemaVersion": "deadbeef",
+    "policyDecisionRef": "policy:run_001:toolcall_001:1781870400"
+  }
 }
 ```
 
@@ -193,6 +199,8 @@ Required:
 ```text
 toolCallId, requestId, sessionId, toolName, input
 ```
+
+`governance` is optional but is populated by the agent runtime before the call crosses any boundary; see §3.11 GovernanceMetadata.
 
 Runtime boundary rule:
 
@@ -234,6 +242,13 @@ Tool Layer -> Agent Core
   "metadata": {},
   "truncated": false,
   "redacted": false,
+  "source": "tool:google_workspace",
+  "governance": {
+    "model": "claude-opus-4-8",
+    "promptVersion": "abc12345",
+    "toolSchemaVersion": "deadbeef",
+    "policyDecisionRef": "policy:run_001:toolcall_001:1781870400"
+  },
   "error": null
 }
 ```
@@ -264,6 +279,10 @@ Error:
 
 `redacted=true` means sensitive content was removed or masked before the result was added to LLM context. `redacted` is a typed boolean and is the single source of truth for redaction state (it is never stored as a `metadata` key). User-facing text can remain more detailed when appropriate, but logs, session observations, and LLM-visible content must use the sanitized result.
 
+`source` is an optional attribution string that identifies the origin layer producing the result, e.g. `tool:google_workspace`, `tool:sandbox.python`, `connector:tavily`. Audit/N4 use it to group records by origin without parsing tool names. Use the prefixes from `internal/governance` (`SourceToolPrefix`, `SourceConnectorPrefix`, `SourceUserChannel`).
+
+`governance` is optional and mirrors the bundle from the originating `ToolCall`. The agent runtime copies it through after execution so consumers reading only the result still know which model, prompt, schema, and policy decision produced it. See §3.11 GovernanceMetadata.
+
 ---
 
 ## 3.5. RiskDecision
@@ -280,9 +299,12 @@ Tool Policy -> Agent Core / Approvals
   "decision": "requires_approval",
   "requiresApproval": true,
   "reason": "Creating a new Google Calendar event changes external data.",
-  "checkedAt": "2026-05-29T09:00:00+07:00"
+  "checkedAt": "2026-05-29T09:00:00+07:00",
+  "policyDecisionRef": "policy:run_001:toolcall_001:1781870400"
 }
 ```
+
+`policyDecisionRef` is a composite reference shared with every record (tool call, action, audit) that descends from this risk decision. Format: `policy:<runID>:<toolCallId>:<unixSec>`. Computed by `governance.PolicyRef()`. See §3.11.
 
 Decision:
 
@@ -334,9 +356,17 @@ Safety / Agent Core -> Channel / User
     }
   },
   "createdAt": "2026-05-29T09:00:00+07:00",
-  "expiresAt": "2026-05-29T09:10:00+07:00"
+  "expiresAt": "2026-05-29T09:10:00+07:00",
+  "governance": {
+    "model": "claude-opus-4-8",
+    "promptVersion": "abc12345",
+    "toolSchemaVersion": "deadbeef",
+    "policyDecisionRef": "policy:run_001:toolcall_001:1781870400"
+  }
 }
 ```
+
+`governance` makes the approval record self-contained for audit/trace — see §3.11. Channel UIs that render approvals (Telegram/Slack) MUST NOT display these fields to the end user; they are for backend consumers (logs, dashboards, N4 trace) only.
 
 Status:
 
@@ -483,6 +513,53 @@ Rules:
 - Planner must not execute tools, call connectors, or bypass safety.
 - Side-effect tools in a plan still require `RiskDecision` and `ApprovalRequest` before execution.
 - If required information is missing, Agent Core should ask through the internal `clarify` tool and return `need_clarification`.
+
+---
+
+## 3.11. GovernanceMetadata
+
+```text
+Agent Core -> ToolCall, ToolResult, ApprovalRequest, RiskDecision, audit_entries
+```
+
+```json
+{
+  "model": "claude-opus-4-8",
+  "promptVersion": "abc12345",
+  "toolSchemaVersion": "deadbeef",
+  "policyDecisionRef": "policy:run_001:toolcall_001:1781870400"
+}
+```
+
+Provenance bundle attached to every significant runtime record so the N4 monitoring/trace UI can answer "which model + prompt + tool schema + policy decision produced this result?" without joining across tables.
+
+Fields:
+
+- `model` — LLM model ID used for the surrounding request, e.g. `claude-opus-4-8`, `gemini-1.5-pro`. Empty if the record was produced outside an LLM-driven step.
+- `promptVersion` — short content-hash fingerprint of the effective system prompt (`runtimeSystemPrompt` + `SOUL.md`). Computed by `governance.PromptVersion()` once when the runtime is constructed; same prompt → same version. Eight hex characters.
+- `toolSchemaVersion` — short content-hash fingerprint of the tool's parameter schema at call time. Computed by `governance.ToolSchemaVersion()` from the canonicalised schema; cosmetic key reordering does not shift the version. Eight hex characters.
+- `policyDecisionRef` — composite reference back to the `RiskDecision` that authorised the tool call. Format: `policy:<runID>:<toolCallId>:<unixSec>`. Computed by `governance.PolicyRef()` from the decision's `checkedAt` in UTC seconds. Readable in JSONL audit dumps via `grep`.
+
+Where it appears:
+
+| Record | Field | Notes |
+|---|---|---|
+| `ToolCall` | `governance` | Stamped by Runtime before the call leaves Agent Core. |
+| `ToolResult` | `governance` | Copied through after execution; same bundle as the originating `ToolCall`. |
+| `ToolResult` | `source` | Origin attribution prefix, e.g. `tool:google_workspace`, `connector:tavily`. Not in `governance` because it describes the result layer, not the request context. |
+| `RiskDecision` | `policyDecisionRef` | Self-reference — the decision IS the policy reference. |
+| `ApprovalRequest` | `governance` | Carries the bundle so approval records are self-contained. |
+| `audit_entries` | `model`, `prompt_version`, `tool_schema_version`, `policy_decision_ref`, `source` | Five separate columns (not nested) for index efficiency — see [docs/05-erd.md](./05-erd.md#governance-columns). |
+
+Rules:
+
+- The runtime computes governance values once per construction (`promptVersion`) or once per call (`toolSchemaVersion`, `policyDecisionRef`) — they are not provided by the channel adapter or LLM.
+- All fields are optional strings. Empty values mean "unknown" and round-trip cleanly; existing producers that do not yet stamp governance keep working.
+- Channel UIs (Telegram, Slack, web) MUST NOT display governance to end users — these are backend trace identifiers, not human-facing context.
+- Governance values are stable identifiers, not secrets. They may be logged, indexed, and shipped to monitoring without redaction.
+- A change in any input that contributes to a hash (system prompt body, SOUL.md, tool parameter schema) automatically shifts the corresponding version. There is no manual version-bump step.
+
+Implementation: see `internal/governance/governance.go`. Migration: `migrations/003_governance_metadata.sql`. Persistence: see [docs/05-erd.md §Governance columns](./05-erd.md#governance-columns).
 
 ---
 

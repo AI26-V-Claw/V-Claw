@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"vclaw/internal/contracts"
+	"vclaw/internal/governance"
 	"vclaw/internal/providers"
 	"vclaw/internal/tools"
 )
@@ -41,13 +42,15 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		return RunState{}, internalError("load run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	state = RunState{
-		RunID:        runID,
-		SessionID:    message.SessionID,
-		RequestID:    message.RequestID,
-		OriginalGoal: message.Text,
-		Status:       RuntimeRunStatusRunning,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		RunID:         runID,
+		SessionID:     message.SessionID,
+		RequestID:     message.RequestID,
+		OriginalGoal:  message.Text,
+		Status:        RuntimeRunStatusRunning,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		Model:         r.model,
+		PromptVersion: r.promptVersion,
 	}
 	if err := r.stateStore.CreateRun(ctx, state); err != nil {
 		return RunState{}, internalError("create run state: "+err.Error(), contracts.ErrorSourceAgent)
@@ -169,6 +172,10 @@ func (r *Runtime) createApprovalAction(ctx context.Context, runState RunState, m
 		IdempotencyKey:    key,
 		CreatedAt:         now,
 		UpdatedAt:         now,
+		Model:             r.model,
+		PromptVersion:     r.promptVersion,
+		ToolSchemaVersion: r.toolSchemaVersionFor(toolCall.Name),
+		PolicyDecisionRef: decision.PolicyDecisionRef,
 	}
 	stored, _, err := r.stateStore.FindOrCreateAction(ctx, record)
 	if err != nil {
@@ -188,16 +195,17 @@ func (r *Runtime) recordRuntimeRiskDecision(ctx context.Context, runState RunSta
 		return nil
 	}
 	if err := r.stateStore.RecordRiskDecision(ctx, RiskDecisionRecord{
-		RunID:            runState.RunID,
-		RequestID:        runState.RequestID,
-		SessionID:        runState.SessionID,
-		ToolCallID:       toolCall.ID,
-		ToolName:         toolCall.Name,
-		RiskLevel:        decision.RiskLevel,
-		Decision:         decision.Decision,
-		RequiresApproval: decision.RequiresApproval,
-		Reason:           decision.Reason,
-		CheckedAt:        decision.CheckedAt,
+		RunID:             runState.RunID,
+		RequestID:         runState.RequestID,
+		SessionID:         runState.SessionID,
+		ToolCallID:        toolCall.ID,
+		ToolName:          toolCall.Name,
+		RiskLevel:         decision.RiskLevel,
+		Decision:          decision.Decision,
+		RequiresApproval:  decision.RequiresApproval,
+		Reason:            decision.Reason,
+		CheckedAt:         decision.CheckedAt,
+		PolicyDecisionRef: decision.PolicyDecisionRef,
 	}); err != nil {
 		return internalError("record risk decision: "+err.Error(), contracts.ErrorSourceAgent)
 	}
@@ -209,16 +217,19 @@ func (r *Runtime) recordRuntimeToolCallStatus(ctx context.Context, runState RunS
 		return nil
 	}
 	if err := r.stateStore.RecordToolCall(ctx, ToolCallRecord{
-		ToolCallID:   toolCall.ID,
-		RunID:        runState.RunID,
-		RequestID:    runState.RequestID,
-		SessionID:    runState.SessionID,
-		ToolName:     toolCall.Name,
-		ArgsSnapshot: cloneArguments(toolCall.Arguments),
-		Status:       status,
-		Reason:       reason,
-		ApprovalID:   approvalID,
-		CreatedAt:    r.now(),
+		ToolCallID:        toolCall.ID,
+		RunID:             runState.RunID,
+		RequestID:         runState.RequestID,
+		SessionID:         runState.SessionID,
+		ToolName:          toolCall.Name,
+		ArgsSnapshot:      cloneArguments(toolCall.Arguments),
+		Status:            status,
+		Reason:            reason,
+		ApprovalID:        approvalID,
+		CreatedAt:         r.now(),
+		Model:             r.model,
+		PromptVersion:     r.promptVersion,
+		ToolSchemaVersion: r.toolSchemaVersionFor(toolCall.Name),
 	}); err != nil {
 		return internalError("record tool call: "+err.Error(), contracts.ErrorSourceAgent)
 	}
@@ -257,20 +268,115 @@ func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolC
 		}
 	}
 	if err := r.stateStore.RecordToolCall(ctx, ToolCallRecord{
-		ToolCallID:   toolCall.ID,
-		RunID:        runID,
-		RequestID:    requestID,
-		SessionID:    sessionID,
-		ToolName:     toolCall.Name,
-		ArgsSnapshot: cloneArguments(toolCall.Arguments),
-		Status:       status,
-		ApprovalID:   approvalID,
-		Result:       &result,
-		ErrorMessage: errorMessage,
-		LatencyMS:    latency.Milliseconds(),
-		CreatedAt:    r.now(),
+		ToolCallID:        toolCall.ID,
+		RunID:             runID,
+		RequestID:         requestID,
+		SessionID:         sessionID,
+		ToolName:          toolCall.Name,
+		ArgsSnapshot:      cloneArguments(toolCall.Arguments),
+		Status:            status,
+		ApprovalID:        approvalID,
+		Result:            &result,
+		ErrorMessage:      errorMessage,
+		LatencyMS:         latency.Milliseconds(),
+		CreatedAt:         r.now(),
+		Model:             r.model,
+		PromptVersion:     r.promptVersion,
+		ToolSchemaVersion: r.toolSchemaVersionFor(toolCall.Name),
+		// PolicyDecisionRef and Source are populated when the tool layer
+		// stamps them on the ToolResult; if absent here, downstream readers
+		// can still cross-reference via run_id + tool_call_id.
+		PolicyDecisionRef: toolResultPolicyRef(&result),
+		Source:            toolResultSource(&result),
 	}); err != nil {
 		return internalError("record tool call: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	return nil
+}
+
+// toolSchemaVersionFor looks up the registered tool's parameter schema and
+// returns its content-hash version. Empty if the tool isn't registered or the
+// registry isn't available — caller stores empty rather than failing.
+func (r *Runtime) toolSchemaVersionFor(toolName string) string {
+	if r == nil || r.registry == nil || strings.TrimSpace(toolName) == "" {
+		return ""
+	}
+	def, ok := r.registry.GetDefinition(toolName)
+	if !ok {
+		return ""
+	}
+	return governance.ToolSchemaVersion(def.Parameters)
+}
+
+// toolResultPolicyRef extracts the policy decision reference attached to the
+// tool result. The runtime stamps result.PolicyDecisionRef from the live
+// risk decision (allowed path) or the approved ActionRecord (HITL path)
+// before persistence — see runtime.go and runtime_approval.go.
+func toolResultPolicyRef(result *tools.ToolResult) string {
+	if result == nil {
+		return ""
+	}
+	return strings.TrimSpace(result.PolicyDecisionRef)
+}
+
+// toolResultSource mirrors the tool's declared origin attribution onto the
+// tool_calls record. The runtime fills result.Source from the registered
+// tool's Group right after Execute returns (see stampToolResultSource), so
+// individual tool implementations don't have to set it themselves. Tools may
+// override Source for unusual cases (e.g. wrapping a raw connector).
+func toolResultSource(result *tools.ToolResult) string {
+	if result == nil {
+		return ""
+	}
+	return strings.TrimSpace(result.Source)
+}
+
+// stampPolicyRef populates PolicyDecisionRef on a risk decision that came from
+// the policy layer (which doesn't know the run context). This avoids sprinkling
+// governance.PolicyRef calls across every callsite; callers just wrap decisions.
+func (r *Runtime) stampPolicyRef(runID string, toolCallID string, decision contracts.RiskDecision) contracts.RiskDecision {
+	decision.PolicyDecisionRef = governance.PolicyRef(runID, toolCallID, decision.CheckedAt)
+	return decision
+}
+
+// buildGovernanceMetadata returns the full provenance bundle that this runtime
+// stamps onto every contract record (ToolCall, ToolResult, ApprovalRequest)
+// before it crosses an Agent-Core boundary. The bundle pulls Model and
+// PromptVersion from the live runtime, computes ToolSchemaVersion from the
+// registered tool's parameter schema, and carries through the PolicyDecisionRef
+// supplied by the caller (typically the live RiskDecision or the persisted
+// ActionRecord). Returns nil when every field is empty so JSON stays compact
+// for un-instrumented paths (tests, legacy entry points).
+func (r *Runtime) buildGovernanceMetadata(toolName string, policyDecisionRef string) *contracts.GovernanceMetadata {
+	if r == nil {
+		return nil
+	}
+	gm := &contracts.GovernanceMetadata{
+		Model:             strings.TrimSpace(r.model),
+		PromptVersion:     strings.TrimSpace(r.promptVersion),
+		ToolSchemaVersion: r.toolSchemaVersionFor(toolName),
+		PolicyDecisionRef: strings.TrimSpace(policyDecisionRef),
+	}
+	if gm.Model == "" && gm.PromptVersion == "" && gm.ToolSchemaVersion == "" && gm.PolicyDecisionRef == "" {
+		return nil
+	}
+	return gm
+}
+
+// GovernanceFromActionRecord rebuilds the provenance bundle from a persisted
+// ActionRecord. Use this on the restore-from-DB path where the values stored
+// when the run started are authoritative — the live runtime may have been
+// recreated with a different model/prompt/registry since then. Returns nil
+// when every field is empty so JSON stays compact.
+func GovernanceFromActionRecord(record ActionRecord) *contracts.GovernanceMetadata {
+	gm := &contracts.GovernanceMetadata{
+		Model:             strings.TrimSpace(record.Model),
+		PromptVersion:     strings.TrimSpace(record.PromptVersion),
+		ToolSchemaVersion: strings.TrimSpace(record.ToolSchemaVersion),
+		PolicyDecisionRef: strings.TrimSpace(record.PolicyDecisionRef),
+	}
+	if gm.Model == "" && gm.PromptVersion == "" && gm.ToolSchemaVersion == "" && gm.PolicyDecisionRef == "" {
+		return nil
+	}
+	return gm
 }
