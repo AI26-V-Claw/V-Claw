@@ -192,9 +192,9 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		now = time.Now
 	}
 	localLocation := config.LocalLocation
-	if localLocation == nil {
-		localLocation = time.Local
-	}
+	// Do not default to time.Local here.
+	// Production always sets this via AgentRuntimeConfig.Timezone → BuildRuntime.
+	// Tests leave it nil so runtimeLocalLocation falls back to now().Location().
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
 		if config.Provider != nil {
