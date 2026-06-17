@@ -30,6 +30,20 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
 		}
 	}
+	if len(memory.FileRefs) > 0 {
+		lines := make([]string, 0, len(memory.FileRefs))
+		for name, ref := range memory.FileRefs {
+			switch ref.Source {
+			case "local":
+				lines = append(lines, fmt.Sprintf("- %s: local file, path=%s", name, ref.Path))
+			case "drive":
+				lines = append(lines, fmt.Sprintf("- %s: Google Drive file, driveId=%s", name, ref.DriveID))
+			}
+		}
+		if len(lines) > 0 {
+			parts = append(parts, "Resolved file references (use these to attach files without re-resolving):\n"+strings.Join(lines, "\n"))
+		}
+	}
 	if len(parts) == 0 {
 		return ""
 	}
@@ -38,6 +52,7 @@ Use this memory to answer follow-up questions and maintain conversational contin
 Do not use memory alone to fill required parameters for a new write, destructive, local file, or code execution action.
 If the current user message does not explicitly provide required write parameters, ask a concise clarification question.
 HARD RULE — chat.sendMessage recipients: For DM to a specific person, always use the recipientEmail parameter with their email address — do NOT use chat.findSpacesByMembers or chat.createSpace separately; the tool handles find-or-create internally. For group chats, resolve the space name with chat.listSpaces and pass the spaces/... resource name in the space parameter. A spaces/... value from history must NEVER be reused as the destination for a different person.
+FILE REFS RULE — when "Resolved file references" lists a file by name: use the recorded source and path/driveId directly. Do NOT call filesystem.fileInfo or drive.listFiles again for that file unless the user says the file has changed.
 
 ` + strings.Join(parts, "\n\n"))
 }
@@ -205,7 +220,56 @@ func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, resu
 	if len(memory.LastActionResults) > 10 {
 		memory.LastActionResults = memory.LastActionResults[len(memory.LastActionResults)-10:]
 	}
+	if ref := extractFileRef(result); ref != nil {
+		if memory.FileRefs == nil {
+			memory.FileRefs = make(map[string]sessions.FileRef)
+		}
+		memory.FileRefs[ref.name] = sessions.FileRef{
+			Source:  ref.source,
+			Path:    ref.path,
+			DriveID: ref.driveID,
+		}
+	}
 	return r.saveSessionMemory(ctx, sessionID, memory)
+}
+
+type resolvedFileRef struct {
+	name    string
+	source  string
+	path    string
+	driveID string
+}
+
+// extractFileRef pulls a file reference from a tool result's ArtifactRef.
+// Returns nil when the result does not represent a single resolvable file.
+func extractFileRef(result tools.ToolResult) *resolvedFileRef {
+	art := result.ArtifactRef
+	if art == nil || strings.TrimSpace(art.Label) == "" {
+		return nil
+	}
+	switch art.Kind {
+	case "file":
+		// Filesystem tool — local file with absolute host path.
+		if strings.TrimSpace(art.URI) == "" {
+			return nil
+		}
+		return &resolvedFileRef{
+			name:   art.Label,
+			source: "local",
+			path:   art.URI,
+		}
+	case "google.drive.file":
+		// Drive tool — file stored on Google Drive.
+		if strings.TrimSpace(art.ID) == "" {
+			return nil
+		}
+		return &resolvedFileRef{
+			name:    art.Label,
+			source:  "drive",
+			driveID: art.ID,
+		}
+	}
+	return nil
 }
 
 func buildExtractiveSessionSummary(transcript []providers.Message, recentWindow int, maxLines int) string {
