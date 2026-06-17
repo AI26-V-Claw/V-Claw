@@ -641,7 +641,7 @@ If required information is missing, ask one concise clarification question inste
 					"duration", outcome.duration,
 					"content_preview", logPreview(result.ContentForLLM, 260),
 				)
-				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, r.policy.DecideToolCall(call.ID, batch[i].definition, true, r.now())); errShape != nil {
+				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, r.decideToolCall(ctx, call, batch[i].definition, true)); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -753,7 +753,7 @@ If required information is missing, ask one concise clarification question inste
 				definition.Name = providerToolCall.Name
 			}
 
-			decision := r.policy.DecideToolCall(providerToolCall.ID, definition, found, r.now())
+			decision := r.decideToolCall(ctx, providerToolCall, definition, found)
 			r.logger.Info("agent tool call proposed",
 				"request_id", message.RequestID,
 				"session_id", message.SessionID,
