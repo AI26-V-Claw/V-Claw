@@ -18,7 +18,7 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory
 	messages := make([]providers.Message, 0, len(transcript)+5)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
-		Content: runtimeSystemPrompt(r.now()),
+		Content: runtimeSystemPrompt(r.now().In(r.localLocation)),
 	})
 	if r.ltMemLoader != nil {
 		if ltm := r.ltMemLoader.Load(); ltm != "" {

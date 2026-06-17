@@ -17,11 +17,10 @@ func (r *Runtime) toolContentForProvider(toolName string, content string) string
 }
 
 func runtimeLocalLocation(r *Runtime) *time.Location {
-	now := time.Now
-	if r != nil && r.now != nil {
-		now = r.now
+	if r != nil && r.localLocation != nil {
+		return r.localLocation
 	}
-	return now().Location()
+	return time.Local
 }
 
 func enrichToolContentForLLM(toolName string, content string, location *time.Location) string {
