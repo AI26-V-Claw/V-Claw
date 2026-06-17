@@ -81,6 +81,8 @@ type AgentRuntimeConfig struct {
 	SandboxImage        string
 	SandboxRunner       sandboxruntime.Runner
 
+	Timezone string // IANA timezone name, e.g. "Asia/Ho_Chi_Minh"; defaults to "Asia/Ho_Chi_Minh" when empty
+
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
 	ParallelToolTimeoutDefault time.Duration
@@ -186,6 +188,15 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	if err := os.MkdirAll(longMemDir, 0700); err != nil {
 		return RuntimeBundle{}, fmt.Errorf("create long-term memory dir: %w", err)
 	}
+	tz := strings.TrimSpace(config.Timezone)
+	if tz == "" {
+		tz = "Asia/Ho_Chi_Minh"
+	}
+	localLocation, err := time.LoadLocation(tz)
+	if err != nil {
+		return RuntimeBundle{}, fmt.Errorf("invalid VCLAW_TIMEZONE %q: %w", tz, err)
+	}
+
 	var runtimeHooks toolhooks.Hooks = auditHooks
 	if config.ToolHooks != nil {
 		runtimeHooks = toolhooks.ChainHooks{config.ToolHooks, auditHooks}
@@ -206,6 +217,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		ToolHooks:                  runtimeHooks,
 		MaxIterations:              config.MaxIterations,
 		Model:                      model,
+		LocalLocation:              localLocation,
 		Compactor:                  compactor,
 		MemoryClassifierModel:      compactorModel,
 		LongMemDir:                 longMemDir,
@@ -328,7 +340,7 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 		return fmt.Errorf("configure Google tools: %w", err)
 	}
 
-	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient))); err != nil {
+	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient)).WithDriveSource(gdrive.NewClient(httpClient))); err != nil {
 		return err
 	}
 	// drive.uploadFile may only read local files from the same sandbox workspace

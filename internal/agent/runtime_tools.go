@@ -17,6 +17,9 @@ func (r *Runtime) toolContentForProvider(toolName string, content string) string
 }
 
 func runtimeLocalLocation(r *Runtime) *time.Location {
+	if r != nil && r.localLocation != nil {
+		return r.localLocation
+	}
 	now := time.Now
 	if r != nil && r.now != nil {
 		now = r.now
