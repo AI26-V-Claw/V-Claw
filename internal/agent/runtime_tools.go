@@ -20,7 +20,11 @@ func runtimeLocalLocation(r *Runtime) *time.Location {
 	if r != nil && r.localLocation != nil {
 		return r.localLocation
 	}
-	return time.Local
+	now := time.Now
+	if r != nil && r.now != nil {
+		now = r.now
+	}
+	return now().Location()
 }
 
 func enrichToolContentForLLM(toolName string, content string, location *time.Location) string {
