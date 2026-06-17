@@ -114,6 +114,7 @@ type Connector interface {
 type DriveFileSource interface {
 	GetFile(ctx context.Context, fileID string) (driveconnector.FileSummary, error)
 	DownloadFile(ctx context.Context, fileID string, maxBytes int64) (driveconnector.FileContentOutput, error)
+	ExportFile(ctx context.Context, fileID string, mimeType string, maxBytes int64) (driveconnector.FileContentOutput, error)
 }
 
 type Service struct {
@@ -896,9 +897,26 @@ func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([
 	attachments := make([]gmailconnector.DraftAttachmentInput, 0, len(cleaned))
 	totalSize := int64(0)
 	for _, fileID := range cleaned {
-		output, err := s.driveSource.DownloadFile(ctx, fileID, maxDraftAttachmentRaw)
+		meta, err := s.driveSource.GetFile(ctx, fileID)
 		if err != nil {
 			return nil, MapError(err)
+		}
+		var output driveconnector.FileContentOutput
+		if isGoogleAppsFile(meta.MimeType) {
+			exportMIME, ext := googleAppsExportFormat(meta.MimeType)
+			output, err = s.driveSource.ExportFile(ctx, fileID, exportMIME, maxDraftAttachmentRaw)
+			if err != nil {
+				return nil, MapError(err)
+			}
+			if output.File.Name != "" && !strings.Contains(output.File.Name, ".") {
+				output.File.Name = output.File.Name + ext
+			}
+			output.MimeType = exportMIME
+		} else {
+			output, err = s.driveSource.DownloadFile(ctx, fileID, maxDraftAttachmentRaw)
+			if err != nil {
+				return nil, MapError(err)
+			}
 		}
 		totalSize += output.Size
 		if totalSize > maxDraftAttachmentRaw {
@@ -1097,6 +1115,27 @@ func cleanStringSlice(values []string) []string {
 
 func invalidInput(message string) *ErrorShape {
 	return &ErrorShape{Code: "INVALID_INPUT", Message: message, Retryable: false}
+}
+
+// isGoogleAppsFile returns true for Google Workspace native formats that require
+// files.export instead of files.get?alt=media.
+func isGoogleAppsFile(mimeType string) bool {
+	return strings.HasPrefix(mimeType, "application/vnd.google-apps.")
+}
+
+// googleAppsExportFormat returns the export MIME type and file extension for a
+// Google Workspace native file. Defaults to PDF for all editor types.
+func googleAppsExportFormat(mimeType string) (exportMIME string, ext string) {
+	switch mimeType {
+	case "application/vnd.google-apps.spreadsheet":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"
+	case "application/vnd.google-apps.presentation":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"
+	case "application/vnd.google-apps.drawing":
+		return "image/png", ".png"
+	default:
+		return "application/pdf", ".pdf"
+	}
 }
 
 func internalError(message string) *ErrorShape {
