@@ -12,17 +12,21 @@ import (
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/governance"
+	"vclaw/internal/longmem"
 	"vclaw/internal/orchestration"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
+	"vclaw/internal/toolhooks"
 )
 
 const (
-	DefaultMaxIterations = 8
-	DefaultToolTimeout   = 30 * time.Second
-	approvalTTL          = 10 * time.Minute
+	DefaultMaxIterations       = 8
+	DefaultToolTimeout         = 30 * time.Second
+	approvalTTL                = 10 * time.Minute
+	pendingClarificationTTL    = 30 * time.Minute
 )
 
 var (
@@ -40,16 +44,23 @@ type RuntimeConfig struct {
 	SessionStore               sessions.Store
 	StateStore                 RuntimeStateStore
 	Logger                     *slog.Logger
+	ToolHooks                  toolhooks.Hooks
 	MaxIterations              int
 	ToolTimeout                time.Duration
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
 	ParallelToolTimeoutDefault time.Duration
+	SubtaskMaxChildren         int
+	SubtaskMaxDepth            int
+	SubtaskDefaultTimeout      time.Duration
+	SubtaskMaxTimeout          time.Duration
 	Model                      string
 	Now                        func() time.Time
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
 	MemoryClassifierModel      string
+	SoulPrompt                 string
+	LongMemDir                 string
 }
 
 type Runtime struct {
@@ -61,6 +72,7 @@ type Runtime struct {
 	sessionStore               sessions.Store
 	stateStore                 RuntimeStateStore
 	logger                     *slog.Logger
+	toolHooks                  toolhooks.Hooks
 	approvalMu                 sync.Mutex
 	pendingApprovals           map[string]pendingApproval
 	pendingBySession           map[string]string
@@ -69,11 +81,26 @@ type Runtime struct {
 	parallelExecutionEnabled   bool
 	parallelMaxWorkers         int
 	parallelToolTimeoutDefault time.Duration
+	subtaskMaxDepth            int
+	subtaskDefaultTimeout      time.Duration
+	subtaskMaxTimeout          time.Duration
 	model                      string
 	now                        func() time.Time
 	compactor                  *sessions.Compactor
 	contextWindow              int
 	memoryClassifierModel      string
+	promptVersion              string
+	subtasks                   *subtaskCoordinator
+	ltMemLoader                longTermMemoryLoader
+	ltMemFlusher               longTermMemoryFlusher
+}
+
+type longTermMemoryLoader interface {
+	Load() string
+}
+
+type longTermMemoryFlusher interface {
+	Flush(context.Context, string) error
 }
 
 type pendingApproval struct {
@@ -141,6 +168,21 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if parallelToolTimeoutDefault <= 0 {
 		parallelToolTimeoutDefault = toolTimeout
 	}
+	subtaskMaxDepth := config.SubtaskMaxDepth
+	if subtaskMaxDepth <= 0 {
+		subtaskMaxDepth = defaultSubtaskMaxDepth
+	}
+	subtaskDefaultTimeout := config.SubtaskDefaultTimeout
+	if subtaskDefaultTimeout <= 0 {
+		subtaskDefaultTimeout = defaultSubtaskTimeout
+	}
+	subtaskMaxTimeout := config.SubtaskMaxTimeout
+	if subtaskMaxTimeout <= 0 {
+		subtaskMaxTimeout = maxSubtaskTimeout
+	}
+	if subtaskDefaultTimeout > subtaskMaxTimeout {
+		subtaskDefaultTimeout = subtaskMaxTimeout
+	}
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
 		sessionStore = sessions.NewInMemoryStore()
@@ -152,6 +194,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+	hooks := config.ToolHooks
+	if hooks == nil {
+		hooks = toolhooks.NoopHooks{}
 	}
 	now := config.Now
 	if now == nil {
@@ -172,6 +218,19 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
+	// Compute the prompt version once at construction. We pass a zero time so
+	// the dynamic "current time" segment of runtimeSystemPrompt doesn't shift
+	// the hash on every Runtime creation. SOUL.md is hashed alongside so any
+	// edit there bumps the version automatically.
+	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
+	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
+	subtasks.now = now
+	var ltLoader longTermMemoryLoader
+	var ltFlusher longTermMemoryFlusher
+	if dir := strings.TrimSpace(config.LongMemDir); dir != "" && config.Provider != nil {
+		ltLoader = longmem.NewLoader(dir)
+		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
+	}
 	return &Runtime{
 		provider:                   config.Provider,
 		registry:                   config.Registry,
@@ -181,6 +240,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		sessionStore:               sessionStore,
 		stateStore:                 stateStore,
 		logger:                     logger,
+		toolHooks:                  hooks,
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
 		maxIterations:              maxIterations,
@@ -188,11 +248,18 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		parallelMaxWorkers:         parallelMaxWorkers,
 		parallelToolTimeoutDefault: parallelToolTimeoutDefault,
+		subtaskMaxDepth:            subtaskMaxDepth,
+		subtaskDefaultTimeout:      subtaskDefaultTimeout,
+		subtaskMaxTimeout:          subtaskMaxTimeout,
 		model:                      config.Model,
 		now:                        now,
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
+		promptVersion:              promptVersion,
+		subtasks:                   subtasks,
+		ltMemLoader:                ltLoader,
+		ltMemFlusher:               ltFlusher,
 	}
 }
 
@@ -286,7 +353,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	pendingClarificationResolution := pendingClarificationResolution{}
 	pendingClarificationActive := false
 	pendingMemoryChanged := false
-	if isUsablePendingClarification(pendingClarification) {
+	if isUsablePendingClarification(pendingClarification, r.now()) {
 		pendingClarificationResolution = r.resolvePendingClarification(ctx, *pendingClarification, message.Text, history)
 		if pendingClarificationResolution.IsAnswer {
 			pendingClarificationActive = true
@@ -533,7 +600,7 @@ If required information is missing, ask one concise clarification question inste
 		}
 
 		evidenceText := providerTranscriptEvidenceText(providerTranscript)
-		if batch, ok := r.prepareParallelBatch(
+		if batch, ok := r.prepareParallelBatch(ctx,
 			assistantMessage.ToolCalls,
 			r.parallelExecutionEnabled,
 			message.Text,
@@ -599,7 +666,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				toolResults = append(toolResults, contractToolResult(result))
+				toolResults = append(toolResults, contractToolResult(result, nil))
 				toolMessage := providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: call.ID,
@@ -791,7 +858,7 @@ If required information is missing, ask one concise clarification question inste
 					resp.SessionID = message.SessionID
 					return *resp, nil
 				}
-				contractResult := contractToolResult(result)
+				contractResult := contractToolResult(result, nil)
 				toolResults = append(toolResults, contractResult)
 
 				toolMessage := providers.Message{
