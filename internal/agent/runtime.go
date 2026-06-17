@@ -32,7 +32,7 @@ const (
 var (
 	emailAnswerPattern  = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
 	timeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
-	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giá»)(\s*\d{1,2})?\b`)
+	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|gi\u1edd)(\s*\d{1,2})?\b`)
 )
 
 type RuntimeConfig struct {
@@ -94,7 +94,6 @@ type Runtime struct {
 	ltMemLoader                longTermMemoryLoader
 	ltMemFlusher               longTermMemoryFlusher
 }
-
 type longTermMemoryLoader interface {
 	Load() string
 }
@@ -1006,7 +1005,7 @@ If required information is missing, ask one concise clarification question inste
 				}
 				base.ToolResults = toolResults
 				base.Status = contracts.AgentStatusBlocked
-				base.Message = "HÃ nh Ä‘á»™ng nÃ y khÃ´ng Ä‘Æ°á»£c phÃ©p thá»±c hiá»‡n do chÃ­nh sÃ¡ch báº£o máº­t hiá»‡n táº¡i."
+				base.Message = "H\u00e0nh \u0111\u1ed9ng n\u00e0y kh\u00f4ng \u0111\u01b0\u1ee3c ph\u00e9p th\u1ef1c hi\u1ec7n do ch\u00ednh s\u00e1ch b\u1ea3o m\u1eadt hi\u1ec7n t\u1ea1i."
 				base.Error = &contracts.ErrorShape{
 					Code:      policyErrorCode(found),
 					Message:   base.Message,
@@ -1148,4 +1147,5 @@ Message: messageText,
 	
 }
 }
+
 
