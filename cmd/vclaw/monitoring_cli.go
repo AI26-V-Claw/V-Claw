@@ -11,6 +11,8 @@ import (
 	"vclaw/internal/monitoring"
 )
 
+const sinceHelpText = "Lọc theo thời gian. Hỗ trợ thời lượng (1h, 24h, 7d) hoặc ngày cụ thể (2026-06-01)."
+
 func monitoringServerConfig(ctx context.Context) monitoring.ServerConfig {
 	googleToolsMode := envOrDefault("VCLAW_GOOGLE_TOOLS_MODE", app.ToolModeAuto)
 	webToolsMode := envOrDefault("VCLAW_WEB_TOOLS_MODE", app.ToolModeAuto)
@@ -41,6 +43,29 @@ func monitoringServerConfig(ctx context.Context) monitoring.ServerConfig {
 		ToolCount:             toolCount,
 		StartedAt:             time.Now(),
 	}
+}
+
+func parseSince(raw string, now time.Time) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+
+	if duration, err := parseSinceDuration(raw); err == nil {
+		return now.Add(-duration), nil
+	}
+
+	if parsed, err := time.ParseInLocation("2006-01-02", raw, time.Local); err == nil {
+		return parsed, nil
+	}
+	if parsed, err := time.ParseInLocation("2006-01-02T15:04:05", raw, time.Local); err == nil {
+		return parsed, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		return parsed, nil
+	}
+
+	return time.Time{}, fmt.Errorf("Giá trị --since không hợp lệ. %s", sinceHelpText)
 }
 
 func providerNameFromEnv() string {
@@ -87,10 +112,16 @@ func fileExists(path string) bool {
 	return !info.IsDir()
 }
 
-func parseSinceDuration(raw string, fallback time.Duration) (time.Duration, error) {
+func parseSinceDuration(raw string) (time.Duration, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fallback, nil
+		return 0, fmt.Errorf("empty since")
+	}
+	if strings.HasSuffix(raw, "d") {
+		days, err := time.ParseDuration(strings.TrimSuffix(raw, "d") + "h")
+		if err == nil {
+			return days * 24, nil
+		}
 	}
 	duration, err := time.ParseDuration(raw)
 	if err != nil {

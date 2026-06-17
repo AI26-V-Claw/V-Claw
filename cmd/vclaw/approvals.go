@@ -15,6 +15,8 @@ func runApprovals(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("vclaw approvals", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	status := fs.String("status", "", "optional status filter: pending, approved, rejected, expired, or revised")
+	sinceRaw := fs.String("since", "", sinceHelpText)
+	tool := fs.String("tool", "", "optional tool name filter")
 	limit := fs.Int("limit", 20, "maximum number of approvals to show")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -22,9 +24,19 @@ func runApprovals(ctx context.Context, args []string) error {
 	if value := strings.TrimSpace(*status); value != "" && !isValidApprovalStatus(value) {
 		return fmt.Errorf("invalid approval status %q", value)
 	}
+	var since time.Time
+	var err error
+	if value := strings.TrimSpace(*sinceRaw); value != "" {
+		since, err = parseSince(value, time.Now())
+		if err != nil {
+			return err
+		}
+	}
 
 	approvals, err := monitoring.QueryApprovals(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), monitoring.ApprovalQuery{
 		Status: strings.TrimSpace(*status),
+		Since:  since,
+		Tool:   strings.TrimSpace(*tool),
 		Limit:  *limit,
 	})
 	if err != nil {

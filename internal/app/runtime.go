@@ -29,8 +29,8 @@ import (
 	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
 	"vclaw/internal/sessions"
-	"vclaw/internal/toolhooks"
 	pgstore "vclaw/internal/store/pg"
+	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
@@ -85,6 +85,7 @@ type AgentRuntimeConfig struct {
 	LangfusePublicKey string
 	LangfuseSecretKey string
 	LangfuseHost      string
+	LangfuseProjectID string
 
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
@@ -136,6 +137,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			PublicKey:   config.LangfusePublicKey,
 			SecretKey:   config.LangfuseSecretKey,
 			Host:        config.LangfuseHost,
+			ProjectID:   config.LangfuseProjectID,
 			ServiceName: "vclaw",
 			Logger:      config.Logger,
 		})

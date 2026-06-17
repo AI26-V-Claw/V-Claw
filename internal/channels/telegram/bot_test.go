@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/contracts"
+	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
 )
 
@@ -359,6 +361,145 @@ func TestIsTelegramPolicyCommand(t *testing.T) {
 	}
 }
 
+func TestIsTelegramStatusCommand(t *testing.T) {
+	for _, input := range []string{"/status", "/status@vclaw_bot", "/status extra args"} {
+		if !isTelegramStatusCommand(input) {
+			t.Fatalf("expected %q to match /status command", input)
+		}
+	}
+	for _, input := range []string{"status", "xem status", "/other"} {
+		if isTelegramStatusCommand(input) {
+			t.Fatalf("unexpected match for %q", input)
+		}
+	}
+}
+
+func TestProcessUpdateRoutesStatusCommandToMonitoringSummary(t *testing.T) {
+	handler := &fakeHandler{}
+	oldLatest := queryLatestTelegramRun
+	oldLogs := queryTelegramLogs
+	t.Cleanup(func() {
+		queryLatestTelegramRun = oldLatest
+		queryTelegramLogs = oldLogs
+	})
+	queryLatestTelegramRun = func(_ context.Context, _ string, sessionID string) (monitoring.LatestRun, error) {
+		if sessionID != "telegram_chat_55" {
+			t.Fatalf("unexpected session id: %s", sessionID)
+		}
+		completedAt := time.Date(2026, 6, 17, 14, 32, 4, 100_000_000, time.Local)
+		return monitoring.LatestRun{
+			RunID:        "run_1",
+			RequestID:    "req_1",
+			SessionID:    sessionID,
+			OriginalGoal: "Tóm tắt email + tạo draft báo cáo",
+			Status:       "completed",
+			StartedAt:    time.Date(2026, 6, 17, 14, 32, 0, 0, time.Local),
+			CompletedAt:  &completedAt,
+		}, nil
+	}
+	queryTelegramLogs = func(_ context.Context, _ string, query monitoring.LogQuery) ([]monitoring.LogEvent, error) {
+		if query.RequestID != "req_1" || query.SessionID != "telegram_chat_55" {
+			t.Fatalf("unexpected log query: %#v", query)
+		}
+		return []monitoring.LogEvent{
+			{EventType: "tool_call", Level: "info", Status: "completed", Message: "Đọc 12 email mới"},
+			{EventType: "tool_call", Level: "info", Status: "completed", Message: "Đã tạo bản nháp email"},
+		}, nil
+	}
+
+	var sentText string
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		sentText = fmt.Sprint(payload["text"])
+		return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 21,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "/status",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.calls != 0 {
+		t.Fatalf("expected /status to bypass agent pipeline, got %d handler calls", handler.calls)
+	}
+	want := "[14:32] Tóm tắt email + tạo draft báo cáo\n\n✅ Đọc 12 email mới\n✅ Đã tạo bản nháp email\n⏱ 4.1 giây"
+	if sentText != want {
+		t.Fatalf("unexpected /status text:\n%s\nwant:\n%s", sentText, want)
+	}
+}
+
+func TestProcessUpdateRoutesStatusCommandToFailedMonitoringSummary(t *testing.T) {
+	handler := &fakeHandler{}
+	oldLatest := queryLatestTelegramRun
+	oldLogs := queryTelegramLogs
+	t.Cleanup(func() {
+		queryLatestTelegramRun = oldLatest
+		queryTelegramLogs = oldLogs
+	})
+	queryLatestTelegramRun = func(_ context.Context, _ string, _ string) (monitoring.LatestRun, error) {
+		completedAt := time.Date(2026, 6, 17, 14, 32, 2, 300_000_000, time.Local)
+		return monitoring.LatestRun{
+			RunID:        "run_2",
+			RequestID:    "req_2",
+			SessionID:    "telegram_chat_55",
+			OriginalGoal: "Gửi báo cáo",
+			Status:       "failed",
+			TraceID:      "a8f3c2zzzz",
+			StartedAt:    time.Date(2026, 6, 17, 14, 32, 0, 0, time.Local),
+			CompletedAt:  &completedAt,
+		}, nil
+	}
+	queryTelegramLogs = func(_ context.Context, _ string, _ monitoring.LogQuery) ([]monitoring.LogEvent, error) {
+		return []monitoring.LogEvent{{EventType: "tool_call", Level: "error", Status: "failed", Message: "Không kết nối được Google Drive"}}, nil
+	}
+
+	var sentText string
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		sentText = fmt.Sprint(payload["text"])
+		return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":43}}`), nil
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 22,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "/status",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	want := "[14:32] Gửi báo cáo\n\n❌ Không kết nối được Google Drive\n⏱ 2.3 giây\n🔍 Ref: A8F3C2"
+	if sentText != want {
+		t.Fatalf("unexpected failed /status text:\n%s\nwant:\n%s", sentText, want)
+	}
+}
+
 func TestProcessUpdateDownloadsPhotoAttachmentAndPassesMetadata(t *testing.T) {
 	handler := &fakeHandler{
 		outbound: contracts.AgentResponse{
@@ -384,6 +525,7 @@ func TestProcessUpdateDownloadsPhotoAttachmentAndPassesMetadata(t *testing.T) {
 	})
 
 	dataDir := t.TempDir()
+	t.Setenv("VCLAW_SANDBOX_WORKSPACE_DIR", filepath.Join(dataDir, "sandbox-root"))
 	bot := New("token", 123, dataDir, nil, handler, nil)
 	bot.client = &http.Client{Transport: botTransport}
 
@@ -416,7 +558,7 @@ func TestProcessUpdateDownloadsPhotoAttachmentAndPassesMetadata(t *testing.T) {
 	if !ok || len(paths) != 1 {
 		t.Fatalf("expected attachment path metadata, got %#v", handler.received.Metadata)
 	}
-	if !strings.Contains(paths[0], "telegram_attachments") {
+	if !strings.Contains(paths[0], filepath.Join("agent", "workspace", "data", "telegram_attachments")) {
 		t.Fatalf("expected local attachment path, got %q", paths[0])
 	}
 	bytes, err := os.ReadFile(paths[0])
@@ -817,6 +959,22 @@ func TestTelegramTextFromApprovalExpiredResponseShowsExpiredMessage(t *testing.T
 	})
 	if text != "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại." {
 		t.Fatalf("unexpected approval expired text: %q", text)
+	}
+}
+
+func TestTelegramTextFromFailedResponseIncludesTraceLinkWhenConfigured(t *testing.T) {
+	t.Setenv("LANGFUSE_HOST", "https://us.cloud.langfuse.com")
+	t.Setenv("LANGFUSE_PROJECT_ID", "proj_123")
+
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusFailed,
+		Data: map[string]any{
+			"trace_id": "trace_abc",
+		},
+	})
+
+	if !strings.Contains(text, "🔍 Xem chi tiết: https://us.cloud.langfuse.com/project/proj_123/traces/trace_abc") {
+		t.Fatalf("missing trace link: %q", text)
 	}
 }
 
@@ -1551,4 +1709,3 @@ func TestTelegramRenderHTMLConvertsTextFieldMarkers(t *testing.T) {
 		t.Fatalf("expected text field to avoid code markup, got %q", rendered)
 	}
 }
-

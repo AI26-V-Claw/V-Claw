@@ -372,8 +372,8 @@ func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 	if strings.Contains(result.ContentForLLM, "MessageIDHeader") || strings.Contains(result.ContentForLLM, "References") {
 		t.Fatalf("ContentForLLM should omit verbose message metadata: %s", result.ContentForLLM)
 	}
-	if !strings.Contains(result.ContentForUser, "long snippet should stay out") {
-		t.Fatalf("ContentForUser should keep full output, got: %s", result.ContentForUser)
+	if result.ContentForUser != "Đã tìm thấy 12 email" {
+		t.Fatalf("unexpected user summary, got: %s", result.ContentForUser)
 	}
 	if !strings.Contains(result.ContentForLLM, `"NextPageToken":"next-page"`) {
 		t.Fatalf("ContentForLLM should keep next page token, got: %s", result.ContentForLLM)

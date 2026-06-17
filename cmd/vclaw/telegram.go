@@ -88,6 +88,7 @@ func runTelegramRun(ctx context.Context, args []string) error {
 		LangfusePublicKey:          envFirst("LANGFUSE_PUBLIC_KEY"),
 		LangfuseSecretKey:          envFirst("LANGFUSE_SECRET_KEY"),
 		LangfuseHost:               envFirst("LANGFUSE_HOST"),
+		LangfuseProjectID:          envFirst("LANGFUSE_PROJECT_ID"),
 		Logger:                     logger,
 		Observer:                   metrics,
 		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",

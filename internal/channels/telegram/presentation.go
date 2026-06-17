@@ -13,6 +13,7 @@ import (
 
 	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
+	"vclaw/internal/traceutil"
 )
 
 const telegramApprovalStateTTL = 30 * time.Minute
@@ -212,6 +213,9 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	if response.Error != nil && response.Error.Code == contracts.ErrorApprovalExpired {
 		return "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại."
 	}
+	if traceURL := telegramTraceURL(response); traceURL != "" {
+		return telegramGenericErrorText() + "\n\n🔍 Xem chi tiết: " + traceURL
+	}
 
 	switch response.Status {
 	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusMaxIterationsReached:
@@ -251,6 +255,17 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	default:
 		return "Agent chưa có phản hồi."
 	}
+}
+
+func telegramTraceURL(response contracts.AgentResponse) string {
+	if response.Status != contracts.AgentStatusFailed {
+		return ""
+	}
+	if response.Data == nil {
+		return ""
+	}
+	traceID, _ := response.Data["trace_id"].(string)
+	return traceutil.BuildTraceURL(traceID)
 }
 
 func telegramDownloadAttachmentsResultText(results []contracts.ToolResult) string {
@@ -1018,4 +1033,3 @@ func looksLikeTelegramApprovalCommand(text string) bool {
 		return false
 	}
 }
-

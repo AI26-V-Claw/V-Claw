@@ -21,20 +21,24 @@ import (
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
 	"vclaw/internal/tools"
+	"vclaw/internal/traceutil"
 )
 
 type LangfuseConfig struct {
 	PublicKey   string
 	SecretKey   string
 	Host        string
+	ProjectID   string
 	ServiceName string
 	Environment string
 	Logger      *slog.Logger
 }
 
 type Langfuse struct {
-	logger *slog.Logger
-	tracer trace.Tracer
+	logger    *slog.Logger
+	tracer    trace.Tracer
+	host      string
+	projectID string
 }
 
 func NewLangfuse(ctx context.Context, cfg LangfuseConfig) (*Langfuse, error) {
@@ -87,8 +91,10 @@ func NewLangfuse(ctx context.Context, cfg LangfuseConfig) (*Langfuse, error) {
 		sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)),
 	)
 	return &Langfuse{
-		logger: logger,
-		tracer: provider.Tracer("vclaw/langfuse"),
+		logger:    logger,
+		tracer:    provider.Tracer("vclaw/langfuse"),
+		host:      host,
+		projectID: strings.TrimSpace(cfg.ProjectID),
 	}, nil
 }
 
@@ -110,6 +116,10 @@ func (l *Langfuse) StartRequest(ctx context.Context, message contracts.UserMessa
 		attrs = append(attrs, attribute.String("langfuse.trace.metadata.locale", locale))
 	}
 	ctx, span := l.tracer.Start(ctx, "vclaw.request", trace.WithAttributes(attrs...))
+	traceID := span.SpanContext().TraceID().String()
+	if strings.TrimSpace(traceID) != "" {
+		ctx = traceutil.WithTraceID(ctx, traceID)
+	}
 	return ctx, func(response contracts.AgentResponse, err error) {
 		if err != nil {
 			span.RecordError(err)

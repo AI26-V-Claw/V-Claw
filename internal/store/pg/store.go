@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,9 @@ type Store struct {
 	db *sql.DB
 }
 
+//go:embed migrations/*.sql
+var embeddedMigrations embed.FS
+
 func New(ctx context.Context, databaseURL string) (*Store, error) {
 	databaseURL = strings.TrimSpace(databaseURL)
 	if databaseURL == "" {
@@ -37,6 +41,10 @@ func New(ctx context.Context, databaseURL string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := applyEmbeddedMigrations(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("apply database migrations: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -49,6 +57,22 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func applyEmbeddedMigrations(ctx context.Context, db *sql.DB) error {
+	for _, name := range []string{
+		"migrations/001_init_vclaw_schema.sql",
+		"migrations/002_persistence_runtime_state.sql",
+	} {
+		data, err := embeddedMigrations.ReadFile(name)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", name, err)
+		}
+		if _, err := db.ExecContext(ctx, string(data)); err != nil {
+			return fmt.Errorf("apply %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) CreateRun(ctx context.Context, state agent.RunState) error {
@@ -721,6 +745,7 @@ func scanRunState(scanner interface{ Scan(dest ...any) error }) (agent.RunState,
 	if err != nil {
 		return agent.RunState{}, err
 	}
+	state.Data = map[string]any{}
 	state.Status = agent.RuntimeRunStatus(status)
 	if completedAt.Valid {
 		state.CompletedAt = &completedAt.Time

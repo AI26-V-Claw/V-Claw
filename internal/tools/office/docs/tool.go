@@ -356,11 +356,35 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 		ToolName:       call.Name,
 		Success:        true,
 		ContentForLLM:  string(data),
-		ContentForUser: string(data),
+		ContentForUser: docsUserSummary(call.Name, output),
 		ArtifactRef:    docsArtifactRef(output),
 		Metadata:       docsResultMetadata(output),
 		Truncated:      docsResultTruncated(output),
 	}
+}
+
+func docsUserSummary(toolName string, output any) string {
+	switch toolName {
+	case ToolNameGetDocument:
+		if out, ok := output.(DocumentOutput); ok {
+			return fmt.Sprintf("Đã đọc tài liệu %s", firstNonEmpty(out.Document.Title, out.Document.ID))
+		}
+	case ToolNameCreateDocument:
+		if out, ok := output.(gdocs.Document); ok {
+			return fmt.Sprintf("Đã tạo tài liệu %s", firstNonEmpty(out.Title, out.ID))
+		}
+	case ToolNameAppendText, ToolNameInsertText:
+		return "Đã thêm nội dung vào tài liệu"
+	case ToolNameReplaceText:
+		return "Đã thay thế nội dung trong tài liệu"
+	case ToolNameDeleteContent:
+		return "Đã xóa nội dung trong tài liệu"
+	}
+	data, err := json.Marshal(output)
+	if err != nil {
+		return fmt.Sprintf("%#v", output)
+	}
+	return string(data)
 }
 
 func docsArtifactRef(output any) *tools.ToolArtifactRef {

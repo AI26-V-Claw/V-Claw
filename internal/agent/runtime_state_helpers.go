@@ -12,6 +12,7 @@ import (
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
 	"vclaw/internal/tools"
+	"vclaw/internal/traceutil"
 )
 
 func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessage) (RunState, *contracts.ErrorShape) {
@@ -30,6 +31,7 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		state.Status = RuntimeRunStatusRunning
 		state.PendingActionID = ""
 		state.PendingClarificationID = ""
+		state.Data = mergeTraceData(state.Data, ctx)
 		state.UpdatedAt = now
 		state.CompletedAt = nil
 		if err := r.stateStore.UpdateRun(ctx, state); err != nil {
@@ -45,6 +47,7 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		SessionID:    message.SessionID,
 		RequestID:    message.RequestID,
 		OriginalGoal: message.Text,
+		Data:         mergeTraceData(nil, ctx),
 		Status:       RuntimeRunStatusRunning,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -53,6 +56,19 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		return RunState{}, internalError("create run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	return state, nil
+}
+
+func mergeTraceData(data map[string]any, ctx context.Context) map[string]any {
+	traceID := traceutil.TraceIDFromContext(ctx)
+	if traceID == "" {
+		return cloneRunData(data)
+	}
+	merged := cloneRunData(data)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	merged["trace_id"] = traceID
+	return merged
 }
 
 func (r *Runtime) updateRunState(ctx context.Context, state RunState) *contracts.ErrorShape {

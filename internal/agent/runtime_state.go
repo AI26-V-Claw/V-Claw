@@ -56,6 +56,7 @@ type RunState struct {
 	SessionID              string
 	RequestID              string
 	OriginalGoal           string
+	Data                   map[string]any
 	Status                 RuntimeRunStatus
 	IterationCount         int
 	PendingActionID        string
@@ -232,6 +233,32 @@ func (s *InMemoryRuntimeStateStore) FindOrCreateAction(_ context.Context, record
 		s.actionsByIdempotency[record.IdempotencyKey] = record.ActionID
 	}
 	return cloneActionRecord(record), true, nil
+}
+
+func cloneRunData(data map[string]any) map[string]any {
+	if len(data) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(data))
+	for key, value := range data {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneRunState(state RunState) RunState {
+	state.Data = cloneRunData(state.Data)
+	return state
+}
+
+func mergeRunState(existing RunState, incoming RunState) RunState {
+	if incoming.CreatedAt.IsZero() {
+		incoming.CreatedAt = existing.CreatedAt
+	}
+	if len(incoming.Data) == 0 {
+		incoming.Data = cloneRunData(existing.Data)
+	}
+	return incoming
 }
 
 func (s *InMemoryRuntimeStateStore) GetAction(_ context.Context, actionID string) (ActionRecord, error) {
@@ -422,21 +449,6 @@ func actionRecordTime(record ActionRecord) time.Time {
 		return record.CreatedAt
 	}
 	return record.UpdatedAt
-}
-
-func mergeRunState(existing RunState, next RunState) RunState {
-	if next.CreatedAt.IsZero() {
-		next.CreatedAt = existing.CreatedAt
-	}
-	return next
-}
-
-func cloneRunState(state RunState) RunState {
-	if state.CompletedAt != nil {
-		completedAt := *state.CompletedAt
-		state.CompletedAt = &completedAt
-	}
-	return state
 }
 
 func cloneActionRecord(record ActionRecord) ActionRecord {

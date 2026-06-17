@@ -17,6 +17,7 @@ import (
 	"vclaw/internal/sessions"
 	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
+	"vclaw/internal/traceutil"
 )
 
 const (
@@ -206,6 +207,10 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		RequestID: message.RequestID,
 		SessionID: message.SessionID,
 		Status:    contracts.AgentStatusFailed,
+		Data:      map[string]any{},
+	}
+	if traceID := traceutil.TraceIDFromContext(ctx); traceID != "" {
+		base.Data["trace_id"] = traceID
 	}
 	if errShape := validateUserMessage(message); errShape != nil {
 		base.Error = errShape

@@ -673,11 +673,109 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 		ToolName:       call.Name,
 		Success:        true,
 		ContentForLLM:  contentForLLM,
-		ContentForUser: string(data),
+		ContentForUser: driveUserSummary(call.Name, output),
 		ArtifactRef:    driveArtifactRef(output),
 		Metadata:       driveResultMetadata(call, output),
 		Truncated:      driveResultTruncated(output),
 	}
+}
+
+func driveUserSummary(toolName string, output any) string {
+	switch toolName {
+	case ToolNameListFiles:
+		if out, ok := output.(gdrive.ListFilesOutput); ok {
+			return fmt.Sprintf("Tìm thấy %d file", len(out.Files))
+		}
+	case ToolNameCreateFolder:
+		if file := drivePrimaryFile(output); file != nil {
+			return fmt.Sprintf("Đã tạo thư mục %s", firstNonEmpty(file.Name, "mới"))
+		}
+		return "Đã tạo thư mục"
+	case ToolNameCreateFile:
+		if file := drivePrimaryFile(output); file != nil {
+			return fmt.Sprintf("Đã tạo file %s", firstNonEmpty(file.Name, "mới"))
+		}
+		return "Đã tạo file"
+	case ToolNameUploadFile:
+		if file := drivePrimaryFile(output); file != nil {
+			return fmt.Sprintf("Đã tải lên file %s", firstNonEmpty(file.Name, "mới"))
+		}
+		return "Đã tải lên file"
+	case ToolNameShareFile:
+		if permission := drivePrimaryPermission(output); permission != nil {
+			recipient := firstNonEmpty(permission.EmailAddress, permission.Type, permission.Role)
+			return fmt.Sprintf("Đã chia sẻ file với %s", recipient)
+		}
+		return "Đã chia sẻ file"
+	case ToolNameTrashFile:
+		return "Đã chuyển file vào thùng rác"
+	case ToolNameMoveFile:
+		if file := drivePrimaryFile(output); file != nil {
+			return fmt.Sprintf("Đã di chuyển file tới %s", firstNonEmpty(file.Name, "vị trí mới"))
+		}
+		return "Đã di chuyển file"
+	case ToolNameMoveFiles:
+		if files, ok := output.(map[string]any); ok {
+			if moved, ok := files["Files"].([]gdrive.FileSummary); ok {
+				return fmt.Sprintf("Đã di chuyển %d file tới vị trí mới", len(moved))
+			}
+		}
+		return "Đã di chuyển file tới vị trí mới"
+	case ToolNameGetFile:
+		if file := drivePrimaryFile(output); file != nil {
+			return fmt.Sprintf("Đã đọc thông tin file %s", firstNonEmpty(file.Name, file.ID))
+		}
+		return "Đã đọc thông tin file"
+	case ToolNameExportFile, ToolNameDownloadFile:
+		if content, ok := output.(gdrive.FileContentOutput); ok {
+			return fmt.Sprintf("Đã đọc nội dung file %s", firstNonEmpty(content.File.Name, content.File.ID))
+		}
+		return "Đã đọc nội dung file"
+	case ToolNameUpdateFileMetadata:
+		if file := drivePrimaryFile(output); file != nil {
+			return fmt.Sprintf("Đã cập nhật thông tin file %s", firstNonEmpty(file.Name, file.ID))
+		}
+		return "Đã cập nhật thông tin file"
+	case ToolNameListPermissions:
+		if values, ok := output.(map[string]any); ok {
+			if permissions, ok := values["Permissions"].([]gdrive.PermissionSummary); ok {
+				return fmt.Sprintf("Đã đọc %d quyền chia sẻ của file", len(permissions))
+			}
+		}
+		return "Đã đọc quyền chia sẻ của file"
+	case ToolNameRevokePermission:
+		return "Đã gỡ quyền chia sẻ của file"
+	case ToolNameUntrashFile:
+		return "Đã khôi phục file từ thùng rác"
+	}
+	data, err := json.Marshal(output)
+	if err != nil {
+		return fmt.Sprintf("%#v", output)
+	}
+	return string(data)
+}
+
+func drivePrimaryFile(output any) *gdrive.FileSummary {
+	switch out := output.(type) {
+	case gdrive.FileSummary:
+		return &out
+	case gdrive.FileContentOutput:
+		return &out.File
+	case map[string]any:
+		if file, ok := out["File"].(gdrive.FileSummary); ok {
+			return &file
+		}
+	}
+	return nil
+}
+
+func drivePrimaryPermission(output any) *gdrive.PermissionSummary {
+	if out, ok := output.(map[string]any); ok {
+		if permission, ok := out["Permission"].(gdrive.PermissionSummary); ok {
+			return &permission
+		}
+	}
+	return nil
 }
 
 func compactDriveContentForLLM(toolName string, output any) string {

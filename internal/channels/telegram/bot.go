@@ -22,10 +22,17 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
+	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
+	sandboxtool "vclaw/internal/tools/system/sandbox"
 )
 
 const longPollTimeout = 30
+
+var (
+	queryLatestTelegramRun = monitoring.QueryLatestRunForSession
+	queryTelegramLogs      = monitoring.QueryLogs
+)
 
 type Bot struct {
 	token         string
@@ -219,6 +226,15 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+	if isTelegramStatusCommand(messageText) {
+		if err := b.sendStatusSummary(ctx, update.Message.Chat.ID); err != nil {
+			b.logger.Error("telegram status summary failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không kiểm tra được trạng thái lúc này. Vui lòng thử lại sau."); sendErr != nil {
+				return false, sendErr
+			}
+		}
+		return true, nil
+	}
 	attachments, err := b.downloadMessageAttachments(ctx, update.Message)
 	if err != nil {
 		if b.handler != nil {
@@ -395,6 +411,80 @@ func isTelegramPolicyCommand(text string) bool {
 		command = command[:index]
 	}
 	return strings.EqualFold(command, "policy")
+}
+
+func isTelegramStatusCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "status")
+}
+
+func (b *Bot) sendStatusSummary(ctx context.Context, chatID int64) error {
+	run, err := queryLatestTelegramRun(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), fmt.Sprintf("telegram_chat_%d", chatID))
+	if err != nil {
+		return err
+	}
+	text, err := b.renderStatusSummary(ctx, run)
+	if err != nil {
+		return err
+	}
+	_, err = b.sendMessage(ctx, chatID, text)
+	return err
+}
+
+func (b *Bot) renderStatusSummary(ctx context.Context, run monitoring.LatestRun) (string, error) {
+	if strings.TrimSpace(run.RunID) == "" {
+		return "Chưa có lệnh nào được thực hiện gần đây.", nil
+	}
+	events, err := queryTelegramLogs(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), monitoring.LogQuery{
+		Limit:     20,
+		RequestID: run.RequestID,
+		SessionID: run.SessionID,
+	})
+	if err != nil {
+		return "", err
+	}
+	lines := make([]string, 0, len(events)+3)
+	if goal := strings.TrimSpace(run.OriginalGoal); goal != "" {
+		lines = append(lines, fmt.Sprintf("[%s] %s", run.StartedAt.Local().Format("15:04"), goal))
+		lines = append(lines, "")
+	}
+	for _, event := range events {
+		if event.EventType != "tool_call" || strings.TrimSpace(event.Message) == "" {
+			continue
+		}
+		prefix := "✅"
+		if strings.EqualFold(event.Level, "error") || strings.EqualFold(event.Status, "failed") {
+			prefix = "❌"
+		}
+		lines = append(lines, fmt.Sprintf("%s %s", prefix, strings.TrimSpace(event.Message)))
+	}
+	if len(lines) == 0 {
+		return "Chưa có lệnh nào được thực hiện gần đây.", nil
+	}
+	completedAt := time.Now()
+	if run.CompletedAt != nil {
+		completedAt = *run.CompletedAt
+	}
+	elapsed := completedAt.Sub(run.StartedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	lines = append(lines, fmt.Sprintf("⏱ %.1f giây", elapsed.Seconds()))
+	if strings.EqualFold(run.Status, "failed") && strings.TrimSpace(run.TraceID) != "" {
+		ref := strings.ToUpper(strings.TrimSpace(run.TraceID))
+		if len(ref) > 6 {
+			ref = ref[:6]
+		}
+		lines = append(lines, fmt.Sprintf("🔍 Ref: %s", ref))
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func (b *Bot) rejectPendingApprovalForNewMessage(ctx context.Context, updateID int, approvalContext telegramApprovalContext) error {
@@ -1081,7 +1171,7 @@ func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramM
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	outputDir := filepath.Join(b.dataDir, "telegram_attachments", safeTelegramID(strconv.FormatInt(message.Chat.ID, 10)), strconv.Itoa(message.MessageID))
+	outputDir := filepath.Join(telegramAttachmentWorkspaceRoot(), "data", "telegram_attachments", safeTelegramID(strconv.FormatInt(message.Chat.ID, 10)), strconv.Itoa(message.MessageID))
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -1109,6 +1199,19 @@ func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramM
 		})
 	}
 	return downloaded, nil
+}
+
+func telegramAttachmentWorkspaceRoot() string {
+	workspaceRoot := strings.TrimSpace(os.Getenv("VCLAW_SANDBOX_WORKSPACE_DIR"))
+	if workspaceRoot == "" {
+		workspaceRoot = ".sandbox-workspace"
+	}
+	if !filepath.IsAbs(workspaceRoot) {
+		if abs, err := filepath.Abs(workspaceRoot); err == nil {
+			workspaceRoot = abs
+		}
+	}
+	return filepath.Join(workspaceRoot, sandboxtool.DefaultSessionID, "workspace")
 }
 
 type telegramAttachmentCandidate struct {

@@ -15,7 +15,7 @@ func runLogs(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("vclaw logs", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	limit := fs.Int("limit", 50, "maximum number of log events to show")
-	sinceRaw := fs.String("since", "1h", "look back duration, for example 15m or 2h")
+	sinceRaw := fs.String("since", "1h", sinceHelpText)
 	level := fs.String("level", "", "optional level filter: error or info")
 	tool := fs.String("tool", "", "optional tool name filter")
 	if err := fs.Parse(args); err != nil {
@@ -24,14 +24,14 @@ func runLogs(ctx context.Context, args []string) error {
 	if value := strings.TrimSpace(*level); value != "" && value != "error" && value != "info" {
 		return fmt.Errorf("invalid level %q", value)
 	}
-	since, err := parseSinceDuration(*sinceRaw, time.Hour)
+	since, err := parseSince(*sinceRaw, time.Now())
 	if err != nil {
 		return err
 	}
 
 	events, err := monitoring.QueryLogs(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), monitoring.LogQuery{
 		Limit: *limit,
-		Since: time.Now().Add(-since),
+		Since: since,
 		Level: strings.TrimSpace(*level),
 		Tool:  strings.TrimSpace(*tool),
 	})
@@ -68,6 +68,9 @@ func formatLogEvent(event monitoring.LogEvent) string {
 	}
 	if value := strings.TrimSpace(event.SessionID); value != "" {
 		parts = append(parts, "sessionId="+value)
+	}
+	if value := strings.TrimSpace(event.TraceURL); value != "" {
+		parts = append(parts, "traceUrl="+value)
 	}
 	if value := strings.TrimSpace(event.Message); value != "" {
 		parts = append(parts, "message="+compactField(value))

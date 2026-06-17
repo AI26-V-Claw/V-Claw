@@ -521,10 +521,50 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 		ToolName:       call.Name,
 		Success:        true,
 		ContentForLLM:  string(data),
-		ContentForUser: string(data),
+		ContentForUser: sheetsUserSummary(call.Name, output),
 		ArtifactRef:    sheetsArtifactRef(output),
 		Metadata:       sheetsResultMetadata(output),
 	}
+}
+
+func sheetsUserSummary(toolName string, output any) string {
+	switch toolName {
+	case ToolNameGetSpreadsheet:
+		if out, ok := output.(gsheets.SpreadsheetSummary); ok {
+			return fmt.Sprintf("Đã đọc bảng tính %s", firstNonEmpty(out.Title, out.ID))
+		}
+	case ToolNameReadValues:
+		return "Đã đọc dữ liệu từ bảng tính"
+	case ToolNameBatchGetValues:
+		if out, ok := output.(gsheets.BatchValuesOutput); ok {
+			return fmt.Sprintf("Đã đọc dữ liệu từ %d vùng trong bảng tính", len(out.Ranges))
+		}
+		return "Đã đọc dữ liệu từ bảng tính"
+	case ToolNameCreateSpreadsheet:
+		if out, ok := output.(gsheets.SpreadsheetSummary); ok {
+			return fmt.Sprintf("Đã tạo bảng tính %s", firstNonEmpty(out.Title, out.ID))
+		}
+		return "Đã tạo bảng tính"
+	case ToolNameUpdateValues, ToolNameBatchUpdateValues:
+		return "Đã cập nhật dữ liệu trong bảng tính"
+	case ToolNameAppendValues:
+		return "Đã thêm dữ liệu vào bảng tính"
+	case ToolNameClearValues:
+		return "Đã xóa dữ liệu trong bảng tính"
+	case ToolNameAddSheet:
+		return "Đã thêm trang mới vào bảng tính"
+	case ToolNameRenameSheet:
+		return "Đã đổi tên trang trong bảng tính"
+	case ToolNameDeleteSheet:
+		return "Đã xóa trang trong bảng tính"
+	case ToolNameDuplicateSheet:
+		return "Đã nhân bản trang trong bảng tính"
+	}
+	data, err := json.Marshal(output)
+	if err != nil {
+		return fmt.Sprintf("%#v", output)
+	}
+	return string(data)
 }
 
 func sheetsArtifactRef(output any) *tools.ToolArtifactRef {

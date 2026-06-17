@@ -155,8 +155,8 @@ func TestMoveFilesMovesEveryFileID(t *testing.T) {
 	if result.Metadata["file_count"] != 2 {
 		t.Fatalf("expected file_count metadata, got %#v", result.Metadata)
 	}
-	if !strings.Contains(result.ContentForUser, "file_1") || !strings.Contains(result.ContentForUser, "file_2") {
-		t.Fatalf("result should include moved files, got %s", result.ContentForUser)
+	if result.ContentForUser != "Đã di chuyển 2 file tới vị trí mới" {
+		t.Fatalf("unexpected user summary: %s", result.ContentForUser)
 	}
 }
 
@@ -180,8 +180,8 @@ func TestListFilesUsesCompactContentForLLM(t *testing.T) {
 		if strings.Contains(result.ContentForLLM, verbose) {
 			t.Fatalf("ContentForLLM should omit verbose field %q: %s", verbose, result.ContentForLLM)
 		}
-		if !strings.Contains(result.ContentForUser, verbose) {
-			t.Fatalf("ContentForUser should keep verbose field %q: %s", verbose, result.ContentForUser)
+		if result.ContentForUser != "Tìm thấy 1 file" {
+			t.Fatalf("unexpected user summary: %s", result.ContentForUser)
 		}
 	}
 }
