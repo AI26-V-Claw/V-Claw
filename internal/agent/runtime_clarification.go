@@ -583,7 +583,7 @@ func isUsablePendingClarification(pending *sessions.PendingClarification, now ti
 	if !hasContent {
 		return false
 	}
-	if !pending.CreatedAt.IsZero() && now.Sub(pending.CreatedAt) >= approvalTTL {
+	if !pending.CreatedAt.IsZero() && now.Sub(pending.CreatedAt) >= pendingClarificationTTL {
 		return false
 	}
 	return true

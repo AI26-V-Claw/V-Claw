@@ -438,11 +438,13 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 
 	userMessage := providers.Message{Role: providers.MessageRoleUser, Content: messageTextWithAttachmentContext(message)}
 	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
-		completedTool, _ := message.Metadata["completedTool"].(string)
-		if completedTool != "" {
-			userMessage.Content = fmt.Sprintf("[Tiáº¿p tá»¥c sau khi %s Ä‘Æ°á»£c xÃ¡c nháº­n vÃ  thá»±c thi]", completedTool)
-		} else {
-			userMessage.Content = "[Tiáº¿p tá»¥c sau khi hÃ nh Ä‘á»™ng Ä‘Æ°á»£c xÃ¡c nháº­n vÃ  thá»±c thi]"
+		if strings.TrimSpace(userMessage.Content) == "" {
+			completedTool, _ := message.Metadata["completedTool"].(string)
+			if completedTool != "" {
+				userMessage.Content = fmt.Sprintf("Continuing after approved tool: %s", completedTool)
+			} else {
+				userMessage.Content = "Continuing after approved action"
+			}
 		}
 	}
 	transcript = append(transcript, userMessage)
