@@ -19,6 +19,11 @@ type fakeProvider struct {
 	calls     []providers.ChatRequest
 }
 
+type blockingProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
 type blockingRuntimeTool struct {
 	release chan struct{}
 }
@@ -391,6 +396,34 @@ func (p *fakeProvider) Generate(ctx context.Context, req *providers.GenerateRequ
 func (p *fakeProvider) Name() string { return "fake" }
 
 func (p *fakeProvider) Close() error { return nil }
+
+func (p *blockingProvider) Chat(ctx context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
+	if p.started != nil {
+		close(p.started)
+	}
+	if p.release != nil {
+		select {
+		case <-p.release:
+			return providers.ChatResponse{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "released"}}, nil
+		case <-ctx.Done():
+			return providers.ChatResponse{}, ctx.Err()
+		}
+	}
+	<-ctx.Done()
+	return providers.ChatResponse{}, ctx.Err()
+}
+
+func (p *blockingProvider) Generate(ctx context.Context, req *providers.GenerateRequest) (*providers.GenerateResponse, error) {
+	_, err := p.Chat(ctx, providers.ChatRequest{Model: req.Model})
+	if err != nil {
+		return nil, err
+	}
+	return &providers.GenerateResponse{Text: "released", Model: req.Model}, nil
+}
+
+func (p *blockingProvider) Name() string { return "blocking" }
+
+func (p *blockingProvider) Close() error { return nil }
 
 func providerMessagesContent(messages []providers.Message) string {
 	parts := make([]string, 0, len(messages))

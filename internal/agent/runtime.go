@@ -24,6 +24,7 @@ import (
 const (
 	DefaultMaxIterations    = 8
 	DefaultToolTimeout      = 30 * time.Second
+	DefaultProviderTimeout  = 60 * time.Second
 	approvalTTL             = 10 * time.Minute
 	pendingClarificationTTL = 30 * time.Minute
 )
@@ -45,6 +46,7 @@ type RuntimeConfig struct {
 	Logger                     *slog.Logger
 	ToolHooks                  toolhooks.Hooks
 	MaxIterations              int
+	ProviderTimeout            time.Duration
 	ToolTimeout                time.Duration
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
@@ -91,6 +93,7 @@ type Runtime struct {
 	pendingApprovals           map[string]pendingApproval
 	pendingBySession           map[string]string
 	maxIterations              int
+	providerTimeout            time.Duration
 	toolTimeout                time.Duration
 	parallelExecutionEnabled   bool
 	parallelMaxWorkers         int
@@ -107,10 +110,10 @@ type Runtime struct {
 	// promptVersion is the content-hash fingerprint of the effective system
 	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
-	promptVersion              string
-	subtasks                   *subtaskCoordinator
-	ltMemLoader                longTermMemoryLoader  // nil = disabled
-	ltMemFlusher               longTermMemoryFlusher // nil = disabled
+	promptVersion string
+	subtasks      *subtaskCoordinator
+	ltMemLoader   longTermMemoryLoader  // nil = disabled
+	ltMemFlusher  longTermMemoryFlusher // nil = disabled
 }
 
 type pendingApproval struct {
@@ -144,6 +147,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	toolTimeout := config.ToolTimeout
 	if toolTimeout <= 0 {
 		toolTimeout = DefaultToolTimeout
+	}
+	providerTimeout := config.ProviderTimeout
+	if providerTimeout <= 0 {
+		providerTimeout = DefaultProviderTimeout
 	}
 	parallelMaxWorkers := config.ParallelMaxWorkers
 	if parallelMaxWorkers < 1 {
@@ -236,6 +243,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
 		maxIterations:              maxIterations,
+		providerTimeout:            providerTimeout,
 		toolTimeout:                toolTimeout,
 		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		parallelMaxWorkers:         parallelMaxWorkers,
@@ -261,6 +269,30 @@ func memoryClassifierModel(config RuntimeConfig) string {
 		return model
 	}
 	return strings.TrimSpace(config.Model)
+}
+
+type providerChatOutcome struct {
+	response providers.ChatResponse
+	err      error
+}
+
+func (r *Runtime) chatWithProviderTimeout(ctx context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
+	if r.providerTimeout <= 0 {
+		return r.provider.Chat(ctx, request)
+	}
+	providerCtx, cancel := context.WithTimeout(ctx, r.providerTimeout)
+	defer cancel()
+	outcomes := make(chan providerChatOutcome, 1)
+	go func() {
+		response, err := r.provider.Chat(providerCtx, request)
+		outcomes <- providerChatOutcome{response: response, err: err}
+	}()
+	select {
+	case outcome := <-outcomes:
+		return outcome.response, outcome.err
+	case <-providerCtx.Done():
+		return providers.ChatResponse{}, providerCtx.Err()
+	}
 }
 
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
@@ -492,7 +524,7 @@ agentLoop:
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
 		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
-		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
+		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
 			Tools:      r.providerTools(),
@@ -501,15 +533,31 @@ agentLoop:
 		if err != nil {
 			code := contracts.ErrorProviderError
 			retryable := providers.IsRetryableError(err)
+			messageText := "provider chat failed: " + err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				code = contracts.ErrorProviderUnavailable
+				retryable = true
+				messageText = fmt.Sprintf("provider chat timed out after %s", r.providerTimeout)
+			} else if errors.Is(err, context.Canceled) {
+				code = contracts.ErrorProviderUnavailable
+				retryable = true
+				messageText = "provider chat canceled: " + err.Error()
+			}
 			if retryable {
 				code = contracts.ErrorProviderUnavailable
 			}
 			base.Error = &contracts.ErrorShape{
 				Code:      code,
-				Message:   "provider chat failed: " + err.Error(),
+				Message:   messageText,
 				Source:    contracts.ErrorSourceProvider,
 				Retryable: retryable,
 			}
+			r.appendRunEvent(ctx, runState.RunID, "provider.failed", map[string]any{
+				"iteration": iteration,
+				"code":      string(code),
+				"retryable": retryable,
+				"timeout":   errors.Is(err, context.DeadlineExceeded),
+			})
 			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
 				base.Error = errShape
 			}

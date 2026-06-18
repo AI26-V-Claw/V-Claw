@@ -43,6 +43,43 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}
 }
 
+func TestRuntimeProviderTurnTimeoutFailsRunState(t *testing.T) {
+	store := NewInMemoryRuntimeStateStore()
+	started := make(chan struct{})
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:        &blockingProvider{started: started},
+		Registry:        tools.NewToolRegistry(),
+		StateStore:      store,
+		ProviderTimeout: 10 * time.Millisecond,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatalf("provider was not called")
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected failed response, got %#v", response)
+	}
+	if response.Error == nil || response.Error.Code != contracts.ErrorProviderUnavailable || !response.Error.Retryable {
+		t.Fatalf("expected retryable provider unavailable timeout, got %#v", response.Error)
+	}
+	run, err := store.GetRun(context.Background(), runIDForMessage(runtimeTestMessage()))
+	if err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if run.Status != RuntimeRunStatusFailed || run.CompletedAt == nil {
+		t.Fatalf("expected failed completed run state, got %#v", run)
+	}
+	if len(store.events) == 0 || store.events[len(store.events)-1].Type != "provider.failed" {
+		t.Fatalf("expected provider.failed event, got %#v", store.events)
+	}
+}
+
 func TestRuntimeBypassesRedundantClarificationForSafeChat(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Tôi là V-Claw."},

@@ -167,7 +167,7 @@ func (*SubtaskTool) Parameters() tools.ToolSchema {
 			"role":            map[string]any{"type": "string", "enum": []string{subtaskRoleLeaf, subtaskRoleOrchestrator}, "description": "Child role. leaf cannot delegate; orchestrator may delegate while depth budget remains."},
 			"context":         map[string]any{"type": "string", "description": "Optional parent-provided context for the isolated child prompt."},
 		},
-		"required": []string{"task"},
+		"required":             []string{"task"},
 		"additionalProperties": false,
 	}
 }
@@ -202,7 +202,30 @@ func (t *SubtaskTool) Execute(ctx context.Context, call tools.ToolCall) tools.To
 		return subtaskErrorResult(call, "max_children_exceeded", err.Error(), startedAt)
 	}
 	taskID := fmt.Sprintf("subtask_%s_%d", safeID(parentRunID), childNumber)
+	t.parent.appendRunEvent(ctx, parentRunID, "subtask.started", map[string]any{
+		"task_id":         taskID,
+		"label":           request.Label,
+		"role":            request.Role,
+		"depth":           childDepth,
+		"timeout_seconds": int(request.Timeout.Seconds()),
+		"effective_tools": effectiveTools,
+	})
 	childResult := t.runChild(ctx, taskID, parentRunID, childDepth, request, childRegistry, effectiveTools, startedAt)
+	eventType := "subtask.completed"
+	if childResult.Status == "timeout" {
+		eventType = "subtask.timeout"
+	} else if childResult.Status == "failed" || childResult.Error != "" {
+		eventType = "subtask.failed"
+	}
+	t.parent.appendRunEvent(ctx, parentRunID, eventType, map[string]any{
+		"task_id":      taskID,
+		"label":        request.Label,
+		"status":       childResult.Status,
+		"runtime_ms":   childResult.RuntimeMS,
+		"timed_out":    childResult.TimedOut,
+		"error":        childResult.Error,
+		"child_run_id": "run_" + safeID(taskID),
+	})
 	return subtaskSuccessResult(call, childResult, startedAt)
 }
 
@@ -314,6 +337,7 @@ func (t *SubtaskTool) runChild(ctx context.Context, taskID string, parentRunID s
 		SubtaskMaxDepth:            t.parent.subtaskMaxDepth,
 		SubtaskDefaultTimeout:      t.parent.subtaskDefaultTimeout,
 		SubtaskMaxTimeout:          t.parent.subtaskMaxTimeout,
+		ProviderTimeout:            request.Timeout,
 	})
 	child.subtasks = t.parent.subtasks
 	response, err := child.Run(childCtx, contracts.UserMessage{
