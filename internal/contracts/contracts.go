@@ -154,8 +154,10 @@ type AgentResponse struct {
 	Data            map[string]any   `json:"data,omitempty"`
 	ToolResults     []ToolResult     `json:"toolResults,omitempty"`
 	Error           *ErrorShape      `json:"error,omitempty"`
-	Plan            *Plan            `json:"plan,omitempty"`
-	Output          *UserOutput      `json:"output,omitempty"`
+	// FailureReason is a machine-readable reason for non-completed status. Empty when Status is completed.
+	FailureReason string      `json:"failureReason,omitempty"`
+	Plan          *Plan       `json:"plan,omitempty"`
+	Output        *UserOutput `json:"output,omitempty"`
 }
 
 type ToolCall struct {
@@ -181,13 +183,13 @@ type ToolResult struct {
 
 	// ArtifactRef references the primary resource this tool accessed or produced.
 	// Mirrors tools.ToolArtifactRef but scoped to the shared contracts package.
-	ArtifactRef *ArtifactRef   `json:"artifactRef,omitempty"`
+	ArtifactRef *ArtifactRef `json:"artifactRef,omitempty"`
 	// Metadata holds optional structured key-value pairs (e.g. line counts, byte sizes).
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 	// Truncated is true when the content payload was cut short due to size limits.
-	Truncated   bool           `json:"truncated,omitempty"`
+	Truncated bool `json:"truncated,omitempty"`
 	// Redacted is true when ContentForLLM was sanitized before inclusion in the LLM context.
-	Redacted    bool           `json:"redacted,omitempty"`
+	Redacted bool `json:"redacted,omitempty"`
 	// Source identifies the origin layer that produced this result, e.g.
 	// "tool:gmail", "connector:tavily", "tool:sandbox.python". Populated by the
 	// tool layer and consumed by audit/N4 to group records by origin without

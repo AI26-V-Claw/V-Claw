@@ -22,6 +22,7 @@ const (
 	RuntimeRunStatusFailed               RuntimeRunStatus = "failed"
 	RuntimeRunStatusBlocked              RuntimeRunStatus = "blocked"
 	RuntimeRunStatusMaxIterations        RuntimeRunStatus = "max_iterations"
+	RuntimeRunStatusCancelled            RuntimeRunStatus = "cancelled"
 )
 
 type ActionStatus string
@@ -57,6 +58,7 @@ type RunState struct {
 	RequestID              string
 	OriginalGoal           string
 	Status                 RuntimeRunStatus
+	FailureReason          string
 	IterationCount         int
 	PendingActionID        string
 	PendingClarificationID string

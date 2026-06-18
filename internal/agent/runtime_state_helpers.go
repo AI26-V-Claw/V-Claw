@@ -69,26 +69,27 @@ func (r *Runtime) updateRunState(ctx context.Context, state RunState) *contracts
 	return nil
 }
 
-func (r *Runtime) finishRunState(ctx context.Context, state RunState, status RuntimeRunStatus) *contracts.ErrorShape {
+func (r *Runtime) finishRunState(ctx context.Context, state RunState, status RuntimeRunStatus, reason string) (RunState, *contracts.ErrorShape) {
 	now := r.now()
 	state.Status = status
+	state.FailureReason = reason
 	state.UpdatedAt = now
 	switch status {
-	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusMaxIterations:
+	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusMaxIterations, RuntimeRunStatusCancelled:
 		state.PendingActionID = ""
 		state.PendingClarificationID = ""
 		state.CompletedAt = &now
 	}
 	if err := r.stateStore.UpdateRun(ctx, state); err != nil {
-		return internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
+		return state, internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	switch status {
-	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusMaxIterations:
+	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusMaxIterations, RuntimeRunStatusCancelled:
 		if r.subtasks != nil {
 			r.subtasks.complete(state.RunID)
 		}
 	}
-	return nil
+	return state, nil
 }
 
 func (r *Runtime) resumeRunState(ctx context.Context, runID string) *contracts.ErrorShape {
@@ -103,12 +104,13 @@ func (r *Runtime) resumeRunState(ctx context.Context, runID string) *contracts.E
 	return r.updateRunState(ctx, state)
 }
 
-func (r *Runtime) finishRunByID(ctx context.Context, runID string, status RuntimeRunStatus) *contracts.ErrorShape {
+func (r *Runtime) finishRunByID(ctx context.Context, runID string, status RuntimeRunStatus, reason string) *contracts.ErrorShape {
 	state, err := r.stateStore.GetRun(ctx, runID)
 	if err != nil {
 		return internalError("load run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
-	return r.finishRunState(ctx, state, status)
+	_, errShape := r.finishRunState(ctx, state, status, reason)
+	return errShape
 }
 
 func runIDForMessage(message contracts.UserMessage) string {

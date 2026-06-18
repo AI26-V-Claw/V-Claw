@@ -56,3 +56,4 @@ scripts/bin/harness-cli.exe
 # Personal harnesses
 docs/khang-harness/
 docs/testing-e2e/
+.gomodcache/
