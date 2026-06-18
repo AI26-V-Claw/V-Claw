@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
 	"vclaw/internal/tools"
@@ -96,6 +99,9 @@ func (r *Runtime) finishRunState(ctx context.Context, state RunState, status Run
 	if status == RuntimeRunStatusFailed && strings.TrimSpace(state.ErrorRef) == "" {
 		state.ErrorRef = newErrorRef()
 	}
+	if status == RuntimeRunStatusFailed && strings.TrimSpace(state.ErrorRef) != "" {
+		attachErrorRefTraceMetadata(ctx, state.ErrorRef)
+	}
 	if err := r.stateStore.UpdateRun(ctx, state); err != nil {
 		return internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
@@ -128,6 +134,18 @@ func newErrorRef() string {
 		return "000000"
 	}
 	return strings.ToUpper(hex.EncodeToString(bytes[:]))
+}
+
+func attachErrorRefTraceMetadata(ctx context.Context, errorRef string) {
+	errorRef = strings.ToUpper(strings.TrimSpace(errorRef))
+	if errorRef == "" {
+		return
+	}
+	span := trace.SpanFromContext(ctx)
+	if span == nil {
+		return
+	}
+	span.SetAttributes(attribute.String("langfuse.trace.metadata.error_ref", errorRef))
 }
 
 func runIDForMessage(message contracts.UserMessage) string {
