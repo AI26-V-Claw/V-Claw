@@ -301,6 +301,38 @@ func TestSubtaskToolSyncReturnsChildResult(t *testing.T) {
 	}
 }
 
+func TestSubtaskToolRecordsLifecycleEvents(t *testing.T) {
+	runtime := newSubtaskTestRuntime(t)
+	store := NewInMemoryRuntimeStateStore()
+	runtime.stateStore = store
+	tool := NewSubtaskTool(runtime)
+	ctx := withParentRunID(context.Background(), "run_parent_events")
+	result := tool.Execute(ctx, tools.ToolCall{
+		ID:   "call_events",
+		Name: SubtaskToolName,
+		Arguments: map[string]any{
+			"task":           "summarize",
+			"allowed_skills": []any{"basic_compute"},
+			"label":          "audit-child",
+		},
+	})
+	if !result.Success {
+		t.Fatalf("expected subtask success, got %#v", result)
+	}
+	if len(store.events) < 2 {
+		t.Fatalf("expected lifecycle events, got %#v", store.events)
+	}
+	if store.events[0].Type != "subtask.started" || store.events[len(store.events)-1].Type != "subtask.completed" {
+		t.Fatalf("unexpected lifecycle events: %#v", store.events)
+	}
+	if store.events[0].RunID != "run_parent_events" || store.events[len(store.events)-1].RunID != "run_parent_events" {
+		t.Fatalf("events should attach to parent run: %#v", store.events)
+	}
+	if store.events[len(store.events)-1].Data["child_run_id"] != "run_subtask_run_parent_events_1" {
+		t.Fatalf("expected child run id metadata, got %#v", store.events[len(store.events)-1].Data)
+	}
+}
+
 func TestSubtaskTimeoutSecondsIsCapped(t *testing.T) {
 	request, err := parseSubtaskRequest(map[string]any{
 		"task":            "slow task",
