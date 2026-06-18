@@ -863,13 +863,13 @@ func TestTelegramPolicySettingsKeyboardContainsSaveButton(t *testing.T) {
 		t.Fatalf("expected seven cycle rows plus save row, got %d", len(rows))
 	}
 	for _, want := range []string{
-		"Đọc email, lịch họp, tin nhắn\n✅ Tự động cho phép",
-		"Tóm tắt nội dung, dịch văn bản\n✅ Tự động cho phép",
-		"Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
-		"Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
-		"Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
-		"Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
-		"Xóa email, file, lịch họp\n🚫 Luôn chặn",
+		"Xem danh sách & thông tin tổng quan\n✅ Tự động cho phép",
+		"Tóm tắt, phân tích nội dung\n✅ Tự động cho phép",
+		"Đọc nội dung riêng tư\n👤 Cần phê duyệt",
+		"Tạo, chỉnh sửa & gửi đi\n👤 Cần phê duyệt",
+		"Tải & lưu file về máy\n👤 Cần phê duyệt",
+		"Chạy lệnh hệ thống\n👤 Cần phê duyệt",
+		"Xóa dữ liệu\n🚫 Luôn chặn",
 	} {
 		found := false
 		for _, row := range rows[:len(rows)-1] {
@@ -929,13 +929,13 @@ func TestTelegramPolicySettingsCyclesEditButtonsAndSaveShowsBriefConfirmation(t 
 		t.Fatalf("unexpected menu text: %#v", sendCall.payload["text"])
 	}
 	assertPolicyKeyboardText(t, sendCall.payload["reply_markup"], map[contracts.RiskLevel]string{
-		contracts.RiskLevelSafeRead:      "Đọc email, lịch họp, tin nhắn\n✅ Tự động cho phép",
-		contracts.RiskLevelSafeCompute:   "Tóm tắt nội dung, dịch văn bản\n✅ Tự động cho phép",
-		contracts.RiskLevelSensitiveRead: "Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
-		contracts.RiskLevelExternalWrite: "Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
-		contracts.RiskLevelLocalWrite:    "Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
-		contracts.RiskLevelCodeExecution: "Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
-		contracts.RiskLevelDestructive:   "Xóa email, file, lịch họp\n🚫 Luôn chặn",
+		contracts.RiskLevelSafeRead:      "Xem danh sách & thông tin tổng quan\n✅ Tự động cho phép",
+		contracts.RiskLevelSafeCompute:   "Tóm tắt, phân tích nội dung\n✅ Tự động cho phép",
+		contracts.RiskLevelSensitiveRead: "Đọc nội dung riêng tư\n👤 Cần phê duyệt",
+		contracts.RiskLevelExternalWrite: "Tạo, chỉnh sửa & gửi đi\n👤 Cần phê duyệt",
+		contracts.RiskLevelLocalWrite:    "Tải & lưu file về máy\n👤 Cần phê duyệt",
+		contracts.RiskLevelCodeExecution: "Chạy lệnh hệ thống\n👤 Cần phê duyệt",
+		contracts.RiskLevelDestructive:   "Xóa dữ liệu\n🚫 Luôn chặn",
 	})
 
 	for _, level := range []contracts.RiskLevel{contracts.RiskLevelSafeRead, contracts.RiskLevelSafeCompute} {
@@ -989,22 +989,22 @@ func TestTelegramPolicySettingsCyclesEditButtonsAndSaveShowsBriefConfirmation(t 
 		t.Fatalf("unexpected cycle text: %#v", editCalls[0].payload["text"])
 	}
 	assertPolicyKeyboardText(t, editCalls[0].payload["reply_markup"], map[contracts.RiskLevel]string{
-		contracts.RiskLevelSafeRead:      "Đọc email, lịch họp, tin nhắn\n👤 Cần phê duyệt",
-		contracts.RiskLevelSafeCompute:   "Tóm tắt nội dung, dịch văn bản\n✅ Tự động cho phép",
-		contracts.RiskLevelSensitiveRead: "Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
-		contracts.RiskLevelExternalWrite: "Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
-		contracts.RiskLevelLocalWrite:    "Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
-		contracts.RiskLevelCodeExecution: "Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
-		contracts.RiskLevelDestructive:   "Xóa email, file, lịch họp\n🚫 Luôn chặn",
+		contracts.RiskLevelSafeRead:      "Xem danh sách & thông tin tổng quan\n👤 Cần phê duyệt",
+		contracts.RiskLevelSafeCompute:   "Tóm tắt, phân tích nội dung\n✅ Tự động cho phép",
+		contracts.RiskLevelSensitiveRead: "Đọc nội dung riêng tư\n👤 Cần phê duyệt",
+		contracts.RiskLevelExternalWrite: "Tạo, chỉnh sửa & gửi đi\n👤 Cần phê duyệt",
+		contracts.RiskLevelLocalWrite:    "Tải & lưu file về máy\n👤 Cần phê duyệt",
+		contracts.RiskLevelCodeExecution: "Chạy lệnh hệ thống\n👤 Cần phê duyệt",
+		contracts.RiskLevelDestructive:   "Xóa dữ liệu\n🚫 Luôn chặn",
 	})
 	assertPolicyKeyboardText(t, editCalls[1].payload["reply_markup"], map[contracts.RiskLevel]string{
-		contracts.RiskLevelSafeRead:      "Đọc email, lịch họp, tin nhắn\n👤 Cần phê duyệt",
-		contracts.RiskLevelSafeCompute:   "Tóm tắt nội dung, dịch văn bản\n👤 Cần phê duyệt",
-		contracts.RiskLevelSensitiveRead: "Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
-		contracts.RiskLevelExternalWrite: "Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
-		contracts.RiskLevelLocalWrite:    "Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
-		contracts.RiskLevelCodeExecution: "Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
-		contracts.RiskLevelDestructive:   "Xóa email, file, lịch họp\n🚫 Luôn chặn",
+		contracts.RiskLevelSafeRead:      "Xem danh sách & thông tin tổng quan\n👤 Cần phê duyệt",
+		contracts.RiskLevelSafeCompute:   "Tóm tắt, phân tích nội dung\n👤 Cần phê duyệt",
+		contracts.RiskLevelSensitiveRead: "Đọc nội dung riêng tư\n👤 Cần phê duyệt",
+		contracts.RiskLevelExternalWrite: "Tạo, chỉnh sửa & gửi đi\n👤 Cần phê duyệt",
+		contracts.RiskLevelLocalWrite:    "Tải & lưu file về máy\n👤 Cần phê duyệt",
+		contracts.RiskLevelCodeExecution: "Chạy lệnh hệ thống\n👤 Cần phê duyệt",
+		contracts.RiskLevelDestructive:   "Xóa dữ liệu\n🚫 Luôn chặn",
 	})
 	if fmt.Sprint(editCalls[2].payload["text"]) != "✅ Đã lưu cài đặt." {
 		t.Fatalf("unexpected save text: %#v", editCalls[2].payload["text"])
@@ -1083,13 +1083,13 @@ func TestTelegramPolicySettingsSaveRejectsDestructiveAutoAllowKeepsMenuOpen(t *t
 		t.Fatalf("unexpected validation text: %#v", editCall.payload["text"])
 	}
 	assertPolicyKeyboardText(t, editCall.payload["reply_markup"], map[contracts.RiskLevel]string{
-		contracts.RiskLevelSafeRead:      "Đọc email, lịch họp, tin nhắn\n✅ Tự động cho phép",
-		contracts.RiskLevelSafeCompute:   "Tóm tắt nội dung, dịch văn bản\n✅ Tự động cho phép",
-		contracts.RiskLevelSensitiveRead: "Mở và đọc chi tiết email, tài liệu\n👤 Cần phê duyệt",
-		contracts.RiskLevelExternalWrite: "Gửi email, đặt lịch họp, nhắn tin\n👤 Cần phê duyệt",
-		contracts.RiskLevelLocalWrite:    "Tải file đính kèm, lưu tài liệu\n👤 Cần phê duyệt",
-		contracts.RiskLevelCodeExecution: "Thực thi script hoặc lệnh hệ thống\n👤 Cần phê duyệt",
-		contracts.RiskLevelDestructive:   "Xóa email, file, lịch họp\n✅ Tự động cho phép",
+		contracts.RiskLevelSafeRead:      "Xem danh sách & thông tin tổng quan\n✅ Tự động cho phép",
+		contracts.RiskLevelSafeCompute:   "Tóm tắt, phân tích nội dung\n✅ Tự động cho phép",
+		contracts.RiskLevelSensitiveRead: "Đọc nội dung riêng tư\n👤 Cần phê duyệt",
+		contracts.RiskLevelExternalWrite: "Tạo, chỉnh sửa & gửi đi\n👤 Cần phê duyệt",
+		contracts.RiskLevelLocalWrite:    "Tải & lưu file về máy\n👤 Cần phê duyệt",
+		contracts.RiskLevelCodeExecution: "Chạy lệnh hệ thống\n👤 Cần phê duyệt",
+		contracts.RiskLevelDestructive:   "Xóa dữ liệu\n✅ Tự động cho phép",
 	})
 }
 

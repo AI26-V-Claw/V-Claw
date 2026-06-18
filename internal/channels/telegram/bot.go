@@ -1775,19 +1775,19 @@ func telegramPolicySettingsButtonText(level contracts.RiskLevel, group policies.
 func telegramPolicyRiskLevelLabel(level contracts.RiskLevel) string {
 	switch level {
 	case contracts.RiskLevelSafeRead:
-		return "Đọc email, lịch họp, tin nhắn"
+		return "Xem danh sách & thông tin tổng quan"
 	case contracts.RiskLevelSafeCompute:
-		return "Tóm tắt nội dung, dịch văn bản"
+		return "Tóm tắt, phân tích nội dung"
 	case contracts.RiskLevelSensitiveRead:
-		return "Mở và đọc chi tiết email, tài liệu"
+		return "Đọc nội dung riêng tư"
 	case contracts.RiskLevelExternalWrite:
-		return "Gửi email, đặt lịch họp, nhắn tin"
+		return "Tạo, chỉnh sửa & gửi đi"
 	case contracts.RiskLevelLocalWrite:
-		return "Tải file đính kèm, lưu tài liệu"
+		return "Tải & lưu file về máy"
 	case contracts.RiskLevelCodeExecution:
-		return "Thực thi script hoặc lệnh hệ thống"
+		return "Chạy lệnh hệ thống"
 	case contracts.RiskLevelDestructive:
-		return "Xóa email, file, lịch họp"
+		return "Xóa dữ liệu"
 	default:
 		return policies.RiskLevelLabel(level)
 	}
