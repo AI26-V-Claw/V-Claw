@@ -8,27 +8,44 @@ import (
 	"vclaw/internal/connectors/google/common"
 )
 
+// maxListEventsPages caps the number of result pages fetched in one ListEvents
+// call. It guards against an unbounded loop while still covering far more events
+// than any normal time-range query returns.
+const maxListEventsPages = 20
+
 // ListEvents retrieves events from the primary calendar within a time range.
-// It also applies a search query if one is provided.
+// It also applies a search query if one is provided. The Calendar API paginates
+// large result sets, so this follows NextPageToken across pages to avoid
+// silently dropping events beyond the first page.
 func (c *Client) ListEvents(ctx context.Context, timeMin, timeMax time.Time, query string) ([]Event, error) {
-	req := c.srv.Events.List("primary").
-		TimeMin(timeMin.Format(time.RFC3339)).
-		TimeMax(timeMax.Format(time.RFC3339)).
-		SingleEvents(true).
-		OrderBy("startTime")
-
-	if query != "" {
-		req = req.Q(query)
-	}
-
-	res, err := req.Context(ctx).Do()
-	if err != nil {
-		return nil, fmt.Errorf("calendar: list events: %w", common.MapError(err))
-	}
-
 	var events []Event
-	for _, item := range res.Items {
-		events = append(events, toDomainEvent(item))
+	pageToken := ""
+	for page := 0; page < maxListEventsPages; page++ {
+		req := c.srv.Events.List("primary").
+			TimeMin(timeMin.Format(time.RFC3339)).
+			TimeMax(timeMax.Format(time.RFC3339)).
+			SingleEvents(true).
+			OrderBy("startTime")
+		if query != "" {
+			req = req.Q(query)
+		}
+		if pageToken != "" {
+			req = req.PageToken(pageToken)
+		}
+
+		res, err := req.Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("calendar: list events: %w", common.MapError(err))
+		}
+
+		for _, item := range res.Items {
+			events = append(events, toDomainEvent(item))
+		}
+
+		if res.NextPageToken == "" {
+			break
+		}
+		pageToken = res.NextPageToken
 	}
 	return events, nil
 }

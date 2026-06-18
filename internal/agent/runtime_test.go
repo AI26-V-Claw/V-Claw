@@ -16,6 +16,8 @@ import (
 	"vclaw/internal/sessions"
 	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
+	caltool "vclaw/internal/tools/office/calendar"
+	gmtool "vclaw/internal/tools/office/gmail"
 )
 
 func TestRuntimeCompletesNormalChat(t *testing.T) {
@@ -903,20 +905,66 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	now := time.Date(2026, 6, 3, 17, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
 	prompt := runtimeSystemPrompt(now)
 
+	// The system prompt keeps date-interpretation rules (they are cross-tool) and the
+	// current time. Tool-specific argument rules now live in the tool descriptions.
 	if !strings.Contains(prompt, "2026-06-03T17:30:00+07:00") {
 		t.Fatalf("expected current time in prompt, got: %s", prompt)
 	}
 	if !strings.Contains(prompt, "this week") || !strings.Contains(prompt, "next Monday") {
 		t.Fatalf("expected calendar range guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "gmail.listEmails") || !strings.Contains(prompt, "date-only YYYY-MM-DD") || !strings.Contains(prompt, "never RFC3339") {
+	if !strings.Contains(prompt, "YYYY-MM-DD") {
 		t.Fatalf("expected Gmail date-only guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "LocalDate") || !strings.Contains(prompt, "different timezone") {
+	if !strings.Contains(prompt, "LocalDate") {
 		t.Fatalf("expected Gmail LocalDate grouping guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "people.searchDirectory") || !strings.Contains(prompt, "Attendees must be valid email addresses") {
-		t.Fatalf("expected attendee resolution guidance in prompt, got: %s", prompt)
+}
+
+func TestGmailToolDescriptionsCarryDateAndAttachmentRules(t *testing.T) {
+	want := map[string][]string{
+		gmtool.ToolNameListEmails:  {"date-only YYYY-MM-DD", "in:sent", "SENT"},
+		gmtool.ToolNameListThreads: {"date-only YYYY-MM-DD"},
+		gmtool.ToolNameCreateDraft: {"driveAttachments", "Drive file ID"},
+		gmtool.ToolNameSendDraft:   {"draftId", "createDraft alone does not send"},
+	}
+	got := map[string]string{}
+	for _, entry := range gmtool.RegistryEntries {
+		got[entry.Name] = entry.Description
+	}
+	for name, fragments := range want {
+		desc, ok := got[name]
+		if !ok {
+			t.Fatalf("%s not found in RegistryEntries", name)
+		}
+		for _, frag := range fragments {
+			if !strings.Contains(desc, frag) {
+				t.Fatalf("%s description missing %q, got: %q", name, frag, desc)
+			}
+		}
+	}
+}
+
+func TestCalendarToolDescriptionsCarryAttendeeAndBulkDeleteRules(t *testing.T) {
+	want := map[string][]string{
+		caltool.ToolNameCreateEvent: {"valid email addresses", "people.searchDirectory"},
+		caltool.ToolNameUpdateEvent: {"valid email addresses", "people.searchDirectory"},
+		caltool.ToolNameDeleteEvent: {"verify the range is empty"},
+	}
+	got := map[string]string{}
+	for _, entry := range caltool.RegistryEntries {
+		got[entry.Name] = entry.Description
+	}
+	for name, fragments := range want {
+		desc, ok := got[name]
+		if !ok {
+			t.Fatalf("%s not found in RegistryEntries", name)
+		}
+		for _, frag := range fragments {
+			if !strings.Contains(desc, frag) {
+				t.Fatalf("%s description missing %q, got: %q", name, frag, desc)
+			}
+		}
 	}
 }
 
