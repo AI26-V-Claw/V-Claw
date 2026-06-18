@@ -1,9 +1,7 @@
 {
-  "auto_allow": [
-    "safe_read",
-    "safe_compute"
-  ],
   "require_approval": [
+    "safe_read",
+    "safe_compute",
     "sensitive_read",
     "external_write",
     "local_write",
