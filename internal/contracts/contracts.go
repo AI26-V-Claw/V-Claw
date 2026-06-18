@@ -93,6 +93,32 @@ const (
 	ErrorMaxIterationsExceeded  = "MAX_ITERATIONS_EXCEEDED"
 )
 
+// GovernanceMetadata captures the provenance fields that must be attached to
+// every significant runtime record (run, tool call, approval, risk decision,
+// audit entry). Consumers such as the N4 monitoring UI use these fields to
+// trace which model, prompt version, tool schema version, and policy decision
+// produced a given result — without having to join across tables or read
+// process memory.
+//
+// All fields are optional strings so existing records without governance data
+// round-trip cleanly (omitempty keeps JSON compact).
+type GovernanceMetadata struct {
+	// Model is the LLM model ID used for this request
+	// (e.g. "claude-opus-4-8", "gemini-1.5-pro").
+	Model string `json:"model,omitempty"`
+	// PromptVersion is a short content-hash fingerprint of the effective system
+	// prompt (runtimeSystemPrompt + SOUL.md). Changes automatically when the
+	// prompt changes; computed by governance.PromptVersion().
+	PromptVersion string `json:"promptVersion,omitempty"`
+	// ToolSchemaVersion is a short content-hash fingerprint of the tool's
+	// parameter schema at call time. Computed by governance.ToolSchemaVersion().
+	ToolSchemaVersion string `json:"toolSchemaVersion,omitempty"`
+	// PolicyDecisionRef is a composite reference back to the risk decision that
+	// classified this tool call. Format: "policy:<runID>:<toolCallID>:<unixSec>".
+	// Computed by governance.PolicyRef().
+	PolicyDecisionRef string `json:"policyDecisionRef,omitempty"`
+}
+
 type UserMessage struct {
 	RequestID string         `json:"requestId"`
 	SessionID string         `json:"sessionId"`
@@ -128,8 +154,10 @@ type AgentResponse struct {
 	Data            map[string]any   `json:"data,omitempty"`
 	ToolResults     []ToolResult     `json:"toolResults,omitempty"`
 	Error           *ErrorShape      `json:"error,omitempty"`
-	Plan            *Plan            `json:"plan,omitempty"`
-	Output          *UserOutput      `json:"output,omitempty"`
+	// FailureReason is a machine-readable reason for non-completed status. Empty when Status is completed.
+	FailureReason string      `json:"failureReason,omitempty"`
+	Plan          *Plan       `json:"plan,omitempty"`
+	Output        *UserOutput `json:"output,omitempty"`
 }
 
 type ToolCall struct {
@@ -139,6 +167,9 @@ type ToolCall struct {
 	ToolName   string         `json:"toolName"`
 	Input      map[string]any `json:"input,omitempty"`
 	Reason     string         `json:"reason,omitempty"`
+	// Governance carries provenance metadata for this tool call.
+	// Populated by the agent runtime before the call crosses any boundary.
+	Governance *GovernanceMetadata `json:"governance,omitempty"`
 }
 
 // ToolResult carries the outcome of a single tool execution across the contract
@@ -152,13 +183,22 @@ type ToolResult struct {
 
 	// ArtifactRef references the primary resource this tool accessed or produced.
 	// Mirrors tools.ToolArtifactRef but scoped to the shared contracts package.
-	ArtifactRef *ArtifactRef   `json:"artifactRef,omitempty"`
+	ArtifactRef *ArtifactRef `json:"artifactRef,omitempty"`
 	// Metadata holds optional structured key-value pairs (e.g. line counts, byte sizes).
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 	// Truncated is true when the content payload was cut short due to size limits.
-	Truncated   bool           `json:"truncated,omitempty"`
+	Truncated bool `json:"truncated,omitempty"`
 	// Redacted is true when ContentForLLM was sanitized before inclusion in the LLM context.
-	Redacted    bool           `json:"redacted,omitempty"`
+	Redacted bool `json:"redacted,omitempty"`
+	// Source identifies the origin layer that produced this result, e.g.
+	// "tool:gmail", "connector:tavily", "tool:sandbox.python". Populated by the
+	// tool layer and consumed by audit/N4 to group records by origin without
+	// parsing tool names. Use the prefixes from internal/governance.
+	Source string `json:"source,omitempty"`
+	// Governance carries the same provenance fields as ToolCall.Governance. The
+	// agent runtime copies them through after execution so consumers reading
+	// only the result still know which model/prompt/schema/policy produced it.
+	Governance *GovernanceMetadata `json:"governance,omitempty"`
 }
 
 // ValidateToolResult checks that r satisfies the ToolResult contract invariants:
@@ -191,6 +231,11 @@ type RiskDecision struct {
 	RequiresApproval bool               `json:"requiresApproval"`
 	Reason           string             `json:"reason,omitempty"`
 	CheckedAt        time.Time          `json:"checkedAt"`
+	// PolicyDecisionRef is a composite reference, identical to the value
+	// stored on tool calls / approvals / audit entries that descend from this
+	// risk decision. It lets consumers correlate records without joining on
+	// the surrogate id. Format: "policy:<runID>:<toolCallId>:<unixSec>".
+	PolicyDecisionRef string `json:"policyDecisionRef,omitempty"`
 }
 
 type ApprovalRequest struct {
@@ -206,6 +251,10 @@ type ApprovalRequest struct {
 	ToolCall         ToolCall       `json:"toolCall"`
 	CreatedAt        time.Time      `json:"createdAt"`
 	ExpiresAt        time.Time      `json:"expiresAt"`
+	// Governance carries provenance metadata so the approval record is
+	// self-contained for audit/trace without joining back to the run or
+	// tool_call tables.
+	Governance *GovernanceMetadata `json:"governance,omitempty"`
 }
 
 type ApprovalDecision struct {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"vclaw/internal/tools"
 )
@@ -285,5 +286,17 @@ func (s *FileRuntimeStateStore) persist() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, s.path)
+	return renameWithRetry(tmpPath, s.path)
+}
+
+func renameWithRetry(oldPath, newPath string) error {
+	var err error
+	for attempt := 0; attempt < 8; attempt++ {
+		err = os.Rename(oldPath, newPath)
+		if err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
+	}
+	return err
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"vclaw/internal/tools"
 )
@@ -145,7 +146,7 @@ func calendarEventArtifactRef(event EventSummary) *tools.ToolArtifactRef {
 		Kind:  "calendar.event",
 		Label: "Google Calendar event",
 		ID:    event.ID,
-		URI:   "https://calendar.google.com/calendar/r/eventedit/" + event.ID,
+		URI:   strings.TrimSpace(event.EventLink),
 	}
 	if event.MeetLink != "" {
 		ref.Meta = map[string]any{"meetLink": event.MeetLink}
@@ -345,7 +346,11 @@ func formatListEventsOutput(output ListEventsOutput) string {
 	if len(output.Events) == 0 {
 		return "Không tìm thấy sự kiện nào trong khoảng thời gian đã chọn."
 	}
-	data, err := json.Marshal(output.Events)
+	eventsPayload := make([]map[string]any, 0, len(output.Events))
+	for _, event := range output.Events {
+		eventsPayload = append(eventsPayload, calendarEventPayload(event))
+	}
+	data, err := json.Marshal(eventsPayload)
 	if err != nil {
 		return fmt.Sprintf("Tìm thấy %d sự kiện.", len(output.Events))
 	}
@@ -353,7 +358,10 @@ func formatListEventsOutput(output ListEventsOutput) string {
 }
 
 func formatCreateEventOutput(output CreateEventOutput) string {
-	data, err := json.Marshal(output.Event)
+	payload := map[string]any{
+		"Event": calendarEventPayload(output.Event),
+	}
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Sprintf("Đã tạo sự kiện với ID: %s", output.EventID)
 	}
@@ -366,4 +374,20 @@ func formatUpdateEventOutput(output UpdateEventOutput) string {
 		return "Đã cập nhật sự kiện thành công."
 	}
 	return fmt.Sprintf("Đã cập nhật sự kiện: %s", string(data))
+}
+
+func calendarEventPayload(event EventSummary) map[string]any {
+	payload := map[string]any{
+		"id":          event.ID,
+		"title":       event.Title,
+		"description": event.Description,
+		"location":    event.Location,
+		"start":       event.Start,
+		"end":         event.End,
+		"attendees":   event.Attendees,
+		"eventLink":   event.EventLink,
+		"meetLink":    event.MeetLink,
+		"isRecurring": event.IsRecurring,
+	}
+	return payload
 }

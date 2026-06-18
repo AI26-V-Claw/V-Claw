@@ -58,7 +58,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameListMembers,
 		Owner:            "integration",
-		Description:      "List members in a Google Chat space.",
+		Description:      "List members in a Google Chat space. space must be a resource name like spaces/AAAA.",
 		DefaultRiskLevel: "safe_read",
 		RequiresApproval: false,
 	},
@@ -72,14 +72,14 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameListMessages,
 		Owner:            "integration",
-		Description:      "List messages in a Google Chat space.",
+		Description:      "List messages in a Google Chat space. space must be a resource name like spaces/AAAA — resolve a group name with chat.listSpaces first.",
 		DefaultRiskLevel: "sensitive_read",
 		RequiresApproval: true,
 	},
 	{
 		Name:             ToolNameSendMessage,
 		Owner:            "integration",
-		Description:      "Send a Google Chat message, including a new message, thread reply, and optional file attachments.",
+		Description:      "Send a Google Chat message, thread reply, or file attachment. space must be a resource name like spaces/AAAA. For a named person, call people.searchDirectory then chat.findSpacesByMembers before this tool — never assume a spaces/... value from history.",
 		DefaultRiskLevel: "external_write",
 		RequiresApproval: true,
 	},
@@ -107,7 +107,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameAddMember,
 		Owner:            "integration",
-		Description:      "Add a member to a Google Chat space.",
+		Description:      "Add a member to a Google Chat space. space must be a resource name like spaces/AAAA.",
 		DefaultRiskLevel: "external_write",
 		RequiresApproval: true,
 	},
@@ -233,6 +233,7 @@ type ListMessagesOutput struct {
 
 type SendMessageInput struct {
 	Space              string
+	RecipientEmail     string // DM flow: find-or-create DM space automatically; mutually exclusive with Space
 	Text               string
 	ThreadName         string
 	ThreadKey          string
@@ -457,16 +458,49 @@ func (s *Service) ListMessages(ctx context.Context, input ListMessagesInput) (Li
 	}, nil
 }
 
+// findOrCreateDMSpace finds an existing DM space with the recipient or creates one if none exists.
+// recipientEmail can be a plain email or users/... resource name.
+func (s *Service) findOrCreateDMSpace(ctx context.Context, recipientEmail string) (string, *ErrorShape) {
+	memberUserNames := normalizeMemberUserNames([]string{recipientEmail})
+	if len(memberUserNames) == 0 {
+		return "", &ErrorShape{Code: "INVALID_INPUT", Message: "recipientEmail is invalid"}
+	}
+	found, errShape := s.FindSpacesByMembers(ctx, FindSpacesByMembersInput{
+		MemberUserNames: memberUserNames,
+		SpaceType:       "DIRECT_MESSAGE",
+	})
+	if errShape != nil {
+		return "", errShape
+	}
+	if len(found.Spaces) > 0 {
+		return found.Spaces[0].Space.Name, nil
+	}
+	// No existing DM — create one. CreateSpace validates workspace domain.
+	created, errShape := s.CreateSpace(ctx, CreateSpaceInput{
+		SpaceType:   "DIRECT_MESSAGE",
+		MemberUsers: []string{recipientEmail},
+	})
+	if errShape != nil {
+		return "", errShape
+	}
+	return created.Space.Name, nil
+}
+
 func (s *Service) SendMessage(ctx context.Context, input SendMessageInput) (SendMessageOutput, *ErrorShape) {
 	if s == nil || s.connector == nil {
 		return SendMessageOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "chat connector is not configured"}
 	}
-	if strings.TrimSpace(input.Space) == "" {
-		return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "space is required"}
-	}
 	space := normalizeSpaceName(input.Space)
 	if space == "" {
-		return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "space must contain a resource name like spaces/AAAA"}
+		recipientEmail := strings.TrimSpace(input.RecipientEmail)
+		if recipientEmail == "" {
+			return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "space or recipientEmail is required"}
+		}
+		resolved, errShape := s.findOrCreateDMSpace(ctx, recipientEmail)
+		if errShape != nil {
+			return SendMessageOutput{}, errShape
+		}
+		space = resolved
 	}
 	if strings.TrimSpace(input.CardTitle) != "" || strings.TrimSpace(input.CardText) != "" || strings.TrimSpace(input.CardSubtitle) != "" {
 		return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "Google Chat card messages are not supported by the current user OAuth flow; send a text message instead"}
@@ -929,14 +963,18 @@ func (SendMessageTool) Name() string {
 }
 
 func (SendMessageTool) Description() string {
-	return "Send a Google Chat text message or attachment. The space input must be a spaces/... resource name. If the user names a group or space display name (e.g. VClaw), resolve it with chat.listSpaces. If the user names a specific person (e.g. Bao Le), ALWAYS call people.searchDirectory then chat.findSpacesByMembers with spaceType=DIRECT_MESSAGE — do NOT reuse any previously known space from memory or history, even if a DM was recently used; different people have different DM spaces and reusing the wrong one sends to the wrong person. This external write requires approval."
+	return "Send a Google Chat text message or attachment. " +
+		"For DM to a specific person (e.g. Bao Le): provide recipientEmail with their email address — the tool automatically finds or creates the DM space. Do NOT call chat.findSpacesByMembers or chat.createSpace separately for DM. " +
+		"For a group chat or named space (e.g. VClaw): resolve the space name with chat.listSpaces, then provide the spaces/... resource name in the space parameter. " +
+		"Never reuse a spaces/... value from history for a different recipient. This external write requires approval."
 }
 
 func (SendMessageTool) Parameters() tools.ToolSchema {
 	return tools.ToolSchema{
 		"type": "object",
 		"properties": map[string]any{
-			"space":              map[string]any{"type": "string"},
+			"space":              map[string]any{"type": "string", "description": "spaces/... resource name — for group chats and named spaces"},
+			"recipientEmail":     map[string]any{"type": "string", "description": "email of the recipient — for DM; the tool finds or creates the DM space automatically"},
 			"text":               map[string]any{"type": "string"},
 			"threadName":         map[string]any{"type": "string"},
 			"threadKey":          map[string]any{"type": "string"},
@@ -945,7 +983,6 @@ func (SendMessageTool) Parameters() tools.ToolSchema {
 			"requestId":          map[string]any{"type": "string"},
 			"attachments":        arrayStringSchema(),
 		},
-		"required":             []string{"space"},
 		"additionalProperties": false,
 	}
 }
@@ -959,8 +996,10 @@ func (SendMessageTool) RiskLevel() tools.RiskLevel {
 }
 
 func (t SendMessageTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	recipientEmail := stringArg(call.Arguments, "recipientEmail")
 	output, errShape := t.service.SendMessage(ctx, SendMessageInput{
 		Space:              stringArg(call.Arguments, "space"),
+		RecipientEmail:     recipientEmail,
 		Text:               stringArg(call.Arguments, "text"),
 		ThreadName:         stringArg(call.Arguments, "threadName"),
 		ThreadKey:          stringArg(call.Arguments, "threadKey"),
@@ -977,8 +1016,12 @@ func (t SendMessageTool) Execute(ctx context.Context, call tools.ToolCall) tools
 	}
 
 	content := "Sent Google Chat message: " + output.Message.Name
+	hasAttachments := len(stringSliceArg(call.Arguments, "attachments")) > 0
 	userContent := "Đã gửi tin nhắn Google Chat."
-	if len(stringSliceArg(call.Arguments, "attachments")) > 0 {
+	if strings.TrimSpace(recipientEmail) != "" {
+		userContent = "Đã gửi tin nhắn Google Chat đến " + strings.TrimSpace(recipientEmail) + "."
+	}
+	if hasAttachments {
 		userContent = "Đã gửi tin nhắn kèm file lên Google Chat."
 		if strings.TrimSpace(stringArg(call.Arguments, "text")) == "" {
 			userContent = "Đã gửi file lên Google Chat."

@@ -12,6 +12,9 @@ import (
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/governance"
+	"vclaw/internal/longmem"
+	"vclaw/internal/orchestration"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
@@ -21,9 +24,11 @@ import (
 )
 
 const (
-	DefaultMaxIterations = 8
-	DefaultToolTimeout   = 30 * time.Second
-	approvalTTL          = 10 * time.Minute
+	DefaultMaxIterations    = 8
+	DefaultToolTimeout      = 30 * time.Second
+	DefaultProviderTimeout  = 60 * time.Second
+	approvalTTL             = 10 * time.Minute
+	pendingClarificationTTL = 30 * time.Minute
 )
 
 var (
@@ -44,15 +49,23 @@ type RuntimeConfig struct {
 	Logger                     *slog.Logger
 	ToolHooks                  toolhooks.Hooks
 	MaxIterations              int
+	ProviderTimeout            time.Duration
 	ToolTimeout                time.Duration
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
 	ParallelToolTimeoutDefault time.Duration
+	SubtaskMaxChildren         int
+	SubtaskMaxDepth            int
+	SubtaskDefaultTimeout      time.Duration
+	SubtaskMaxTimeout          time.Duration
 	Model                      string
 	Now                        func() time.Time
+	LocalLocation              *time.Location // timezone for date calculations; nil falls back to time.Local
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
 	MemoryClassifierModel      string
+	SoulPrompt                 string
+	LongMemDir                 string
 }
 
 type Runtime struct {
@@ -70,15 +83,35 @@ type Runtime struct {
 	pendingApprovals           map[string]pendingApproval
 	pendingBySession           map[string]string
 	maxIterations              int
+	providerTimeout            time.Duration
 	toolTimeout                time.Duration
 	parallelExecutionEnabled   bool
 	parallelMaxWorkers         int
 	parallelToolTimeoutDefault time.Duration
+	subtaskMaxDepth            int
+	subtaskDefaultTimeout      time.Duration
+	subtaskMaxTimeout          time.Duration
 	model                      string
 	now                        func() time.Time
+	localLocation              *time.Location
 	compactor                  *sessions.Compactor
 	contextWindow              int
 	memoryClassifierModel      string
+	// promptVersion is the content-hash fingerprint of the effective system
+	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
+	// is constructed and stamped onto every record this Runtime produces.
+	promptVersion string
+	subtasks      *subtaskCoordinator
+	ltMemLoader   longTermMemoryLoader  // nil = disabled
+	ltMemFlusher  longTermMemoryFlusher // nil = disabled
+}
+
+type longTermMemoryLoader interface {
+	Load() string
+}
+
+type longTermMemoryFlusher interface {
+	Flush(context.Context, string) error
 }
 
 type pendingApproval struct {
@@ -117,6 +150,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if toolTimeout <= 0 {
 		toolTimeout = DefaultToolTimeout
 	}
+	providerTimeout := config.ProviderTimeout
+	if providerTimeout <= 0 {
+		providerTimeout = DefaultProviderTimeout
+	}
 	parallelMaxWorkers := config.ParallelMaxWorkers
 	if parallelMaxWorkers < 1 {
 		parallelMaxWorkers = 1
@@ -127,6 +164,21 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	parallelToolTimeoutDefault := config.ParallelToolTimeoutDefault
 	if parallelToolTimeoutDefault <= 0 {
 		parallelToolTimeoutDefault = toolTimeout
+	}
+	subtaskMaxDepth := config.SubtaskMaxDepth
+	if subtaskMaxDepth <= 0 {
+		subtaskMaxDepth = defaultSubtaskMaxDepth
+	}
+	subtaskDefaultTimeout := config.SubtaskDefaultTimeout
+	if subtaskDefaultTimeout <= 0 {
+		subtaskDefaultTimeout = defaultSubtaskTimeout
+	}
+	subtaskMaxTimeout := config.SubtaskMaxTimeout
+	if subtaskMaxTimeout <= 0 {
+		subtaskMaxTimeout = maxSubtaskTimeout
+	}
+	if subtaskDefaultTimeout > subtaskMaxTimeout {
+		subtaskDefaultTimeout = subtaskMaxTimeout
 	}
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
@@ -148,6 +200,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if now == nil {
 		now = time.Now
 	}
+	localLocation := config.LocalLocation
+	// Do not default to time.Local here.
+	// Production always sets this via AgentRuntimeConfig.Timezone â†’ BuildRuntime.
+	// Tests leave it nil so runtimeLocalLocation falls back to now().Location().
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
 		if provider != nil {
@@ -163,6 +219,19 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
+	// Compute the prompt version once at construction. We pass a zero time so
+	// the dynamic "current time" segment of runtimeSystemPrompt doesn't shift
+	// the hash on every Runtime creation. SOUL.md is hashed alongside so any
+	// edit there bumps the version automatically.
+	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
+	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
+	subtasks.now = now
+	var ltLoader longTermMemoryLoader
+	var ltFlusher longTermMemoryFlusher
+	if dir := strings.TrimSpace(config.LongMemDir); dir != "" && config.Provider != nil {
+		ltLoader = longmem.NewLoader(dir)
+		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
+	}
 	return &Runtime{
 		provider:                   provider,
 		registry:                   config.Registry,
@@ -177,15 +246,24 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
 		maxIterations:              maxIterations,
+		providerTimeout:            providerTimeout,
 		toolTimeout:                toolTimeout,
 		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		parallelMaxWorkers:         parallelMaxWorkers,
 		parallelToolTimeoutDefault: parallelToolTimeoutDefault,
+		subtaskMaxDepth:            subtaskMaxDepth,
+		subtaskDefaultTimeout:      subtaskDefaultTimeout,
+		subtaskMaxTimeout:          subtaskMaxTimeout,
 		model:                      config.Model,
 		now:                        now,
+		localLocation:              localLocation,
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
+		promptVersion:              promptVersion,
+		subtasks:                   subtasks,
+		ltMemLoader:                ltLoader,
+		ltMemFlusher:               ltFlusher,
 	}
 }
 
@@ -196,7 +274,31 @@ func memoryClassifierModel(config RuntimeConfig) string {
 	return strings.TrimSpace(config.Model)
 }
 
-func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
+type providerChatOutcome struct {
+	response providers.ChatResponse
+	err      error
+}
+
+func (r *Runtime) chatWithProviderTimeout(ctx context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
+	if r.providerTimeout <= 0 {
+		return r.provider.Chat(ctx, request)
+	}
+	providerCtx, cancel := context.WithTimeout(ctx, r.providerTimeout)
+	defer cancel()
+	outcomes := make(chan providerChatOutcome, 1)
+	go func() {
+		response, err := r.provider.Chat(providerCtx, request)
+		outcomes <- providerChatOutcome{response: response, err: err}
+	}()
+	select {
+	case outcome := <-outcomes:
+		return outcome.response, outcome.err
+	case <-providerCtx.Done():
+		return providers.ChatResponse{}, providerCtx.Err()
+	}
+}
+
+func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (response contracts.AgentResponse, err error) {
 	ctx = toolhooks.WithRequestContext(ctx, message.RequestID, message.SessionID)
 	if r.compactor != nil {
 		sessionID := message.SessionID
@@ -237,17 +339,45 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		base.Message = base.Error.Message
 		return base, nil
 	}
+	if errShape := r.expirePendingApprovalIfNeeded(ctx, message.SessionID); errShape != nil {
+		base.Error = errShape
+		base.Message = errShape.Message
+		base.FailureReason = string(orchestration.FailureReasonApprovalExpired)
+		return base, nil
+	}
 	runState, errShape := r.startRunState(ctx, message)
 	if errShape != nil {
 		base.Error = errShape
 		base.Message = errShape.Message
 		return base, nil
 	}
+	ctx = withParentRunID(ctx, runState.RunID)
 	ctx = providers.WithUsageRecorder(ctx, func(usage *providers.Usage) {
 		r.recordLLMUsageCost(ctx, &runState, usage)
 	})
+	// Panic guard: ensure finishRunState always runs if a panic occurs after runState is initialized.
+	defer func() {
+		if rec := recover(); rec != nil {
+			r.logger.Error("agent runtime panic recovered",
+				"run_id", runState.RunID,
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"panic", rec,
+			)
+			currentState, getErr := r.stateStore.GetRun(context.WithoutCancel(ctx), runState.RunID)
+			if getErr == nil && currentState.Status == RuntimeRunStatusRunning {
+				_, _ = r.finishRunState(context.WithoutCancel(ctx), currentState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted))
+			}
+			base.Status = contracts.AgentStatusFailed
+			base.FailureReason = string(orchestration.FailureReasonAborted)
+			base.Error = internalError("agent runtime panic", contracts.ErrorSourceAgent)
+			base.Message = base.Error.Message
+			response = base
+			err = nil
+		}
+	}()
 	failStartedRun := func(errShape *contracts.ErrorShape) (contracts.AgentResponse, error) {
-		if finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); finishErr != nil {
+		if _, finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted)); finishErr != nil {
 			errShape = finishErr
 		}
 		base.Error = errShape
@@ -271,7 +401,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	pendingClarificationResolution := pendingClarificationResolution{}
 	pendingClarificationActive := false
 	pendingMemoryChanged := false
-	if isUsablePendingClarification(pendingClarification) {
+	if isUsablePendingClarification(pendingClarification, r.now()) {
 		pendingClarificationResolution = r.resolvePendingClarification(ctx, *pendingClarification, message.Text, history)
 		if pendingClarificationResolution.IsAnswer {
 			pendingClarificationActive = true
@@ -279,9 +409,11 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			sessionMemory.PendingClarification = nil
 			pendingMemoryChanged = true
 			if pendingRunID := strings.TrimSpace(pendingClarification.RunID); pendingRunID != "" && pendingRunID != runState.RunID {
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted); errShape != nil {
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted, string(orchestration.FailureReasonNone))
+				if errShape != nil {
 					return failStartedRun(errShape)
 				}
+				base.FailureReason = updatedState.FailureReason
 				if errShape := r.resumeRunState(ctx, pendingRunID); errShape != nil {
 					return failStartedRun(errShape)
 				}
@@ -360,11 +492,13 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 
 	userMessage := providers.Message{Role: providers.MessageRoleUser, Content: messageTextWithAttachmentContext(message)}
 	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
-		completedTool, _ := message.Metadata["completedTool"].(string)
-		if completedTool != "" {
-			userMessage.Content = fmt.Sprintf("[Tiếp tục sau khi %s được xác nhận và thực thi]", completedTool)
-		} else {
-			userMessage.Content = "[Tiếp tục sau khi hành động được xác nhận và thực thi]"
+		if strings.TrimSpace(userMessage.Content) == "" {
+			completedTool, _ := message.Metadata["completedTool"].(string)
+			if completedTool != "" {
+				userMessage.Content = fmt.Sprintf("Continuing after approved tool: %s", completedTool)
+			} else {
+				userMessage.Content = "Continuing after approved action"
+			}
 		}
 	}
 	transcript = append(transcript, userMessage)
@@ -407,7 +541,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	providerTranscript := transcript
 	providerMemory := sessionMemory
 	providerReference := referenceResolution
-	if isolatedNewWriteRequest || standaloneReadRequest {
+	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
+		providerTranscript = transcriptWithLastUserContent(transcript, message.Text)
+	} else if isolatedNewWriteRequest || standaloneReadRequest {
 		providerTranscript = []providers.Message{userMessage}
 		providerMemory = sessions.SessionMemory{}
 		providerReference = nil
@@ -429,29 +565,61 @@ agentLoop:
 			return base, nil
 		}
 		r.logger.Debug("agent iteration started", "request_id", message.RequestID, "session_id", message.SessionID, "iteration", iteration)
+		if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
+			resp.RequestID = message.RequestID
+			resp.SessionID = message.SessionID
+			return *resp, nil
+		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
 		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
-		providerResponse, err := r.provider.Chat(ctx, providers.ChatRequest{
+		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
 			Tools:      r.providerTools(),
 			ToolChoice: "auto",
 		})
+		if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
+			resp.RequestID = message.RequestID
+			resp.SessionID = message.SessionID
+			return *resp, nil
+		}
 		if err != nil {
 			code := contracts.ErrorProviderError
 			retryable := providers.IsRetryableError(err)
+			messageText := "provider chat failed: " + err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				code = contracts.ErrorProviderUnavailable
+				retryable = true
+				messageText = fmt.Sprintf("provider chat timed out after %s", r.providerTimeout)
+			} else if errors.Is(err, context.Canceled) {
+				code = contracts.ErrorProviderUnavailable
+				retryable = true
+				messageText = "provider chat canceled: " + err.Error()
+			}
 			if retryable {
 				code = contracts.ErrorProviderUnavailable
 			}
 			base.Error = &contracts.ErrorShape{
 				Code:      code,
-				Message:   "provider chat failed: " + err.Error(),
+				Message:   messageText,
 				Source:    contracts.ErrorSourceProvider,
 				Retryable: retryable,
 			}
-			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+			r.appendRunEvent(ctx, runState.RunID, "provider.failed", map[string]any{
+				"iteration": iteration,
+				"code":      string(code),
+				"retryable": retryable,
+				"timeout":   errors.Is(err, context.DeadlineExceeded),
+			})
+			reason := orchestration.FailureReasonProviderError
+			if retryable {
+				reason = orchestration.FailureReasonProviderUnavailable
+			}
+			updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(reason))
+			if errShape != nil {
 				base.Error = errShape
 			}
+			base.FailureReason = updatedState.FailureReason
 			base.Message = base.Error.Message
 			return base, nil
 		}
@@ -492,7 +660,7 @@ If required information is missing, ask one concise clarification question inste
 				"content_preview", logPreview(assistantMessage.Content, 180),
 			)
 			emitProgress(ctx, ProgressEvent{Stage: ProgressStageFinalizing, Message: "Agent is finalizing the response"})
-			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted); errShape != nil {
+			if _, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted, string(orchestration.FailureReasonNone)); errShape != nil {
 				base.Error = errShape
 				base.Message = errShape.Message
 				return base, nil
@@ -508,8 +676,7 @@ If required information is missing, ask one concise clarification question inste
 		}
 
 		evidenceText := providerTranscriptEvidenceText(providerTranscript)
-		if batch, ok := r.prepareParallelBatch(
-			ctx,
+		if batch, ok := r.prepareParallelBatch(ctx,
 			assistantMessage.ToolCalls,
 			r.parallelExecutionEnabled,
 			message.Text,
@@ -554,7 +721,8 @@ If required information is missing, ask one concise clarification question inste
 					"duration", outcome.duration,
 					"content_preview", logPreview(result.ContentForLLM, 260),
 				)
-				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, r.policy.DecideToolCall(call.ID, batch[i].definition, true, r.now())); errShape != nil {
+				decision := r.stampPolicyRef(runState.RunID, call.ID, r.decideToolCall(ctx, call, batch[i].definition, true))
+				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, decision); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -564,6 +732,8 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
+				result.PolicyDecisionRef = decision.PolicyDecisionRef
+				batchResults[i].result = result
 				emitProgress(ctx, ProgressEvent{
 					Stage:      stage,
 					ToolName:   call.Name,
@@ -580,7 +750,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				toolResults = append(toolResults, contractToolResult(result))
+				toolResults = append(toolResults, contractToolResult(result, r.buildGovernanceMetadata(call.Name, decision.PolicyDecisionRef)))
 				toolMessage := providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: call.ID,
@@ -596,11 +766,13 @@ If required information is missing, ask one concise clarification question inste
 				}
 			}
 			if isBatchSystemError(batchResults) {
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError))
+				if errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
 				}
+				base.FailureReason = updatedState.FailureReason
 				base.ToolResults = toolResults
 				base.Error = toolErrorShape(batchResults[0].result)
 				base.Message = base.Error.Message
@@ -665,7 +837,7 @@ If required information is missing, ask one concise clarification question inste
 				definition.Name = providerToolCall.Name
 			}
 
-			decision := r.decideToolCall(ctx, providerToolCall, definition, found)
+			decision := r.stampPolicyRef(runState.RunID, providerToolCall.ID, r.decideToolCall(ctx, providerToolCall, definition, found))
 			r.logger.Info("agent tool call proposed",
 				"request_id", message.RequestID,
 				"session_id", message.SessionID,
@@ -702,6 +874,30 @@ If required information is missing, ask one concise clarification question inste
 						return base, nil
 					}
 					for _, skipped := range skippedToolObservationMessages(assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the current Google Chat target must be resolved first") {
+						transcript = append(transcript, skipped)
+						providerTranscript = append(providerTranscript, skipped)
+						if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, skipped); err != nil {
+							base.Error = err
+							base.Message = err.Message
+							return base, nil
+						}
+					}
+					continue agentLoop
+				}
+				if shouldResolveDriveMoveBeforeClarification(providerToolCall, currentRequestText, toolCallMissingFields) {
+					toolMessage := providers.Message{
+						Role:       providers.MessageRoleTool,
+						ToolCallID: providerToolCall.ID,
+						Content:    truncateToolContentForLLM(driveMoveResolutionObservation(toolCallMissingFields)),
+					}
+					transcript = append(transcript, toolMessage)
+					providerTranscript = append(providerTranscript, toolMessage)
+					if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, toolMessage); err != nil {
+						base.Error = err
+						base.Message = err.Message
+						return base, nil
+					}
+					for _, skipped := range skippedToolObservationMessages(assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the Drive move target must be resolved first") {
 						transcript = append(transcript, skipped)
 						providerTranscript = append(providerTranscript, skipped)
 						if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, skipped); err != nil {
@@ -756,6 +952,7 @@ If required information is missing, ask one concise clarification question inste
 				}
 				startedAt := time.Now()
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
+				result.PolicyDecisionRef = decision.PolicyDecisionRef
 				if errShape := r.recordRuntimeToolCall(ctx, &runState, runState.RunID, providerToolCall, result, time.Since(startedAt), ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -766,7 +963,12 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				contractResult := contractToolResult(result)
+				if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
+					resp.RequestID = message.RequestID
+					resp.SessionID = message.SessionID
+					return *resp, nil
+				}
+				contractResult := contractToolResult(result, r.buildGovernanceMetadata(providerToolCall.Name, decision.PolicyDecisionRef))
 				toolResults = append(toolResults, contractResult)
 
 				toolMessage := providers.Message{
@@ -783,11 +985,13 @@ If required information is missing, ask one concise clarification question inste
 					return base, nil
 				}
 				if !result.Success {
-					if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); errShape != nil {
+					updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError))
+					if errShape != nil {
 						base.Error = errShape
 						base.Message = errShape.Message
 						return base, nil
 					}
+					base.FailureReason = updatedState.FailureReason
 					base.ToolResults = toolResults
 					base.Error = toolErrorShape(result)
 					base.Message = base.Error.Message
@@ -930,26 +1134,31 @@ If required information is missing, ask one concise clarification question inste
 					Source:    contracts.ErrorSourcePolicy,
 					Retryable: false,
 				}
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusBlocked); errShape != nil {
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusBlocked, string(orchestration.FailureReasonPolicyBlocked))
+				if errShape != nil {
 					base.Error = errShape
 				}
+				base.FailureReason = updatedState.FailureReason
 				return base, nil
 			}
 		}
 	}
 
-	if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations); errShape != nil {
+	updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations, string(orchestration.FailureReasonMaxIteration))
+	if errShape != nil {
 		base.Error = errShape
 		base.Message = errShape.Message
 		return base, nil
 	}
+	base.FailureReason = updatedState.FailureReason
 	return contracts.AgentResponse{
-		RequestID:   message.RequestID,
-		SessionID:   message.SessionID,
-		Status:      contracts.AgentStatusFailed,
-		Message:     "agent exceeded max iterations",
-		Data:        r.traceData(referenceResolution),
-		ToolResults: toolResults,
+		RequestID:     message.RequestID,
+		SessionID:     message.SessionID,
+		Status:        contracts.AgentStatusMaxIterationsReached,
+		FailureReason: updatedState.FailureReason,
+		Message:       "agent exceeded max iterations",
+		Data:          r.traceData(referenceResolution),
+		ToolResults:   toolResults,
 		Error: &contracts.ErrorShape{
 			Code:      contracts.ErrorMaxIterationsExceeded,
 			Message:   "agent exceeded max iterations",
@@ -987,4 +1196,39 @@ func responsePlan(planResult *TaskPlanResult) *contracts.Plan {
 	}
 	plan := planResult.Plan
 	return &plan
+}
+
+func (r *Runtime) handleContextError(ctx context.Context, runState RunState, toolResults []contracts.ToolResult) *contracts.AgentResponse {
+	err := ctx.Err()
+	if err == nil {
+		return nil
+	}
+
+	runStatus := RuntimeRunStatusFailed
+	statusCode := contracts.ErrorProviderTimeout
+	messageText := "request timed out"
+	if errors.Is(err, context.Canceled) {
+		runStatus = RuntimeRunStatusCancelled
+		statusCode = contracts.ErrorInternal
+		messageText = "request canceled"
+	}
+
+	contextReason := orchestration.FromContextError(err)
+	updatedState, finishErr := r.finishRunState(context.WithoutCancel(ctx), runState, runStatus, string(contextReason))
+	if finishErr != nil {
+		return &contracts.AgentResponse{Error: finishErr, Message: finishErr.Message, Status: contracts.AgentStatusFailed}
+	}
+
+	return &contracts.AgentResponse{
+		Status:        contracts.AgentStatusFailed,
+		FailureReason: updatedState.FailureReason,
+		ToolResults:   toolResults,
+		Error: &contracts.ErrorShape{
+			Code:      statusCode,
+			Message:   messageText,
+			Source:    contracts.ErrorSourceAgent,
+			Retryable: false,
+		},
+		Message: messageText,
+	}
 }

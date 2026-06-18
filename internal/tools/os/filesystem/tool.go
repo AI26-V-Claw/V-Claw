@@ -48,7 +48,7 @@ func NewListDirTool(guard PathGuard) ListDirTool {
 func (ListDirTool) Name() string { return ToolNameListDir }
 
 func (ListDirTool) Description() string {
-	return "List files and subdirectories at the given path. Returns name, size, type, and last modified time for each entry."
+	return "List files and subdirectories at the given path. Requires a directory path — do not pass a filename. Returns name, size, type, and last modified time for each entry."
 }
 
 func (ListDirTool) Parameters() tools.ToolSchema {
@@ -157,9 +157,9 @@ func (t ListDirTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolR
 	}
 
 	if len(entries) == 0 {
-		content := fmt.Sprintf("Directory %s is empty.", path)
+		content := fmt.Sprintf("Directory %s is empty.", resolved)
 		if pattern != "" {
-			content = fmt.Sprintf("No entries matching %q in %s.", pattern, path)
+			content = fmt.Sprintf("No entries matching %q in %s.", pattern, resolved)
 		}
 		return tools.ToolResult{
 			ToolCallID: call.ID, ToolName: call.Name, Success: true,
@@ -169,7 +169,7 @@ func (t ListDirTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolR
 		}
 	}
 
-	header := fmt.Sprintf("Contents of %s", path)
+	header := fmt.Sprintf("Contents of %s", resolved)
 	if pattern != "" {
 		header += fmt.Sprintf(" (pattern: %s)", pattern)
 	}
@@ -272,9 +272,9 @@ func (t ReadFileTool) Execute(_ context.Context, call tools.ToolCall) tools.Tool
 		truncated = true
 	}
 
-	header := fmt.Sprintf("File: %s (%d lines)", path, totalLines)
+	header := fmt.Sprintf("File: %s (%d lines)", resolved, totalLines)
 	if startLine > 0 && endLine > 0 {
-		header = fmt.Sprintf("File: %s (lines %d-%d of %d)", path, startLine, endLine, totalLines)
+		header = fmt.Sprintf("File: %s (lines %d-%d of %d)", resolved, startLine, endLine, totalLines)
 	}
 	if truncated {
 		header += " [truncated]"
@@ -316,7 +316,7 @@ func NewFileInfoTool(guard PathGuard) FileInfoTool {
 func (FileInfoTool) Name() string { return ToolNameFileInfo }
 
 func (FileInfoTool) Description() string {
-	return "Get metadata about a file or directory: size, last modified time, type, and permissions."
+	return "Get metadata about a file or directory. Pass just a filename to locate it anywhere in the workspace. If not found, call filesystem.listDir with path='.' to list all workspace files."
 }
 
 func (FileInfoTool) Parameters() tools.ToolSchema {
@@ -362,7 +362,7 @@ func (t FileInfoTool) Execute(_ context.Context, call tools.ToolCall) tools.Tool
 	}
 
 	content := fmt.Sprintf("Path: %s\nType: %s\nSize: %s\nModified: %s\nPermissions: %s",
-		path, fileType, formatSize(info.Size()), info.ModTime().Format(time.RFC3339), info.Mode().String())
+		resolved, fileType, formatSize(info.Size()), info.ModTime().Format(time.RFC3339), info.Mode().String())
 
 	if !info.IsDir() {
 		ext := filepath.Ext(info.Name())

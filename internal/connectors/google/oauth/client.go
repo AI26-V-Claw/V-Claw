@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -45,20 +47,112 @@ func Client(ctx context.Context, cfg Config) (*http.Client, error) {
 		}
 	}
 
-	// Inject a base transport with IdleConnTimeout shorter than Google's server-side 90s
-	// idle timeout. This prevents the "connection forcibly closed" error that occurs when
-	// a keepalive connection is reused after the server has already closed it.
+	// Use HTTP/1.1 (ForceAttemptHTTP2: false) to avoid HTTP/2 connection reset issues on Windows.
+	// HTTP/2 multiplexes connections and is more susceptible to wsarecv / forcibly-closed errors
+	// when the OS TCP stack handles RST_STREAM differently. HTTP/1.1 opens a fresh connection
+	// per keep-alive cycle and fails more gracefully.
+	// IdleConnTimeout is set below Google's server-side 90s idle timeout to avoid reusing a
+	// connection the server has already closed.
 	baseTransport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       60 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Transport: baseTransport})
-	return oauthConfig.Client(ctx, token), nil
+	client := oauthConfig.Client(ctx, token)
+	// Wrap with retry transport to handle transient connection errors that slip through
+	// even on HTTP/1.1 (e.g. mid-transfer resets on flaky networks or Windows firewalls).
+	client.Transport = &retryTransport{base: client.Transport, logger: slog.Default()}
+	return client, nil
+}
+
+const (
+	retryMaxAttempts = 3
+	retryBaseDelay   = 500 * time.Millisecond
+	retryMaxDelay    = 4 * time.Second
+)
+
+// retryTransport retries requests on transient network errors. It only retries
+// when the request body is nil or can be recreated via GetBody, ensuring
+// write operations with a one-shot body are never double-submitted.
+type retryTransport struct {
+	base   http.RoundTripper
+	logger *slog.Logger
+}
+
+func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	canRetry := req.Body == nil || req.GetBody != nil
+
+	var lastErr error
+	for attempt := 0; attempt <= retryMaxAttempts; attempt++ {
+		if attempt > 0 {
+			if !canRetry {
+				return nil, lastErr
+			}
+			// Recreate the request body for retry.
+			if req.GetBody != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, lastErr
+				}
+				req.Body = body
+			}
+			delay := retryBaseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > retryMaxDelay {
+				delay = retryMaxDelay
+			}
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(delay):
+			}
+		}
+
+		resp, err := t.base.RoundTrip(req)
+		if err == nil {
+			if attempt > 0 {
+				t.logger.Info("google api retry succeeded", "attempt", attempt, "url", req.URL.Path)
+			}
+			return resp, nil
+		}
+		if !isRetryableNetworkError(err) {
+			return nil, err
+		}
+		t.logger.Warn("google api connection error, will retry",
+			"attempt", attempt+1,
+			"max_attempts", retryMaxAttempts,
+			"url", req.URL.Path,
+			"error", err.Error(),
+		)
+		lastErr = err
+	}
+	t.logger.Error("google api request failed after all retries", "url", req.URL.Path, "error", lastErr.Error())
+	return nil, lastErr
+}
+
+// isRetryableNetworkError returns true for transient connection-level errors
+// where the server is known not to have processed the request yet.
+// Context cancellation and deadline errors are never retried.
+func isRetryableNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "forcibly closed") ||
+		strings.Contains(msg, "wsarecv") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "use of closed network connection")
 }
 
 func oauthConfig(cfg Config) (*oauth2.Config, error) {

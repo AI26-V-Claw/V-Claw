@@ -114,6 +114,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 	select {
 	case result := <-resultCh:
 		result = sanitizeToolResult(result, definition)
+		result = stampToolResultSource(result, definition)
 		var execErr error
 		if result.Error != nil && !result.Success {
 			execErr = errors.New(result.Error.Message)
@@ -150,6 +151,7 @@ func (r *Runtime) executeAllowedTool(ctx context.Context, toolCall providers.Too
 			},
 		}
 		result = sanitizeToolResult(result, definition)
+		result = stampToolResultSource(result, definition)
 		r.runPostToolHook(ctx, toolCall, definition, result, toolCtx.Err(), startedAt)
 		emitProgress(ctx, ProgressEvent{
 			Stage:      ProgressStageToolFailed,

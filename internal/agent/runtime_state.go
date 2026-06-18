@@ -22,6 +22,7 @@ const (
 	RuntimeRunStatusFailed               RuntimeRunStatus = "failed"
 	RuntimeRunStatusBlocked              RuntimeRunStatus = "blocked"
 	RuntimeRunStatusMaxIterations        RuntimeRunStatus = "max_iterations"
+	RuntimeRunStatusCancelled            RuntimeRunStatus = "cancelled"
 )
 
 type ActionStatus string
@@ -63,12 +64,17 @@ type RunState struct {
 	Category               string
 	ErrorRef               string
 	Status                 RuntimeRunStatus
+	FailureReason          string
 	IterationCount         int
 	PendingActionID        string
 	PendingClarificationID string
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 	CompletedAt            *time.Time
+	// Governance fields — set once when the run starts, carried through every
+	// record that belongs to this run so N4 can filter/group without joining.
+	Model         string // LLM model ID, e.g. "claude-opus-4-8"
+	PromptVersion string // content-hash fingerprint of the effective system prompt
 }
 
 type RunStep struct {
@@ -94,6 +100,11 @@ type ActionRecord struct {
 	Result            *tools.ToolResult
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	// Governance fields — copied from the run at action-creation time.
+	Model             string // LLM model ID
+	PromptVersion     string // content-hash fingerprint of system prompt
+	ToolSchemaVersion string // content-hash fingerprint of the tool's parameter schema
+	PolicyDecisionRef string // "policy:<runID>:<toolCallID>:<unixSec>"
 }
 
 type ToolCallRecord struct {
@@ -110,6 +121,16 @@ type ToolCallRecord struct {
 	ErrorMessage string
 	LatencyMS    int64
 	CreatedAt    time.Time
+	// Governance fields — same provenance bundle as ActionRecord, but populated
+	// for every tool call (not only those that need approval).
+	Model             string
+	PromptVersion     string
+	ToolSchemaVersion string
+	PolicyDecisionRef string
+	// Source identifies the origin layer that produced this call's result.
+	// Mirrors contracts.ToolResult.Source so audit records keep a single
+	// source-of-truth for attribution.
+	Source string
 }
 
 type RiskDecisionRecord struct {
@@ -124,6 +145,10 @@ type RiskDecisionRecord struct {
 	Reason           string
 	PolicyReasons    []string
 	CheckedAt        time.Time
+	// PolicyDecisionRef is the composite reference shared with every record
+	// (tool call, action, audit) that descends from this risk decision.
+	// Format: "policy:<runID>:<toolCallID>:<unixSec>".
+	PolicyDecisionRef string
 }
 
 type ApprovalDecisionRecord struct {

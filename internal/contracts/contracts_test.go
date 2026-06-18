@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -241,5 +242,133 @@ func TestApprovalRequestSerializesParentApprovalAndRevisedStatus(t *testing.T) {
 	}
 	if decoded.ParentApprovalID != "appr_root" {
 		t.Fatalf("expected parentApprovalId to round-trip, got %#v", decoded.ParentApprovalID)
+	}
+}
+
+// ─── GovernanceMetadata tests ─────────────────────────────────────────────────
+
+func TestGovernanceMetadataRoundTripOnToolCall(t *testing.T) {
+	original := ToolCall{
+		ToolCallID: "call_g_001",
+		ToolName:   "calendar.createEvent",
+		Input:      map[string]any{"title": "Họp"},
+		Governance: &GovernanceMetadata{
+			Model:             "claude-opus-4-8",
+			PromptVersion:     "abc12345",
+			ToolSchemaVersion: "deadbeef",
+			PolicyDecisionRef: "policy:run_x:call_g_001:1781524800",
+		},
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded ToolCall
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Governance == nil {
+		t.Fatal("Governance must survive round-trip")
+	}
+	if decoded.Governance.Model != "claude-opus-4-8" {
+		t.Errorf("Model mismatch: got %q", decoded.Governance.Model)
+	}
+	if decoded.Governance.PromptVersion != "abc12345" {
+		t.Errorf("PromptVersion mismatch: got %q", decoded.Governance.PromptVersion)
+	}
+	if decoded.Governance.ToolSchemaVersion != "deadbeef" {
+		t.Errorf("ToolSchemaVersion mismatch: got %q", decoded.Governance.ToolSchemaVersion)
+	}
+	if decoded.Governance.PolicyDecisionRef != "policy:run_x:call_g_001:1781524800" {
+		t.Errorf("PolicyDecisionRef mismatch: got %q", decoded.Governance.PolicyDecisionRef)
+	}
+}
+
+func TestGovernanceMetadataOmittedWhenAbsent(t *testing.T) {
+	// Existing producers that don't yet populate governance must round-trip
+	// without an empty object hanging around in JSON.
+	tc := ToolCall{ToolCallID: "call_g_002", ToolName: "calculator"}
+	data, _ := json.Marshal(tc)
+	if strings.Contains(string(data), "governance") {
+		t.Errorf("governance field must be omitted when nil, got: %s", string(data))
+	}
+}
+
+func TestGovernanceMetadataOnRiskDecisionAndApproval(t *testing.T) {
+	// PolicyDecisionRef on RiskDecision and Governance on ApprovalRequest must
+	// both round-trip cleanly so consumers that read either record see the
+	// same provenance.
+	rd := RiskDecision{
+		ToolCallID:        "call_g_003",
+		ToolName:          "gmail.sendDraft",
+		RiskLevel:         RiskLevelExternalWrite,
+		Decision:          RiskDecisionRequiresApproval,
+		RequiresApproval:  true,
+		CheckedAt:         time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC),
+		PolicyDecisionRef: "policy:run_y:call_g_003:1781524800",
+	}
+	rdJSON, _ := json.Marshal(rd)
+	var rdDecoded RiskDecision
+	if err := json.Unmarshal(rdJSON, &rdDecoded); err != nil {
+		t.Fatalf("RiskDecision unmarshal: %v", err)
+	}
+	if rdDecoded.PolicyDecisionRef != rd.PolicyDecisionRef {
+		t.Errorf("PolicyDecisionRef mismatch: got %q", rdDecoded.PolicyDecisionRef)
+	}
+
+	approval := ApprovalRequest{
+		ApprovalID: "appr_g_001",
+		RequestID:  "req_g_001",
+		SessionID:  "sess_g_001",
+		ToolCallID: "call_g_003",
+		Status:     ApprovalStatusPending,
+		RiskLevel:  RiskLevelExternalWrite,
+		Summary:    "Send draft",
+		ToolCall:   ToolCall{ToolName: "gmail.sendDraft"},
+		CreatedAt:  time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC),
+		ExpiresAt:  time.Date(2026, 6, 15, 12, 10, 0, 0, time.UTC),
+		Governance: &GovernanceMetadata{
+			Model:             "claude-opus-4-8",
+			PromptVersion:     "abc12345",
+			ToolSchemaVersion: "feedface",
+			PolicyDecisionRef: rd.PolicyDecisionRef,
+		},
+	}
+	apJSON, _ := json.Marshal(approval)
+	var apDecoded ApprovalRequest
+	if err := json.Unmarshal(apJSON, &apDecoded); err != nil {
+		t.Fatalf("ApprovalRequest unmarshal: %v", err)
+	}
+	if apDecoded.Governance == nil || apDecoded.Governance.PolicyDecisionRef != rd.PolicyDecisionRef {
+		t.Errorf("ApprovalRequest.Governance.PolicyDecisionRef mismatch: %#v", apDecoded.Governance)
+	}
+}
+
+func TestToolResultGovernanceAndSourceRoundTrip(t *testing.T) {
+	original := ToolResult{
+		ToolCallID: "call_g_004",
+		ToolName:   "gmail.listEmails",
+		Success:    true,
+		Source:     "tool:google_workspace",
+		Governance: &GovernanceMetadata{
+			Model:             "claude-opus-4-8",
+			PromptVersion:     "abc12345",
+			ToolSchemaVersion: "cafef00d",
+			PolicyDecisionRef: "policy:run_z:call_g_004:1781524800",
+		},
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded ToolResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Source != "tool:google_workspace" {
+		t.Errorf("Source mismatch: got %q", decoded.Source)
+	}
+	if decoded.Governance == nil || decoded.Governance.Model != "claude-opus-4-8" {
+		t.Errorf("Governance mismatch: %#v", decoded.Governance)
 	}
 }

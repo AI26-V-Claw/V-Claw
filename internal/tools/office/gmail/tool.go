@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	googleconnector "vclaw/internal/connectors/google"
+	driveconnector "vclaw/internal/connectors/google/drive"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	"vclaw/internal/tools"
 
@@ -51,6 +52,14 @@ const (
 	maxAllowedResults     = int64(50)
 	maxDraftAttachments   = 10
 	maxDraftAttachmentRaw = int64(20 * 1024 * 1024)
+
+	// Auto-pagination: when the caller makes a bare list request (no explicit
+	// maxResults and no pageToken), the Service fetches successive pages until
+	// the result set is exhausted or these safety caps are reached, so a
+	// complete list is not silently truncated to one page.
+	autoPaginatePageSize = int64(50)  // per-connector-call page size while auto-paginating
+	maxAutoPaginateTotal = int64(300) // hard cap on total accumulated results
+	maxAutoPaginatePages = 25         // hard cap on round trips (guards against a stuck pageToken)
 )
 
 type ToolRegistryEntry struct {
@@ -62,21 +71,21 @@ type ToolRegistryEntry struct {
 }
 
 var RegistryEntries = []ToolRegistryEntry{
-	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria. This returns message summaries only and does not include attachment information; call gmail.getEmail to inspect attachments.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria. after/before must be date-only YYYY-MM-DD strings (not RFC3339). To list sent mail to a recipient, use query \"in:sent to:<email>\" with labelIds=[\"SENT\"]. Returns message summaries only; call gmail.getEmail to inspect attachments.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetEmail, Owner: "integration", Description: "Read one email in detail, including attachment metadata and message content. This is a sensitive read and requires approval.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameListLabels, Owner: "integration", Description: "List Gmail labels.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetProfile, Owner: "integration", Description: "Read the Gmail account profile.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameListThreads, Owner: "integration", Description: "List Gmail threads by search criteria.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListThreads, Owner: "integration", Description: "List Gmail threads by search criteria. after/before must be date-only YYYY-MM-DD strings (not RFC3339).", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetThread, Owner: "integration", Description: "Read a Gmail thread in detail.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameListDrafts, Owner: "integration", Description: "List Gmail drafts.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetDraft, Owner: "integration", Description: "Read one Gmail draft in detail.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameCreateDraft, Owner: "integration", Description: "Create a Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameCreateDraft, Owner: "integration", Description: "Create a Gmail draft. To attach a Google Drive file, use the driveAttachments field with the Drive file ID from drive.listFiles — do not construct a file path from a Drive filename.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateDraft, Owner: "integration", Description: "Update a Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameSendDraft, Owner: "integration", Description: "Send an existing Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameSendDraft, Owner: "integration", Description: "Send an existing Gmail draft. Requires a draftId from gmail.createDraft. The email is not delivered until this tool succeeds — createDraft alone does not send.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameDeleteDraft, Owner: "integration", Description: "Delete an existing Gmail draft.", DefaultRiskLevel: "destructive", RequiresApproval: true},
 	{Name: ToolNameReplyDraft, Owner: "integration", Description: "Create a Gmail reply draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameForwardDraft, Owner: "integration", Description: "Create a Gmail forward draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameDownloadAttachments, Owner: "integration", Description: "Download Gmail attachments to a local directory. Call gmail.getEmail immediately before gmail.downloadAttachments so the agent can use fresh attachment filenames from the current message. If filenames are provided, only matching attachments are downloaded.", DefaultRiskLevel: "local_write", RequiresApproval: true},
+	{Name: ToolNameDownloadAttachments, Owner: "integration", Description: "Download Gmail attachments into the local sandbox workspace. Call gmail.getEmail immediately before gmail.downloadAttachments so the agent can use fresh attachment filenames from the current message. If filenames are provided, only matching attachments are downloaded. outputDir is optional and defaults to the workspace root.", DefaultRiskLevel: "local_write", RequiresApproval: true},
 	{Name: ToolNameModifyMessage, Owner: "integration", Description: "Modify Gmail message labels such as read, unread, starred, archive, or inbox.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameBatchModifyMessages, Owner: "integration", Description: "Modify Gmail labels for multiple messages.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameTrashMessage, Owner: "integration", Description: "Move a Gmail message to trash.", DefaultRiskLevel: "destructive", RequiresApproval: true},
@@ -109,12 +118,57 @@ type Connector interface {
 	UntrashMessage(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error)
 }
 
+// DriveFileSource is a minimal interface for downloading Drive files to attach to Gmail drafts.
+type DriveFileSource interface {
+	GetFile(ctx context.Context, fileID string) (driveconnector.FileSummary, error)
+	DownloadFile(ctx context.Context, fileID string, maxBytes int64) (driveconnector.FileContentOutput, error)
+	ExportFile(ctx context.Context, fileID string, mimeType string, maxBytes int64) (driveconnector.FileContentOutput, error)
+}
+
+// PathGuard confines attachment downloads to the sandbox workspace.
+// filesystem.PathGuard satisfies this interface.
+type PathGuard interface {
+	Resolve(path string) (string, error)
+}
+
 type Service struct {
-	connector Connector
+	connector   Connector
+	driveSource DriveFileSource
+	// location is the user's timezone, used to derive a local send time from each
+	// message's InternalDate (epoch ms) for display. Defaults to time.Local.
+	location *time.Location
+	// downloadGuard confines gmail.downloadAttachments output to the sandbox
+	// workspace. When set, outputDir is optional and defaults to the workspace root.
+	downloadGuard PathGuard
 }
 
 func NewService(connector Connector) *Service {
 	return &Service{connector: connector}
+}
+
+func (s *Service) WithDriveSource(source DriveFileSource) *Service {
+	s.driveSource = source
+	return s
+}
+
+// WithLocation sets the timezone used to localize message send times.
+func (s *Service) WithLocation(loc *time.Location) *Service {
+	s.location = loc
+	return s
+}
+
+// WithDownloadGuard confines attachment downloads to the sandbox workspace and
+// makes outputDir optional (defaulting to the workspace root).
+func (s *Service) WithDownloadGuard(guard PathGuard) *Service {
+	s.downloadGuard = guard
+	return s
+}
+
+func (s *Service) localLocation() *time.Location {
+	if s != nil && s.location != nil {
+		return s.location
+	}
+	return time.Local
 }
 
 type ListEmailsInput struct {
@@ -225,15 +279,16 @@ type GetDraftOutput struct {
 }
 
 type DraftInput struct {
-	UserID      string
-	To          []string
-	Cc          []string
-	Bcc         []string
-	Subject     string
-	TextBody    string
-	HTMLBody    string
-	ThreadID    string
-	Attachments []string
+	UserID           string
+	To               []string
+	Cc               []string
+	Bcc              []string
+	Subject          string
+	TextBody         string
+	HTMLBody         string
+	ThreadID         string
+	Attachments      []string
+	DriveAttachments []string
 }
 
 type CreateDraftOutput struct {
@@ -343,19 +398,50 @@ func (s *Service) ListEmails(ctx context.Context, input ListEmailsInput) (ListEm
 	if errShape := s.validateConnector(); errShape != nil {
 		return ListEmailsOutput{}, errShape
 	}
-	maxResults, errShape := normalizeMaxResults(input.MaxResults)
-	if errShape != nil {
-		return ListEmailsOutput{}, errShape
-	}
 	query, err := BuildSearchQuery(input)
 	if err != nil {
 		return ListEmailsOutput{}, invalidInput(err.Error())
 	}
-	messages, nextPageToken, err := s.connector.ListMessages(ctx, normalizeUserID(input.UserID), query, input.LabelIDs, maxResults, input.PageToken)
+	userID := normalizeUserID(input.UserID)
+	// A bare list request (no explicit count, no page cursor) means "list everything":
+	// auto-paginate up to a safe cap so results are not silently truncated to one page.
+	if input.PageToken == "" && input.MaxResults <= 0 {
+		messages, nextPageToken, err := s.listAllMessages(ctx, userID, query, input.LabelIDs)
+		if err != nil {
+			return ListEmailsOutput{}, MapError(err)
+		}
+		return ListEmailsOutput{Query: query, Messages: messages, NextPageToken: nextPageToken}, nil
+	}
+	// Explicit count or manual pagination: return a single page.
+	maxResults, errShape := normalizeMaxResults(input.MaxResults)
+	if errShape != nil {
+		return ListEmailsOutput{}, errShape
+	}
+	messages, nextPageToken, err := s.connector.ListMessages(ctx, userID, query, input.LabelIDs, maxResults, input.PageToken)
 	if err != nil {
 		return ListEmailsOutput{}, MapError(err)
 	}
 	return ListEmailsOutput{Query: query, Messages: messages, NextPageToken: nextPageToken}, nil
+}
+
+// listAllMessages fetches successive pages until the result set is exhausted or
+// a safety cap is reached. The returned token is non-empty only when a cap cut
+// the listing short, signalling there are more results to fetch manually.
+func (s *Service) listAllMessages(ctx context.Context, userID, query string, labelIDs []string) ([]gmailconnector.MessageSummary, string, error) {
+	var all []gmailconnector.MessageSummary
+	pageToken := ""
+	for page := 0; page < maxAutoPaginatePages; page++ {
+		messages, next, err := s.connector.ListMessages(ctx, userID, query, labelIDs, autoPaginatePageSize, pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		all = append(all, messages...)
+		if next == "" || int64(len(all)) >= maxAutoPaginateTotal {
+			return all, next, nil
+		}
+		pageToken = next
+	}
+	return all, pageToken, nil
 }
 
 func (s *Service) ListLabels(ctx context.Context, input ListLabelsInput) (ListLabelsOutput, *ErrorShape) {
@@ -402,19 +488,49 @@ func (s *Service) ListThreads(ctx context.Context, input ListThreadsInput) (List
 	if errShape := s.validateConnector(); errShape != nil {
 		return ListThreadsOutput{}, errShape
 	}
-	maxResults, errShape := normalizeMaxResults(input.MaxResults)
-	if errShape != nil {
-		return ListThreadsOutput{}, errShape
-	}
 	query, err := BuildSearchQuery(ListEmailsInput{Query: input.Query, From: input.From, Subject: input.Subject, After: input.After, Before: input.Before})
 	if err != nil {
 		return ListThreadsOutput{}, invalidInput(err.Error())
 	}
-	threads, nextPageToken, err := s.connector.ListThreads(ctx, normalizeUserID(input.UserID), query, input.LabelIDs, maxResults, input.PageToken)
+	userID := normalizeUserID(input.UserID)
+	// A bare list request (no explicit count, no page cursor) means "list everything":
+	// auto-paginate up to a safe cap so results are not silently truncated to one page.
+	if input.PageToken == "" && input.MaxResults <= 0 {
+		threads, nextPageToken, err := s.listAllThreads(ctx, userID, query, input.LabelIDs)
+		if err != nil {
+			return ListThreadsOutput{}, MapError(err)
+		}
+		return ListThreadsOutput{Query: query, Threads: threads, NextPageToken: nextPageToken}, nil
+	}
+	// Explicit count or manual pagination: return a single page.
+	maxResults, errShape := normalizeMaxResults(input.MaxResults)
+	if errShape != nil {
+		return ListThreadsOutput{}, errShape
+	}
+	threads, nextPageToken, err := s.connector.ListThreads(ctx, userID, query, input.LabelIDs, maxResults, input.PageToken)
 	if err != nil {
 		return ListThreadsOutput{}, MapError(err)
 	}
 	return ListThreadsOutput{Query: query, Threads: threads, NextPageToken: nextPageToken}, nil
+}
+
+// listAllThreads fetches successive pages until the result set is exhausted or
+// a safety cap is reached, mirroring listAllMessages.
+func (s *Service) listAllThreads(ctx context.Context, userID, query string, labelIDs []string) ([]gmailconnector.ThreadSummary, string, error) {
+	var all []gmailconnector.ThreadSummary
+	pageToken := ""
+	for page := 0; page < maxAutoPaginatePages; page++ {
+		threads, next, err := s.connector.ListThreads(ctx, userID, query, labelIDs, autoPaginatePageSize, pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		all = append(all, threads...)
+		if next == "" || int64(len(all)) >= maxAutoPaginateTotal {
+			return all, next, nil
+		}
+		pageToken = next
+	}
+	return all, pageToken, nil
 }
 
 func (s *Service) GetThread(ctx context.Context, input GetThreadInput) (GetThreadOutput, *ErrorShape) {
@@ -480,6 +596,11 @@ func (s *Service) CreateDraft(ctx context.Context, input DraftInput) (CreateDraf
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
+	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DriveAttachments)
+	if errShape != nil {
+		return CreateDraftOutput{}, errShape
+	}
+	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
 	draft, err := s.connector.CreateDraft(ctx, normalizeUserID(input.UserID), draftInput)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
@@ -498,6 +619,11 @@ func (s *Service) UpdateDraft(ctx context.Context, input UpdateDraftInput) (Crea
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
+	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	if errShape != nil {
+		return CreateDraftOutput{}, errShape
+	}
+	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
 	draft, err := s.connector.UpdateDraft(ctx, normalizeUserID(input.UserID), input.DraftID, draftInput)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
@@ -541,6 +667,11 @@ func (s *Service) ReplyDraft(ctx context.Context, input ReplyDraftInput) (Create
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
+	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	if errShape != nil {
+		return CreateDraftOutput{}, errShape
+	}
+	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
 	var draft gmailconnector.DraftSummary
 	var err error
 	if strings.TrimSpace(input.MessageID) != "" {
@@ -573,6 +704,11 @@ func (s *Service) ForwardDraft(ctx context.Context, input ForwardDraftInput) (Cr
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
+	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	if errShape != nil {
+		return CreateDraftOutput{}, errShape
+	}
+	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
 	original, err := s.connector.GetMessage(ctx, normalizeUserID(input.UserID), input.MessageID)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
@@ -592,8 +728,9 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 	if strings.TrimSpace(input.MessageID) == "" {
 		return DownloadAttachmentsOutput{}, invalidInput("messageId is required")
 	}
-	if strings.TrimSpace(input.OutputDir) == "" {
-		return DownloadAttachmentsOutput{}, invalidInput("outputDir is required")
+	outputDir, errShape := s.resolveDownloadDir(input.OutputDir)
+	if errShape != nil {
+		return DownloadAttachmentsOutput{}, errShape
 	}
 	message, err := s.connector.GetMessage(ctx, normalizeUserID(input.UserID), input.MessageID)
 	if err != nil {
@@ -603,7 +740,7 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 	if len(attachments) == 0 {
 		return DownloadAttachmentsOutput{}, invalidInput("no matching attachments found")
 	}
-	if err := os.MkdirAll(input.OutputDir, 0700); err != nil {
+	if err := os.MkdirAll(outputDir, 0700); err != nil {
 		return DownloadAttachmentsOutput{}, internalError("create outputDir: " + err.Error())
 	}
 
@@ -614,7 +751,7 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 			return DownloadAttachmentsOutput{}, MapError(err)
 		}
 		filename := safeAttachmentFilename(attachment)
-		path := filepath.Join(input.OutputDir, filename)
+		path := filepath.Join(outputDir, filename)
 		if err := os.WriteFile(path, data.Data, 0600); err != nil {
 			return DownloadAttachmentsOutput{}, internalError("write attachment: " + err.Error())
 		}
@@ -626,6 +763,28 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 		})
 	}
 	return output, nil
+}
+
+// resolveDownloadDir confines the attachment output directory to the sandbox
+// workspace when a guard is configured. With a guard, outputDir is optional and
+// defaults to the workspace root; a path outside the workspace is rejected.
+// Without a guard (e.g. unit tests), outputDir is required and used verbatim.
+func (s *Service) resolveDownloadDir(outputDir string) (string, *ErrorShape) {
+	outputDir = strings.TrimSpace(outputDir)
+	if s.downloadGuard == nil {
+		if outputDir == "" {
+			return "", invalidInput("outputDir is required")
+		}
+		return outputDir, nil
+	}
+	if outputDir == "" {
+		outputDir = "."
+	}
+	resolved, err := s.downloadGuard.Resolve(outputDir)
+	if err != nil {
+		return "", invalidInput("outputDir is outside the allowed workspace: " + err.Error())
+	}
+	return resolved, nil
 }
 
 func (s *Service) ModifyMessage(ctx context.Context, input ModifyMessageInput) (ModifyMessageOutput, *ErrorShape) {
@@ -783,6 +942,20 @@ func normalizeMaxResults(value int64) (int64, *ErrorShape) {
 	return value, nil
 }
 
+// listMaxResultsArg reads the maxResults argument for a list call. When the key
+// is absent it returns 0, signalling the Service to auto-paginate the full
+// result set. When present it is clamped into [1, maxAllowedResults] so an
+// out-of-range request is bounded to a single page rather than rejected.
+func listMaxResultsArg(args map[string]any) int64 {
+	if args == nil {
+		return 0
+	}
+	if _, ok := args["maxResults"]; !ok {
+		return 0
+	}
+	return boundedInt64Arg(args, "maxResults", defaultMaxResults, maxAllowedResults)
+}
+
 func buildDraftMessageInput(input DraftInput, requireRecipient bool, requireSubject bool) (gmailconnector.DraftMessageInput, *ErrorShape) {
 	if requireRecipient && len(cleanStringSlice(append(append(input.To, input.Cc...), input.Bcc...))) == 0 {
 		return gmailconnector.DraftMessageInput{}, invalidInput("at least one recipient is required")
@@ -846,6 +1019,55 @@ func loadDraftAttachments(paths []string) ([]gmailconnector.DraftAttachmentInput
 			Filename: filename,
 			MimeType: mimeType,
 			Data:     data,
+		})
+	}
+	return attachments, nil
+}
+
+func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([]gmailconnector.DraftAttachmentInput, *ErrorShape) {
+	cleaned := cleanStringSlice(fileIDs)
+	if len(cleaned) == 0 || s.driveSource == nil {
+		return nil, nil
+	}
+	if len(cleaned) > maxDraftAttachments {
+		return nil, invalidInput(fmt.Sprintf("driveAttachments must contain at most %d files", maxDraftAttachments))
+	}
+	attachments := make([]gmailconnector.DraftAttachmentInput, 0, len(cleaned))
+	totalSize := int64(0)
+	for _, fileID := range cleaned {
+		meta, err := s.driveSource.GetFile(ctx, fileID)
+		if err != nil {
+			return nil, MapError(err)
+		}
+		var output driveconnector.FileContentOutput
+		if isGoogleAppsFile(meta.MimeType) {
+			exportMIME, ext := googleAppsExportFormat(meta.MimeType)
+			output, err = s.driveSource.ExportFile(ctx, fileID, exportMIME, maxDraftAttachmentRaw)
+			if err != nil {
+				return nil, MapError(err)
+			}
+			if output.File.Name != "" && !strings.Contains(output.File.Name, ".") {
+				output.File.Name = output.File.Name + ext
+			}
+			output.MimeType = exportMIME
+		} else {
+			output, err = s.driveSource.DownloadFile(ctx, fileID, maxDraftAttachmentRaw)
+			if err != nil {
+				return nil, MapError(err)
+			}
+		}
+		totalSize += output.Size
+		if totalSize > maxDraftAttachmentRaw {
+			return nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
+		}
+		mimeType := output.MimeType
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		attachments = append(attachments, gmailconnector.DraftAttachmentInput{
+			Filename: output.File.Name,
+			MimeType: mimeType,
+			Data:     []byte(output.Content),
 		})
 	}
 	return attachments, nil
@@ -1033,6 +1255,27 @@ func invalidInput(message string) *ErrorShape {
 	return &ErrorShape{Code: "INVALID_INPUT", Message: message, Retryable: false}
 }
 
+// isGoogleAppsFile returns true for Google Workspace native formats that require
+// files.export instead of files.get?alt=media.
+func isGoogleAppsFile(mimeType string) bool {
+	return strings.HasPrefix(mimeType, "application/vnd.google-apps.")
+}
+
+// googleAppsExportFormat returns the export MIME type and file extension for a
+// Google Workspace native file. Defaults to PDF for all editor types.
+func googleAppsExportFormat(mimeType string) (exportMIME string, ext string) {
+	switch mimeType {
+	case "application/vnd.google-apps.spreadsheet":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"
+	case "application/vnd.google-apps.presentation":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"
+	case "application/vnd.google-apps.drawing":
+		return "image/png", ".png"
+	default:
+		return "application/pdf", ".pdf"
+	}
+}
+
 func internalError(message string) *ErrorShape {
 	return &ErrorShape{Code: "INTERNAL_ERROR", Message: message, Retryable: false}
 }
@@ -1147,7 +1390,7 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 	case ToolNameForwardDraft:
 		return forwardDraftSchema()
 	case ToolNameDownloadAttachments:
-		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "filenames": arrayStringSchema(), "outputDir": map[string]any{"type": "string"}}, "required": []string{"messageId", "outputDir"}, "additionalProperties": false}
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "filenames": arrayStringSchema(), "outputDir": map[string]any{"type": "string", "description": "Optional workspace-relative directory. Omit to save into the workspace root. Paths outside the workspace are rejected."}}, "required": []string{"messageId"}, "additionalProperties": false}
 	case ToolNameModifyMessage:
 		return tools.ToolSchema{
 			"type": "object",
@@ -1206,65 +1449,65 @@ func (t GmailTool) RiskLevel() tools.RiskLevel {
 func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
 	switch t.name {
 	case ToolNameListEmails:
-		output, errShape := t.service.ListEmails(ctx, ListEmailsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
-		return outputToolResult(call, output, errShape)
+		output, errShape := t.service.ListEmails(ctx, ListEmailsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: listMaxResultsArg(call.Arguments), PageToken: stringArg(call.Arguments, "pageToken")})
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameListLabels:
 		output, errShape := t.service.ListLabels(ctx, ListLabelsInput{})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameGetProfile:
 		output, errShape := t.service.GetProfile(ctx, GetProfileInput{})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameGetEmail:
 		output, errShape := t.service.GetEmail(ctx, GetEmailInput{MessageID: stringArg(call.Arguments, "messageId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameListThreads:
-		output, errShape := t.service.ListThreads(ctx, ListThreadsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
-		return outputToolResult(call, output, errShape)
+		output, errShape := t.service.ListThreads(ctx, ListThreadsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: listMaxResultsArg(call.Arguments), PageToken: stringArg(call.Arguments, "pageToken")})
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameGetThread:
 		output, errShape := t.service.GetThread(ctx, GetThreadInput{ThreadID: stringArg(call.Arguments, "threadId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameListDrafts:
 		output, errShape := t.service.ListDrafts(ctx, ListDraftsInput{MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameGetDraft:
 		output, errShape := t.service.GetDraft(ctx, GetDraftInput{DraftID: stringArg(call.Arguments, "draftId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameCreateDraft:
 		output, errShape := t.service.CreateDraft(ctx, draftInputFromArgs(call.Arguments))
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameUpdateDraft:
 		input := UpdateDraftInput{DraftInput: draftInputFromArgs(call.Arguments), DraftID: stringArg(call.Arguments, "draftId")}
 		output, errShape := t.service.UpdateDraft(ctx, input)
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameSendDraft:
 		output, errShape := t.service.SendDraft(ctx, SendDraftInput{DraftID: stringArg(call.Arguments, "draftId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameDeleteDraft:
 		output, errShape := t.service.DeleteDraft(ctx, DeleteDraftInput{DraftID: stringArg(call.Arguments, "draftId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameReplyDraft:
 		input := ReplyDraftInput{DraftInput: draftInputFromArgs(call.Arguments), MessageID: stringArg(call.Arguments, "messageId")}
 		output, errShape := t.service.ReplyDraft(ctx, input)
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameForwardDraft:
 		input := ForwardDraftInput{DraftInput: draftInputFromArgs(call.Arguments), MessageID: stringArg(call.Arguments, "messageId")}
 		output, errShape := t.service.ForwardDraft(ctx, input)
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameDownloadAttachments:
 		output, errShape := t.service.DownloadAttachments(ctx, DownloadAttachmentsInput{MessageID: stringArg(call.Arguments, "messageId"), Filenames: stringSliceArg(call.Arguments, "filenames"), OutputDir: stringArg(call.Arguments, "outputDir")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameModifyMessage:
 		output, errShape := t.service.ModifyMessage(ctx, ModifyMessageInput{MessageID: stringArg(call.Arguments, "messageId"), Action: stringArg(call.Arguments, "action"), LabelIDs: stringSliceArg(call.Arguments, "labelIds")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameBatchModifyMessages:
 		output, errShape := t.service.BatchModifyMessages(ctx, BatchModifyMessagesInput{MessageIDs: stringSliceArg(call.Arguments, "messageIds"), Action: stringArg(call.Arguments, "action"), LabelIDs: stringSliceArg(call.Arguments, "labelIds")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameTrashMessage:
 		output, errShape := t.service.TrashMessage(ctx, TrashMessageInput{MessageID: stringArg(call.Arguments, "messageId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameUntrashMessage:
 		output, errShape := t.service.UntrashMessage(ctx, UntrashMessageInput{MessageID: stringArg(call.Arguments, "messageId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	default:
 		return tools.ToolNotFoundResult(call)
 	}
@@ -1279,12 +1522,19 @@ func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 	return nil
 }
 
-func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) tools.ToolResult {
+func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape, location *time.Location) tools.ToolResult {
 	if errShape != nil {
 		return toolErrorResult(call, errShape)
 	}
 	userContent := gmailUserSummary(call.Name, output)
-	llmContent := formatJSON(compactOutputForLLM(call.Name, output))
+	if call.Name == ToolNameGetEmail {
+		userContent = formatJSON(output)
+	} else if call.Name == ToolNameListEmails {
+		if out, ok := output.(ListEmailsOutput); ok && len(out.Messages) == 1 {
+			userContent = formatJSON(output)
+		}
+	}
+	llmContent := formatJSON(compactOutputForLLM(call.Name, output, location))
 	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent, ArtifactRef: gmailArtifactRef(call.Name, output)}
 }
 
@@ -1401,11 +1651,11 @@ func formatJSON(output any) string {
 	return string(data)
 }
 
-func compactOutputForLLM(toolName string, output any) any {
+func compactOutputForLLM(toolName string, output any, location *time.Location) any {
 	switch toolName {
 	case ToolNameListEmails:
 		if list, ok := output.(ListEmailsOutput); ok {
-			return compactListEmailsOutput(list)
+			return compactListEmailsOutput(list, location)
 		}
 	case ToolNameListThreads:
 		if list, ok := output.(ListThreadsOutput); ok {
@@ -1415,8 +1665,107 @@ func compactOutputForLLM(toolName string, output any) any {
 		if list, ok := output.(ListDraftsOutput); ok {
 			return compactListDraftsOutput(list)
 		}
+	case ToolNameGetEmail:
+		if msg, ok := output.(GetEmailOutput); ok {
+			return compactGetEmailOutput(msg, location)
+		}
+	case ToolNameGetThread:
+		if thread, ok := output.(GetThreadOutput); ok {
+			return compactGetThreadOutput(thread, location)
+		}
+	case ToolNameGetDraft:
+		if draft, ok := output.(GetDraftOutput); ok {
+			return compactGetDraftOutput(draft, location)
+		}
 	}
 	return output
+}
+
+// compactEmailDetail mirrors a single message for the LLM, replacing the raw
+// "Date" header (sender timezone) with LocalDate/LocalDateTime in the user's
+// timezone. See compactEmailMessage for why the raw header is omitted.
+type compactEmailDetail struct {
+	ID            string                      `json:"ID"`
+	ThreadID      string                      `json:"ThreadID"`
+	From          string                      `json:"From"`
+	To            string                      `json:"To"`
+	Subject       string                      `json:"Subject"`
+	LocalDate     string                      `json:"LocalDate,omitempty"`
+	LocalDateTime string                      `json:"LocalDateTime,omitempty"`
+	LabelIDs      []string                    `json:"LabelIDs,omitempty"`
+	InternalDate  int64                       `json:"InternalDate"`
+	Attachments   []gmailconnector.Attachment `json:"Attachments,omitempty"`
+}
+
+func compactMessageDetail(m gmailconnector.MessageDetail, location *time.Location) compactEmailDetail {
+	if location == nil {
+		location = time.Local
+	}
+	detail := compactEmailDetail{
+		ID:           m.ID,
+		ThreadID:     m.ThreadID,
+		From:         m.From,
+		To:           m.To,
+		Subject:      m.Subject,
+		LabelIDs:     m.LabelIDs,
+		InternalDate: m.InternalDate,
+		Attachments:  m.Attachments,
+	}
+	if m.InternalDate > 0 {
+		localTime := time.UnixMilli(m.InternalDate).In(location)
+		detail.LocalDate = localTime.Format("2006-01-02")
+		detail.LocalDateTime = localTime.Format(time.RFC3339)
+	}
+	return detail
+}
+
+type compactGetEmail struct {
+	Message compactEmailDetail `json:"Message"`
+	Display DisplayOutput      `json:"Display"`
+}
+
+func compactGetEmailOutput(output GetEmailOutput, location *time.Location) compactGetEmail {
+	return compactGetEmail{Message: compactMessageDetail(output.Message, location), Display: output.Display}
+}
+
+type compactThreadMessage struct {
+	Message compactEmailDetail `json:"Message"`
+	Display DisplayOutput      `json:"Display"`
+}
+
+type compactGetThread struct {
+	ThreadID string                 `json:"ThreadID"`
+	Snippet  string                 `json:"Snippet,omitempty"`
+	Messages []compactThreadMessage `json:"Messages"`
+}
+
+func compactGetThreadOutput(output GetThreadOutput, location *time.Location) compactGetThread {
+	messages := make([]compactThreadMessage, 0, len(output.Messages))
+	for _, m := range output.Messages {
+		messages = append(messages, compactThreadMessage{
+			Message: compactMessageDetail(m.Message, location),
+			Display: m.Display,
+		})
+	}
+	return compactGetThread{ThreadID: output.Thread.ID, Snippet: output.Thread.Snippet, Messages: messages}
+}
+
+type compactGetDraft struct {
+	DraftID   string             `json:"DraftID"`
+	MessageID string             `json:"MessageID,omitempty"`
+	ThreadID  string             `json:"ThreadID,omitempty"`
+	Message   compactEmailDetail `json:"Message"`
+	Display   DisplayOutput      `json:"Display"`
+}
+
+func compactGetDraftOutput(output GetDraftOutput, location *time.Location) compactGetDraft {
+	return compactGetDraft{
+		DraftID:   output.Draft.ID,
+		MessageID: output.Draft.MessageID,
+		ThreadID:  output.Draft.ThreadID,
+		Message:   compactMessageDetail(output.Draft.Message, location),
+		Display:   output.Display,
+	}
 }
 
 type compactListEmails struct {
@@ -1425,30 +1774,44 @@ type compactListEmails struct {
 	NextPageToken string                `json:"NextPageToken,omitempty"`
 }
 
+// compactEmailMessage intentionally omits the raw "Date" header. That header
+// carries the sender's own timezone offset (e.g. -0700) and the model would
+// otherwise echo it verbatim, reporting the wrong local time. LocalDate and
+// LocalDateTime are derived from InternalDate in the user's timezone and are
+// the only date fields the model should display.
 type compactEmailMessage struct {
-	ID           string   `json:"ID"`
-	ThreadID     string   `json:"ThreadID"`
-	From         string   `json:"From"`
-	To           string   `json:"To"`
-	Subject      string   `json:"Subject"`
-	Date         string   `json:"Date"`
-	LabelIDs     []string `json:"LabelIDs,omitempty"`
-	InternalDate int64    `json:"InternalDate"`
+	ID            string   `json:"ID"`
+	ThreadID      string   `json:"ThreadID"`
+	From          string   `json:"From"`
+	To            string   `json:"To"`
+	Subject       string   `json:"Subject"`
+	LocalDate     string   `json:"LocalDate,omitempty"`
+	LocalDateTime string   `json:"LocalDateTime,omitempty"`
+	LabelIDs      []string `json:"LabelIDs,omitempty"`
+	InternalDate  int64    `json:"InternalDate"`
 }
 
-func compactListEmailsOutput(output ListEmailsOutput) compactListEmails {
+func compactListEmailsOutput(output ListEmailsOutput, location *time.Location) compactListEmails {
+	if location == nil {
+		location = time.Local
+	}
 	messages := make([]compactEmailMessage, 0, len(output.Messages))
 	for _, message := range output.Messages {
-		messages = append(messages, compactEmailMessage{
+		compact := compactEmailMessage{
 			ID:           message.ID,
 			ThreadID:     message.ThreadID,
 			From:         message.From,
 			To:           message.To,
 			Subject:      message.Subject,
-			Date:         message.Date,
 			LabelIDs:     message.LabelIDs,
 			InternalDate: message.InternalDate,
-		})
+		}
+		if message.InternalDate > 0 {
+			localTime := time.UnixMilli(message.InternalDate).In(location)
+			compact.LocalDate = localTime.Format("2006-01-02")
+			compact.LocalDateTime = localTime.Format(time.RFC3339)
+		}
+		messages = append(messages, compact)
 	}
 	return compactListEmails{Query: output.Query, Messages: messages, NextPageToken: output.NextPageToken}
 }
@@ -1482,7 +1845,7 @@ func compactListDraftsOutput(output ListDraftsOutput) compactListDrafts {
 }
 
 func draftInputFromArgs(args map[string]any) DraftInput {
-	return DraftInput{To: stringSliceArg(args, "to"), Cc: stringSliceArg(args, "cc"), Bcc: stringSliceArg(args, "bcc"), Subject: stringArg(args, "subject"), TextBody: multilineStringArg(args, "textBody"), HTMLBody: multilineStringArg(args, "htmlBody"), ThreadID: stringArg(args, "threadId"), Attachments: stringSliceArg(args, "attachments")}
+	return DraftInput{To: stringSliceArg(args, "to"), Cc: stringSliceArg(args, "cc"), Bcc: stringSliceArg(args, "bcc"), Subject: stringArg(args, "subject"), TextBody: multilineStringArg(args, "textBody"), HTMLBody: multilineStringArg(args, "htmlBody"), ThreadID: stringArg(args, "threadId"), Attachments: stringSliceArg(args, "attachments"), DriveAttachments: stringSliceArg(args, "driveAttachments")}
 }
 
 // multilineStringArg is like stringArg but joins array values with newlines.
@@ -1513,10 +1876,12 @@ func listSchema() tools.ToolSchema {
 
 func maxResultsSchema() map[string]any {
 	return map[string]any{
-		"type":        "number",
-		"minimum":     1,
-		"maximum":     maxAllowedResults,
-		"description": "Omit to use default 10.",
+		"type":    "number",
+		"minimum": 1,
+		"maximum": maxAllowedResults,
+		"description": "OMIT this for normal listing. When omitted, the tool returns ALL matching results " +
+			"by paginating automatically. Set it ONLY when the user explicitly asks for a specific number " +
+			"(e.g. \"my 5 latest emails\"); a set value returns just that many from a single page and may truncate the list.",
 	}
 }
 
@@ -1541,7 +1906,8 @@ func draftSchema(required []string) tools.ToolSchema {
 		"textBody":    map[string]any{"type": "string"},
 		"htmlBody":    map[string]any{"type": "string"},
 		"threadId":    map[string]any{"type": "string"},
-		"attachments": arrayStringSchema(),
+		"attachments":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Local file system paths to attach (e.g. /tmp/file.pdf). Do NOT use this for Google Drive files — use driveAttachments instead."},
+		"driveAttachments": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Google Drive file IDs to attach (not filenames or URLs — the Drive file ID string such as '1abc...'). Use this whenever the file is on Google Drive."},
 	}, "required": required, "additionalProperties": false}
 }
 

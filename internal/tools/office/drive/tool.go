@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"vclaw/internal/connectors/google/common"
 	gdrive "vclaw/internal/connectors/google/drive"
@@ -17,6 +20,7 @@ const (
 	ToolNameGetFile            = "drive.getFile"
 	ToolNameExportFile         = "drive.exportFile"
 	ToolNameDownloadFile       = "drive.downloadFile"
+	ToolNameSaveFile           = "drive.saveFile"
 	ToolNameCreateFolder       = "drive.createFolder"
 	ToolNameCreateFile         = "drive.createFile"
 	ToolNameUploadFile         = "drive.uploadFile"
@@ -31,6 +35,16 @@ const (
 
 	defaultMaxResults = int64(10)
 	maxResults        = int64(50)
+
+	// Auto-pagination: a bare drive.listFiles call (no explicit maxResults and no
+	// pageToken) fetches successive pages until the result set is exhausted or
+	// these safety caps are reached, so a complete listing is not truncated to
+	// one page.
+	autoPaginatePageSize = int64(50)  // per-connector-call page size while auto-paginating
+	maxAutoPaginateTotal = int64(300) // hard cap on total accumulated files
+	maxAutoPaginatePages = 25         // hard cap on round trips (guards against a stuck pageToken)
+
+	maxSaveFileBytes = int64(25 * 1024 * 1024) // cap on a single file saved to the workspace
 )
 
 type ToolRegistryEntry struct {
@@ -42,19 +56,20 @@ type ToolRegistryEntry struct {
 }
 
 var RegistryEntries = []ToolRegistryEntry{
-	{Name: ToolNameListFiles, Owner: "integration", Description: "List files in Google Drive.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListFiles, Owner: "integration", Description: "List files in Google Drive. Pass a plain file name or a valid Drive query like \"name contains 'X' and trashed = false\". Do not pass arbitrary sentences as query.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetFile, Owner: "integration", Description: "Read Google Drive file metadata.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameExportFile, Owner: "integration", Description: "Export a Google Workspace Drive file as text or another MIME type.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameDownloadFile, Owner: "integration", Description: "Download Drive file content into the tool response with a size cap.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameCreateFolder, Owner: "integration", Description: "Create a Google Drive folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameDownloadFile, Owner: "integration", Description: "Download a Drive file's content into the tool response with a size cap. Works for any file type — Google Docs Editors files are auto-exported to text. Read-only; does not write local files.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameSaveFile, Owner: "integration", Description: "Save a Drive file to the local sandbox workspace so the user has it on disk. Works for any file type — Google Docs Editors files are auto-exported. Omit outputDir to save into the workspace root. Writes a local file and requires approval.", DefaultRiskLevel: "local_write", RequiresApproval: true},
+	{Name: ToolNameCreateFolder, Owner: "integration", Description: "Create a Google Drive folder. If the user names a destination parent folder, resolve it first with drive.listFiles and pass the folder ID in parentIds.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameCreateFile, Owner: "integration", Description: "Create a Google Drive file from provided content.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUploadFile, Owner: "integration", Description: "Upload a local file to Google Drive.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateFileMetadata, Owner: "integration", Description: "Update Google Drive file metadata.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameShareFile, Owner: "integration", Description: "Share a Google Drive file.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameListPermissions, Owner: "integration", Description: "List sharing permissions for a Google Drive file.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameRevokePermission, Owner: "integration", Description: "Revoke a Google Drive file permission.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameMoveFile, Owner: "integration", Description: "Move a Google Drive file or folder to another folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameMoveFiles, Owner: "integration", Description: "Move multiple Google Drive files or folders to another folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameMoveFile, Owner: "integration", Description: "Move a Google Drive file or folder to another folder. Use this for moving — do not use drive.updateFileMetadata for moves. Resolve source and destination with drive.listFiles first.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameMoveFiles, Owner: "integration", Description: "Move multiple Google Drive files or folders to another folder. Use this for batch moves — do not use drive.updateFileMetadata. Resolve all sources and the destination with drive.listFiles first.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameTrashFile, Owner: "integration", Description: "Move a Google Drive file or folder to trash.", DefaultRiskLevel: "destructive", RequiresApproval: true},
 	{Name: ToolNameUntrashFile, Owner: "integration", Description: "Restore a Google Drive file or folder from trash.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 }
@@ -78,10 +93,51 @@ type Connector interface {
 
 type Service struct {
 	connector Connector
+	// location is the user's timezone, used to render file modifiedTime (which
+	// Drive returns in UTC) in local time. Defaults to time.Local.
+	location *time.Location
 }
 
 func NewService(connector Connector) *Service {
 	return &Service{connector: connector}
+}
+
+// WithLocation sets the timezone used to render file modifiedTime in local time.
+func (s *Service) WithLocation(loc *time.Location) *Service {
+	s.location = loc
+	return s
+}
+
+func (s *Service) localLocation() *time.Location {
+	if s != nil && s.location != nil {
+		return s.location
+	}
+	return time.Local
+}
+
+// localizeModifiedTime reparses a Drive UTC timestamp (RFC3339, e.g.
+// "2026-06-12T02:58:37.000Z") into the user's local timezone. The raw string is
+// returned unchanged if it cannot be parsed.
+func localizeModifiedTime(raw string, location *time.Location) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	if location == nil {
+		location = time.Local
+	}
+	return t.In(location).Format(time.RFC3339)
+}
+
+func (s *Service) localizeFiles(output gdrive.ListFilesOutput) gdrive.ListFilesOutput {
+	loc := s.localLocation()
+	for i := range output.Files {
+		output.Files[i].ModifiedTime = localizeModifiedTime(output.Files[i].ModifiedTime, loc)
+	}
+	return output
 }
 
 type ErrorShape struct {
@@ -167,11 +223,41 @@ func (s *Service) ListFiles(ctx context.Context, input ListFilesInput) (gdrive.L
 	if errShape := s.validateConnector(); errShape != nil {
 		return gdrive.ListFilesOutput{}, errShape
 	}
+	// A bare list request (no explicit count, no page cursor) means "list everything":
+	// auto-paginate up to a safe cap so results are not silently truncated to one page.
+	if input.PageToken == "" && input.MaxResults <= 0 {
+		output, err := s.listAllFiles(ctx, input.Query, input.MimeType)
+		if err != nil {
+			return gdrive.ListFilesOutput{}, mapError(err)
+		}
+		return s.localizeFiles(output), nil
+	}
 	output, err := s.connector.ListFiles(ctx, input.Query, input.MimeType, boundMax(input.MaxResults), input.PageToken)
 	if err != nil {
 		return gdrive.ListFilesOutput{}, mapError(err)
 	}
-	return output, nil
+	return s.localizeFiles(output), nil
+}
+
+// listAllFiles fetches successive pages until the result set is exhausted or a
+// safety cap is reached. The returned NextPageToken is non-empty only when a
+// cap cut the listing short, signalling there are more files to fetch manually.
+func (s *Service) listAllFiles(ctx context.Context, query, mimeType string) (gdrive.ListFilesOutput, error) {
+	var all gdrive.ListFilesOutput
+	pageToken := ""
+	for page := 0; page < maxAutoPaginatePages; page++ {
+		output, err := s.connector.ListFiles(ctx, query, mimeType, autoPaginatePageSize, pageToken)
+		if err != nil {
+			return gdrive.ListFilesOutput{}, err
+		}
+		all.Files = append(all.Files, output.Files...)
+		if output.NextPageToken == "" || int64(len(all.Files)) >= maxAutoPaginateTotal {
+			all.NextPageToken = output.NextPageToken
+			return all, nil
+		}
+		pageToken = output.NextPageToken
+	}
+	return all, nil
 }
 
 func (s *Service) GetFile(ctx context.Context, input GetFileInput) (gdrive.FileSummary, *ErrorShape) {
@@ -185,6 +271,7 @@ func (s *Service) GetFile(ctx context.Context, input GetFileInput) (gdrive.FileS
 	if err != nil {
 		return gdrive.FileSummary{}, mapError(err)
 	}
+	file.ModifiedTime = localizeModifiedTime(file.ModifiedTime, s.localLocation())
 	return file, nil
 }
 
@@ -209,11 +296,54 @@ func (s *Service) DownloadFile(ctx context.Context, input FileContentInput) (gdr
 	if strings.TrimSpace(input.FileID) == "" {
 		return gdrive.FileContentOutput{}, invalidInput("fileId is required")
 	}
+	// Google Docs Editors files (Docs, Sheets, Slides) have no binary content and
+	// cannot be downloaded directly — Drive returns 403 fileNotDownloadable. Detect
+	// them by MIME type and export to a text-friendly format instead, so a plain
+	// "download this file" request works regardless of the file's type.
+	meta, err := s.connector.GetFile(ctx, input.FileID)
+	if err != nil {
+		return gdrive.FileContentOutput{}, mapError(err)
+	}
+	if isGoogleAppsFile(meta.MimeType) {
+		exportMIME, ext := googleAppsDownloadFormat(meta.MimeType)
+		output, err := s.connector.ExportFile(ctx, input.FileID, exportMIME, input.MaxBytes)
+		if err != nil {
+			return gdrive.FileContentOutput{}, mapError(err)
+		}
+		if output.File.Name != "" && !strings.Contains(output.File.Name, ".") {
+			output.File.Name += ext
+		}
+		if output.MimeType == "" {
+			output.MimeType = exportMIME
+		}
+		return output, nil
+	}
 	output, err := s.connector.DownloadFile(ctx, input.FileID, input.MaxBytes)
 	if err != nil {
 		return gdrive.FileContentOutput{}, mapError(err)
 	}
 	return output, nil
+}
+
+// isGoogleAppsFile reports whether a MIME type is a Google Workspace native file
+// (Docs, Sheets, Slides, etc.), which must be exported rather than downloaded.
+func isGoogleAppsFile(mimeType string) bool {
+	return strings.HasPrefix(mimeType, "application/vnd.google-apps.")
+}
+
+// googleAppsDownloadFormat picks a text-friendly export format for a Google
+// Workspace native file, so downloaded content is readable/summarizable.
+func googleAppsDownloadFormat(mimeType string) (exportMIME string, ext string) {
+	switch mimeType {
+	case "application/vnd.google-apps.spreadsheet":
+		return "text/csv", ".csv"
+	case "application/vnd.google-apps.drawing":
+		return "image/png", ".png"
+	case "application/vnd.google-apps.document", "application/vnd.google-apps.presentation":
+		return "text/plain", ".txt"
+	default:
+		return "application/pdf", ".pdf"
+	}
 }
 
 func (s *Service) CreateFolder(ctx context.Context, input CreateFolderInput) (gdrive.FileSummary, *ErrorShape) {
@@ -454,6 +584,63 @@ func (t DriveTool) resolveUploadPath(localPath string) (string, *ErrorShape) {
 	return resolved, nil
 }
 
+// saveFile downloads (or exports, for Google Docs Editors files) a Drive file
+// and writes it into the sandbox workspace. The destination is confined to the
+// workspace by the same PathGuard used for uploads, so the agent can never write
+// outside it. outputDir is optional; when empty the file lands in the workspace
+// root.
+func (t DriveTool) saveFile(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	if t.guard == nil {
+		return outputToolResult(call, nil, invalidInput("saving files is unavailable: no sandbox workspace is configured"))
+	}
+	fileID := strings.TrimSpace(stringArg(call.Arguments, "fileId"))
+	if fileID == "" {
+		return outputToolResult(call, nil, invalidInput("fileId is required"))
+	}
+
+	// DownloadFile already handles export-vs-download (Google Docs Editors files
+	// are exported to a text-friendly format).
+	content, errShape := t.service.DownloadFile(ctx, FileContentInput{FileID: fileID, MaxBytes: maxSaveFileBytes})
+	if errShape != nil {
+		return outputToolResult(call, nil, errShape)
+	}
+
+	filename := strings.TrimSpace(stringArg(call.Arguments, "filename"))
+	if filename == "" {
+		filename = content.File.Name
+	}
+	if strings.TrimSpace(filename) == "" {
+		filename = fileID
+	}
+	// Keep only the base name; never let a caller-supplied name escape the dir.
+	filename = filepath.Base(filepath.FromSlash(filename))
+
+	outputDir := strings.TrimSpace(stringArg(call.Arguments, "outputDir"))
+	if outputDir == "" {
+		outputDir = "."
+	}
+	resolvedDir, err := t.guard.Resolve(outputDir)
+	if err != nil {
+		return outputToolResult(call, nil, invalidInput("outputDir is outside the allowed workspace: "+err.Error()))
+	}
+	if err := os.MkdirAll(resolvedDir, 0o750); err != nil {
+		return outputToolResult(call, nil, internalError("create outputDir: "+err.Error()))
+	}
+	destPath := filepath.Join(resolvedDir, filename)
+	if err := os.WriteFile(destPath, []byte(content.Content), 0o600); err != nil {
+		return outputToolResult(call, nil, internalError("write file: "+err.Error()))
+	}
+
+	result := map[string]any{
+		"FileID":   fileID,
+		"Filename": filename,
+		"Path":     destPath,
+		"MimeType": content.MimeType,
+		"Size":     int64(len(content.Content)),
+	}
+	return outputToolResult(call, result, nil)
+}
+
 func (t DriveTool) Name() string { return t.name }
 
 func (t DriveTool) Description() string {
@@ -465,7 +652,9 @@ func (t DriveTool) Description() string {
 	case ToolNameExportFile:
 		return "Export a Google Workspace Drive file, such as a Doc or Sheet, into the tool response with a size cap. This is read-only."
 	case ToolNameDownloadFile:
-		return "Download Drive file content into the tool response with a size cap. This is read-only and does not write local files."
+		return "Download a Drive file's content into the tool response with a size cap. Works for any file type: binary files are downloaded directly, and Google Docs Editors files (Docs, Sheets, Slides) are automatically exported to a text-friendly format so their content can be read or summarized. This is read-only and does not write local files."
+	case ToolNameSaveFile:
+		return "Save a Drive file onto the local disk in the sandbox workspace, for requests like \"download/save file X to my machine\". Works for any file type — Google Docs Editors files are auto-exported. outputDir is optional and defaults to the workspace root; the path is confined to the workspace. Writes a local file and requires human approval."
 	case ToolNameCreateFolder:
 		return "Create a folder in Google Drive. Requires human approval before execution."
 	case ToolNameCreateFile:
@@ -508,6 +697,12 @@ func (t DriveTool) Parameters() tools.ToolSchema {
 		return contentReadSchema(true)
 	case ToolNameDownloadFile:
 		return contentReadSchema(false)
+	case ToolNameSaveFile:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{
+			"fileId":    map[string]any{"type": "string", "description": "Drive file ID to save."},
+			"outputDir": map[string]any{"type": "string", "description": "Optional workspace-relative directory. Omit to save into the workspace root. Paths outside the workspace are rejected."},
+			"filename":  map[string]any{"type": "string", "description": "Optional file name to save as. Defaults to the Drive file's name."},
+		}, "required": []string{"fileId"}, "additionalProperties": false}
 	case ToolNameCreateFolder:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{
 			"name":      map[string]any{"type": "string"},
@@ -584,6 +779,8 @@ func (t DriveTool) RiskLevel() tools.RiskLevel {
 	switch t.name {
 	case ToolNameListFiles, ToolNameGetFile, ToolNameExportFile, ToolNameDownloadFile, ToolNameListPermissions:
 		return tools.RiskLevelSafeRead
+	case ToolNameSaveFile:
+		return tools.RiskLevelLocalWrite
 	case ToolNameTrashFile:
 		return tools.RiskLevelDestructive
 	default:
@@ -605,6 +802,8 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	case ToolNameDownloadFile:
 		output, errShape := t.service.DownloadFile(ctx, FileContentInput{FileID: stringArg(call.Arguments, "fileId"), MaxBytes: int64Arg(call.Arguments, "maxBytes")})
 		return outputToolResult(call, output, errShape)
+	case ToolNameSaveFile:
+		return t.saveFile(ctx, call)
 	case ToolNameCreateFolder:
 		output, errShape := t.service.CreateFolder(ctx, CreateFolderInput{Name: stringArg(call.Arguments, "name"), ParentIDs: stringSliceArg(call.Arguments, "parentIds")})
 		return outputToolResult(call, map[string]any{"File": output}, errShape)
@@ -648,7 +847,7 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 }
 
 func RegisterTools(registry *tools.ToolRegistry, service *Service, guard PathGuard) error {
-	for _, name := range []string{ToolNameListFiles, ToolNameGetFile, ToolNameExportFile, ToolNameDownloadFile, ToolNameCreateFolder, ToolNameCreateFile, ToolNameUploadFile, ToolNameUpdateFileMetadata, ToolNameShareFile, ToolNameListPermissions, ToolNameRevokePermission, ToolNameMoveFile, ToolNameMoveFiles, ToolNameTrashFile, ToolNameUntrashFile} {
+	for _, name := range []string{ToolNameListFiles, ToolNameGetFile, ToolNameExportFile, ToolNameDownloadFile, ToolNameSaveFile, ToolNameCreateFolder, ToolNameCreateFile, ToolNameUploadFile, ToolNameUpdateFileMetadata, ToolNameShareFile, ToolNameListPermissions, ToolNameRevokePermission, ToolNameMoveFile, ToolNameMoveFiles, ToolNameTrashFile, ToolNameUntrashFile} {
 		if err := registry.RegisterWithEntry(NewTool(name, service, guard), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
@@ -963,7 +1162,7 @@ func idSchema(name string) tools.ToolSchema {
 }
 
 func maxResultsSchema() map[string]any {
-	return map[string]any{"type": "number", "minimum": 1, "maximum": maxResults, "description": "Omit to use default 10."}
+	return map[string]any{"type": "number", "minimum": 1, "maximum": maxResults, "description": "OMIT this for normal listing. When omitted, the tool returns ALL matching files by paginating automatically. Set it ONLY when the user explicitly asks for a specific number; a set value returns just that many from a single page and may truncate the list."}
 }
 
 func contentReadSchema(includeMimeType bool) tools.ToolSchema {

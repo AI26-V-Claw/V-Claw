@@ -30,6 +30,20 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
 		}
 	}
+	if len(memory.FileRefs) > 0 {
+		lines := make([]string, 0, len(memory.FileRefs))
+		for name, ref := range memory.FileRefs {
+			switch ref.Source {
+			case "local":
+				lines = append(lines, fmt.Sprintf("- %s: local file, path=%s", name, ref.Path))
+			case "drive":
+				lines = append(lines, fmt.Sprintf("- %s: Google Drive file, driveId=%s", name, ref.DriveID))
+			}
+		}
+		if len(lines) > 0 {
+			parts = append(parts, "Resolved file references (use these to attach files without re-resolving):\n"+strings.Join(lines, "\n"))
+		}
+	}
 	if len(parts) == 0 {
 		return ""
 	}
@@ -37,7 +51,8 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 Use this memory to answer follow-up questions and maintain conversational continuity.
 Do not use memory alone to fill required parameters for a new write, destructive, local file, or code execution action.
 If the current user message does not explicitly provide required write parameters, ask a concise clarification question.
-HARD RULE — chat.sendMessage space parameter: a spaces/... value from these results or from anywhere in conversation history must NEVER be reused as the destination for a new chat.sendMessage to a named person. Always call people.searchDirectory then chat.findSpacesByMembers to obtain the correct space. Only call chat.createSpace if chat.findSpacesByMembers returns no match. Never skip the findSpacesByMembers step even if a spaces/... value is visible in history or memory.
+HARD RULE — chat.sendMessage recipients: For DM to a specific person, always use the recipientEmail parameter with their email address — do NOT use chat.findSpacesByMembers or chat.createSpace separately; the tool handles find-or-create internally. For group chats, resolve the space name with chat.listSpaces and pass the spaces/... resource name in the space parameter. A spaces/... value from history must NEVER be reused as the destination for a different person.
+FILE REFS RULE — when "Resolved file references" lists a file by name: use the recorded source and path/driveId directly. Do NOT call filesystem.fileInfo or drive.listFiles again for that file unless the user says the file has changed.
 
 ` + strings.Join(parts, "\n\n"))
 }
@@ -170,7 +185,11 @@ func (r *Runtime) refreshSessionSummary(ctx context.Context, sessionID string, t
 	if err != nil {
 		return internalError("load session memory: "+err.Error(), contracts.ErrorSourceSession)
 	}
-	if strings.TrimSpace(memory.Summary) == strings.TrimSpace(summary) {
+	// LLM summary (written by compactor) takes priority over extractive fallback.
+	// maybeCompactAsync runs as a deferred goroutine at the end of each turn, so
+	// by the time the next turn calls refreshSessionSummary the compactor may have
+	// already written a richer summary. Skip the heuristic to avoid overwriting it.
+	if strings.TrimSpace(memory.Summary) != "" {
 		return nil
 	}
 	memory.Summary = summary
@@ -198,10 +217,59 @@ func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, resu
 		Content:   truncateToolContentForLLM(content),
 		CreatedAt: r.now(),
 	})
-	if len(memory.LastActionResults) > 5 {
-		memory.LastActionResults = memory.LastActionResults[len(memory.LastActionResults)-5:]
+	if len(memory.LastActionResults) > 10 {
+		memory.LastActionResults = memory.LastActionResults[len(memory.LastActionResults)-10:]
+	}
+	if ref := extractFileRef(result); ref != nil {
+		if memory.FileRefs == nil {
+			memory.FileRefs = make(map[string]sessions.FileRef)
+		}
+		memory.FileRefs[ref.name] = sessions.FileRef{
+			Source:  ref.source,
+			Path:    ref.path,
+			DriveID: ref.driveID,
+		}
 	}
 	return r.saveSessionMemory(ctx, sessionID, memory)
+}
+
+type resolvedFileRef struct {
+	name    string
+	source  string
+	path    string
+	driveID string
+}
+
+// extractFileRef pulls a file reference from a tool result's ArtifactRef.
+// Returns nil when the result does not represent a single resolvable file.
+func extractFileRef(result tools.ToolResult) *resolvedFileRef {
+	art := result.ArtifactRef
+	if art == nil || strings.TrimSpace(art.Label) == "" {
+		return nil
+	}
+	switch art.Kind {
+	case "file":
+		// Filesystem tool — local file with absolute host path.
+		if strings.TrimSpace(art.URI) == "" {
+			return nil
+		}
+		return &resolvedFileRef{
+			name:   art.Label,
+			source: "local",
+			path:   art.URI,
+		}
+	case "google.drive.file":
+		// Drive tool — file stored on Google Drive.
+		if strings.TrimSpace(art.ID) == "" {
+			return nil
+		}
+		return &resolvedFileRef{
+			name:    art.Label,
+			source:  "drive",
+			driveID: art.ID,
+		}
+	}
+	return nil
 }
 
 func buildExtractiveSessionSummary(transcript []providers.Message, recentWindow int, maxLines int) string {
@@ -722,17 +790,58 @@ func isLikelyResultFollowUpQuestion(text string) bool {
 	return true
 }
 
+// hasClearVietnameseContextCue returns true when the text contains explicit
+// back-reference signals that indicate the user is referring to something from
+// prior conversation — even when the message also contains write-action keywords.
+// Used as an early check before isPotentialWriteRequest to avoid misclassifying
+// context-referencing write requests as fresh/isolated.
+func hasClearVietnameseContextCue(lower string) bool {
+	return containsAnyText(lower,
+		// Time-based back-references
+		"nãy giờ", "nay gio",
+		"hồi nãy", "hoi nay",
+		"lúc nãy", "luc nay",
+		"vừa nói", "vua noi",
+		"vừa trao đổi", "vua trao doi",
+		"đã trao đổi", "da trao doi",
+		"những gì đã", "nhung gi da",
+		"nội dung vừa", "noi dung vua",
+		// Demonstrative pronoun back-references
+		"người đó", "nguoi do",
+		"người kia", "nguoi kia",
+		"cái đó", "cai do",
+		"cái kia", "cai kia",
+		"cái hồi nãy", "cai hoi nay",
+		"vụ đó", "vu do",
+		"vụ kia", "vu kia",
+		"mail kia", "email kia",
+		"tin nhắn đó", "tin nhan do",
+		// Continuation cues
+		"làm tiếp", "lam tiep",
+		"ý tôi là", "y toi la",
+		"ý mình là", "y minh la",
+		"tiếp tục từ", "tiep tuc tu",
+		"cuộc trò chuyện", "cuoc tro chuyen",
+	)
+}
+
 func isLikelyContextualFollowUpQuestion(text string, history []string, memory sessions.SessionMemory) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	if lower == "" {
 		return false
 	}
-	if isPotentialWriteRequest(lower) {
-		return false
-	}
 	hasContext := len(history) > 0 ||
 		strings.TrimSpace(memory.Summary) != "" ||
 		len(memory.LastActionResults) > 0
+	// Clear Vietnamese back-reference signals override the write-request guard:
+	// a message like "tổng hợp những gì đã trao đổi nãy giờ vào file Docs" is
+	// contextual even though it contains write-action keywords.
+	if hasClearVietnameseContextCue(lower) {
+		return hasContext
+	}
+	if isPotentialWriteRequest(lower) {
+		return false
+	}
 	if !hasContext {
 		return false
 	}

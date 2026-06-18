@@ -2,6 +2,7 @@ package calendar
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -388,7 +389,11 @@ func TestNilService(t *testing.T) {
 func TestListEventsTool_Execute(t *testing.T) {
 	mock := &mockConnector{
 		listEventsFunc: func(ctx context.Context, timeMin, timeMax time.Time, query string) ([]gcal.Event, error) {
-			return []gcal.Event{{ID: "1", Title: "Test"}}, nil
+			return []gcal.Event{{
+				ID:        "1",
+				Title:     "Test",
+				EventLink: "https://calendar.google.com/calendar/event?eid=list_event_1",
+			}}, nil
 		},
 	}
 	svc := NewService(mock)
@@ -412,12 +417,19 @@ func TestListEventsTool_Execute(t *testing.T) {
 	if result.ToolName != ToolNameListEvents {
 		t.Errorf("expected ToolName %q, got %q", ToolNameListEvents, result.ToolName)
 	}
+	if !strings.Contains(result.ContentForUser, "\"eventLink\":\"https://calendar.google.com/calendar/event?eid=list_event_1\"") {
+		t.Fatalf("expected list events output to include event link, got %q", result.ContentForUser)
+	}
 }
 
 func TestCreateEventTool_Execute(t *testing.T) {
 	mock := &mockConnector{
 		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {
-			return gcal.Event{ID: "new", Title: e.Title}, nil
+			return gcal.Event{
+				ID:        "new",
+				Title:     e.Title,
+				EventLink: "https://calendar.google.com/calendar/event?eid=create_event_new",
+			}, nil
 		},
 	}
 	svc := NewService(mock)
@@ -440,6 +452,12 @@ func TestCreateEventTool_Execute(t *testing.T) {
 	}
 	if result.ToolCallID != "tc_002" {
 		t.Errorf("expected ToolCallID 'tc_002', got %q", result.ToolCallID)
+	}
+	if !strings.Contains(result.ContentForUser, "\"eventLink\":\"https://calendar.google.com/calendar/event?eid=create_event_new\"") {
+		t.Fatalf("expected create event output to include event link, got %q", result.ContentForUser)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.URI != "https://calendar.google.com/calendar/event?eid=create_event_new" {
+		t.Fatalf("expected artifact ref URI for created event, got %#v", result.ArtifactRef)
 	}
 }
 
@@ -630,6 +648,7 @@ func TestToEventSummary(t *testing.T) {
 			{Email: "alice@example.com", ResponseStatus: "accepted"},
 			{Email: "bob@example.com", ResponseStatus: "needsAction"},
 		},
+		EventLink:   "https://calendar.google.com/calendar/event?eid=summary_event_1",
 		MeetLink:    "https://meet.google.com/abc-def",
 		IsRecurring: true,
 	}
@@ -653,5 +672,8 @@ func TestToEventSummary(t *testing.T) {
 	}
 	if summary.MeetLink != "https://meet.google.com/abc-def" {
 		t.Errorf("unexpected MeetLink: %s", summary.MeetLink)
+	}
+	if summary.EventLink != "https://calendar.google.com/calendar/event?eid=summary_event_1" {
+		t.Errorf("unexpected EventLink: %s", summary.EventLink)
 	}
 }

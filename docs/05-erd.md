@@ -77,6 +77,8 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
         timestamptz completed_at
+        text model
+        text prompt_version
     }
 
     TOOL_REGISTRY_ENTRIES {
@@ -110,6 +112,11 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
         timestamptz completed_at
+        text model
+        text prompt_version
+        text tool_schema_version
+        text policy_decision_ref
+        text source
     }
 
     RISK_DECISIONS {
@@ -126,6 +133,7 @@ erDiagram
         jsonb policy_reasons
         timestamptz checked_at
         timestamptz created_at
+        text policy_decision_ref
     }
 
     APPROVAL_ACTIONS {
@@ -145,6 +153,10 @@ erDiagram
         jsonb result
         timestamptz created_at
         timestamptz updated_at
+        text model
+        text prompt_version
+        text tool_schema_version
+        text policy_decision_ref
     }
 
     APPROVAL_REQUESTS {
@@ -163,6 +175,8 @@ erDiagram
         timestamptz created_at
         timestamptz expires_at
         timestamptz resolved_at
+        text model
+        text prompt_version
     }
 
     APPROVAL_DECISIONS {
@@ -220,6 +234,11 @@ erDiagram
         text error_message
         timestamptz timestamp
         timestamptz created_at
+        text model
+        text prompt_version
+        text tool_schema_version
+        text policy_decision_ref
+        text source
     }
 
     AGENT_RUNS ||--o{ TOOL_CALLS : proposes

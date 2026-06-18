@@ -34,28 +34,28 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameListEvents,
 		Owner:            "integration",
-		Description:      "List events from Google Calendar within a time range.",
+		Description:      "List events from Google Calendar within a time range. timeMin and timeMax must be RFC3339 timestamps. Use query only for event title, location, or attendee keywords — do not put date phrases like \"today\" or \"hôm nay\" in query.",
 		DefaultRiskLevel: "safe_read",
 		RequiresApproval: false,
 	},
 	{
 		Name:             ToolNameCreateEvent,
 		Owner:            "integration",
-		Description:      "Create a new event in Google Calendar.",
+		Description:      "Create a new event in Google Calendar. Attendees must be valid email addresses — resolve person names with people.searchDirectory before calling this tool.",
 		DefaultRiskLevel: "external_write",
 		RequiresApproval: true,
 	},
 	{
 		Name:             ToolNameUpdateEvent,
 		Owner:            "integration",
-		Description:      "Update an existing event in Google Calendar.",
+		Description:      "Update an existing event in Google Calendar. Attendees must be valid email addresses — resolve person names with people.searchDirectory before calling this tool.",
 		DefaultRiskLevel: "external_write",
 		RequiresApproval: true,
 	},
 	{
 		Name:             ToolNameDeleteEvent,
 		Owner:            "integration",
-		Description:      "Delete an event from Google Calendar.",
+		Description:      "Delete an event from Google Calendar. After a bulk delete batch, call calendar.listEvents with the same time range to verify the range is empty; repeat if events remain.",
 		DefaultRiskLevel: "destructive",
 		RequiresApproval: true,
 	},
@@ -102,6 +102,7 @@ type EventSummary struct {
 	Start       string         `json:"start"`
 	End         string         `json:"end"`
 	Attendees   []AttendeeInfo `json:"attendees,omitempty"`
+	EventLink   string         `json:"eventLink,omitempty"`
 	MeetLink    string         `json:"meetLink,omitempty"`
 	IsRecurring bool           `json:"isRecurring,omitempty"`
 }
@@ -327,6 +328,7 @@ func toEventSummary(e gcal.Event) EventSummary {
 		Description: e.Description,
 		Location:    e.Location,
 		Attendees:   attendees,
+		EventLink:   e.EventLink,
 		MeetLink:    e.MeetLink,
 		IsRecurring: e.IsRecurring,
 	}

@@ -16,6 +16,8 @@ import (
 	"vclaw/internal/sessions"
 	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
+	caltool "vclaw/internal/tools/office/calendar"
+	gmtool "vclaw/internal/tools/office/gmail"
 )
 
 func TestRuntimeCompletesNormalChat(t *testing.T) {
@@ -40,6 +42,43 @@ func TestRuntimeCompletesNormalChat(t *testing.T) {
 	}
 	if len(provider.calls) != 1 {
 		t.Fatalf("expected 1 provider call, got %d", len(provider.calls))
+	}
+}
+
+func TestRuntimeProviderTurnTimeoutFailsRunState(t *testing.T) {
+	store := NewInMemoryRuntimeStateStore()
+	started := make(chan struct{})
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:        &blockingProvider{started: started},
+		Registry:        tools.NewToolRegistry(),
+		StateStore:      store,
+		ProviderTimeout: 10 * time.Millisecond,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatalf("provider was not called")
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected failed response, got %#v", response)
+	}
+	if response.Error == nil || response.Error.Code != contracts.ErrorProviderUnavailable || !response.Error.Retryable {
+		t.Fatalf("expected retryable provider unavailable timeout, got %#v", response.Error)
+	}
+	run, err := store.GetRun(context.Background(), runIDForMessage(runtimeTestMessage()))
+	if err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if run.Status != RuntimeRunStatusFailed || run.CompletedAt == nil {
+		t.Fatalf("expected failed completed run state, got %#v", run)
+	}
+	if len(store.events) == 0 || store.events[len(store.events)-1].Type != "provider.failed" {
+		t.Fatalf("expected provider.failed event, got %#v", store.events)
 	}
 }
 
@@ -903,20 +942,66 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	now := time.Date(2026, 6, 3, 17, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
 	prompt := runtimeSystemPrompt(now)
 
+	// The system prompt keeps date-interpretation rules (they are cross-tool) and the
+	// current time. Tool-specific argument rules now live in the tool descriptions.
 	if !strings.Contains(prompt, "2026-06-03T17:30:00+07:00") {
 		t.Fatalf("expected current time in prompt, got: %s", prompt)
 	}
 	if !strings.Contains(prompt, "this week") || !strings.Contains(prompt, "next Monday") {
 		t.Fatalf("expected calendar range guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "gmail.listEmails") || !strings.Contains(prompt, "date-only YYYY-MM-DD") || !strings.Contains(prompt, "never RFC3339") {
+	if !strings.Contains(prompt, "YYYY-MM-DD") {
 		t.Fatalf("expected Gmail date-only guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "LocalDate") || !strings.Contains(prompt, "different timezone") {
+	if !strings.Contains(prompt, "LocalDate") {
 		t.Fatalf("expected Gmail LocalDate grouping guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "people.searchDirectory") || !strings.Contains(prompt, "Attendees must be valid email addresses") {
-		t.Fatalf("expected attendee resolution guidance in prompt, got: %s", prompt)
+}
+
+func TestGmailToolDescriptionsCarryDateAndAttachmentRules(t *testing.T) {
+	want := map[string][]string{
+		gmtool.ToolNameListEmails:  {"date-only YYYY-MM-DD", "in:sent", "SENT"},
+		gmtool.ToolNameListThreads: {"date-only YYYY-MM-DD"},
+		gmtool.ToolNameCreateDraft: {"driveAttachments", "Drive file ID"},
+		gmtool.ToolNameSendDraft:   {"draftId", "createDraft alone does not send"},
+	}
+	got := map[string]string{}
+	for _, entry := range gmtool.RegistryEntries {
+		got[entry.Name] = entry.Description
+	}
+	for name, fragments := range want {
+		desc, ok := got[name]
+		if !ok {
+			t.Fatalf("%s not found in RegistryEntries", name)
+		}
+		for _, frag := range fragments {
+			if !strings.Contains(desc, frag) {
+				t.Fatalf("%s description missing %q, got: %q", name, frag, desc)
+			}
+		}
+	}
+}
+
+func TestCalendarToolDescriptionsCarryAttendeeAndBulkDeleteRules(t *testing.T) {
+	want := map[string][]string{
+		caltool.ToolNameCreateEvent: {"valid email addresses", "people.searchDirectory"},
+		caltool.ToolNameUpdateEvent: {"valid email addresses", "people.searchDirectory"},
+		caltool.ToolNameDeleteEvent: {"verify the range is empty"},
+	}
+	got := map[string]string{}
+	for _, entry := range caltool.RegistryEntries {
+		got[entry.Name] = entry.Description
+	}
+	for name, fragments := range want {
+		desc, ok := got[name]
+		if !ok {
+			t.Fatalf("%s not found in RegistryEntries", name)
+		}
+		for _, frag := range fragments {
+			if !strings.Contains(desc, frag) {
+				t.Fatalf("%s description missing %q, got: %q", name, frag, desc)
+			}
+		}
 	}
 }
 
@@ -3514,8 +3599,8 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run runtime: %v", err)
 	}
-	if response.Status != contracts.AgentStatusFailed {
-		t.Fatalf("expected failed, got %#v", response)
+	if response.Status != contracts.AgentStatusMaxIterationsReached {
+		t.Fatalf("expected max iterations reached, got %#v", response)
 	}
 	if response.Error == nil || response.Error.Code != contracts.ErrorMaxIterationsExceeded {
 		t.Fatalf("expected max iteration error, got %#v", response.Error)

@@ -509,7 +509,84 @@ func TestMultiLogger(t *testing.T) {
 	}
 }
 
-// ─── NopLogger ────────────────────────────────────────────────────────────────
+// ─── Governance fields ────────────────────────────────────────────────────────
+
+func TestAuditEventGovernanceFields_RoundTrip(t *testing.T) {
+	ev := audit.NewToolRequestEvent("req_g", "sess_g", "user_g", "gmail.sendDraft", audit.ActionFileWrite, "send")
+	ev.Model = "claude-opus-4-8"
+	ev.PromptVersion = "abc12345"
+	ev.ToolSchemaVersion = "deadbeef"
+	ev.PolicyDecisionRef = "policy:run_g:call_g:1781524800"
+	ev.Source = "tool:google_workspace"
+
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded audit.AuditEvent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if decoded.Model != "claude-opus-4-8" {
+		t.Errorf("Model mismatch: got %q", decoded.Model)
+	}
+	if decoded.PromptVersion != "abc12345" {
+		t.Errorf("PromptVersion mismatch: got %q", decoded.PromptVersion)
+	}
+	if decoded.ToolSchemaVersion != "deadbeef" {
+		t.Errorf("ToolSchemaVersion mismatch: got %q", decoded.ToolSchemaVersion)
+	}
+	if decoded.PolicyDecisionRef != "policy:run_g:call_g:1781524800" {
+		t.Errorf("PolicyDecisionRef mismatch: got %q", decoded.PolicyDecisionRef)
+	}
+	if decoded.Source != "tool:google_workspace" {
+		t.Errorf("Source mismatch: got %q", decoded.Source)
+	}
+}
+
+func TestAuditEventGovernanceFields_OmittedWhenEmpty(t *testing.T) {
+	// Existing producers (sandbox pipeline, legacy callers) don't set governance
+	// fields yet. Their JSON output must stay clean — empty strings should be
+	// omitted by encoding/json so audit lines don't bloat.
+	ev := audit.NewToolRequestEvent("req_g_empty", "sess_g", "user_g", "sandbox.runShell", audit.ActionRunShell, "ls")
+	data, _ := json.Marshal(ev)
+	s := string(data)
+	for _, key := range []string{
+		"model",
+		"prompt_version",
+		"tool_schema_version",
+		"policy_decision_ref",
+		`"source"`, // quote to avoid matching "command_source" or similar
+	} {
+		if strings.Contains(s, key) {
+			t.Errorf("empty governance field %q must be omitted, got: %s", key, s)
+		}
+	}
+}
+
+func TestAuditEventGovernanceFields_FilterByModel(t *testing.T) {
+	// MemoryLogger.Query doesn't filter by Model, but the field must still be
+	// queryable downstream. This test just confirms it survives Log/Query.
+	logger := audit.NewMemoryLogger()
+	ev := audit.NewToolRequestEvent("req_gm", "sess_gm", "user_gm", "calendar.createEvent", audit.ActionFileWrite, "create event")
+	ev.Model = "claude-opus-4-8"
+	ev.PromptVersion = "abc12345"
+	_ = logger.Log(ev)
+
+	results, _ := logger.Query(audit.Filter{RequestID: "req_gm"})
+	if len(results) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(results))
+	}
+	if results[0].Model != "claude-opus-4-8" {
+		t.Errorf("Model lost through MemoryLogger: %q", results[0].Model)
+	}
+	if results[0].PromptVersion != "abc12345" {
+		t.Errorf("PromptVersion lost through MemoryLogger: %q", results[0].PromptVersion)
+	}
+}
+
+// ─── End governance fields ────────────────────────────────────────────────────
 
 func TestNopLogger(t *testing.T) {
 	nop := &audit.NopLogger{}

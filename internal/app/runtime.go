@@ -56,6 +56,7 @@ type AgentRuntimeConfig struct {
 	OpenAIModel    string
 	OpenAIBaseURL  string
 	CompactorModel string
+	LongMemDir     string // path to cache/memory/; defaults to ./cache/memory
 
 	Provider     providers.Provider
 	SessionStore sessions.Store
@@ -86,10 +87,15 @@ type AgentRuntimeConfig struct {
 	LangfuseSecretKey string
 	LangfuseHost      string
 	LangfuseProjectID string
+	Timezone          string // IANA timezone name, e.g. "Asia/Ho_Chi_Minh"; defaults to "Asia/Ho_Chi_Minh" when empty
 
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
 	ParallelToolTimeoutDefault time.Duration
+	SubtaskMaxChildren         int
+	SubtaskMaxDepth            int
+	SubtaskDefaultTimeout      time.Duration
+	SubtaskMaxTimeout          time.Duration
 }
 
 type RuntimeBundle struct {
@@ -173,10 +179,6 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
-	if err := persistToolRegistry(ctx, registry, config.SessionStore, config.StateStore, config.AuditLogger); err != nil {
-		return RuntimeBundle{}, err
-	}
-
 	sessionStore := config.SessionStore
 	if sessionStore == nil {
 		sessionStore, err = sessions.NewFileStore(dataDir)
@@ -203,6 +205,22 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	compactor := sessions.NewCompactor(provider, sessions.CompactorConfig{
 		SummarizeModel: compactorModel,
 	}, config.Logger)
+	longMemDir := strings.TrimSpace(config.LongMemDir)
+	if longMemDir == "" {
+		longMemDir = "./cache/memory"
+	}
+	if err := os.MkdirAll(longMemDir, 0700); err != nil {
+		return RuntimeBundle{}, fmt.Errorf("create long-term memory dir: %w", err)
+	}
+	tz := strings.TrimSpace(config.Timezone)
+	if tz == "" {
+		tz = defaultTimezone
+	}
+	localLocation, err := time.LoadLocation(tz)
+	if err != nil {
+		return RuntimeBundle{}, fmt.Errorf("invalid VCLAW_TIMEZONE %q: %w", tz, err)
+	}
+
 	var runtimeHooks toolhooks.Hooks = auditHooks
 	if config.ToolHooks != nil {
 		runtimeHooks = toolhooks.ChainHooks{config.ToolHooks, auditHooks}
@@ -224,12 +242,24 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		ToolHooks:                  runtimeHooks,
 		MaxIterations:              config.MaxIterations,
 		Model:                      model,
+		LocalLocation:              localLocation,
 		Compactor:                  compactor,
 		MemoryClassifierModel:      compactorModel,
+		LongMemDir:                 longMemDir,
 		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,
+		SubtaskMaxChildren:         config.SubtaskMaxChildren,
+		SubtaskMaxDepth:            config.SubtaskMaxDepth,
+		SubtaskDefaultTimeout:      config.SubtaskDefaultTimeout,
+		SubtaskMaxTimeout:          config.SubtaskMaxTimeout,
 	})
+	if err := registry.RegisterWithEntry(agent.NewSubtaskTool(runtime), tools.ToolRegistryEntry{Owner: "agent_core", Group: "delegation"}); err != nil {
+		return RuntimeBundle{}, fmt.Errorf("register subtask tool: %w", err)
+	}
+	if err := persistToolRegistry(ctx, registry, config.SessionStore, config.StateStore, config.AuditLogger); err != nil {
+		return RuntimeBundle{}, err
+	}
 	return RuntimeBundle{
 		Runtime:               runtime,
 		Registry:              registry,
@@ -335,13 +365,15 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 		return fmt.Errorf("configure Google tools: %w", err)
 	}
 
-	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient))); err != nil {
+	gmailLocation := resolveLocalLocation(config.Timezone)
+	// Local file writes (gmail.downloadAttachments, drive.saveFile, drive.uploadFile)
+	// are confined to the same sandbox workspace the filesystem tools use, never
+	// arbitrary host paths such as configs/google/token.json or .env.
+	workspaceGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
+	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient)).WithDriveSource(gdrive.NewClient(httpClient)).WithLocation(gmailLocation).WithDownloadGuard(workspaceGuard)); err != nil {
 		return err
 	}
-	// drive.uploadFile may only read local files from the same sandbox workspace
-	// the filesystem tools are restricted to — never arbitrary host paths.
-	driveUploadGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
-	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)), driveUploadGuard); err != nil {
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)).WithLocation(gmailLocation), workspaceGuard); err != nil {
 		return err
 	}
 	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
@@ -506,6 +538,23 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// defaultTimezone is used when no VCLAW_TIMEZONE is configured.
+const defaultTimezone = "Asia/Ho_Chi_Minh"
+
+// resolveLocalLocation loads the configured timezone, falling back to the
+// default and then to time.Local so tool wiring never fails over a bad tz
+// string (BuildRuntime validates it strictly; this is best-effort for tools).
+func resolveLocalLocation(timezone string) *time.Location {
+	tz := strings.TrimSpace(timezone)
+	if tz == "" {
+		tz = defaultTimezone
+	}
+	if loc, err := time.LoadLocation(tz); err == nil {
+		return loc
+	}
+	return time.Local
 }
 
 func normalizeToolMode(mode string) (string, error) {

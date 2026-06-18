@@ -37,7 +37,7 @@ func TestFinishRunStateAttachesErrorRefToActiveTrace(t *testing.T) {
 	})
 
 	ctx, span := tp.Tracer("test").Start(context.Background(), "finishRunState")
-	if err := r.finishRunState(ctx, run, RuntimeRunStatusFailed); err != nil {
+	if _, err := r.finishRunState(ctx, run, RuntimeRunStatusFailed, "test_failure"); err != nil {
 		t.Fatalf("finish run state: %v", err)
 	}
 	span.End()

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"vclaw/internal/contracts"
+	"vclaw/internal/orchestration"
 	"vclaw/internal/providers"
 	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
@@ -87,7 +88,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				})
 			}
 		}
-		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonApprovalExpired)); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
 				SessionID: pending.message.SessionID,
@@ -97,10 +98,11 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			}, nil
 		}
 		return contracts.AgentResponse{
-			RequestID: pending.message.RequestID,
-			SessionID: pending.message.SessionID,
-			Status:    contracts.AgentStatusFailed,
-			Message:   "Yêu cầu xác nhận đã hết hạn. Vui lòng gửi lại yêu cầu.",
+			RequestID:     pending.message.RequestID,
+			SessionID:     pending.message.SessionID,
+			Status:        contracts.AgentStatusFailed,
+			Message:       "Yêu cầu xác nhận đã hết hạn. Vui lòng gửi lại yêu cầu.",
+			FailureReason: string(orchestration.FailureReasonApprovalExpired),
 			Error: &contracts.ErrorShape{
 				Code:      contracts.ErrorApprovalExpired,
 				Message:   "approval expired",
@@ -178,7 +180,7 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			"toolName":   pending.request.ToolCall.ToolName,
 			"comment":    strings.TrimSpace(decision.Comment),
 		})
-		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked); errShape != nil {
+		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusBlocked, string(orchestration.FailureReasonApprovalRejected)); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
 				SessionID: pending.message.SessionID,
@@ -198,11 +200,12 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			}, nil
 		}
 		return contracts.AgentResponse{
-			RequestID: pending.message.RequestID,
-			SessionID: pending.message.SessionID,
-			Status:    contracts.AgentStatusBlocked,
-			Message:   "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
-			Data:      r.traceData(nil),
+			RequestID:     pending.message.RequestID,
+			SessionID:     pending.message.SessionID,
+			Status:        contracts.AgentStatusBlocked,
+			Message:       "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
+			FailureReason: string(orchestration.FailureReasonApprovalRejected),
+			Data:          r.traceData(nil),
 			Error: &contracts.ErrorShape{
 				Code:      contracts.ErrorActionBlockedByPolicy,
 				Message:   "approval rejected",
@@ -284,7 +287,7 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 				})
 			}
 		}
-		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonApprovalExpired)); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: requestID,
 				SessionID: sessionID,
@@ -329,14 +332,25 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 	now := r.now()
 	input := cloneArguments(toolCall.Arguments)
 	input = enrichApprovalInput(toolCall.Name, input, transcript)
+	// Stamp the full governance bundle on the contract ToolCall before it
+	// leaves Agent Core (see docs/03-contracts.md §3.11). The same bundle is
+	// also attached to the ApprovalRequest so approval records are
+	// self-contained for audit/N4 without a join back to tool_calls.
+	governanceMeta := r.buildGovernanceMetadata(toolCall.Name, decision.PolicyDecisionRef)
 	contractCall := contracts.ToolCall{
 		ToolCallID: toolCall.ID,
 		RequestID:  message.RequestID,
 		SessionID:  message.SessionID,
 		ToolName:   toolCall.Name,
 		Input:      input,
+		Governance: governanceMeta,
 	}
 	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
+	if toolCall.Name == "chat.sendMessage" {
+		if email, ok := input["recipientEmail"].(string); ok && strings.TrimSpace(email) != "" {
+			summary = fmt.Sprintf("Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat đến %s. Nếu chưa có DM space, sẽ tự động tạo.", strings.TrimSpace(email))
+		}
+	}
 	parentApprovalID := ""
 	if message.Metadata != nil {
 		if value, ok := message.Metadata["parentApprovalId"].(string); ok && strings.TrimSpace(value) != "" {
@@ -358,6 +372,7 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		ToolCall:         contractCall,
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(approvalTTL),
+		Governance:       governanceMeta,
 	}
 }
 
@@ -567,6 +582,11 @@ func (r *Runtime) pendingApprovalFromState(ctx context.Context, sessionID string
 	if runState, err := r.stateStore.GetRun(ctx, record.RunID); err == nil && strings.TrimSpace(runState.OriginalGoal) != "" {
 		message.Text = runState.OriginalGoal
 	}
+	// Rebuild the governance bundle from the persisted action record so the
+	// restored ApprovalRequest carries the same provenance the run had at
+	// approval time, even if the live runtime has been reconstructed with a
+	// different model/prompt/registry since then.
+	governanceMeta := GovernanceFromActionRecord(record)
 	request := contracts.ApprovalRequest{
 		ApprovalID: record.ApprovalID,
 		RequestID:  record.RequestID,
@@ -581,9 +601,11 @@ func (r *Runtime) pendingApprovalFromState(ctx context.Context, sessionID string
 			SessionID:  record.SessionID,
 			ToolName:   record.ToolName,
 			Input:      cloneArguments(record.ArgsSnapshot),
+			Governance: governanceMeta,
 		},
-		CreatedAt: record.CreatedAt,
-		ExpiresAt: record.ApprovalExpiresAt,
+		CreatedAt:  record.CreatedAt,
+		ExpiresAt:  record.ApprovalExpiresAt,
+		Governance: governanceMeta,
 	}
 	return pendingApproval{
 		runID:      record.RunID,
@@ -653,6 +675,9 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 	if decision.Decision != contracts.RiskDecisionBlock {
 		result = r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
 	}
+	// Carry the policy reference recorded on the action so the persisted
+	// tool_calls row matches the risk_decisions row and N4 can join on it.
+	result.PolicyDecisionRef = record.PolicyDecisionRef
 	if errShape := r.recordRuntimeToolCall(ctx, nil, record.RunID, pending.toolCall, result, time.Since(startedAt), record.ApprovalID); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
@@ -702,7 +727,10 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 			Error:     errShape,
 		}, nil
 	}
-	contractResult := contractToolResult(result)
+	// Carry the persisted ActionRecord governance through to the contract
+	// result so the response surfaced after approval keeps the same provenance
+	// as the original ToolCall (docs/03-contracts.md §3.11).
+	contractResult := contractToolResult(result, GovernanceFromActionRecord(record))
 	response := contracts.AgentResponse{
 		RequestID:   pending.message.RequestID,
 		SessionID:   pending.message.SessionID,
@@ -722,10 +750,11 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 		response.Message = errShape.Message
 	}
 	if response.Status == contracts.AgentStatusFailed {
-		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError)); errShape != nil {
 			response.Error = errShape
 			response.Message = errShape.Message
 		}
+		response.FailureReason = string(orchestration.FailureReasonToolError)
 		return response, nil
 	}
 	if result.Success {
@@ -735,17 +764,20 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 			return continuationResp, nil
 		}
 	}
-	if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed); errShape != nil {
+	if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError)); errShape != nil {
 		response.Status = contracts.AgentStatusFailed
 		response.Error = errShape
 		response.Message = errShape.Message
 	}
+	response.FailureReason = string(orchestration.FailureReasonToolError)
 	return response, nil
 }
 
 func (r *Runtime) responseForUnclaimedApprovedAction(record ActionRecord, pending pendingApproval) contracts.AgentResponse {
 	if record.Status == ActionStatusCompleted && record.Result != nil {
-		contractResult := contractToolResult(*record.Result)
+		// Use the persisted ActionRecord's governance bundle so the contract
+		// result mirrors the run's state at the time it was approved.
+		contractResult := contractToolResult(*record.Result, GovernanceFromActionRecord(record))
 		return contracts.AgentResponse{
 			RequestID:   pending.message.RequestID,
 			SessionID:   pending.message.SessionID,
@@ -896,6 +928,8 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi xóa Gmail draft."
 	case "gmail.downloadAttachments":
 		return "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local."
+	case "gmail.getEmail":
+		return "Tôi cần bạn xác nhận trước khi đọc nội dung email này."
 	case "gmail.modifyMessage", "gmail.batchModifyMessages":
 		return "Tôi cần bạn xác nhận trước khi sửa trạng thái hoặc nhãn Gmail."
 	case "gmail.trashMessage":
@@ -953,7 +987,7 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 	case "sandbox.runPython", "sandbox.runShell":
 		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
 	default:
-		return fmt.Sprintf("Tôi cần bạn xác nhận trước khi chạy %s vì risk là %s.", toolName, riskLevel)
+		return "Tôi cần bạn xác nhận trước khi thực hiện thao tác này."
 	}
 }
 

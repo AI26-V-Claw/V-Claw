@@ -3,11 +3,15 @@ package drive
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gdrive "vclaw/internal/connectors/google/drive"
 	"vclaw/internal/tools"
+	fstool "vclaw/internal/tools/os/filesystem"
 )
 
 // fakeUploadGuard approves only paths under allowedPrefix, modelling the sandbox
@@ -183,6 +187,172 @@ func TestListFilesUsesCompactContentForLLM(t *testing.T) {
 		if result.ContentForUser != "Tìm thấy 1 file" {
 			t.Fatalf("unexpected user summary: %s", result.ContentForUser)
 		}
+	}
+}
+
+func TestListFilesLocalizesModifiedTime(t *testing.T) {
+	ict := time.FixedZone("ICT", 7*60*60)
+	// listFilesConnector returns ModifiedTime "2026-06-12T02:58:37.000Z" (UTC).
+	// In ICT that is 09:58:37+07:00.
+	tool := NewTool(ToolNameListFiles, NewService(listFilesConnector{}).WithLocation(ict), nil)
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:        "call_list_tz",
+		Name:      ToolNameListFiles,
+		Arguments: map[string]any{"query": "name contains 'doc'"},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	if !strings.Contains(result.ContentForLLM, "2026-06-12T09:58:37+07:00") {
+		t.Fatalf("ContentForLLM should localize modifiedTime, got: %s", result.ContentForLLM)
+	}
+	if strings.Contains(result.ContentForLLM, "02:58:37") || strings.Contains(result.ContentForLLM, ".000Z") {
+		t.Fatalf("ContentForLLM should not expose the raw UTC modifiedTime, got: %s", result.ContentForLLM)
+	}
+}
+
+// googleDocConnector models a Google Docs Editors file: GetFile reports the
+// google-apps MIME type, DownloadFile fails like the real API, and ExportFile
+// succeeds. It records whether Export was used.
+type googleDocConnector struct {
+	fakeDriveConnector
+	exported   bool
+	exportMIME string
+}
+
+func (c *googleDocConnector) GetFile(context.Context, string) (gdrive.FileSummary, error) {
+	return gdrive.FileSummary{ID: "doc_1", Name: "GoClaw", MimeType: "application/vnd.google-apps.document"}, nil
+}
+
+func (c *googleDocConnector) DownloadFile(context.Context, string, int64) (gdrive.FileContentOutput, error) {
+	return gdrive.FileContentOutput{}, errors.New("googleapi: Error 403: ... fileNotDownloadable")
+}
+
+func (c *googleDocConnector) ExportFile(_ context.Context, _ string, mimeType string, _ int64) (gdrive.FileContentOutput, error) {
+	c.exported = true
+	c.exportMIME = mimeType
+	return gdrive.FileContentOutput{
+		File:     gdrive.FileSummary{ID: "doc_1", Name: "GoClaw"},
+		MimeType: mimeType,
+		Content:  "Nội dung tài liệu GoClaw",
+	}, nil
+}
+
+func TestDownloadFileExportsGoogleDocsEditorsFile(t *testing.T) {
+	connector := &googleDocConnector{}
+	out, errShape := NewService(connector).DownloadFile(context.Background(), FileContentInput{FileID: "doc_1", MaxBytes: 1024})
+	if errShape != nil {
+		t.Fatalf("DownloadFile() errShape = %#v", errShape)
+	}
+	if !connector.exported {
+		t.Fatal("expected a Google Doc to be exported, not downloaded")
+	}
+	if connector.exportMIME != "text/plain" {
+		t.Fatalf("expected text/plain export for a Doc, got %q", connector.exportMIME)
+	}
+	if out.File.Name != "GoClaw.txt" {
+		t.Fatalf("expected exported name to gain .txt extension, got %q", out.File.Name)
+	}
+	if !strings.Contains(out.Content, "GoClaw") {
+		t.Fatalf("expected exported content, got %q", out.Content)
+	}
+}
+
+// binaryFileConnector returns a downloadable binary file.
+type binaryFileConnector struct {
+	fakeDriveConnector
+}
+
+func (binaryFileConnector) GetFile(context.Context, string) (gdrive.FileSummary, error) {
+	return gdrive.FileSummary{ID: "bin_1", Name: "report.pdf", MimeType: "application/pdf"}, nil
+}
+
+func (binaryFileConnector) DownloadFile(context.Context, string, int64) (gdrive.FileContentOutput, error) {
+	return gdrive.FileContentOutput{
+		File:     gdrive.FileSummary{ID: "bin_1", Name: "report.pdf"},
+		MimeType: "application/pdf",
+		Content:  "PDFDATA",
+	}, nil
+}
+
+func TestSaveFileWritesIntoWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	guard := fstool.NewPathGuard([]string{workspace})
+	tool := NewTool(ToolNameSaveFile, NewService(binaryFileConnector{}), guard)
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:        "call_save",
+		Name:      ToolNameSaveFile,
+		Arguments: map[string]any{"fileId": "bin_1", "outputDir": "out"},
+	})
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	saved := filepath.Join(workspace, "out", "report.pdf")
+	data, err := os.ReadFile(saved)
+	if err != nil {
+		t.Fatalf("expected saved file at %s: %v", saved, err)
+	}
+	if string(data) != "PDFDATA" {
+		t.Fatalf("unexpected saved content: %q", string(data))
+	}
+	if !strings.Contains(result.ContentForLLM, "report.pdf") {
+		t.Fatalf("result should report the saved file, got: %s", result.ContentForLLM)
+	}
+}
+
+func TestSaveFileExportsGoogleDocsEditorsFile(t *testing.T) {
+	workspace := t.TempDir()
+	guard := fstool.NewPathGuard([]string{workspace})
+	connector := &googleDocConnector{}
+	tool := NewTool(ToolNameSaveFile, NewService(connector), guard)
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:        "call_save_doc",
+		Name:      ToolNameSaveFile,
+		Arguments: map[string]any{"fileId": "doc_1"},
+	})
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	if !connector.exported {
+		t.Fatal("expected the Google Doc to be exported before saving")
+	}
+	saved := filepath.Join(workspace, "GoClaw.txt")
+	if _, err := os.Stat(saved); err != nil {
+		t.Fatalf("expected exported file saved at %s: %v", saved, err)
+	}
+}
+
+func TestSaveFileRejectsPathOutsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	guard := fstool.NewPathGuard([]string{workspace})
+	tool := NewTool(ToolNameSaveFile, NewService(binaryFileConnector{}), guard)
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:        "call_save_escape",
+		Name:      ToolNameSaveFile,
+		// Escape the workspace via the parent directory.
+		Arguments: map[string]any{"fileId": "bin_1", "outputDir": filepath.Join(workspace, "..", "outside-escape")},
+	})
+	if result.Success {
+		t.Fatal("expected failure when outputDir is outside the workspace")
+	}
+	if result.Error == nil || result.Error.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %#v", result.Error)
+	}
+}
+
+func TestSaveFileWithoutGuardRefuses(t *testing.T) {
+	tool := NewTool(ToolNameSaveFile, NewService(binaryFileConnector{}), nil)
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:        "call_save_noguard",
+		Name:      ToolNameSaveFile,
+		Arguments: map[string]any{"fileId": "bin_1"},
+	})
+	if result.Success {
+		t.Fatal("expected refusal without a configured workspace guard")
 	}
 }
 

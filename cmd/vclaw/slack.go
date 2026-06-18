@@ -67,6 +67,7 @@ func runSlackRun(ctx context.Context, args []string) error {
 		OpenAIModel:                envFirst("OPENAI_MODEL", "LLM_MODEL"),
 		OpenAIBaseURL:              envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
 		CompactorModel:             envFirst("VCLAW_COMPACTOR_MODEL"),
+		Timezone:                   envOrDefault("VCLAW_TIMEZONE", "Asia/Ho_Chi_Minh"),
 		DatabaseURL:                envFirst("DATABASE_URL"),
 		MaxIterations:              *maxIterations,
 		GoogleToolsMode:            *googleToolsMode,

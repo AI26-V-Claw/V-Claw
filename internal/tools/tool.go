@@ -92,6 +92,19 @@ type ToolResult struct {
 	// single source of truth for redaction state; do not store this flag in
 	// Metadata.
 	Redacted bool `json:"redacted,omitempty"`
+
+	// Source identifies the origin layer that produced this result, e.g.
+	// "tool:google_workspace", "tool:sandbox", "connector:tavily". Stamped by
+	// the runtime from the registered tool's Group right after Execute returns,
+	// so individual tool implementations don't have to remember to set it.
+	// See internal/governance.SourceToolPrefix / SourceConnectorPrefix.
+	Source string `json:"source,omitempty"`
+	// PolicyDecisionRef is the composite reference back to the risk decision
+	// that authorised this tool call. Format: "policy:<runID>:<toolCallID>:<unixSec>".
+	// Stamped by the runtime after policy.DecideToolCall (allowed path) or
+	// copied from the approved ActionRecord (HITL path) before persistence.
+	// Tool implementations should NOT set this — it is owned by the runtime.
+	PolicyDecisionRef string `json:"policyDecisionRef,omitempty"`
 }
 
 type ToolError struct {
