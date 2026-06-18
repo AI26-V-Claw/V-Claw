@@ -347,7 +347,7 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	// drive.uploadFile may only read local files from the same sandbox workspace
 	// the filesystem tools are restricted to — never arbitrary host paths.
 	driveUploadGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
-	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)), driveUploadGuard); err != nil {
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)).WithLocation(gmailLocation), driveUploadGuard); err != nil {
 		return err
 	}
 	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {

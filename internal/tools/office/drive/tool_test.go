@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	gdrive "vclaw/internal/connectors/google/drive"
 	"vclaw/internal/tools"
@@ -183,6 +184,28 @@ func TestListFilesUsesCompactContentForLLM(t *testing.T) {
 		if !strings.Contains(result.ContentForUser, verbose) {
 			t.Fatalf("ContentForUser should keep verbose field %q: %s", verbose, result.ContentForUser)
 		}
+	}
+}
+
+func TestListFilesLocalizesModifiedTime(t *testing.T) {
+	ict := time.FixedZone("ICT", 7*60*60)
+	// listFilesConnector returns ModifiedTime "2026-06-12T02:58:37.000Z" (UTC).
+	// In ICT that is 09:58:37+07:00.
+	tool := NewTool(ToolNameListFiles, NewService(listFilesConnector{}).WithLocation(ict), nil)
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:        "call_list_tz",
+		Name:      ToolNameListFiles,
+		Arguments: map[string]any{"query": "name contains 'doc'"},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	if !strings.Contains(result.ContentForLLM, "2026-06-12T09:58:37+07:00") {
+		t.Fatalf("ContentForLLM should localize modifiedTime, got: %s", result.ContentForLLM)
+	}
+	if strings.Contains(result.ContentForLLM, "02:58:37") || strings.Contains(result.ContentForLLM, ".000Z") {
+		t.Fatalf("ContentForLLM should not expose the raw UTC modifiedTime, got: %s", result.ContentForLLM)
 	}
 }
 

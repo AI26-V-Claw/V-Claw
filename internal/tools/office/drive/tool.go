@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"vclaw/internal/connectors/google/common"
 	gdrive "vclaw/internal/connectors/google/drive"
@@ -86,10 +87,51 @@ type Connector interface {
 
 type Service struct {
 	connector Connector
+	// location is the user's timezone, used to render file modifiedTime (which
+	// Drive returns in UTC) in local time. Defaults to time.Local.
+	location *time.Location
 }
 
 func NewService(connector Connector) *Service {
 	return &Service{connector: connector}
+}
+
+// WithLocation sets the timezone used to render file modifiedTime in local time.
+func (s *Service) WithLocation(loc *time.Location) *Service {
+	s.location = loc
+	return s
+}
+
+func (s *Service) localLocation() *time.Location {
+	if s != nil && s.location != nil {
+		return s.location
+	}
+	return time.Local
+}
+
+// localizeModifiedTime reparses a Drive UTC timestamp (RFC3339, e.g.
+// "2026-06-12T02:58:37.000Z") into the user's local timezone. The raw string is
+// returned unchanged if it cannot be parsed.
+func localizeModifiedTime(raw string, location *time.Location) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	if location == nil {
+		location = time.Local
+	}
+	return t.In(location).Format(time.RFC3339)
+}
+
+func (s *Service) localizeFiles(output gdrive.ListFilesOutput) gdrive.ListFilesOutput {
+	loc := s.localLocation()
+	for i := range output.Files {
+		output.Files[i].ModifiedTime = localizeModifiedTime(output.Files[i].ModifiedTime, loc)
+	}
+	return output
 }
 
 type ErrorShape struct {
@@ -182,13 +224,13 @@ func (s *Service) ListFiles(ctx context.Context, input ListFilesInput) (gdrive.L
 		if err != nil {
 			return gdrive.ListFilesOutput{}, mapError(err)
 		}
-		return output, nil
+		return s.localizeFiles(output), nil
 	}
 	output, err := s.connector.ListFiles(ctx, input.Query, input.MimeType, boundMax(input.MaxResults), input.PageToken)
 	if err != nil {
 		return gdrive.ListFilesOutput{}, mapError(err)
 	}
-	return output, nil
+	return s.localizeFiles(output), nil
 }
 
 // listAllFiles fetches successive pages until the result set is exhausted or a
@@ -223,6 +265,7 @@ func (s *Service) GetFile(ctx context.Context, input GetFileInput) (gdrive.FileS
 	if err != nil {
 		return gdrive.FileSummary{}, mapError(err)
 	}
+	file.ModifiedTime = localizeModifiedTime(file.ModifiedTime, s.localLocation())
 	return file, nil
 }
 
