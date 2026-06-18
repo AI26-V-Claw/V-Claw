@@ -51,7 +51,7 @@ func TestFailureReason_ToolError(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 
-	_ = r.finishRunState(context.Background(), runState, RuntimeRunStatusFailed, "tool_error")
+	_, _ = r.finishRunState(context.Background(), runState, RuntimeRunStatusFailed, "tool_error")
 
 	updated, err := store.GetRun(context.Background(), "run_tool_error")
 	if err != nil {
@@ -86,7 +86,7 @@ func TestFailureReason_ApprovalExpired(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 
-	_ = r.finishRunState(context.Background(), runState, RuntimeRunStatusFailed, "approval_expired")
+	_, _ = r.finishRunState(context.Background(), runState, RuntimeRunStatusFailed, "approval_expired")
 
 	updated, err := store.GetRun(context.Background(), "run_approval_expired")
 	if err != nil {
@@ -118,7 +118,7 @@ func TestFailureReason_HappyPath(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 
-	_ = r.finishRunState(context.Background(), runState, RuntimeRunStatusCompleted, "")
+	_, _ = r.finishRunState(context.Background(), runState, RuntimeRunStatusCompleted, "")
 
 	updated, err := store.GetRun(context.Background(), "run_happy")
 	if err != nil {

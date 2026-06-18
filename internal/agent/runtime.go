@@ -1,4 +1,4 @@
-package agent
+﻿package agent
 
 import (
 	"context"
@@ -32,7 +32,7 @@ const (
 var (
 	emailAnswerPattern  = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
 	timeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
-	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giờ)(\s*\d{1,2})?\b`)
+	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giá»)(\s*\d{1,2})?\b`)
 )
 
 type RuntimeConfig struct {
@@ -127,28 +127,6 @@ type TaskPlanResult struct {
 	Plan contracts.Plan
 }
 
-type TurnMode string
-
-const (
-	TurnModeNoTool      TurnMode = "no_tool"
-	TurnModeToolEnabled TurnMode = "tool_enabled"
-)
-
-type TurnRouteInput struct {
-	Message       string
-	RecentHistory []string
-	Now           time.Time
-}
-
-type TurnRoute struct {
-	Mode   TurnMode
-	Reason string
-}
-
-type TurnRouter interface {
-	RouteTurn(ctx context.Context, input TurnRouteInput) (TurnRoute, error)
-}
-
 func NewRuntime(config RuntimeConfig) *Runtime {
 	maxIterations := config.MaxIterations
 	if maxIterations <= 0 {
@@ -206,7 +184,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	}
 	localLocation := config.LocalLocation
 	// Do not default to time.Local here.
-	// Production always sets this via AgentRuntimeConfig.Timezone → BuildRuntime.
+	// Production always sets this via AgentRuntimeConfig.Timezone â†’ BuildRuntime.
 	// Tests leave it nil so runtimeLocalLocation falls back to now().Location().
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
@@ -277,6 +255,7 @@ func memoryClassifierModel(config RuntimeConfig) string {
 }
 
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contracts.AgentResponse, error) {
+	ctx = toolhooks.WithRequestContext(ctx, message.RequestID, message.SessionID)
 	if r.compactor != nil {
 		sessionID := message.SessionID
 		defer func() { go r.maybeCompactAsync(sessionID) }()
@@ -319,6 +298,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		base.Message = errShape.Message
 		return base, nil
 	}
+	ctx = withParentRunID(ctx, runState.RunID)
 	// Panic guard: ensure finishRunState always runs if a panic occurs after runState is initialized.
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -330,12 +310,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			)
 			currentState, getErr := r.stateStore.GetRun(context.WithoutCancel(ctx), runState.RunID)
 			if getErr == nil && currentState.Status == RuntimeRunStatusRunning {
-				_ = r.finishRunState(context.WithoutCancel(ctx), currentState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted))
+				_, _ = r.finishRunState(context.WithoutCancel(ctx), currentState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted))
 			}
 		}
 	}()
 	failStartedRun := func(errShape *contracts.ErrorShape) (contracts.AgentResponse, error) {
-		if finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted)); finishErr != nil {
+		if _, finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted)); finishErr != nil {
 			errShape = finishErr
 		}
 		base.Error = errShape
@@ -367,10 +347,11 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			sessionMemory.PendingClarification = nil
 			pendingMemoryChanged = true
 			if pendingRunID := strings.TrimSpace(pendingClarification.RunID); pendingRunID != "" && pendingRunID != runState.RunID {
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted, string(orchestration.FailureReasonNone)); errShape != nil {
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted, string(orchestration.FailureReasonNone))
+				if errShape != nil {
 					return failStartedRun(errShape)
 				}
-				base.FailureReason = runState.FailureReason
+				base.FailureReason = updatedState.FailureReason
 				if errShape := r.resumeRunState(ctx, pendingRunID); errShape != nil {
 					return failStartedRun(errShape)
 				}
@@ -493,7 +474,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 	providerTranscript := transcript
 	providerMemory := sessionMemory
 	providerReference := referenceResolution
-	if isolatedNewWriteRequest || standaloneReadRequest {
+	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
+		providerTranscript = transcriptWithLastUserContent(transcript, message.Text)
+	} else if isolatedNewWriteRequest || standaloneReadRequest {
 		providerTranscript = []providers.Message{userMessage}
 		providerMemory = sessions.SessionMemory{}
 		providerReference = nil
@@ -549,7 +532,7 @@ agentLoop:
 			if retryable {
 				reason = orchestration.FailureReasonProviderUnavailable
 			}
-			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(reason)); errShape != nil {
+			if _, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(reason)); errShape != nil {
 				base.Error = errShape
 			}
 			base.Message = base.Error.Message
@@ -592,7 +575,7 @@ If required information is missing, ask one concise clarification question inste
 				"content_preview", logPreview(assistantMessage.Content, 180),
 			)
 			emitProgress(ctx, ProgressEvent{Stage: ProgressStageFinalizing, Message: "Agent is finalizing the response"})
-			if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted, string(orchestration.FailureReasonNone)); errShape != nil {
+			if _, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCompleted, string(orchestration.FailureReasonNone)); errShape != nil {
 				base.Error = errShape
 				base.Message = errShape.Message
 				return base, nil
@@ -640,6 +623,11 @@ If required information is missing, ask one concise clarification question inste
 				if !result.Success {
 					stage = ProgressStageToolFailed
 				}
+				var execErr error
+				if result.Error != nil && !result.Success {
+					execErr = errors.New(result.Error.Message)
+				}
+				r.runPostToolHook(ctx, call, batch[i].definition, result, execErr, r.now().Add(-outcome.duration))
 				r.logger.Info("parallel tool execution completed",
 					"tool_call_id", call.ID,
 					"tool_name", call.Name,
@@ -648,7 +636,8 @@ If required information is missing, ask one concise clarification question inste
 					"duration", outcome.duration,
 					"content_preview", logPreview(result.ContentForLLM, 260),
 				)
-				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, r.decideToolCall(ctx, call, batch[i].definition, true)); errShape != nil {
+				decision := r.stampPolicyRef(runState.RunID, call.ID, r.decideToolCall(ctx, call, batch[i].definition, true))
+				if errShape := r.recordRuntimeRiskDecision(ctx, runState, call, decision); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -674,7 +663,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				toolResults = append(toolResults, contractToolResult(result, nil))
+				toolResults = append(toolResults, contractToolResult(result, r.buildGovernanceMetadata(call.Name, decision.PolicyDecisionRef)))
 				toolMessage := providers.Message{
 					Role:       providers.MessageRoleTool,
 					ToolCallID: call.ID,
@@ -690,12 +679,13 @@ If required information is missing, ask one concise clarification question inste
 				}
 			}
 			if isBatchSystemError(batchResults) {
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError)); errShape != nil {
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError))
+				if errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
 				}
-				base.FailureReason = runState.FailureReason
+				base.FailureReason = updatedState.FailureReason
 				base.ToolResults = toolResults
 				base.Error = toolErrorShape(batchResults[0].result)
 				base.Message = base.Error.Message
@@ -760,7 +750,7 @@ If required information is missing, ask one concise clarification question inste
 				definition.Name = providerToolCall.Name
 			}
 
-			decision := r.decideToolCall(ctx, providerToolCall, definition, found)
+			decision := r.stampPolicyRef(runState.RunID, providerToolCall.ID, r.decideToolCall(ctx, providerToolCall, definition, found))
 			r.logger.Info("agent tool call proposed",
 				"request_id", message.RequestID,
 				"session_id", message.SessionID,
@@ -890,7 +880,7 @@ If required information is missing, ask one concise clarification question inste
 					resp.SessionID = message.SessionID
 					return *resp, nil
 				}
-				contractResult := contractToolResult(result, nil)
+				contractResult := contractToolResult(result, r.buildGovernanceMetadata(providerToolCall.Name, decision.PolicyDecisionRef))
 				toolResults = append(toolResults, contractResult)
 
 				toolMessage := providers.Message{
@@ -907,12 +897,13 @@ If required information is missing, ask one concise clarification question inste
 					return base, nil
 				}
 				if !result.Success {
-					if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError)); errShape != nil {
+					updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError))
+					if errShape != nil {
 						base.Error = errShape
 						base.Message = errShape.Message
 						return base, nil
 					}
-					base.FailureReason = runState.FailureReason
+					base.FailureReason = updatedState.FailureReason
 					base.ToolResults = toolResults
 					base.Error = toolErrorShape(result)
 					base.Message = base.Error.Message
@@ -1036,28 +1027,30 @@ If required information is missing, ask one concise clarification question inste
 				}
 				base.ToolResults = toolResults
 				base.Status = contracts.AgentStatusBlocked
-				base.Message = "H\u00e0nh \u0111\u1ed9ng n\u00e0y kh\u00f4ng \u0111\u01b0\u1ee3c ph\u00e9p th\u1ef1c hi\u1ec7n do ch\u00ednh s\u00e1ch b\u1ea3o m\u1eadt hi\u1ec7n t\u1ea1i."
+				base.Message = "Hành động này không được phép thực hiện do chính sách bảo mật hiện tại."
 				base.Error = &contracts.ErrorShape{
 					Code:      policyErrorCode(found),
 					Message:   base.Message,
 					Source:    contracts.ErrorSourcePolicy,
 					Retryable: false,
 				}
-				if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusBlocked, string(orchestration.FailureReasonPolicyBlocked)); errShape != nil {
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusBlocked, string(orchestration.FailureReasonPolicyBlocked))
+				if errShape != nil {
 					base.Error = errShape
 				}
-				base.FailureReason = runState.FailureReason
+				base.FailureReason = updatedState.FailureReason
 				return base, nil
 			}
 		}
 	}
 
-	if errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations, string(orchestration.FailureReasonMaxIteration)); errShape != nil {
+	updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations, string(orchestration.FailureReasonMaxIteration))
+	if errShape != nil {
 		base.Error = errShape
 		base.Message = errShape.Message
 		return base, nil
 	}
-	base.FailureReason = runState.FailureReason
+	base.FailureReason = updatedState.FailureReason
 	return contracts.AgentResponse{
 		RequestID:   message.RequestID,
 		SessionID:   message.SessionID,
@@ -1135,7 +1128,7 @@ messageText = "request canceled"
 }
 	
 	contextReason := orchestration.FromContextError(err)
-	if finishErr := r.finishRunState(ctx, runState, runStatus, string(contextReason)); finishErr != nil {
+	if _, finishErr := r.finishRunState(ctx, runState, runStatus, string(contextReason)); finishErr != nil {
 	
 
 return &contracts.AgentResponse{Error: finishErr, Message: finishErr.Message, Status: contracts.AgentStatusFailed}
@@ -1178,5 +1171,6 @@ Message: messageText,
 	
 }
 }
+
 
 
