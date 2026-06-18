@@ -341,13 +341,14 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	}
 
 	gmailLocation := resolveLocalLocation(config.Timezone)
-	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient)).WithDriveSource(gdrive.NewClient(httpClient)).WithLocation(gmailLocation)); err != nil {
+	// Local file writes (gmail.downloadAttachments, drive.saveFile, drive.uploadFile)
+	// are confined to the same sandbox workspace the filesystem tools use, never
+	// arbitrary host paths such as configs/google/token.json or .env.
+	workspaceGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
+	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient)).WithDriveSource(gdrive.NewClient(httpClient)).WithLocation(gmailLocation).WithDownloadGuard(workspaceGuard)); err != nil {
 		return err
 	}
-	// drive.uploadFile may only read local files from the same sandbox workspace
-	// the filesystem tools are restricted to — never arbitrary host paths.
-	driveUploadGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
-	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)).WithLocation(gmailLocation), driveUploadGuard); err != nil {
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)).WithLocation(gmailLocation), workspaceGuard); err != nil {
 		return err
 	}
 	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
