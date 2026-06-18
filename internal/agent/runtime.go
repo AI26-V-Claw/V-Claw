@@ -56,6 +56,7 @@ type RuntimeConfig struct {
 	SubtaskMaxTimeout          time.Duration
 	Model                      string
 	Now                        func() time.Time
+	LocalLocation              *time.Location // timezone for date calculations; nil falls back to time.Local
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
 	MemoryClassifierModel      string
@@ -86,6 +87,7 @@ type Runtime struct {
 	subtaskMaxTimeout          time.Duration
 	model                      string
 	now                        func() time.Time
+	localLocation              *time.Location
 	compactor                  *sessions.Compactor
 	contextWindow              int
 	memoryClassifierModel      string
@@ -202,6 +204,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if now == nil {
 		now = time.Now
 	}
+	localLocation := config.LocalLocation
+	// Do not default to time.Local here.
+	// Production always sets this via AgentRuntimeConfig.Timezone → BuildRuntime.
+	// Tests leave it nil so runtimeLocalLocation falls back to now().Location().
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
 		if config.Provider != nil {
@@ -252,6 +258,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		subtaskMaxTimeout:          subtaskMaxTimeout,
 		model:                      config.Model,
 		now:                        now,
+		localLocation:              localLocation,
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
@@ -790,6 +797,30 @@ If required information is missing, ask one concise clarification question inste
 						return base, nil
 					}
 					for _, skipped := range skippedToolObservationMessages(assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the current Google Chat target must be resolved first") {
+						transcript = append(transcript, skipped)
+						providerTranscript = append(providerTranscript, skipped)
+						if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, skipped); err != nil {
+							base.Error = err
+							base.Message = err.Message
+							return base, nil
+						}
+					}
+					continue agentLoop
+				}
+				if shouldResolveDriveMoveBeforeClarification(providerToolCall, currentRequestText, toolCallMissingFields) {
+					toolMessage := providers.Message{
+						Role:       providers.MessageRoleTool,
+						ToolCallID: providerToolCall.ID,
+						Content:    truncateToolContentForLLM(driveMoveResolutionObservation(toolCallMissingFields)),
+					}
+					transcript = append(transcript, toolMessage)
+					providerTranscript = append(providerTranscript, toolMessage)
+					if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, toolMessage); err != nil {
+						base.Error = err
+						base.Message = err.Message
+						return base, nil
+					}
+					for _, skipped := range skippedToolObservationMessages(assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because the Drive move target must be resolved first") {
 						transcript = append(transcript, skipped)
 						providerTranscript = append(providerTranscript, skipped)
 						if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, skipped); err != nil {

@@ -30,7 +30,10 @@ func (f *Flusher) Flush(ctx context.Context, summary string) error {
 		return nil
 	}
 
-	result, err := f.classifyWithLLM(ctx, summary)
+	existingUserMD := f.readFile("USER.md")
+	existingNotesMD := f.readFile("NOTES.md")
+
+	result, err := f.classifyWithLLM(ctx, summary, existingUserMD, existingNotesMD)
 	if err != nil || (len(result.UserFacts) == 0 && len(result.NotesFacts) == 0) {
 		// Fallback: regex extraction, all facts go to NOTES.md.
 		fallbackFacts := extractiveFallback(summary)
@@ -59,10 +62,10 @@ func (f *Flusher) Flush(ctx context.Context, summary string) error {
 	return nil
 }
 
-func (f *Flusher) classifyWithLLM(ctx context.Context, summary string) (ClassifyResult, error) {
+func (f *Flusher) classifyWithLLM(ctx context.Context, summary, existingUserMD, existingNotesMD string) (ClassifyResult, error) {
 	resp, err := f.provider.Generate(ctx, &providers.GenerateRequest{
 		SystemPrompt: classifySystemPrompt(),
-		UserPrompt:   classifyUserPrompt(summary),
+		UserPrompt:   classifyUserPrompt(summary, existingUserMD, existingNotesMD),
 		Temperature:  0.2,
 		MaxTokens:    512,
 		Model:        f.model,
@@ -71,6 +74,15 @@ func (f *Flusher) classifyWithLLM(ctx context.Context, summary string) (Classify
 		return ClassifyResult{}, err
 	}
 	return parseClassifyResponse(resp.Text), nil
+}
+
+// readFile reads the content of a memory file, returning empty string if not found.
+func (f *Flusher) readFile(name string) string {
+	data, err := os.ReadFile(filepath.Join(f.dir, name))
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // updateFile reads the current content of name, applies transform, and atomically

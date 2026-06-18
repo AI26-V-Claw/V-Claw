@@ -35,7 +35,20 @@ type SessionMemory struct {
 	Summary              string                `json:"summary,omitempty"`
 	LastActionResults    []ActionResult        `json:"lastActionResults,omitempty"`
 	PendingClarification *PendingClarification `json:"pendingClarification,omitempty"`
-	UpdatedAt            time.Time             `json:"updatedAt,omitempty"`
+	// FileRefs tracks files the agent has resolved this session, keyed by filename.
+	// Persists across bot restarts so the agent knows whether a file is local or on Drive.
+	FileRefs  map[string]FileRef `json:"fileRefs,omitempty"`
+	UpdatedAt time.Time          `json:"updatedAt,omitempty"`
+}
+
+// FileRef records the resolved source of a file the agent has accessed.
+type FileRef struct {
+	// Source is either "local" or "drive".
+	Source string `json:"source"`
+	// Path is the absolute host path for local files.
+	Path string `json:"path,omitempty"`
+	// DriveID is the Google Drive file ID for Drive files.
+	DriveID string `json:"driveId,omitempty"`
 }
 
 type ActionResult struct {
@@ -161,6 +174,12 @@ func cloneMemory(memory SessionMemory) SessionMemory {
 	}
 	if memory.PendingClarification != nil {
 		cloned.PendingClarification = clonePendingClarification(memory.PendingClarification)
+	}
+	if len(memory.FileRefs) > 0 {
+		cloned.FileRefs = make(map[string]FileRef, len(memory.FileRefs))
+		for k, v := range memory.FileRefs {
+			cloned.FileRefs[k] = v
+		}
 	}
 	return cloned
 }

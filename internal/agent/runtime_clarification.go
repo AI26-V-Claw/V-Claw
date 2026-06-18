@@ -526,6 +526,7 @@ func contextualPendingClarificationText(pending sessions.PendingClarification, u
 Use the original request, assistant question, already-provided partial input, and current answer to continue the original task.
 Do not treat this as a standalone request.
 Do not execute write/destructive tools without the normal approval boundary.
+IMPORTANT: Read original_request carefully. If it already contains a value for any required field (e.g. event title, recipient, subject), use that value directly — do not ask for it again.
 
 original_request:
 %s

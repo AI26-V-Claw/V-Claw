@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	googleconnector "vclaw/internal/connectors/google"
+	driveconnector "vclaw/internal/connectors/google/drive"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	"vclaw/internal/tools"
 
@@ -109,12 +110,25 @@ type Connector interface {
 	UntrashMessage(ctx context.Context, userID string, messageID string) (gmailconnector.MessageSummary, error)
 }
 
+// DriveFileSource is a minimal interface for downloading Drive files to attach to Gmail drafts.
+type DriveFileSource interface {
+	GetFile(ctx context.Context, fileID string) (driveconnector.FileSummary, error)
+	DownloadFile(ctx context.Context, fileID string, maxBytes int64) (driveconnector.FileContentOutput, error)
+	ExportFile(ctx context.Context, fileID string, mimeType string, maxBytes int64) (driveconnector.FileContentOutput, error)
+}
+
 type Service struct {
-	connector Connector
+	connector   Connector
+	driveSource DriveFileSource
 }
 
 func NewService(connector Connector) *Service {
 	return &Service{connector: connector}
+}
+
+func (s *Service) WithDriveSource(source DriveFileSource) *Service {
+	s.driveSource = source
+	return s
 }
 
 type ListEmailsInput struct {
@@ -225,15 +239,16 @@ type GetDraftOutput struct {
 }
 
 type DraftInput struct {
-	UserID      string
-	To          []string
-	Cc          []string
-	Bcc         []string
-	Subject     string
-	TextBody    string
-	HTMLBody    string
-	ThreadID    string
-	Attachments []string
+	UserID           string
+	To               []string
+	Cc               []string
+	Bcc              []string
+	Subject          string
+	TextBody         string
+	HTMLBody         string
+	ThreadID         string
+	Attachments      []string
+	DriveAttachments []string
 }
 
 type CreateDraftOutput struct {
@@ -480,6 +495,11 @@ func (s *Service) CreateDraft(ctx context.Context, input DraftInput) (CreateDraf
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
+	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DriveAttachments)
+	if errShape != nil {
+		return CreateDraftOutput{}, errShape
+	}
+	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
 	draft, err := s.connector.CreateDraft(ctx, normalizeUserID(input.UserID), draftInput)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
@@ -498,6 +518,11 @@ func (s *Service) UpdateDraft(ctx context.Context, input UpdateDraftInput) (Crea
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
+	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	if errShape != nil {
+		return CreateDraftOutput{}, errShape
+	}
+	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
 	draft, err := s.connector.UpdateDraft(ctx, normalizeUserID(input.UserID), input.DraftID, draftInput)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
@@ -541,6 +566,11 @@ func (s *Service) ReplyDraft(ctx context.Context, input ReplyDraftInput) (Create
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
+	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	if errShape != nil {
+		return CreateDraftOutput{}, errShape
+	}
+	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
 	var draft gmailconnector.DraftSummary
 	var err error
 	if strings.TrimSpace(input.MessageID) != "" {
@@ -573,6 +603,11 @@ func (s *Service) ForwardDraft(ctx context.Context, input ForwardDraftInput) (Cr
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
+	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	if errShape != nil {
+		return CreateDraftOutput{}, errShape
+	}
+	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
 	original, err := s.connector.GetMessage(ctx, normalizeUserID(input.UserID), input.MessageID)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
@@ -851,6 +886,55 @@ func loadDraftAttachments(paths []string) ([]gmailconnector.DraftAttachmentInput
 	return attachments, nil
 }
 
+func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([]gmailconnector.DraftAttachmentInput, *ErrorShape) {
+	cleaned := cleanStringSlice(fileIDs)
+	if len(cleaned) == 0 || s.driveSource == nil {
+		return nil, nil
+	}
+	if len(cleaned) > maxDraftAttachments {
+		return nil, invalidInput(fmt.Sprintf("driveAttachments must contain at most %d files", maxDraftAttachments))
+	}
+	attachments := make([]gmailconnector.DraftAttachmentInput, 0, len(cleaned))
+	totalSize := int64(0)
+	for _, fileID := range cleaned {
+		meta, err := s.driveSource.GetFile(ctx, fileID)
+		if err != nil {
+			return nil, MapError(err)
+		}
+		var output driveconnector.FileContentOutput
+		if isGoogleAppsFile(meta.MimeType) {
+			exportMIME, ext := googleAppsExportFormat(meta.MimeType)
+			output, err = s.driveSource.ExportFile(ctx, fileID, exportMIME, maxDraftAttachmentRaw)
+			if err != nil {
+				return nil, MapError(err)
+			}
+			if output.File.Name != "" && !strings.Contains(output.File.Name, ".") {
+				output.File.Name = output.File.Name + ext
+			}
+			output.MimeType = exportMIME
+		} else {
+			output, err = s.driveSource.DownloadFile(ctx, fileID, maxDraftAttachmentRaw)
+			if err != nil {
+				return nil, MapError(err)
+			}
+		}
+		totalSize += output.Size
+		if totalSize > maxDraftAttachmentRaw {
+			return nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
+		}
+		mimeType := output.MimeType
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		attachments = append(attachments, gmailconnector.DraftAttachmentInput{
+			Filename: output.File.Name,
+			MimeType: mimeType,
+			Data:     []byte(output.Content),
+		})
+	}
+	return attachments, nil
+}
+
 func replyDraftMessageInput(input gmailconnector.DraftMessageInput, original gmailconnector.MessageDetail) gmailconnector.DraftMessageInput {
 	if strings.TrimSpace(input.ThreadID) == "" {
 		input.ThreadID = original.ThreadID
@@ -1031,6 +1115,27 @@ func cleanStringSlice(values []string) []string {
 
 func invalidInput(message string) *ErrorShape {
 	return &ErrorShape{Code: "INVALID_INPUT", Message: message, Retryable: false}
+}
+
+// isGoogleAppsFile returns true for Google Workspace native formats that require
+// files.export instead of files.get?alt=media.
+func isGoogleAppsFile(mimeType string) bool {
+	return strings.HasPrefix(mimeType, "application/vnd.google-apps.")
+}
+
+// googleAppsExportFormat returns the export MIME type and file extension for a
+// Google Workspace native file. Defaults to PDF for all editor types.
+func googleAppsExportFormat(mimeType string) (exportMIME string, ext string) {
+	switch mimeType {
+	case "application/vnd.google-apps.spreadsheet":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"
+	case "application/vnd.google-apps.presentation":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"
+	case "application/vnd.google-apps.drawing":
+		return "image/png", ".png"
+	default:
+		return "application/pdf", ".pdf"
+	}
 }
 
 func internalError(message string) *ErrorShape {
@@ -1404,7 +1509,7 @@ func compactListDraftsOutput(output ListDraftsOutput) compactListDrafts {
 }
 
 func draftInputFromArgs(args map[string]any) DraftInput {
-	return DraftInput{To: stringSliceArg(args, "to"), Cc: stringSliceArg(args, "cc"), Bcc: stringSliceArg(args, "bcc"), Subject: stringArg(args, "subject"), TextBody: multilineStringArg(args, "textBody"), HTMLBody: multilineStringArg(args, "htmlBody"), ThreadID: stringArg(args, "threadId"), Attachments: stringSliceArg(args, "attachments")}
+	return DraftInput{To: stringSliceArg(args, "to"), Cc: stringSliceArg(args, "cc"), Bcc: stringSliceArg(args, "bcc"), Subject: stringArg(args, "subject"), TextBody: multilineStringArg(args, "textBody"), HTMLBody: multilineStringArg(args, "htmlBody"), ThreadID: stringArg(args, "threadId"), Attachments: stringSliceArg(args, "attachments"), DriveAttachments: stringSliceArg(args, "driveAttachments")}
 }
 
 // multilineStringArg is like stringArg but joins array values with newlines.
@@ -1463,7 +1568,8 @@ func draftSchema(required []string) tools.ToolSchema {
 		"textBody":    map[string]any{"type": "string"},
 		"htmlBody":    map[string]any{"type": "string"},
 		"threadId":    map[string]any{"type": "string"},
-		"attachments": arrayStringSchema(),
+		"attachments":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Local file system paths to attach (e.g. /tmp/file.pdf). Do NOT use this for Google Drive files — use driveAttachments instead."},
+		"driveAttachments": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Google Drive file IDs to attach (not filenames or URLs — the Drive file ID string such as '1abc...'). Use this whenever the file is on Google Drive."},
 	}, "required": required, "additionalProperties": false}
 }
 

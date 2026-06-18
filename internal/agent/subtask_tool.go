@@ -150,13 +150,13 @@ func (*SubtaskTool) Parameters() tools.ToolSchema {
 			"task": map[string]any{"type": "string", "description": "Specific subtask for the temporary child agent."},
 			"allowed_skills": map[string]any{
 				"type":        "array",
-				"description": "High-level skill profile names to grant to the child agent.",
+				"description": "High-level skill profile names to grant to the child agent. At least one of allowed_skills or allowed_tool_groups is required.",
 				"items":       map[string]any{"type": "string"},
 				"minItems":    1,
 			},
 			"allowed_tool_groups": map[string]any{
 				"type":        "array",
-				"description": "Tool registry groups to grant to the child agent, filtered by policy and safety.",
+				"description": "Tool registry groups to grant to the child agent, filtered by policy and safety. At least one of allowed_skills or allowed_tool_groups is required.",
 				"items":       map[string]any{"type": "string"},
 				"minItems":    1,
 			},
@@ -168,10 +168,6 @@ func (*SubtaskTool) Parameters() tools.ToolSchema {
 			"context":         map[string]any{"type": "string", "description": "Optional parent-provided context for the isolated child prompt."},
 		},
 		"required": []string{"task"},
-		"anyOf": []any{
-			map[string]any{"required": []string{"allowed_skills"}},
-			map[string]any{"required": []string{"allowed_tool_groups"}},
-		},
 		"additionalProperties": false,
 	}
 }

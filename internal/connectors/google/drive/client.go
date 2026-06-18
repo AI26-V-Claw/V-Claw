@@ -396,6 +396,9 @@ func MoveFile(ctx context.Context, client *http.Client, fileID string, targetPar
 	if err != nil {
 		return FileSummary{}, err
 	}
+	if strings.TrimSpace(fileID) == strings.TrimSpace(targetParentID) {
+		return FileSummary{}, fmt.Errorf("%w: cannot move a folder into itself", common.ErrAPI)
+	}
 	removeParentIDs = cleanStrings(removeParentIDs)
 	if len(removeParentIDs) == 0 {
 		file, err := service.Files.Get(fileID).Fields("parents").Do()
@@ -404,9 +407,27 @@ func MoveFile(ctx context.Context, client *http.Client, fileID string, targetPar
 		}
 		removeParentIDs = cleanStrings(file.Parents)
 	}
+	// Remove targetParentID from removeParentIDs to avoid sending the same ID
+	// in both addParents and removeParents, which causes Drive API 400 badRequest.
+	filtered := make([]string, 0, len(removeParentIDs))
+	for _, p := range removeParentIDs {
+		if strings.TrimSpace(p) != strings.TrimSpace(targetParentID) {
+			filtered = append(filtered, p)
+		}
+	}
+	if len(filtered) == 0 {
+		// File is already in the target folder — nothing to do.
+		file, err := service.Files.Get(fileID).
+			Fields("id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed").
+			Do()
+		if err != nil {
+			return FileSummary{}, common.MapError(err)
+		}
+		return fileSummaryFromAPI(file), nil
+	}
 	updated, err := service.Files.Update(fileID, &drive.File{}).
 		AddParents(strings.TrimSpace(targetParentID)).
-		RemoveParents(strings.Join(removeParentIDs, ",")).
+		RemoveParents(strings.Join(filtered, ",")).
 		Fields("id, name, mimeType, description, webViewLink, iconLink, owners(emailAddress, displayName), modifiedTime, size, parents, starred, trashed").
 		Do()
 	if err != nil {

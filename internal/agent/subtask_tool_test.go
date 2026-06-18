@@ -20,18 +20,11 @@ func TestSubtaskToolParametersRequireCapabilityAllowlist(t *testing.T) {
 	if !reflect.DeepEqual(required, []string{"task"}) {
 		t.Fatalf("expected only task to be required unconditionally, got %v", required)
 	}
-	anyOf, ok := schema["anyOf"].([]any)
-	if !ok {
-		t.Fatalf("expected anyOf to be []any, got %T", schema["anyOf"])
-	}
-	if len(anyOf) != 2 {
-		t.Fatalf("expected anyOf to include allowed_skills or allowed_tool_groups, got %v", anyOf)
-	}
-	if !reflect.DeepEqual(anyOf[0], map[string]any{"required": []string{"allowed_skills"}}) {
-		t.Fatalf("expected allowed_skills requirement, got %v", anyOf[0])
-	}
-	if !reflect.DeepEqual(anyOf[1], map[string]any{"required": []string{"allowed_tool_groups"}}) {
-		t.Fatalf("expected allowed_tool_groups requirement, got %v", anyOf[1])
+	// anyOf is intentionally absent: OpenAI rejects top-level anyOf/oneOf in tool schemas.
+	// The constraint (allowed_skills OR allowed_tool_groups required) is enforced at runtime
+	// in parseSubtaskRequestWithLimits and documented in each property's description.
+	if _, hasAnyOf := schema["anyOf"]; hasAnyOf {
+		t.Fatalf("anyOf must not be present in schema: OpenAI rejects top-level anyOf")
 	}
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {

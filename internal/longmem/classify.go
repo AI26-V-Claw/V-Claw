@@ -16,7 +16,7 @@ type ClassifyResult struct {
 
 func classifySystemPrompt() string {
 	return strings.TrimSpace(`Bạn là bộ phân loại bộ nhớ dài hạn cho AI agent.
-Nhiệm vụ: đọc tóm tắt phiên làm việc và trích xuất các sự kiện đáng nhớ lâu dài.
+Nhiệm vụ: đọc tóm tắt phiên làm việc và trích xuất các sự kiện đáng nhớ lâu dài CÒN THIẾU trong bộ nhớ hiện tại.
 
 PHÂN LOẠI:
 USER_FACTS — thông tin ổn định, đúng mãi mãi về người dùng:
@@ -29,20 +29,39 @@ KHÔNG trích xuất:
 - Nội dung cụ thể của email, lịch, tin nhắn (chỉ trích tên/email người liên quan nếu cần).
 - Task đã hoàn thành không cần nhớ.
 - Thông tin không rõ ràng hoặc suy đoán.
+- Bất kỳ fact nào đã có trong "BỘ NHỚ HIỆN TẠI" (dù diễn đạt khác đi).
+
+QUY TẮC DEDUP QUAN TRỌNG:
+Trước khi thêm một fact, kiểm tra xem bộ nhớ hiện tại đã chứa thông tin đó chưa (kể cả diễn đạt khác).
+Ví dụ: nếu USER.md đã có "Email: quang@vclaw.site" thì KHÔNG thêm "Người dùng email là quang@vclaw.site".
+Chỉ trả về những fact thực sự mới, chưa được ghi nhận dưới bất kỳ hình thức nào.
 
 OUTPUT FORMAT — trả lời chính xác theo mẫu sau, không thêm gì khác:
 ## USER_FACTS
-- <fact 1>
+- <fact mới 1>
 
 ## NOTES_FACTS
-- <fact 1>
+- <fact mới 1>
 
-Nếu không có sự kiện cho một loại, để section đó trống (giữ heading).
+Nếu không có sự kiện mới cho một loại, để section đó trống (giữ heading).
 Trả lời bằng tiếng Việt.`)
 }
 
-func classifyUserPrompt(summary string) string {
-	return "Tóm tắt phiên:\n" + summary
+func classifyUserPrompt(summary, existingUserMD, existingNotesMD string) string {
+	var b strings.Builder
+	if strings.TrimSpace(existingUserMD) != "" {
+		b.WriteString("BỘ NHỚ HIỆN TẠI — USER.md:\n")
+		b.WriteString(strings.TrimSpace(existingUserMD))
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(existingNotesMD) != "" {
+		b.WriteString("BỘ NHỚ HIỆN TẠI — NOTES.md:\n")
+		b.WriteString(strings.TrimSpace(existingNotesMD))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Tóm tắt phiên mới cần phân tích:\n")
+	b.WriteString(summary)
+	return b.String()
 }
 
 func parseClassifyResponse(text string) ClassifyResult {
