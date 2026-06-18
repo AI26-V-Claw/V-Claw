@@ -946,7 +946,7 @@ func idSchema(name string) tools.ToolSchema {
 }
 
 func maxResultsSchema() map[string]any {
-	return map[string]any{"type": "number", "minimum": 1, "maximum": maxResults, "description": "Omit to use default 10."}
+	return map[string]any{"type": "number", "minimum": 1, "maximum": maxResults, "description": "OMIT this for normal listing. When omitted, the tool returns ALL matching files by paginating automatically. Set it ONLY when the user explicitly asks for a specific number; a set value returns just that many from a single page and may truncate the list."}
 }
 
 func contentReadSchema(includeMimeType bool) tools.ToolSchema {

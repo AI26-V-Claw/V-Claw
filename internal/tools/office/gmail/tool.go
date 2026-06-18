@@ -1752,10 +1752,12 @@ func listSchema() tools.ToolSchema {
 
 func maxResultsSchema() map[string]any {
 	return map[string]any{
-		"type":        "number",
-		"minimum":     1,
-		"maximum":     maxAllowedResults,
-		"description": "Omit to use default 10.",
+		"type":    "number",
+		"minimum": 1,
+		"maximum": maxAllowedResults,
+		"description": "OMIT this for normal listing. When omitted, the tool returns ALL matching results " +
+			"by paginating automatically. Set it ONLY when the user explicitly asks for a specific number " +
+			"(e.g. \"my 5 latest emails\"); a set value returns just that many from a single page and may truncate the list.",
 	}
 }
 
