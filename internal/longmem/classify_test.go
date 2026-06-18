@@ -21,11 +21,36 @@ func TestParseClassifyResponseBothSections(t *testing.T) {
 	if len(result.NotesFacts) != 2 {
 		t.Fatalf("NotesFacts = %v, want 2 items", result.NotesFacts)
 	}
-	if result.UserFacts[0] != "Tên: Quang Ho" {
+	if result.UserFacts[0].Fact != "Tên: Quang Ho" {
 		t.Errorf("unexpected UserFacts[0]: %q", result.UserFacts[0])
+	}
+	// Bullets without a "###" sub-heading fall back to the default category.
+	if result.UserFacts[0].Category != defaultUserCategory() {
+		t.Errorf("unexpected UserFacts[0].Category: %q", result.UserFacts[0].Category)
 	}
 	if result.NotesFacts[0] != "Đang làm sprint 2" {
 		t.Errorf("unexpected NotesFacts[0]: %q", result.NotesFacts[0])
+	}
+}
+
+func TestParseClassifyResponseCategorizedUserFacts(t *testing.T) {
+	input := `## USER_FACTS
+### Thông tin cơ bản
+- Email: quang@vclaw.site
+### Người quen thuộc
+- Bao Le (baolnc@vclaw.site)
+
+## NOTES_FACTS
+`
+	result := parseClassifyResponse(input)
+	if len(result.UserFacts) != 2 {
+		t.Fatalf("UserFacts = %#v, want 2 items", result.UserFacts)
+	}
+	if result.UserFacts[0].Category != "Thông tin cơ bản" || result.UserFacts[0].Fact != "Email: quang@vclaw.site" {
+		t.Errorf("unexpected UserFacts[0]: %#v", result.UserFacts[0])
+	}
+	if result.UserFacts[1].Category != "Người quen thuộc" || result.UserFacts[1].Fact != "Bao Le (baolnc@vclaw.site)" {
+		t.Errorf("unexpected UserFacts[1]: %#v", result.UserFacts[1])
 	}
 }
 
@@ -52,7 +77,10 @@ func TestParseClassifyResponseEmptySections(t *testing.T) {
 
 func TestMergeUserFactsDeduplication(t *testing.T) {
 	existing := userMDSkeleton() + "- Tên: Quang Ho\n"
-	result := mergeUserFacts(existing, []string{"Tên: Quang Ho", "Email: quang@vclaw.com"})
+	result := mergeUserFacts(existing, []CategorizedFact{
+		{Category: "Thông tin cơ bản", Fact: "Tên: Quang Ho"},
+		{Category: "Thông tin cơ bản", Fact: "Email: quang@vclaw.com"},
+	})
 	count := strings.Count(result, "Tên: Quang Ho")
 	if count != 1 {
 		t.Errorf("duplicate fact: 'Tên: Quang Ho' appears %d times", count)
@@ -62,8 +90,35 @@ func TestMergeUserFactsDeduplication(t *testing.T) {
 	}
 }
 
+func TestMergeUserFactsDedupIgnoresTrailingPunctuationAndCase(t *testing.T) {
+	existing := userMDSkeleton() + "- Tên người dùng: Quang\n"
+	result := mergeUserFacts(existing, []CategorizedFact{
+		// Differs only by trailing period and case — must not be re-added.
+		{Category: "Thông tin cơ bản", Fact: "Tên người dùng: quang."},
+	})
+	if n := strings.Count(strings.ToLower(result), "tên người dùng: quang"); n != 1 {
+		t.Fatalf("expected the fact once after semantic dedup, got %d:\n%s", n, result)
+	}
+}
+
+func TestMergeUserFactsPlacesFactUnderCategoryHeading(t *testing.T) {
+	result := mergeUserFacts("", []CategorizedFact{
+		{Category: "Người quen thuộc", Fact: "Bao Le (baolnc@vclaw.site)"},
+	})
+	idxHeading := strings.Index(result, "## Người quen thuộc")
+	idxFact := strings.Index(result, "Bao Le (baolnc@vclaw.site)")
+	idxNext := strings.Index(result, "## Quy tắc làm việc")
+	if idxHeading < 0 || idxFact < 0 || idxNext < 0 {
+		t.Fatalf("missing heading or fact:\n%s", result)
+	}
+	// The fact must sit between its own heading and the following heading.
+	if !(idxHeading < idxFact && idxFact < idxNext) {
+		t.Fatalf("fact not placed under its category heading:\n%s", result)
+	}
+}
+
 func TestMergeUserFactsCreatesSkeletonWhenEmpty(t *testing.T) {
-	result := mergeUserFacts("", []string{"Tên: Quang"})
+	result := mergeUserFacts("", []CategorizedFact{{Category: "Thông tin cơ bản", Fact: "Tên: Quang"}})
 	if !strings.Contains(result, "# Thông tin người dùng") {
 		t.Error("skeleton heading missing")
 	}

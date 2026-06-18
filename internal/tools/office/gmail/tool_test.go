@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	"vclaw/internal/tools"
@@ -319,6 +320,81 @@ func TestGmailListToolBoundsMaxResults(t *testing.T) {
 	}
 }
 
+func TestListEmailsAutoPaginatesBareCall(t *testing.T) {
+	// A bare list call (no maxResults, no pageToken) should follow NextPageToken
+	// across pages and return the complete result set, not just the first page.
+	var calls int
+	service := NewService(&mockConnector{
+		listMessages: func(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error) {
+			calls++
+			switch pageToken {
+			case "":
+				return []gmailconnector.MessageSummary{{ID: "m1"}, {ID: "m2"}}, "page2", nil
+			case "page2":
+				return []gmailconnector.MessageSummary{{ID: "m3"}}, "", nil
+			default:
+				t.Fatalf("unexpected pageToken %q", pageToken)
+				return nil, "", nil
+			}
+		},
+	})
+
+	output, errShape := service.ListEmails(context.Background(), ListEmailsInput{Query: "in:sent"})
+	if errShape != nil {
+		t.Fatalf("ListEmails() errShape = %v", errShape)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 connector calls across pages, got %d", calls)
+	}
+	if len(output.Messages) != 3 {
+		t.Fatalf("expected 3 accumulated messages, got %d: %#v", len(output.Messages), output.Messages)
+	}
+	if output.NextPageToken != "" {
+		t.Fatalf("expected empty NextPageToken after full pagination, got %q", output.NextPageToken)
+	}
+}
+
+func TestListEmailsLocalizesSendTimeAndOmitsRawDate(t *testing.T) {
+	ict := time.FixedZone("ICT", 7*60*60)
+	// 11:24:29 local (ICT) == 04:24:29 UTC. The raw header carries a -0700 offset
+	// that must NOT leak into the LLM content.
+	internal := time.Date(2026, 6, 17, 4, 24, 29, 0, time.UTC).UnixMilli()
+	service := NewService(&mockConnector{
+		listMessages: func(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error) {
+			return []gmailconnector.MessageSummary{{
+				ID:           "m1",
+				Subject:      "File prime_sum_1_to_1000.txt đính kèm",
+				Date:         "Tue, 16 Jun 2026 21:24:29 -0700",
+				InternalDate: internal,
+			}}, "", nil
+		},
+	}).WithLocation(ict)
+
+	result := NewTool(ToolNameListEmails, service).Execute(context.Background(), tools.ToolCall{
+		ID:        "call-tz",
+		Name:      ToolNameListEmails,
+		Arguments: map[string]any{"query": "in:sent"},
+	})
+
+	if !result.Success {
+		t.Fatalf("Execute() failed: %#v", result.Error)
+	}
+	if !strings.Contains(result.ContentForLLM, `"LocalDateTime":"2026-06-17T11:24:29+07:00"`) {
+		t.Fatalf("ContentForLLM missing localized datetime, got: %s", result.ContentForLLM)
+	}
+	if !strings.Contains(result.ContentForLLM, `"LocalDate":"2026-06-17"`) {
+		t.Fatalf("ContentForLLM missing LocalDate, got: %s", result.ContentForLLM)
+	}
+	// The raw header and its sender offset must not reach the LLM.
+	if strings.Contains(result.ContentForLLM, "-0700") || strings.Contains(result.ContentForLLM, `"Date"`) {
+		t.Fatalf("ContentForLLM should not expose the raw Date header, got: %s", result.ContentForLLM)
+	}
+	// The full user-facing content may still keep the original header.
+	if !strings.Contains(result.ContentForUser, "21:24:29 -0700") {
+		t.Fatalf("ContentForUser should keep the raw Date header, got: %s", result.ContentForUser)
+	}
+}
+
 func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 	longSnippet := strings.Repeat("long snippet should stay out of llm content ", 80)
 	messages := make([]gmailconnector.MessageSummary, 0, 12)
@@ -344,9 +420,14 @@ func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 			References:      "<old@example.com>",
 		})
 	}
+	// Bare list call auto-paginates: first page returns all messages plus a
+	// cursor, the follow-up page returns nothing, ending the listing.
 	service := NewService(&mockConnector{
 		listMessages: func(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error) {
-			return messages, "next-page", nil
+			if pageToken == "" {
+				return messages, "next-page", nil
+			}
+			return nil, "", nil
 		},
 	})
 
@@ -375,8 +456,9 @@ func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 	if !strings.Contains(result.ContentForUser, "long snippet should stay out") {
 		t.Fatalf("ContentForUser should keep full output, got: %s", result.ContentForUser)
 	}
-	if !strings.Contains(result.ContentForLLM, `"NextPageToken":"next-page"`) {
-		t.Fatalf("ContentForLLM should keep next page token, got: %s", result.ContentForLLM)
+	// The listing was fully paginated, so no trailing page cursor should remain.
+	if strings.Contains(result.ContentForLLM, "NextPageToken") {
+		t.Fatalf("ContentForLLM should not expose a page token after full pagination, got: %s", result.ContentForLLM)
 	}
 }
 
