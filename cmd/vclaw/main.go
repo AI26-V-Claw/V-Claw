@@ -276,6 +276,16 @@ func envBool(name string, fallback bool) bool {
 }
 
 func loadDotEnv(path string) error {
+	overrideKeys := map[string]struct{}{
+		"OPENAI_API_KEY":     {},
+		"LLM_API_KEY":        {},
+		"OPENAI_MODEL":       {},
+		"LLM_MODEL":          {},
+		"OPENAI_BASE_URL":    {},
+		"LLM_BASE_URL":       {},
+		"TELEGRAM_BOT_TOKEN": {},
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -303,7 +313,9 @@ func loadDotEnv(path string) error {
 			return fmt.Errorf("%s:%d: env key is empty", path, lineNumber)
 		}
 		if _, exists := os.LookupEnv(key); exists {
+			if _, override := overrideKeys[key]; !override {
 			continue
+			}
 		}
 
 		value = parseDotEnvValue(strings.TrimSpace(value))

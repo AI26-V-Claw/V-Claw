@@ -36,6 +36,9 @@ type turnAnalysis struct {
 	// MemoryMode is only meaningful when the input had CheckMemoryMode=true.
 	MemoryMode memoryMode
 
+	ShortLabel string
+	Category   string
+
 	// IsClarificationAnswer is true when the message answers an active clarification question.
 	IsClarificationAnswer bool
 
@@ -82,7 +85,7 @@ func (r *Runtime) analyzeTurn(ctx context.Context, input turnAnalysisInput) turn
 	needsMemoryMode := input.CheckMemoryMode
 
 	if !needsClarification && !needsResultFollowUp && !needsContextual && !needsMemoryMode {
-		return turnAnalysis{MemoryMode: memoryModeFresh}
+		return turnAnalysis{MemoryMode: memoryModeFresh, Category: "chat"}
 	}
 
 	if r.provider == nil || r.memoryClassifierModel == "" {
@@ -127,6 +130,11 @@ func (r *Runtime) llmAnalyzeTurn(
 	contextSections = append(contextSections, "User message:\n"+input.Text)
 
 	var fieldDefs []string
+	fieldDefs = append(fieldDefs,
+		`"shortLabel": string
+  ≤4 Vietnamese words describing the request`,
+		`"category": "gmail" | "calendar" | "drive" | "docs" | "chat" | "search"
+  Choose the primary request category`)
 	if needsMemoryMode {
 		fieldDefs = append(fieldDefs,
 			`"memoryMode": "fresh" | "needs_context"
@@ -177,6 +185,8 @@ Rules:
 
 	var wire struct {
 		MemoryMode            string `json:"memoryMode"`
+		ShortLabel            string `json:"shortLabel"`
+		Category              string `json:"category"`
 		IsClarificationAnswer bool   `json:"isClarificationAnswer"`
 		IsResultFollowUp      bool   `json:"isResultFollowUp"`
 		IsContextualFollowUp  bool   `json:"isContextualFollowUp"`
@@ -193,6 +203,8 @@ Rules:
 
 	return turnAnalysis{
 		MemoryMode:            mode,
+		ShortLabel:            normalizeRunShortLabel(wire.ShortLabel),
+		Category:              normalizeRunCategory(wire.Category),
 		IsClarificationAnswer: wire.IsClarificationAnswer,
 		IsResultFollowUp:      wire.IsResultFollowUp,
 		IsContextualFollowUp:  wire.IsContextualFollowUp,
@@ -207,10 +219,28 @@ func (r *Runtime) turnAnalysisHeuristic(input turnAnalysisInput) turnAnalysis {
 	}
 	return turnAnalysis{
 		MemoryMode:            mode,
+		Category:              "chat",
 		IsClarificationAnswer: input.ActiveClarificationQuestion != "" && isLikelyClarificationAnswer(input.Text),
 		IsResultFollowUp:      input.HasRecentResults && isLikelyResultFollowUpQuestion(input.Text),
 		IsContextualFollowUp:  isLikelyContextualFollowUpQuestion(input.Text, input.History, input.Memory),
 	}
+}
+
+func normalizeRunCategory(category string) string {
+	switch strings.TrimSpace(strings.ToLower(category)) {
+	case "gmail", "calendar", "drive", "docs", "chat", "search":
+		return strings.TrimSpace(strings.ToLower(category))
+	default:
+		return "chat"
+	}
+}
+
+func normalizeRunShortLabel(label string) string {
+	words := strings.Fields(strings.TrimSpace(label))
+	if len(words) > 4 {
+		words = words[:4]
+	}
+	return strings.Join(words, " ")
 }
 
 // lastAssistantText returns the most recent non-empty assistant message text from transcript.

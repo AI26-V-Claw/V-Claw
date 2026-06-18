@@ -31,6 +31,10 @@ type fakeHandler struct {
 	finalizedErr error
 }
 
+func ptrTime(t time.Time) *time.Time {
+	return &t
+}
+
 func TestTelegramApproveFlowKeepsOriginalApprovalMessage(t *testing.T) {
 	handler := &fakeHandler{
 		outbound: contracts.AgentResponse{
@@ -374,36 +378,54 @@ func TestIsTelegramStatusCommand(t *testing.T) {
 	}
 }
 
+func TestIsTelegramHistoryCommand(t *testing.T) {
+	for _, input := range []string{"/history", "/history@vclaw_bot", "/history extra args"} {
+		if !isTelegramHistoryCommand(input) {
+			t.Fatalf("expected %q to match /history command", input)
+		}
+	}
+	for _, input := range []string{"history", "xem history", "/other"} {
+		if isTelegramHistoryCommand(input) {
+			t.Fatalf("unexpected match for %q", input)
+		}
+	}
+}
+
 func TestProcessUpdateRoutesStatusCommandToMonitoringSummary(t *testing.T) {
 	handler := &fakeHandler{}
 	oldLatest := queryLatestTelegramRun
-	oldLogs := queryTelegramLogs
+	oldRunByID := queryTelegramRunByID
 	t.Cleanup(func() {
 		queryLatestTelegramRun = oldLatest
-		queryTelegramLogs = oldLogs
+		queryTelegramRunByID = oldRunByID
 	})
 	queryLatestTelegramRun = func(_ context.Context, _ string, sessionID string) (monitoring.LatestRun, error) {
 		if sessionID != "telegram_chat_55" {
 			t.Fatalf("unexpected session id: %s", sessionID)
 		}
-		completedAt := time.Date(2026, 6, 17, 14, 32, 4, 100_000_000, time.Local)
 		return monitoring.LatestRun{
-			RunID:        "run_1",
-			RequestID:    "req_1",
-			SessionID:    sessionID,
-			OriginalGoal: "Tóm tắt email + tạo draft báo cáo",
-			Status:       "completed",
-			StartedAt:    time.Date(2026, 6, 17, 14, 32, 0, 0, time.Local),
-			CompletedAt:  &completedAt,
+			RunID:     "run_1",
+			RequestID: "req_1",
+			SessionID: sessionID,
+			Status:    "completed",
 		}, nil
 	}
-	queryTelegramLogs = func(_ context.Context, _ string, query monitoring.LogQuery) ([]monitoring.LogEvent, error) {
-		if query.RequestID != "req_1" || query.SessionID != "telegram_chat_55" {
-			t.Fatalf("unexpected log query: %#v", query)
+	queryTelegramRunByID = func(_ context.Context, _ string, runID string) (*agent.RunState, error) {
+		if runID != "run_1" {
+			t.Fatalf("unexpected run id: %s", runID)
 		}
-		return []monitoring.LogEvent{
-			{EventType: "tool_call", Level: "info", Status: "completed", Message: "Đọc 12 email mới"},
-			{EventType: "tool_call", Level: "info", Status: "completed", Message: "Đã tạo bản nháp email"},
+		completedAt := time.Date(2026, 6, 17, 14, 32, 4, 100_000_000, time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60))
+		return &agent.RunState{
+			RunID:        "run_1",
+			OriginalGoal: "Tóm tắt email + tạo draft báo cáo",
+			Status:       "completed",
+			CostUSD:      0.0123,
+			Steps: []agent.RunStep{
+				{OK: true, Text: "Đọc 12 email mới"},
+				{OK: true, Text: "Đã tạo bản nháp email"},
+			},
+			CreatedAt:   time.Date(2026, 6, 17, 14, 32, 0, 0, time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)),
+			CompletedAt: &completedAt,
 		}, nil
 	}
 
@@ -438,35 +460,54 @@ func TestProcessUpdateRoutesStatusCommandToMonitoringSummary(t *testing.T) {
 	if handler.calls != 0 {
 		t.Fatalf("expected /status to bypass agent pipeline, got %d handler calls", handler.calls)
 	}
-	want := "[14:32] Tóm tắt email + tạo draft báo cáo\n\n✅ Đọc 12 email mới\n✅ Đã tạo bản nháp email\n⏱ 4.1 giây"
-	if sentText != want {
-		t.Fatalf("unexpected /status text:\n%s\nwant:\n%s", sentText, want)
+	for _, want := range []string{
+		"📊 *Trạng thái lệnh gần nhất*",
+		"📝 *Yêu cầu*",
+		"Tóm tắt email + tạo draft báo cáo",
+		"✅ Đọc 12 email mới",
+		"✅ Đã tạo bản nháp email",
+		"⚡ Thời gian xử lý: 4.1 giây",
+		"💰 Chi phí: $0.0123 (~316 VNĐ)",
+		"Trạng thái: ✅ Hoàn thành",
+	} {
+		if !strings.Contains(sentText, want) {
+			t.Fatalf("missing %q in /status text:\n%s", want, sentText)
+		}
 	}
 }
 
 func TestProcessUpdateRoutesStatusCommandToFailedMonitoringSummary(t *testing.T) {
 	handler := &fakeHandler{}
 	oldLatest := queryLatestTelegramRun
-	oldLogs := queryTelegramLogs
+	oldRunByID := queryTelegramRunByID
 	t.Cleanup(func() {
 		queryLatestTelegramRun = oldLatest
-		queryTelegramLogs = oldLogs
+		queryTelegramRunByID = oldRunByID
 	})
 	queryLatestTelegramRun = func(_ context.Context, _ string, _ string) (monitoring.LatestRun, error) {
-		completedAt := time.Date(2026, 6, 17, 14, 32, 2, 300_000_000, time.Local)
 		return monitoring.LatestRun{
-			RunID:        "run_2",
-			RequestID:    "req_2",
-			SessionID:    "telegram_chat_55",
-			OriginalGoal: "Gửi báo cáo",
-			Status:       "failed",
-			TraceID:      "a8f3c2zzzz",
-			StartedAt:    time.Date(2026, 6, 17, 14, 32, 0, 0, time.Local),
-			CompletedAt:  &completedAt,
+			RunID:     "run_2",
+			RequestID: "req_2",
+			SessionID: "telegram_chat_55",
+			Status:    "failed",
 		}, nil
 	}
-	queryTelegramLogs = func(_ context.Context, _ string, _ monitoring.LogQuery) ([]monitoring.LogEvent, error) {
-		return []monitoring.LogEvent{{EventType: "tool_call", Level: "error", Status: "failed", Message: "Không kết nối được Google Drive"}}, nil
+	queryTelegramRunByID = func(_ context.Context, _ string, runID string) (*agent.RunState, error) {
+		if runID != "run_2" {
+			t.Fatalf("unexpected run id: %s", runID)
+		}
+		completedAt := time.Date(2026, 6, 17, 14, 32, 2, 300_000_000, time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60))
+		return &agent.RunState{
+			RunID:        "run_2",
+			OriginalGoal: "Gửi báo cáo",
+			Status:       "failed",
+			ErrorRef:     "A8F3C2",
+			Steps: []agent.RunStep{
+				{OK: false, Text: "Không kết nối được Google Drive"},
+			},
+			CreatedAt:   time.Date(2026, 6, 17, 14, 32, 0, 0, time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)),
+			CompletedAt: &completedAt,
+		}, nil
 	}
 
 	var sentText string
@@ -494,9 +535,152 @@ func TestProcessUpdateRoutesStatusCommandToFailedMonitoringSummary(t *testing.T)
 	if !processed {
 		t.Fatal("expected update to be processed")
 	}
-	want := "[14:32] Gửi báo cáo\n\n❌ Không kết nối được Google Drive\n⏱ 2.3 giây\n🔍 Ref: A8F3C2"
-	if sentText != want {
-		t.Fatalf("unexpected failed /status text:\n%s\nwant:\n%s", sentText, want)
+	for _, want := range []string{
+		"Gửi báo cáo",
+		"❌ Không kết nối được Google Drive",
+		"⚡ Thời gian xử lý: 2.3 giây",
+		"Trạng thái: ❌ Thất bại",
+		"🔍 Ref: A8F3C2",
+	} {
+		if !strings.Contains(sentText, want) {
+			t.Fatalf("missing %q in failed /status text:\n%s", want, sentText)
+		}
+	}
+}
+
+func TestProcessUpdateRoutesHistoryCommandToMonitoringSummary(t *testing.T) {
+	handler := &fakeHandler{}
+	oldRecent := queryRecentTelegramRuns
+	oldRunByID := queryTelegramRunByID
+	t.Cleanup(func() {
+		queryRecentTelegramRuns = oldRecent
+		queryTelegramRunByID = oldRunByID
+	})
+	queryRecentTelegramRuns = func(_ context.Context, _ string, sessionID string, limit int) ([]monitoring.LatestRun, error) {
+		if sessionID != "telegram_chat_55" || limit != 10 {
+			t.Fatalf("unexpected history query: session=%s limit=%d", sessionID, limit)
+		}
+		return []monitoring.LatestRun{
+			{RunID: "run_1"},
+			{RunID: "run_2"},
+			{RunID: "run_3"},
+		}, nil
+	}
+	queryTelegramRunByID = func(_ context.Context, _ string, runID string) (*agent.RunState, error) {
+		loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+		switch runID {
+		case "run_1":
+			return &agent.RunState{RunID: "run_1", ShortLabel: "Tóm tắt email", Category: "gmail", Status: "completed", CreatedAt: time.Date(2026, 6, 17, 14, 32, 0, 0, loc), CompletedAt: ptrTime(time.Date(2026, 6, 17, 14, 32, 3, 100_000_000, loc))}, nil
+		case "run_2":
+			return &agent.RunState{RunID: "run_2", ShortLabel: "Đặt lịch họp", Category: "calendar", Status: "failed", CreatedAt: time.Date(2026, 6, 17, 14, 30, 0, 0, loc), CompletedAt: ptrTime(time.Date(2026, 6, 17, 14, 30, 2, 400_000_000, loc)), ErrorRef: "A8F3C2"}, nil
+		case "run_3":
+			return &agent.RunState{RunID: "run_3", ShortLabel: "Gửi báo cáo tuần", Category: "docs", Status: "completed", CreatedAt: time.Date(2026, 6, 17, 14, 28, 0, 0, loc), CompletedAt: ptrTime(time.Date(2026, 6, 17, 14, 28, 5, 200_000_000, loc))}, nil
+		default:
+			t.Fatalf("unexpected run id: %s", runID)
+			return nil, nil
+		}
+	}
+
+	var sentText string
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		sentText = fmt.Sprint(payload["text"])
+		return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":44}}`), nil
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 23,
+		Message:  &telegramMessage{From: &telegramUser{ID: 123}, Chat: telegramChat{ID: 55}, Text: "/history"},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.calls != 0 {
+		t.Fatalf("expected /history to bypass agent pipeline, got %d handler calls", handler.calls)
+	}
+	for _, want := range []string{
+		"📋 *Lịch sử gần nhất*",
+		"1.",
+		"📧",
+		"Tóm tắt email",
+		"❌",
+		"📅",
+		"Đặt lịch họp",
+		"📄",
+		"Gửi báo cáo tuần",
+		"_Gõ_ `/history <số>` _để xem chi tiết_",
+	} {
+		if !strings.Contains(sentText, want) {
+			t.Fatalf("missing %q in /history text:\n%s", want, sentText)
+		}
+	}
+}
+
+func TestProcessUpdateRoutesHistoryCommandWhenNoRunsExist(t *testing.T) {
+	handler := &fakeHandler{}
+	oldRecent := queryRecentTelegramRuns
+	t.Cleanup(func() {
+		queryRecentTelegramRuns = oldRecent
+	})
+	queryRecentTelegramRuns = func(_ context.Context, _ string, _ string, _ int) ([]monitoring.LatestRun, error) {
+		return []monitoring.LatestRun{}, nil
+	}
+
+	var sentText string
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		sentText = fmt.Sprint(payload["text"])
+		return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":45}}`), nil
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 24,
+		Message:  &telegramMessage{From: &telegramUser{ID: 123}, Chat: telegramChat{ID: 55}, Text: "/history"},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if sentText != "Chưa có lịch sử nào." {
+		t.Fatalf("unexpected empty history text: %s", sentText)
+	}
+}
+
+func TestFormatHistoryShowsFiveRuns(t *testing.T) {
+	completed := func(seconds float64) *time.Time {
+		loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+		timeValue := time.Date(2026, 6, 17, 14, 0, 0, 0, loc).Add(time.Duration(seconds * float64(time.Second)))
+		return &timeValue
+	}
+	now := time.Date(2026, 6, 17, 15, 0, 0, 0, time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60))
+	runs := []*agent.RunState{
+		{RunID: "run_1", ShortLabel: "1", Category: "gmail", Status: "completed", CreatedAt: time.Date(2026, 6, 17, 14, 0, 0, 0, now.Location()), CompletedAt: completed(1)},
+		{RunID: "run_2", ShortLabel: "2", Category: "calendar", Status: "completed", CreatedAt: time.Date(2026, 6, 17, 14, 0, 0, 0, now.Location()), CompletedAt: completed(2)},
+		{RunID: "run_3", ShortLabel: "3", Category: "drive", Status: "failed", CreatedAt: time.Date(2026, 6, 17, 14, 0, 0, 0, now.Location()), CompletedAt: completed(3)},
+		{RunID: "run_4", ShortLabel: "4", Category: "docs", Status: "completed", CreatedAt: time.Date(2026, 6, 17, 14, 0, 0, 0, now.Location()), CompletedAt: completed(4)},
+		{RunID: "run_5", ShortLabel: "5", Category: "search", Status: "completed", CreatedAt: time.Date(2026, 6, 17, 14, 0, 0, 0, now.Location()), CompletedAt: completed(5)},
+	}
+	text := FormatHistory(runs, now)
+	if strings.Count(text, "\n") != 8 {
+		t.Fatalf("expected header + divider + 5 rows + footer, got %q", text)
+	}
+	for _, want := range []string{"14:00", "📧", "📅", "📁", "📄", "🔍", "❌"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %q", want, text)
+		}
 	}
 }
 

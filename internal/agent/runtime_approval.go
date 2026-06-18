@@ -653,7 +653,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 	if decision.Decision != contracts.RiskDecisionBlock {
 		result = r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
 	}
-	if errShape := r.recordRuntimeToolCall(ctx, record.RunID, pending.toolCall, result, time.Since(startedAt), record.ApprovalID); errShape != nil {
+	if errShape := r.recordRuntimeToolCall(ctx, nil, record.RunID, pending.toolCall, result, time.Since(startedAt), record.ApprovalID); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
 			SessionID: pending.message.SessionID,

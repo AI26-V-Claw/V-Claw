@@ -212,6 +212,8 @@ func (c *OpenAIClient) Generate(ctx context.Context, req *GenerateRequest) (*Gen
 		return nil, err
 	}
 
+	// TODO: Populate Usage from OpenAI responses when this client decodes token
+	// usage metadata; the current chat-completions path does not surface it.
 	return &GenerateResponse{
 		Text:         resp.Message.Content,
 		FinishReason: "stop",

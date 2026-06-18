@@ -30,8 +30,9 @@ import (
 const longPollTimeout = 30
 
 var (
-	queryLatestTelegramRun = monitoring.QueryLatestRunForSession
-	queryTelegramLogs      = monitoring.QueryLogs
+	queryLatestTelegramRun  = monitoring.QueryLatestRunForSession
+	queryRecentTelegramRuns = monitoring.QueryRecentRunsForSession
+	queryTelegramLogs       = monitoring.QueryLogs
 )
 
 type Bot struct {
@@ -235,6 +236,15 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+	if isTelegramHistoryCommand(messageText) {
+		if err := b.sendHistorySummary(ctx, update.Message.Chat.ID, messageText); err != nil {
+			b.logger.Error("telegram history summary failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không kiểm tra được trạng thái lúc này. Vui lòng thử lại sau."); sendErr != nil {
+				return false, sendErr
+			}
+		}
+		return true, nil
+	}
 	attachments, err := b.downloadMessageAttachments(ctx, update.Message)
 	if err != nil {
 		if b.handler != nil {
@@ -425,66 +435,72 @@ func isTelegramStatusCommand(text string) bool {
 	return strings.EqualFold(command, "status")
 }
 
+func isTelegramHistoryCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "history")
+}
+
 func (b *Bot) sendStatusSummary(ctx context.Context, chatID int64) error {
 	run, err := queryLatestTelegramRun(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), fmt.Sprintf("telegram_chat_%d", chatID))
 	if err != nil {
 		return err
 	}
-	text, err := b.renderStatusSummary(ctx, run)
+	if strings.TrimSpace(run.RunID) == "" {
+		_, err = b.sendMarkdownMessage(ctx, chatID, FormatStatus(nil))
+		return err
+	}
+	runState, err := queryTelegramRunByID(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), run.RunID)
 	if err != nil {
 		return err
 	}
-	_, err = b.sendMessage(ctx, chatID, text)
+	_, err = b.sendMarkdownMessage(ctx, chatID, FormatStatus(runState))
 	return err
 }
 
-func (b *Bot) renderStatusSummary(ctx context.Context, run monitoring.LatestRun) (string, error) {
-	if strings.TrimSpace(run.RunID) == "" {
-		return "Chưa có lệnh nào được thực hiện gần đây.", nil
-	}
-	events, err := queryTelegramLogs(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), monitoring.LogQuery{
-		Limit:     20,
-		RequestID: run.RequestID,
-		SessionID: run.SessionID,
-	})
+func (b *Bot) sendHistorySummary(ctx context.Context, chatID int64, messageText string) error {
+	runs, err := queryRecentTelegramRuns(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), fmt.Sprintf("telegram_chat_%d", chatID), 10)
 	if err != nil {
-		return "", err
+		return err
 	}
-	lines := make([]string, 0, len(events)+3)
-	if goal := strings.TrimSpace(run.OriginalGoal); goal != "" {
-		lines = append(lines, fmt.Sprintf("[%s] %s", run.StartedAt.Local().Format("15:04"), goal))
-		lines = append(lines, "")
+	if len(runs) == 0 {
+		_, err = b.sendMarkdownMessage(ctx, chatID, FormatHistory(nil, time.Now()))
+		return err
 	}
-	for _, event := range events {
-		if event.EventType != "tool_call" || strings.TrimSpace(event.Message) == "" {
-			continue
+
+	fields := strings.Fields(strings.TrimSpace(messageText))
+	if len(fields) > 1 {
+		index, parseErr := strconv.Atoi(strings.TrimSpace(fields[1]))
+		if parseErr != nil || index <= 0 || index > len(runs) {
+			_, sendErr := b.sendMarkdownMessage(ctx, chatID, "Số thứ tự không hợp lệ. Hãy dùng /history <số>.")
+			return sendErr
 		}
-		prefix := "✅"
-		if strings.EqualFold(event.Level, "error") || strings.EqualFold(event.Status, "failed") {
-			prefix = "❌"
+		runState, err := queryTelegramRunByID(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), runs[index-1].RunID)
+		if err != nil {
+			return err
 		}
-		lines = append(lines, fmt.Sprintf("%s %s", prefix, strings.TrimSpace(event.Message)))
+		_, err = b.sendMarkdownMessage(ctx, chatID, FormatStatus(runState))
+		return err
 	}
-	if len(lines) == 0 {
-		return "Chưa có lệnh nào được thực hiện gần đây.", nil
-	}
-	completedAt := time.Now()
-	if run.CompletedAt != nil {
-		completedAt = *run.CompletedAt
-	}
-	elapsed := completedAt.Sub(run.StartedAt)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	lines = append(lines, fmt.Sprintf("⏱ %.1f giây", elapsed.Seconds()))
-	if strings.EqualFold(run.Status, "failed") && strings.TrimSpace(run.TraceID) != "" {
-		ref := strings.ToUpper(strings.TrimSpace(run.TraceID))
-		if len(ref) > 6 {
-			ref = ref[:6]
+
+	states := make([]*agent.RunState, 0, len(runs))
+	for _, run := range runs {
+		runState, err := queryTelegramRunByID(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), run.RunID)
+		if err != nil {
+			return err
 		}
-		lines = append(lines, fmt.Sprintf("🔍 Ref: %s", ref))
+		if runState != nil {
+			states = append(states, runState)
+		}
 	}
-	return strings.Join(lines, "\n"), nil
+	_, err = b.sendMarkdownMessage(ctx, chatID, FormatHistory(states, time.Now()))
+	return err
 }
 
 func (b *Bot) rejectPendingApprovalForNewMessage(ctx context.Context, updateID int, approvalContext telegramApprovalContext) error {
@@ -758,6 +774,15 @@ func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) (teleg
 		"chat_id": chatID,
 	}
 	applyTelegramFormattedText(payload, text)
+	return b.sendMessagePayload(ctx, payload)
+}
+
+func (b *Bot) sendMarkdownMessage(ctx context.Context, chatID int64, text string) (telegramSentMessage, error) {
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"text":       text,
+		"parse_mode": "Markdown",
+	}
 	return b.sendMessagePayload(ctx, payload)
 }
 

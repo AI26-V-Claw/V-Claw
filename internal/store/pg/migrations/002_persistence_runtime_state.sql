@@ -1,5 +1,11 @@
 ALTER TABLE agent_runs
     ADD COLUMN IF NOT EXISTS run_id text,
+    ADD COLUMN IF NOT EXISTS data jsonb NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS cost_usd double precision NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS short_label text NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'chat',
+    ADD COLUMN IF NOT EXISTS error_ref text NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS original_goal text NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'running',
     ADD COLUMN IF NOT EXISTS iteration_count integer NOT NULL DEFAULT 0,
@@ -132,7 +138,6 @@ ALTER TABLE agent_runs
     DROP COLUMN IF EXISTS locale,
     DROP COLUMN IF EXISTS response_status,
     DROP COLUMN IF EXISTS response_message,
-    DROP COLUMN IF EXISTS data,
     DROP COLUMN IF EXISTS plan,
     DROP COLUMN IF EXISTS error;
 

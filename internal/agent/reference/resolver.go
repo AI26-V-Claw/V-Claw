@@ -363,6 +363,9 @@ func resolveDraftFromActionResults(input Input) *Resolution {
 func isDraftActionResult(result sessions.ActionResult) bool {
 	toolName := strings.ToLower(strings.TrimSpace(result.ToolName))
 	content := strings.ToLower(strings.TrimSpace(result.Content))
+	if toolName == "gmail.senddraft" || toolName == "gmail.deletedraft" {
+		return false
+	}
 	return strings.Contains(toolName, "draft") ||
 		strings.Contains(content, `"draft"`) ||
 		strings.Contains(content, "draft id") ||
@@ -623,6 +626,9 @@ var draftIDPattern = regexp.MustCompile(`(?i)\bdraft\s*id\b\s*[:=]\s*"?([A-Za-z0
 
 func extractActionResultID(refType Type, result sessions.ActionResult) string {
 	if refType == TypeGmailEmail && strings.Contains(strings.ToLower(result.ToolName), "draft") {
+		if strings.EqualFold(strings.TrimSpace(result.ToolName), "gmail.sendDraft") || strings.EqualFold(strings.TrimSpace(result.ToolName), "gmail.deleteDraft") {
+			return ""
+		}
 		if id := extractDraftID(result.Content); id != "" {
 			return id
 		}

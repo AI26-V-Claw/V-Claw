@@ -57,6 +57,11 @@ type RunState struct {
 	RequestID              string
 	OriginalGoal           string
 	Data                   map[string]any
+	CostUSD                float64
+	Steps                  []RunStep
+	ShortLabel             string
+	Category               string
+	ErrorRef               string
 	Status                 RuntimeRunStatus
 	IterationCount         int
 	PendingActionID        string
@@ -64,6 +69,11 @@ type RunState struct {
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 	CompletedAt            *time.Time
+}
+
+type RunStep struct {
+	OK   bool   `json:"ok"`
+	Text string `json:"text"`
 }
 
 type ActionRecord struct {
@@ -137,6 +147,8 @@ type RuntimeStateStore interface {
 	CreateRun(ctx context.Context, state RunState) error
 	GetRun(ctx context.Context, runID string) (RunState, error)
 	UpdateRun(ctx context.Context, state RunState) error
+	AppendRunStep(ctx context.Context, runID string, step RunStep) error
+	AddRunCost(ctx context.Context, runID string, costUSD float64) error
 
 	FindOrCreateAction(ctx context.Context, record ActionRecord) (ActionRecord, bool, error)
 	GetAction(ctx context.Context, actionID string) (ActionRecord, error)
@@ -206,6 +218,30 @@ func (s *InMemoryRuntimeStateStore) UpdateRun(_ context.Context, state RunState)
 	return nil
 }
 
+func (s *InMemoryRuntimeStateStore) AppendRunStep(_ context.Context, runID string, step RunStep) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.runs[runID]
+	if !ok {
+		return ErrRuntimeStateNotFound
+	}
+	state.Steps = append(state.Steps, step)
+	s.runs[runID] = cloneRunState(state)
+	return nil
+}
+
+func (s *InMemoryRuntimeStateStore) AddRunCost(_ context.Context, runID string, costUSD float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.runs[runID]
+	if !ok {
+		return ErrRuntimeStateNotFound
+	}
+	state.CostUSD += costUSD
+	s.runs[runID] = cloneRunState(state)
+	return nil
+}
+
 func (s *InMemoryRuntimeStateStore) FindOrCreateAction(_ context.Context, record ActionRecord) (ActionRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -246,8 +282,18 @@ func cloneRunData(data map[string]any) map[string]any {
 	return cloned
 }
 
+func cloneRunSteps(steps []RunStep) []RunStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	cloned := make([]RunStep, len(steps))
+	copy(cloned, steps)
+	return cloned
+}
+
 func cloneRunState(state RunState) RunState {
 	state.Data = cloneRunData(state.Data)
+	state.Steps = cloneRunSteps(state.Steps)
 	return state
 }
 
@@ -257,6 +303,21 @@ func mergeRunState(existing RunState, incoming RunState) RunState {
 	}
 	if len(incoming.Data) == 0 {
 		incoming.Data = cloneRunData(existing.Data)
+	}
+	if len(incoming.Steps) == 0 {
+		incoming.Steps = cloneRunSteps(existing.Steps)
+	}
+	if incoming.ShortLabel == "" {
+		incoming.ShortLabel = existing.ShortLabel
+	}
+	if incoming.Category == "" {
+		incoming.Category = existing.Category
+	}
+	if incoming.ErrorRef == "" {
+		incoming.ErrorRef = existing.ErrorRef
+	}
+	if incoming.CostUSD == 0 {
+		incoming.CostUSD = existing.CostUSD
 	}
 	return incoming
 }

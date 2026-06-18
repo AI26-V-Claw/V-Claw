@@ -56,6 +56,24 @@ func TestHeuristicResolverResolvesRecentCalendarEvent(t *testing.T) {
 	}
 }
 
+func TestHeuristicResolverDoesNotTreatSentDraftAsDraftReference(t *testing.T) {
+	resolver := NewHeuristicResolver()
+	result, err := resolver.Resolve(context.Background(), Input{
+		CurrentMessage: "gui ban nhap vua tao di",
+		Memory: sessions.SessionMemory{LastActionResults: []sessions.ActionResult{{
+			ToolName:  "gmail.sendDraft",
+			Content:   `{"Message":{"ID":"msg_1","ThreadID":"thread_1","To":"baolnc@gmail.com"}}`,
+			CreatedAt: time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if result.ReferenceType == TypeGmailEmail && result.Source == SourceLastActionResult && !result.NeedsClarification {
+		t.Fatalf("expected sent draft result not to be reused as a draft reference, got %#v", result)
+	}
+}
+
 func TestHeuristicResolverResolvesNewlyCreatedCalendarEvent(t *testing.T) {
 	resolver := NewHeuristicResolver()
 	result, err := resolver.Resolve(context.Background(), Input{

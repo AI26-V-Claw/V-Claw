@@ -154,6 +154,7 @@ func (c *Client) Generate(ctx context.Context, req *providers.GenerateRequest) (
 		usage.CompletionTokens = int(resp.UsageMetadata.CandidatesTokenCount)
 		usage.TotalTokens = int(resp.UsageMetadata.TotalTokenCount)
 	}
+	providers.RecordUsageFromContext(ctx, usage)
 
 	// Determine finish reason
 	finishReason := "stop"

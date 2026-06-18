@@ -18,6 +18,7 @@ Practical steps for starting, checking, and debugging V-Claw with monitoring ena
 - `vclaw logs`, `vclaw approvals`, and `GET /metrics/history` read from Postgres audit tables
 - Repo does not contain CLI migration command for audit tables. Apply `migrations/001_init_vclaw_schema.sql` before expecting audit data
 - V-Claw loads `.env` automatically on startup
+- Runtime provider vars from repo `.env` override inherited shell values for `OPENAI_*`, `LLM_*`, and Telegram bot token settings so local project config wins over stale global exports
 
 ### Start Postgres for audit and monitoring data
 

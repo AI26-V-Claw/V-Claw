@@ -159,10 +159,9 @@ func (l *Langfuse) RecordToolCall(ctx context.Context, toolCall providers.ToolCa
 		attribute.String("langfuse.observation.type", "span"),
 		attribute.String("langfuse.observation.input", compactJSON(toolCall.Arguments)),
 		attribute.String("langfuse.observation.output", compactJSON(map[string]any{
-			"success":        result.Success,
-			"contentForLLM":  result.ContentForLLM,
-			"contentForUser": result.ContentForUser,
-			"error":          result.Error,
+			"success":       result.Success,
+			"contentForLLM": result.ContentForLLM,
+			"error":         result.Error,
 		})),
 		attribute.String("langfuse.observation.metadata.tool_call_id", strings.TrimSpace(toolCall.ID)),
 	)

@@ -63,6 +63,7 @@ func applyEmbeddedMigrations(ctx context.Context, db *sql.DB) error {
 	for _, name := range []string{
 		"migrations/001_init_vclaw_schema.sql",
 		"migrations/002_persistence_runtime_state.sql",
+		"migrations/003_run_metadata.sql",
 	} {
 		data, err := embeddedMigrations.ReadFile(name)
 		if err != nil {
@@ -95,21 +96,39 @@ func (s *Store) CreateRun(ctx context.Context, state agent.RunState) error {
 
 func (s *Store) GetRun(ctx context.Context, runID string) (agent.RunState, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT run_id, session_id, request_id, original_goal, status, iteration_count,
-		       pending_action_id, pending_clarification_id, created_at, updated_at, completed_at
+		SELECT run_id, session_id, request_id, original_goal, status, data, cost_usd, steps,
+		       short_label, category, error_ref, iteration_count, pending_action_id,
+		       pending_clarification_id, created_at, updated_at, completed_at
 		FROM agent_runs
 		WHERE run_id = $1`, runID)
 	return scanRunState(row)
 }
 
 func (s *Store) UpdateRun(ctx context.Context, state agent.RunState) error {
+	data := state.Data
+	if data == nil {
+		data = map[string]any{}
+	}
+	dataJSON, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	stepsJSON := []byte("[]")
+	if len(state.Steps) > 0 {
+		stepsJSON, err = json.Marshal(state.Steps)
+		if err != nil {
+			return err
+		}
+	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE agent_runs
-		SET session_id = $2, request_id = $3, original_goal = $4, status = $5,
-		    iteration_count = $6, pending_action_id = $7, pending_clarification_id = $8,
-		    updated_at = $9, completed_at = $10
+		SET session_id = $2, request_id = $3, original_goal = $4, status = $5, data = $6::jsonb,
+		    cost_usd = $7, steps = $8::jsonb, short_label = $9, category = $10, error_ref = $11,
+		    iteration_count = $12, pending_action_id = $13, pending_clarification_id = $14,
+		    updated_at = $15, completed_at = $16
 		WHERE run_id = $1`,
-		state.RunID, state.SessionID, state.RequestID, state.OriginalGoal, string(state.Status),
+		state.RunID, state.SessionID, state.RequestID, state.OriginalGoal, string(state.Status), string(dataJSON),
+		state.CostUSD, string(stepsJSON), state.ShortLabel, state.Category, state.ErrorRef,
 		state.IterationCount, state.PendingActionID, state.PendingClarificationID, zeroNow(state.UpdatedAt), state.CompletedAt)
 	if err != nil {
 		return err
@@ -574,25 +593,84 @@ func (s *Store) ListToolCallsByRun(ctx context.Context, runID string) ([]agent.T
 }
 
 func (s *Store) upsertRun(ctx context.Context, state agent.RunState) error {
-	_, err := s.db.ExecContext(ctx, `
+	data := state.Data
+	if data == nil {
+		data = map[string]any{}
+	}
+	dataJSON, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	stepsJSON := []byte("[]")
+	if len(state.Steps) > 0 {
+		stepsJSON, err = json.Marshal(state.Steps)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO agent_runs (
-			run_id, request_id, session_id, input_text, original_goal, status,
-			iteration_count, pending_action_id, pending_clarification_id, created_at, updated_at, completed_at
+			run_id, request_id, session_id, input_text, original_goal, status, data, cost_usd,
+			steps, short_label, category, error_ref, iteration_count, pending_action_id,
+			pending_clarification_id, created_at, updated_at, completed_at
 		)
-		VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $4, $5, $6::jsonb, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		ON CONFLICT (run_id) DO UPDATE
 		SET request_id = EXCLUDED.request_id,
 		    session_id = EXCLUDED.session_id,
 		    original_goal = COALESCE(NULLIF(EXCLUDED.original_goal, ''), agent_runs.original_goal),
 		    status = EXCLUDED.status,
+		    data = EXCLUDED.data,
+		    cost_usd = EXCLUDED.cost_usd,
+		    steps = EXCLUDED.steps,
+		    short_label = EXCLUDED.short_label,
+		    category = EXCLUDED.category,
+		    error_ref = EXCLUDED.error_ref,
 		    iteration_count = EXCLUDED.iteration_count,
 		    pending_action_id = EXCLUDED.pending_action_id,
 		    pending_clarification_id = EXCLUDED.pending_clarification_id,
 		    updated_at = EXCLUDED.updated_at,
 		    completed_at = EXCLUDED.completed_at`,
-		state.RunID, state.RequestID, state.SessionID, state.OriginalGoal, string(state.Status),
+		state.RunID, state.RequestID, state.SessionID, state.OriginalGoal, string(state.Status), string(dataJSON),
+		state.CostUSD, string(stepsJSON), state.ShortLabel, state.Category, state.ErrorRef,
 		state.IterationCount, state.PendingActionID, state.PendingClarificationID,
 		zeroNow(state.CreatedAt), zeroNow(state.UpdatedAt), state.CompletedAt)
+	return err
+}
+
+func (s *Store) AppendRunStep(ctx context.Context, runID string, step agent.RunStep) error {
+	payload, err := json.Marshal([]agent.RunStep{step})
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET steps = COALESCE(steps, '[]'::jsonb) || $2::jsonb,
+		    updated_at = now()
+		WHERE run_id = $1`, runID, string(payload))
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err == nil && affected == 0 {
+		return agent.ErrRuntimeStateNotFound
+	}
+	return err
+}
+
+func (s *Store) AddRunCost(ctx context.Context, runID string, costUSD float64) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET cost_usd = cost_usd + $2,
+		    updated_at = now()
+		WHERE run_id = $1`, runID, costUSD)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err == nil && affected == 0 {
+		return agent.ErrRuntimeStateNotFound
+	}
 	return err
 }
 
@@ -735,9 +813,12 @@ func (s *Store) recordToolExecution(ctx context.Context, record agent.ToolCallRe
 func scanRunState(scanner interface{ Scan(dest ...any) error }) (agent.RunState, error) {
 	var state agent.RunState
 	var status string
+	var dataRaw []byte
+	var stepsRaw []byte
 	var completedAt sql.NullTime
 	err := scanner.Scan(&state.RunID, &state.SessionID, &state.RequestID, &state.OriginalGoal,
-		&status, &state.IterationCount, &state.PendingActionID, &state.PendingClarificationID,
+		&status, &dataRaw, &state.CostUSD, &stepsRaw, &state.ShortLabel, &state.Category, &state.ErrorRef,
+		&state.IterationCount, &state.PendingActionID, &state.PendingClarificationID,
 		&state.CreatedAt, &state.UpdatedAt, &completedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return agent.RunState{}, agent.ErrRuntimeStateNotFound
@@ -746,6 +827,16 @@ func scanRunState(scanner interface{ Scan(dest ...any) error }) (agent.RunState,
 		return agent.RunState{}, err
 	}
 	state.Data = map[string]any{}
+	if len(dataRaw) > 0 && string(dataRaw) != "null" {
+		if err := json.Unmarshal(dataRaw, &state.Data); err != nil {
+			return agent.RunState{}, err
+		}
+	}
+	if len(stepsRaw) > 0 && string(stepsRaw) != "null" {
+		if err := json.Unmarshal(stepsRaw, &state.Steps); err != nil {
+			return agent.RunState{}, err
+		}
+	}
 	state.Status = agent.RuntimeRunStatus(status)
 	if completedAt.Valid {
 		state.CompletedAt = &completedAt.Time

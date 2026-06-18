@@ -243,6 +243,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 		base.Message = errShape.Message
 		return base, nil
 	}
+	ctx = providers.WithUsageRecorder(ctx, func(usage *providers.Usage) {
+		r.recordLLMUsageCost(ctx, &runState, usage)
+	})
 	failStartedRun := func(errShape *contracts.ErrorShape) (contracts.AgentResponse, error) {
 		if finishErr := r.finishRunState(ctx, runState, RuntimeRunStatusFailed); finishErr != nil {
 			errShape = finishErr
@@ -313,6 +316,11 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (contr
 			HasRecentResults:            hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory),
 			CheckMemoryMode:             isPotentialWriteRequest(message.Text),
 		})
+		runState.ShortLabel = strings.TrimSpace(turnMeta.ShortLabel)
+		runState.Category = normalizeRunCategory(turnMeta.Category)
+		if errShape := r.updateRunState(ctx, runState); errShape != nil {
+			return failStartedRun(errShape)
+		}
 	}
 	activeClarification := pendingClarificationActive || (hasActiveClarification(transcript) && turnMeta.IsClarificationAnswer)
 	activeTranscript := []providers.Message(nil)
@@ -562,7 +570,7 @@ If required information is missing, ask one concise clarification question inste
 					ToolCallID: call.ID,
 					Message:    "Tool finished",
 				})
-				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, call, result, outcome.duration, ""); errShape != nil {
+				if errShape := r.recordRuntimeToolCall(ctx, &runState, runState.RunID, call, result, outcome.duration, ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -748,7 +756,7 @@ If required information is missing, ask one concise clarification question inste
 				}
 				startedAt := time.Now()
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
-				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, providerToolCall, result, time.Since(startedAt), ""); errShape != nil {
+				if errShape := r.recordRuntimeToolCall(ctx, &runState, runState.RunID, providerToolCall, result, time.Since(startedAt), ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -92,6 +93,9 @@ func (r *Runtime) finishRunState(ctx context.Context, state RunState, status Run
 		state.PendingClarificationID = ""
 		state.CompletedAt = &now
 	}
+	if status == RuntimeRunStatusFailed && strings.TrimSpace(state.ErrorRef) == "" {
+		state.ErrorRef = newErrorRef()
+	}
 	if err := r.stateStore.UpdateRun(ctx, state); err != nil {
 		return internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
@@ -116,6 +120,14 @@ func (r *Runtime) finishRunByID(ctx context.Context, runID string, status Runtim
 		return internalError("load run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	return r.finishRunState(ctx, state, status)
+}
+
+func newErrorRef() string {
+	var bytes [3]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "000000"
+	}
+	return strings.ToUpper(hex.EncodeToString(bytes[:]))
 }
 
 func runIDForMessage(message contracts.UserMessage) string {
@@ -247,7 +259,7 @@ func (r *Runtime) appendRunEvent(ctx context.Context, runID string, eventType st
 	})
 }
 
-func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration, approvalID string) *contracts.ErrorShape {
+func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runState *RunState, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration, approvalID string) *contracts.ErrorShape {
 	r.recordToolCallObservation(toolCall.Name, result.Success)
 	if r != nil && r.telemetry != nil {
 		r.telemetry.RecordToolCall(ctx, toolCall, result, latency)
@@ -285,5 +297,39 @@ func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolC
 	}); err != nil {
 		return internalError("record tool call: "+err.Error(), contracts.ErrorSourceAgent)
 	}
+	if errShape := r.recordRunStep(ctx, runState, runID, RunStep{
+		OK:   result.Success,
+		Text: strings.TrimSpace(result.ContentForUser),
+	}); errShape != nil {
+		return errShape
+	}
 	return nil
+}
+
+func (r *Runtime) recordRunStep(ctx context.Context, runState *RunState, runID string, step RunStep) *contracts.ErrorShape {
+	if r == nil || r.stateStore == nil || strings.TrimSpace(runID) == "" {
+		return nil
+	}
+	if err := r.stateStore.AppendRunStep(ctx, runID, step); err != nil {
+		return internalError("append run step: "+err.Error(), contracts.ErrorSourceAgent)
+	}
+	if runState != nil {
+		runState.Steps = append(runState.Steps, step)
+	}
+	return nil
+}
+
+func (r *Runtime) recordLLMUsageCost(ctx context.Context, runState *RunState, usage *providers.Usage) {
+	if r == nil || r.stateStore == nil || usage == nil || runState == nil {
+		return
+	}
+	cost := float64(usage.PromptTokens)*0.000003 + float64(usage.CompletionTokens)*0.000015
+	if cost <= 0 {
+		return
+	}
+	if err := r.stateStore.AddRunCost(ctx, runState.RunID, cost); err != nil {
+		r.logger.Warn("persist llm cost failed", "run_id", runState.RunID, "error", err)
+		return
+	}
+	runState.CostUSD += cost
 }
