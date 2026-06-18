@@ -104,7 +104,7 @@ func (r *Runtime) finishRunState(ctx context.Context, state RunState, status Run
 		state.ErrorRef = newErrorRef()
 	}
 	if status == RuntimeRunStatusFailed && strings.TrimSpace(state.ErrorRef) != "" {
-		attachErrorRefTraceMetadata(ctx, state.ErrorRef)
+		r.attachErrorRefTraceMetadata(ctx, state.RunID, state.ErrorRef)
 	}
 	if err := r.stateStore.UpdateRun(ctx, state); err != nil {
 		return state, internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
@@ -147,13 +147,19 @@ func newErrorRef() string {
 	return strings.ToUpper(hex.EncodeToString(bytes[:]))
 }
 
-func attachErrorRefTraceMetadata(ctx context.Context, errorRef string) {
+func (r *Runtime) attachErrorRefTraceMetadata(ctx context.Context, runID string, errorRef string) {
 	errorRef = strings.ToUpper(strings.TrimSpace(errorRef))
 	if errorRef == "" {
 		return
 	}
 	span := trace.SpanFromContext(ctx)
-	if span == nil {
+	if !span.SpanContext().IsValid() {
+		if r != nil && r.logger != nil {
+			r.logger.Warn("error_ref not attached to trace: no active span",
+				"error_ref", errorRef,
+				"run_id", runID,
+			)
+		}
 		return
 	}
 	span.SetAttributes(attribute.String("langfuse.trace.metadata.error_ref", errorRef))

@@ -347,7 +347,6 @@ func applyMigrations(t *testing.T, ctx context.Context, db *sql.DB) {
 	for _, name := range []string{
 		"001_init_vclaw_schema.sql",
 		"002_persistence_runtime_state.sql",
-		"003_run_metadata.sql",
 		"003_governance_metadata.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "migrations", name)
@@ -365,7 +364,6 @@ func applyEmbeddedMigrationsForTest(ctx context.Context, db *sql.DB) error {
 	for _, name := range []string{
 		filepath.Join("migrations", "001_init_vclaw_schema.sql"),
 		filepath.Join("migrations", "002_persistence_runtime_state.sql"),
-		filepath.Join("migrations", "003_run_metadata.sql"),
 		filepath.Join("migrations", "003_governance_metadata.sql"),
 	} {
 		data, err := os.ReadFile(filepath.Join(".", name))

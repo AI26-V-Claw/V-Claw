@@ -63,7 +63,6 @@ func applyEmbeddedMigrations(ctx context.Context, db *sql.DB) error {
 	for _, name := range []string{
 		"migrations/001_init_vclaw_schema.sql",
 		"migrations/002_persistence_runtime_state.sql",
-		"migrations/003_run_metadata.sql",
 	} {
 		data, err := embeddedMigrations.ReadFile(name)
 		if err != nil {

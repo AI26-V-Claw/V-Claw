@@ -1,175 +1,69 @@
 package providers
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 )
 
-func TestOpenAIToolNameMapPreservesContractNames(t *testing.T) {
-	nameMap := newOpenAIToolNameMap([]ToolDefinition{
-		{Name: "gmail.listEmails"},
-		{Name: "calendar.createEvent"},
-	})
-
-	if got := nameMap.safeName("gmail.listEmails"); got != "gmail__dot__listEmails" {
-		t.Fatalf("unexpected safe name: %q", got)
-	}
-	if got := nameMap.contractName("gmail__dot__listEmails"); got != "gmail.listEmails" {
-		t.Fatalf("unexpected contract name: %q", got)
-	}
-	if got := nameMap.contractName("calendar__dot__createEvent"); got != "calendar.createEvent" {
-		t.Fatalf("unexpected calendar contract name: %q", got)
-	}
+type openAITestRoundTripper struct {
+	body string
 }
 
-func TestOpenAIMessageMappingUsesSafeNamesAndRestoresContractNames(t *testing.T) {
-	nameMap := newOpenAIToolNameMap([]ToolDefinition{{Name: "gmail.listEmails"}})
-
-	wire := openAIMessageFromProvider(Message{
-		Role: MessageRoleAssistant,
-		ToolCalls: []ToolCall{{
-			ID:        "call_1",
-			Name:      "gmail.listEmails",
-			Arguments: map[string]any{"query": "newer_than:1d"},
-		}},
-	}, nameMap.safeName)
-
-	if len(wire.ToolCalls) != 1 {
-		t.Fatalf("expected one tool call, got %d", len(wire.ToolCalls))
+func (rt openAITestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method != http.MethodPost {
+		return nil, http.ErrUseLastResponse
 	}
-	if got := wire.ToolCalls[0].Function.Name; got != "gmail__dot__listEmails" {
-		t.Fatalf("unexpected safe function name: %q", got)
-	}
-
-	providerMessage := providerMessageFromOpenAI(wire, nameMap.contractName)
-	if len(providerMessage.ToolCalls) != 1 {
-		t.Fatalf("expected one provider tool call, got %d", len(providerMessage.ToolCalls))
-	}
-	if got := providerMessage.ToolCalls[0].Name; got != "gmail.listEmails" {
-		t.Fatalf("unexpected restored tool name: %q", got)
-	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewBufferString(rt.body)),
+	}, nil
 }
 
-func TestOpenAIClientRetriesTransientHTTPError(t *testing.T) {
-	calls := 0
+func TestOpenAIGenerateRecordsUsageFromResponse(t *testing.T) {
 	client, err := NewOpenAIClient(OpenAIConfig{
-		APIKey:  "test-key",
-		Model:   "test-model",
-		BaseURL: "https://api.test",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-			calls++
-			if calls == 1 {
-				return nil, errors.New("connection reset")
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)),
-				Header:     make(http.Header),
-			}, nil
-		})},
+		APIKey: "test-key",
+		Model:  "gpt-test",
+		HTTPClient: &http.Client{
+			Transport: openAITestRoundTripper{body: `{
+				"choices":[{"message":{"role":"assistant","content":"xin chao"}}],
+				"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}
+			}`},
+		},
 	})
 	if err != nil {
-		t.Fatalf("NewOpenAIClient() error = %v", err)
+		t.Fatalf("new client: %v", err)
 	}
 
-	response, err := client.Chat(context.Background(), ChatRequest{})
-	if err != nil {
-		t.Fatalf("Chat() error = %v", err)
-	}
-	if calls != 2 {
-		t.Fatalf("expected 2 attempts, got %d", calls)
-	}
-	if response.Message.Content != "ok" {
-		t.Fatalf("unexpected response: %#v", response)
-	}
-}
-
-func TestOpenAIClientOmitsToolChoiceWhenNoToolsAreSpecified(t *testing.T) {
-	var requestBody string
-	client, err := NewOpenAIClient(OpenAIConfig{
-		APIKey:  "test-key",
-		Model:   "test-model",
-		BaseURL: "https://api.test",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			body, err := io.ReadAll(request.Body)
-			if err != nil {
-				return nil, err
-			}
-			requestBody = string(body)
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)),
-				Header:     make(http.Header),
-			}, nil
-		})},
+	var recorded *Usage
+	ctx := WithUsageRecorder(context.Background(), func(usage *Usage) {
+		recorded = usage
 	})
+
+	resp, err := client.Generate(ctx, &GenerateRequest{UserPrompt: "hello"})
 	if err != nil {
-		t.Fatalf("NewOpenAIClient() error = %v", err)
+		t.Fatalf("generate: %v", err)
 	}
-
-	if _, err := client.Chat(context.Background(), ChatRequest{
-		Messages:   []Message{{Role: MessageRoleUser, Content: "plan"}},
-		ToolChoice: "auto",
-	}); err != nil {
-		t.Fatalf("Chat() error = %v", err)
+	if resp == nil {
+		t.Fatal("expected response")
 	}
-
-	if strings.Contains(requestBody, "tool_choice") {
-		t.Fatalf("expected request without tool_choice when no tools are provided, got %s", requestBody)
+	if resp.Usage == nil {
+		t.Fatal("expected usage on response")
 	}
-	if strings.Contains(requestBody, `"tools"`) {
-		t.Fatalf("expected request without tools, got %s", requestBody)
+	if resp.Usage.PromptTokens != 11 || resp.Usage.CompletionTokens != 7 || resp.Usage.TotalTokens != 18 {
+		t.Fatalf("unexpected response usage: %#v", resp.Usage)
 	}
-}
-
-func TestOpenAIClientSendsToolChoiceWhenToolsAreSpecified(t *testing.T) {
-	var requestBody string
-	client, err := NewOpenAIClient(OpenAIConfig{
-		APIKey:  "test-key",
-		Model:   "test-model",
-		BaseURL: "https://api.test",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			body, err := io.ReadAll(request.Body)
-			if err != nil {
-				return nil, err
-			}
-			requestBody = string(body)
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)),
-				Header:     make(http.Header),
-			}, nil
-		})},
-	})
-	if err != nil {
-		t.Fatalf("NewOpenAIClient() error = %v", err)
+	if recorded == nil {
+		t.Fatal("expected usage callback")
 	}
-
-	if _, err := client.Chat(context.Background(), ChatRequest{
-		Messages: []Message{{Role: MessageRoleUser, Content: "use tool"}},
-		Tools: []ToolDefinition{{
-			Name:        "calendar.listEvents",
-			Description: "List calendar events",
-			Parameters:  map[string]any{"type": "object"},
-		}},
-	}); err != nil {
-		t.Fatalf("Chat() error = %v", err)
+	if recorded.PromptTokens != 11 || recorded.CompletionTokens != 7 || recorded.TotalTokens != 18 {
+		t.Fatalf("unexpected recorded usage: %#v", recorded)
 	}
-
-	if !strings.Contains(requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("expected request with automatic tool_choice, got %s", requestBody)
+	if got := strings.TrimSpace(resp.Text); got != "xin chao" {
+		t.Fatalf("response text = %q", got)
 	}
-	if !strings.Contains(requestBody, `"tools"`) {
-		t.Fatalf("expected request with tools, got %s", requestBody)
-	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
 }

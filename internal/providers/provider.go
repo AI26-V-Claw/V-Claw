@@ -40,6 +40,7 @@ type ChatRequest struct {
 
 type ChatResponse struct {
 	Message Message
+	Usage   *Usage
 }
 
 type Message struct {

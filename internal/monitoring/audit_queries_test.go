@@ -41,7 +41,7 @@ func TestQueryLogsPopulatesTraceURLForToolCall(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `SET search_path TO `+schema); err != nil {
 		t.Fatalf("set search path: %v", err)
 	}
-	for _, name := range []string{"001_init_vclaw_schema.sql", "002_persistence_runtime_state.sql", "003_run_metadata.sql"} {
+	for _, name := range []string{"001_init_vclaw_schema.sql", "002_persistence_runtime_state.sql"} {
 		data, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)
