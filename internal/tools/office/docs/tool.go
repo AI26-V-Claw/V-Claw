@@ -30,7 +30,7 @@ type ToolRegistryEntry struct {
 }
 
 var RegistryEntries = []ToolRegistryEntry{
-	{Name: ToolNameGetDocument, Owner: "integration", Description: "Read a Google Docs document.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameGetDocument, Owner: "integration", Description: "Read a Google Docs document in full or preview mode.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameCreateDocument, Owner: "integration", Description: "Create a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameAppendText, Owner: "integration", Description: "Append text to a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameReplaceText, Owner: "integration", Description: "Replace matching text in a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
@@ -290,7 +290,7 @@ func (t DocsTool) Capability() tools.Capability {
 
 func (t DocsTool) RiskLevel() tools.RiskLevel {
 	if t.name == ToolNameGetDocument {
-		return tools.RiskLevelSafeRead
+		return tools.RiskLevelSensitiveRead
 	}
 	return tools.RiskLevelExternalWrite
 }

@@ -462,6 +462,7 @@ func TestProcessUpdateRoutesStatusCommandToMonitoringSummary(t *testing.T) {
 	}
 	for _, want := range []string{
 		"📊 *Trạng thái lệnh gần nhất*",
+		"🗓 Thời gian: 17/06/2026 14:32:00",
 		"📝 *Yêu cầu*",
 		"Tóm tắt email + tạo draft báo cáo",
 		"✅ Đọc 12 email mới",
@@ -656,6 +657,52 @@ func TestProcessUpdateRoutesHistoryCommandWhenNoRunsExist(t *testing.T) {
 	}
 	if sentText != "Chưa có lịch sử nào." {
 		t.Fatalf("unexpected empty history text: %s", sentText)
+	}
+}
+
+func TestFormatStatusShowsFullDateAndNoFakeZeroCost(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	completedAt := time.Date(2026, 6, 17, 14, 32, 4, 100_000_000, loc)
+	run := &agent.RunState{
+		RunID:        "run_1",
+		OriginalGoal: "Xem lịch ngày mai của tôi",
+		Status:       "completed",
+		CostUSD:      0,
+		CreatedAt:    time.Date(2026, 6, 17, 14, 32, 0, 0, loc),
+		CompletedAt:  &completedAt,
+	}
+	text := FormatStatus(run)
+	for _, want := range []string{
+		"🗓 Thời gian: 17/06/2026 14:32:00",
+		"💰 Chi phí: chưa ghi nhận",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in status text:\n%s", want, text)
+		}
+	}
+}
+
+func TestSetMyCommandsRegistersTelegramSlashCommands(t *testing.T) {
+	bot := New("token", 123, t.TempDir(), &fakeHandler{}, nil)
+	var gotPath string
+	var gotPayload map[string]any
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		return jsonResponse(http.StatusOK, `{"ok":true,"result":true}`), nil
+	})}
+
+	if err := bot.setMyCommands(context.Background()); err != nil {
+		t.Fatalf("setMyCommands() error = %v", err)
+	}
+	if gotPath != "/bottoken/setMyCommands" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	commands, ok := gotPayload["commands"].([]any)
+	if !ok || len(commands) < 3 {
+		t.Fatalf("unexpected commands payload: %#v", gotPayload["commands"])
 	}
 }
 

@@ -117,6 +117,9 @@ func (b *Bot) Run(ctx context.Context) error {
 		return err
 	}
 	b.logger.Info("telegram bot ready", "username", me.Username, "bot_id", me.ID)
+	if err := b.setMyCommands(ctx); err != nil {
+		b.logger.Warn("failed to register telegram commands", "error", err)
+	}
 
 	// A single worker goroutine processes updates sequentially. This ensures
 	// session state is never read/written concurrently while keeping the
@@ -746,6 +749,27 @@ func (b *Bot) getMe(ctx context.Context) (telegramUser, error) {
 		return telegramUser{}, fmt.Errorf("telegram getMe returned not ok")
 	}
 	return response.Result, nil
+}
+
+func (b *Bot) setMyCommands(ctx context.Context) error {
+	payload := map[string]any{
+		"commands": []map[string]string{
+			{"command": "status", "description": "Xem trạng thái lệnh gần nhất"},
+			{"command": "history", "description": "Xem lịch sử gần đây"},
+			{"command": "policy", "description": "Mở menu chính sách"},
+		},
+	}
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	_, err := b.doJSON(ctx, http.MethodPost, "/setMyCommands", payload, &response)
+	if err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("telegram setMyCommands returned not ok")
+	}
+	return nil
 }
 
 func (b *Bot) getUpdates(ctx context.Context, offset int64) ([]telegramUpdate, error) {

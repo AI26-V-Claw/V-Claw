@@ -62,9 +62,9 @@ func FormatStatus(run *agent.RunState) string {
 	lines := []string{
 		"📊 *Trạng thái lệnh gần nhất*",
 		"────────────────────",
-		fmt.Sprintf("🗓 Thời gian: %s", smartTime(run.CreatedAt, now)),
+		fmt.Sprintf("🗓 Thời gian: %s", formatDateTime(run.CreatedAt)),
 		fmt.Sprintf("⚡ Thời gian xử lý: %.1f giây", runDurationSeconds(run, now)),
-		fmt.Sprintf("💰 Chi phí: $%.4f (~%s VNĐ)", run.CostUSD, formatVnd(run.CostUSD)),
+		formatCostLine(run.CostUSD),
 		"",
 		"📝 *Yêu cầu*",
 		escapeTelegramMarkdown(textOrFallback(run.OriginalGoal, "(không có dữ liệu)")),
@@ -145,6 +145,17 @@ func escapeTelegramMarkdown(text string) string {
 
 func formatVnd(costUSD float64) string {
 	return fmt.Sprintf("%d", int64(costUSD*usdToVnd+0.5))
+}
+
+func formatCostLine(costUSD float64) string {
+	if costUSD <= 0 {
+		return "💰 Chi phí: chưa ghi nhận"
+	}
+	return fmt.Sprintf("💰 Chi phí: $%.4f (~%s VNĐ)", costUSD, formatVnd(costUSD))
+}
+
+func formatDateTime(t time.Time) string {
+	return t.In(hoChiMinhLocation()).Format("02/01/2006 15:04:05")
 }
 
 func textOrFallback(value string, fallback string) string {

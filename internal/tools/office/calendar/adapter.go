@@ -269,7 +269,7 @@ func (t *DeleteEventTool) Execute(ctx context.Context, call tools.ToolCall) tool
 		return toToolError(call, errShape)
 	}
 
-	return toToolSuccess(call, "Event deleted successfully.")
+	return toToolSuccess(call, "Đã xóa sự kiện thành công.")
 }
 
 // --- Registration ---
@@ -343,11 +343,11 @@ func toToolError(call tools.ToolCall, errShape *ErrorShape) tools.ToolResult {
 
 func formatListEventsOutput(output ListEventsOutput) string {
 	if len(output.Events) == 0 {
-		return "No events found in the specified time range."
+		return "Không tìm thấy sự kiện nào trong khoảng thời gian đã chọn."
 	}
 	data, err := json.Marshal(output.Events)
 	if err != nil {
-		return fmt.Sprintf("Found %d events.", len(output.Events))
+		return fmt.Sprintf("Tìm thấy %d sự kiện.", len(output.Events))
 	}
 	return string(data)
 }
@@ -355,15 +355,15 @@ func formatListEventsOutput(output ListEventsOutput) string {
 func formatCreateEventOutput(output CreateEventOutput) string {
 	data, err := json.Marshal(output.Event)
 	if err != nil {
-		return fmt.Sprintf("Event created with ID: %s", output.EventID)
+		return fmt.Sprintf("Đã tạo sự kiện với ID: %s", output.EventID)
 	}
-	return fmt.Sprintf("Event created: %s", string(data))
+	return fmt.Sprintf("Đã tạo sự kiện: %s", string(data))
 }
 
 func formatUpdateEventOutput(output UpdateEventOutput) string {
 	data, err := json.Marshal(output.Event)
 	if err != nil {
-		return "Event updated successfully."
+		return "Đã cập nhật sự kiện thành công."
 	}
-	return fmt.Sprintf("Event updated: %s", string(data))
+	return fmt.Sprintf("Đã cập nhật sự kiện: %s", string(data))
 }

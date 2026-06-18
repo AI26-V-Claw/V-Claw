@@ -37,8 +37,8 @@ type ToolRegistryEntry struct {
 
 var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameGetSpreadsheet, Owner: "integration", Description: "Read Google Sheets spreadsheet metadata.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameReadValues, Owner: "integration", Description: "Read values from a Google Sheets range.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameBatchGetValues, Owner: "integration", Description: "Read values from multiple Google Sheets ranges.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameReadValues, Owner: "integration", Description: "Read values from a Google Sheets range.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
+	{Name: ToolNameBatchGetValues, Owner: "integration", Description: "Read values from multiple Google Sheets ranges.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameCreateSpreadsheet, Owner: "integration", Description: "Create a Google Sheets spreadsheet.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateValues, Owner: "integration", Description: "Update values in a Google Sheets range.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameBatchUpdateValues, Owner: "integration", Description: "Update values in multiple Google Sheets ranges.", DefaultRiskLevel: "external_write", RequiresApproval: true},
@@ -447,8 +447,10 @@ func (t SheetsTool) Capability() tools.Capability {
 
 func (t SheetsTool) RiskLevel() tools.RiskLevel {
 	switch t.name {
-	case ToolNameGetSpreadsheet, ToolNameReadValues, ToolNameBatchGetValues:
+	case ToolNameGetSpreadsheet:
 		return tools.RiskLevelSafeRead
+	case ToolNameReadValues, ToolNameBatchGetValues:
+		return tools.RiskLevelSensitiveRead
 	case ToolNameDeleteSheet:
 		return tools.RiskLevelDestructive
 	default:

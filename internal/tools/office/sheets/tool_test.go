@@ -76,8 +76,8 @@ func TestRegisterToolsMetadata(t *testing.T) {
 	}
 
 	assertToolMetadata(t, registry, ToolNameGetSpreadsheet, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
-	assertToolMetadata(t, registry, ToolNameReadValues, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
-	assertToolMetadata(t, registry, ToolNameBatchGetValues, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
+	assertToolMetadata(t, registry, ToolNameReadValues, tools.CapabilityReadOnly, tools.RiskLevelSensitiveRead, true)
+	assertToolMetadata(t, registry, ToolNameBatchGetValues, tools.CapabilityReadOnly, tools.RiskLevelSensitiveRead, true)
 	assertToolMetadata(t, registry, ToolNameCreateSpreadsheet, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameUpdateValues, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameBatchUpdateValues, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
