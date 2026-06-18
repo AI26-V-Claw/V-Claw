@@ -42,7 +42,7 @@ func TestQueryLogsPopulatesTraceURLForToolCall(t *testing.T) {
 		t.Fatalf("set search path: %v", err)
 	}
 	for _, name := range []string{"001_init_vclaw_schema.sql", "002_persistence_runtime_state.sql"} {
-		data, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
+		data, err := os.ReadFile(filepath.Join("..", "..", "internal", "store", "pg", "migrations", name))
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)
 		}

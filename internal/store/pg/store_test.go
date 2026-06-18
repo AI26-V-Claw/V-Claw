@@ -349,7 +349,7 @@ func applyMigrations(t *testing.T, ctx context.Context, db *sql.DB) {
 		"002_persistence_runtime_state.sql",
 		"003_governance_metadata.sql",
 	} {
-		path := filepath.Join("..", "..", "..", "migrations", name)
+		path := filepath.Join("migrations", name)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)

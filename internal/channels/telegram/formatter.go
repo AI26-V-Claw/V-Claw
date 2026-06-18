@@ -33,10 +33,10 @@ func smartTime(t, now time.Time) string {
 	now = now.In(loc)
 
 	yesterday := now.AddDate(0, 0, -1)
-	if sameDay(t, now) {
+	if sameLocalDay(t, now) {
 		return t.Format("15:04")
 	}
-	if sameDay(t, yesterday) {
+	if sameLocalDay(t, yesterday) {
 		return "Hôm qua " + t.Format("15:04")
 	}
 	return t.Format("02/01 15:04")
@@ -90,7 +90,7 @@ func FormatStatus(run *agent.RunState) string {
 
 	lines = append(lines,
 		"━━━━━━━━━━━━━━━━━━",
-		fmt.Sprintf("Trạng thái: %s", statusTextForRun(run)),
+		statusLineForRun(run),
 	)
 	if isFailedRunStatus(string(run.Status)) && strings.TrimSpace(run.ErrorRef) != "" {
 		lines = append(lines, fmt.Sprintf("🔍 Ref: %s", escapeTelegramMarkdown(strings.ToUpper(strings.TrimSpace(run.ErrorRef)))))
@@ -165,8 +165,10 @@ func textOrFallback(value string, fallback string) string {
 	return strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
 }
 
-func sameDay(a, b time.Time) bool {
-	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
+func sameLocalDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }
 
 func hoChiMinhLocation() *time.Location {
@@ -193,6 +195,10 @@ func statusTextForRun(run *agent.RunState) string {
 	default:
 		return "⏳ Đang xử lý"
 	}
+}
+
+func statusLineForRun(run *agent.RunState) string {
+	return "Trạng thái: " + statusTextForRun(run)
 }
 
 func historyStatusIcon(status string) string {

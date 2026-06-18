@@ -3,10 +3,11 @@ package pg
 import (
 	"context"
 	"database/sql"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,9 +22,6 @@ import (
 type Store struct {
 	db *sql.DB
 }
-
-//go:embed migrations/*.sql
-var embeddedMigrations embed.FS
 
 func New(ctx context.Context, databaseURL string) (*Store, error) {
 	databaseURL = strings.TrimSpace(databaseURL)
@@ -61,10 +59,11 @@ func (s *Store) Close() error {
 
 func applyEmbeddedMigrations(ctx context.Context, db *sql.DB) error {
 	for _, name := range []string{
-		"migrations/001_init_vclaw_schema.sql",
-		"migrations/002_persistence_runtime_state.sql",
+		"001_init_vclaw_schema.sql",
+		"002_persistence_runtime_state.sql",
+		"003_governance_metadata.sql",
 	} {
-		data, err := embeddedMigrations.ReadFile(name)
+		data, err := os.ReadFile(filepath.Join("migrations", name))
 		if err != nil {
 			return fmt.Errorf("read %s: %w", name, err)
 		}

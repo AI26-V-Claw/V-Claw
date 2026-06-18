@@ -682,6 +682,20 @@ func TestFormatStatusShowsFullDateAndNoFakeZeroCost(t *testing.T) {
 	}
 }
 
+func TestFormatStatusShowsEmojiStatusLine(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	run := &agent.RunState{
+		RunID:       "run_ok",
+		Status:      "completed",
+		CreatedAt:   time.Date(2026, 6, 17, 14, 32, 0, 0, loc),
+		CompletedAt: func() *time.Time { t := time.Date(2026, 6, 17, 14, 32, 4, 0, loc); return &t }(),
+	}
+	text := FormatStatus(run)
+	if !strings.Contains(text, "Trạng thái: ✅ Hoàn thành") {
+		t.Fatalf("missing success emoji line in status text:\n%s", text)
+	}
+}
+
 func TestSetMyCommandsRegistersTelegramSlashCommands(t *testing.T) {
 	bot := New("token", 123, t.TempDir(), &fakeHandler{}, nil)
 	var gotPath string
@@ -728,6 +742,18 @@ func TestFormatHistoryShowsFiveRuns(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in %q", want, text)
 		}
+	}
+}
+
+func TestFormatHistoryShowsDateForOlderRuns(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	now := time.Date(2026, 6, 18, 15, 0, 0, 0, loc)
+	runs := []*agent.RunState{
+		{RunID: "run_old", ShortLabel: "cũ", Category: "gmail", Status: "completed", CreatedAt: time.Date(2026, 6, 15, 14, 0, 0, 0, loc)},
+	}
+	text := FormatHistory(runs, now)
+	if !strings.Contains(text, "15/06 14:00") {
+		t.Fatalf("expected older run to include date, got:\n%s", text)
 	}
 }
 

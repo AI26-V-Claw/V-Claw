@@ -378,7 +378,11 @@ func (r *Runtime) recordLLMUsageCost(ctx context.Context, runState *RunState, us
 	if cost <= 0 {
 		return
 	}
-	if err := r.stateStore.AddRunCost(ctx, runState.RunID, cost); err != nil {
+	persistCtx := context.WithoutCancel(ctx)
+	if persistCtx == nil {
+		persistCtx = context.Background()
+	}
+	if err := r.stateStore.AddRunCost(persistCtx, runState.RunID, cost); err != nil {
 		r.logger.Warn("persist llm cost failed", "run_id", runState.RunID, "error", err)
 		return
 	}

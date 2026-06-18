@@ -7,6 +7,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"vclaw/internal/providers"
 )
 
 type collectingSpanExporter struct {
@@ -55,6 +57,28 @@ func TestFinishRunStateAttachesErrorRefToActiveTrace(t *testing.T) {
 	got := spanAttrValue(exporter.spans[0].Attributes(), "langfuse.trace.metadata.error_ref")
 	if got != stored.ErrorRef {
 		t.Fatalf("trace metadata error_ref = %q, want %q", got, stored.ErrorRef)
+	}
+}
+
+func TestRecordLLMUsageCostPersistsWithCanceledContext(t *testing.T) {
+	store := NewInMemoryRuntimeStateStore()
+	run := RunState{RunID: "run_cost", CostUSD: 1.25}
+	if err := store.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	r := &Runtime{stateStore: store, now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r.recordLLMUsageCost(ctx, &run, &providers.Usage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30})
+
+	stored, err := store.GetRun(context.Background(), run.RunID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	want := 1.25 + float64(10)*0.000003 + float64(20)*0.000015
+	if stored.CostUSD != want {
+		t.Fatalf("cost_usd = %v, want %v", stored.CostUSD, want)
 	}
 }
 
