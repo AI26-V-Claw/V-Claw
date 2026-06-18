@@ -3599,8 +3599,8 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run runtime: %v", err)
 	}
-	if response.Status != contracts.AgentStatusFailed {
-		t.Fatalf("expected failed, got %#v", response)
+	if response.Status != contracts.AgentStatusMaxIterationsReached {
+		t.Fatalf("expected max iterations reached, got %#v", response)
 	}
 	if response.Error == nil || response.Error.Code != contracts.ErrorMaxIterationsExceeded {
 		t.Fatalf("expected max iteration error, got %#v", response.Error)

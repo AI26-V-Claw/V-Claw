@@ -429,7 +429,7 @@ func TestRuntimeFinishRunStateCleansSubtaskParentRunCount(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 
-	if errShape := runtime.finishRunState(context.Background(), state, RuntimeRunStatusCompleted); errShape != nil {
+	if _, errShape := runtime.finishRunState(context.Background(), state, RuntimeRunStatusCompleted, ""); errShape != nil {
 		t.Fatalf("finish run: %v", errShape)
 	}
 

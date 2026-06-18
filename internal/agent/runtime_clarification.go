@@ -571,7 +571,7 @@ func pendingClarificationTranscript(pending sessions.PendingClarification) []pro
 }
 
 // isUsablePendingClarification returns true when pending is non-nil, has content,
-// and has not exceeded pendingClarificationTTL. Stale clarifications are treated
+// and has not exceeded approvalTTL. Stale clarifications are treated
 // as expired so the next user message starts fresh instead of being misread as an
 // answer to a long-forgotten question.
 // Backward compat: a zero CreatedAt (old memory.json files) skips the TTL check.
