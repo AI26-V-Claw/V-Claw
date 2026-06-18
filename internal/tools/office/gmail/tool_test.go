@@ -12,6 +12,7 @@ import (
 
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	"vclaw/internal/tools"
+	fstool "vclaw/internal/tools/os/filesystem"
 
 	"google.golang.org/api/googleapi"
 )
@@ -392,6 +393,49 @@ func TestListEmailsLocalizesSendTimeAndOmitsRawDate(t *testing.T) {
 	// The full user-facing content may still keep the original header.
 	if !strings.Contains(result.ContentForUser, "21:24:29 -0700") {
 		t.Fatalf("ContentForUser should keep the raw Date header, got: %s", result.ContentForUser)
+	}
+}
+
+func TestDownloadAttachmentsDefaultsToWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	guard := fstool.NewPathGuard([]string{workspace})
+	service := NewService(&mockConnector{
+		getMessage: func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageDetail, error) {
+			return gmailconnector.MessageDetail{
+				MessageSummary: gmailconnector.MessageSummary{ID: "m1"},
+				Attachments:    []gmailconnector.Attachment{{Filename: "report.pdf", MimeType: "application/pdf", AttachmentID: "att1", Size: 7}},
+			}, nil
+		},
+		downloadAttachment: func(ctx context.Context, userID, messageID string, attachment gmailconnector.Attachment) (gmailconnector.AttachmentData, error) {
+			return gmailconnector.AttachmentData{Attachment: attachment, Data: []byte("PDFDATA")}, nil
+		},
+	}).WithDownloadGuard(guard)
+
+	// outputDir omitted: should default to the workspace root.
+	out, errShape := service.DownloadAttachments(context.Background(), DownloadAttachmentsInput{MessageID: "m1"})
+	if errShape != nil {
+		t.Fatalf("DownloadAttachments() errShape = %#v", errShape)
+	}
+	if len(out.Files) != 1 {
+		t.Fatalf("expected 1 downloaded file, got %d", len(out.Files))
+	}
+	saved := filepath.Join(workspace, "report.pdf")
+	if data, err := os.ReadFile(saved); err != nil || string(data) != "PDFDATA" {
+		t.Fatalf("expected attachment saved to workspace at %s (err=%v)", saved, err)
+	}
+}
+
+func TestDownloadAttachmentsRejectsPathOutsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	guard := fstool.NewPathGuard([]string{workspace})
+	service := NewService(&mockConnector{}).WithDownloadGuard(guard)
+
+	_, errShape := service.DownloadAttachments(context.Background(), DownloadAttachmentsInput{
+		MessageID: "m1",
+		OutputDir: filepath.Join(workspace, "..", "outside-escape"),
+	})
+	if errShape == nil || errShape.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT for path outside workspace, got %#v", errShape)
 	}
 }
 

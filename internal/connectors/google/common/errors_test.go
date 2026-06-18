@@ -36,6 +36,23 @@ func TestMapError(t *testing.T) {
 			expected: ErrAuth,
 		},
 		{
+			name: "403 fileNotDownloadable is a usage error, not auth (reason)",
+			input: &googleapi.Error{
+				Code:    http.StatusForbidden,
+				Message: "Only files with binary content can be downloaded.",
+				Errors:  []googleapi.ErrorItem{{Reason: "fileNotDownloadable"}},
+			},
+			expected: ErrAPI,
+		},
+		{
+			name: "403 fileNotDownloadable is a usage error, not auth (message)",
+			input: &googleapi.Error{
+				Code:    http.StatusForbidden,
+				Message: "Error 403: Only files with binary content can be downloaded. Use Export with Docs Editors files., fileNotDownloadable",
+			},
+			expected: ErrAPI,
+		},
+		{
 			name: "not found 404",
 			input: &googleapi.Error{
 				Code:    http.StatusNotFound,

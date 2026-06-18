@@ -85,7 +85,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameDeleteDraft, Owner: "integration", Description: "Delete an existing Gmail draft.", DefaultRiskLevel: "destructive", RequiresApproval: true},
 	{Name: ToolNameReplyDraft, Owner: "integration", Description: "Create a Gmail reply draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameForwardDraft, Owner: "integration", Description: "Create a Gmail forward draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameDownloadAttachments, Owner: "integration", Description: "Download Gmail attachments to a local directory. Call gmail.getEmail immediately before gmail.downloadAttachments so the agent can use fresh attachment filenames from the current message. If filenames are provided, only matching attachments are downloaded.", DefaultRiskLevel: "local_write", RequiresApproval: true},
+	{Name: ToolNameDownloadAttachments, Owner: "integration", Description: "Download Gmail attachments into the local sandbox workspace. Call gmail.getEmail immediately before gmail.downloadAttachments so the agent can use fresh attachment filenames from the current message. If filenames are provided, only matching attachments are downloaded. outputDir is optional and defaults to the workspace root.", DefaultRiskLevel: "local_write", RequiresApproval: true},
 	{Name: ToolNameModifyMessage, Owner: "integration", Description: "Modify Gmail message labels such as read, unread, starred, archive, or inbox.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameBatchModifyMessages, Owner: "integration", Description: "Modify Gmail labels for multiple messages.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameTrashMessage, Owner: "integration", Description: "Move a Gmail message to trash.", DefaultRiskLevel: "destructive", RequiresApproval: true},
@@ -125,12 +125,21 @@ type DriveFileSource interface {
 	ExportFile(ctx context.Context, fileID string, mimeType string, maxBytes int64) (driveconnector.FileContentOutput, error)
 }
 
+// PathGuard confines attachment downloads to the sandbox workspace.
+// filesystem.PathGuard satisfies this interface.
+type PathGuard interface {
+	Resolve(path string) (string, error)
+}
+
 type Service struct {
 	connector   Connector
 	driveSource DriveFileSource
 	// location is the user's timezone, used to derive a local send time from each
 	// message's InternalDate (epoch ms) for display. Defaults to time.Local.
 	location *time.Location
+	// downloadGuard confines gmail.downloadAttachments output to the sandbox
+	// workspace. When set, outputDir is optional and defaults to the workspace root.
+	downloadGuard PathGuard
 }
 
 func NewService(connector Connector) *Service {
@@ -145,6 +154,13 @@ func (s *Service) WithDriveSource(source DriveFileSource) *Service {
 // WithLocation sets the timezone used to localize message send times.
 func (s *Service) WithLocation(loc *time.Location) *Service {
 	s.location = loc
+	return s
+}
+
+// WithDownloadGuard confines attachment downloads to the sandbox workspace and
+// makes outputDir optional (defaulting to the workspace root).
+func (s *Service) WithDownloadGuard(guard PathGuard) *Service {
+	s.downloadGuard = guard
 	return s
 }
 
@@ -712,8 +728,9 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 	if strings.TrimSpace(input.MessageID) == "" {
 		return DownloadAttachmentsOutput{}, invalidInput("messageId is required")
 	}
-	if strings.TrimSpace(input.OutputDir) == "" {
-		return DownloadAttachmentsOutput{}, invalidInput("outputDir is required")
+	outputDir, errShape := s.resolveDownloadDir(input.OutputDir)
+	if errShape != nil {
+		return DownloadAttachmentsOutput{}, errShape
 	}
 	message, err := s.connector.GetMessage(ctx, normalizeUserID(input.UserID), input.MessageID)
 	if err != nil {
@@ -723,7 +740,7 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 	if len(attachments) == 0 {
 		return DownloadAttachmentsOutput{}, invalidInput("no matching attachments found")
 	}
-	if err := os.MkdirAll(input.OutputDir, 0700); err != nil {
+	if err := os.MkdirAll(outputDir, 0700); err != nil {
 		return DownloadAttachmentsOutput{}, internalError("create outputDir: " + err.Error())
 	}
 
@@ -734,7 +751,7 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 			return DownloadAttachmentsOutput{}, MapError(err)
 		}
 		filename := safeAttachmentFilename(attachment)
-		path := filepath.Join(input.OutputDir, filename)
+		path := filepath.Join(outputDir, filename)
 		if err := os.WriteFile(path, data.Data, 0600); err != nil {
 			return DownloadAttachmentsOutput{}, internalError("write attachment: " + err.Error())
 		}
@@ -746,6 +763,28 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 		})
 	}
 	return output, nil
+}
+
+// resolveDownloadDir confines the attachment output directory to the sandbox
+// workspace when a guard is configured. With a guard, outputDir is optional and
+// defaults to the workspace root; a path outside the workspace is rejected.
+// Without a guard (e.g. unit tests), outputDir is required and used verbatim.
+func (s *Service) resolveDownloadDir(outputDir string) (string, *ErrorShape) {
+	outputDir = strings.TrimSpace(outputDir)
+	if s.downloadGuard == nil {
+		if outputDir == "" {
+			return "", invalidInput("outputDir is required")
+		}
+		return outputDir, nil
+	}
+	if outputDir == "" {
+		outputDir = "."
+	}
+	resolved, err := s.downloadGuard.Resolve(outputDir)
+	if err != nil {
+		return "", invalidInput("outputDir is outside the allowed workspace: " + err.Error())
+	}
+	return resolved, nil
 }
 
 func (s *Service) ModifyMessage(ctx context.Context, input ModifyMessageInput) (ModifyMessageOutput, *ErrorShape) {
@@ -1351,7 +1390,7 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 	case ToolNameForwardDraft:
 		return forwardDraftSchema()
 	case ToolNameDownloadAttachments:
-		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "filenames": arrayStringSchema(), "outputDir": map[string]any{"type": "string"}}, "required": []string{"messageId", "outputDir"}, "additionalProperties": false}
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "filenames": arrayStringSchema(), "outputDir": map[string]any{"type": "string", "description": "Optional workspace-relative directory. Omit to save into the workspace root. Paths outside the workspace are rejected."}}, "required": []string{"messageId"}, "additionalProperties": false}
 	case ToolNameModifyMessage:
 		return tools.ToolSchema{
 			"type": "object",

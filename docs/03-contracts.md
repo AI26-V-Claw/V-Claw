@@ -625,6 +625,7 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | `drive.getFile` | Integration | `safe_read` | No |
 | `drive.exportFile` | Integration | `safe_read` | No |
 | `drive.downloadFile` | Integration | `safe_read` | No |
+| `drive.saveFile` | Integration | `local_write` | Yes |
 | `drive.createFolder` | Integration | `external_write` | Yes |
 | `drive.createFile` | Integration | `external_write` | Yes |
 | `drive.uploadFile` | Integration | `external_write` | Yes |
@@ -670,6 +671,10 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 > Two additional safety constraints apply beyond approval:
 > - **`drive.uploadFile` is sandboxed.** Its `localPath` is resolved through the same workspace `PathGuard` as the filesystem tools; a path outside the sandbox workspace is rejected with `INVALID_INPUT`. The tool must be constructed with a guard — without one, upload is refused. This prevents the agent from uploading host files such as `configs/google/token.json` or `.env`.
 > - **`drive.shareFile` cannot grant public write access.** When `type=anyone`, `role` must be `reader`; `writer` or `commenter` for `anyone` is rejected with `INVALID_INPUT`. Public links are read-only.
+>
+> Local file downloads are sandboxed too:
+> - **`drive.saveFile`** writes a Drive file to disk inside the sandbox workspace (`local_write`, approval required). Google Docs Editors files are auto-exported; binary files are downloaded directly. `outputDir` is optional and is resolved through the workspace `PathGuard`, defaulting to the workspace root; paths outside the workspace are rejected with `INVALID_INPUT`. Without a guard the tool refuses to save. `drive.downloadFile` stays read-only (content into the response, no local write).
+> - **`gmail.downloadAttachments`** also resolves `outputDir` through the workspace `PathGuard` when one is configured, making `outputDir` optional (defaults to the workspace root) and rejecting paths outside the workspace.
 
 ### Calendar
 
