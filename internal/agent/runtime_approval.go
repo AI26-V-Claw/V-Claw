@@ -877,6 +877,8 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi xóa Gmail draft."
 	case "gmail.downloadAttachments":
 		return "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local."
+	case "gmail.getEmail":
+		return "Tôi cần bạn xác nhận trước khi đọc nội dung email này."
 	case "gmail.modifyMessage", "gmail.batchModifyMessages":
 		return "Tôi cần bạn xác nhận trước khi sửa trạng thái hoặc nhãn Gmail."
 	case "gmail.trashMessage":
@@ -934,7 +936,7 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 	case "sandbox.runPython", "sandbox.runShell":
 		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
 	default:
-		return fmt.Sprintf("Tôi cần bạn xác nhận trước khi chạy %s vì risk là %s.", toolName, riskLevel)
+		return "Tôi cần bạn xác nhận trước khi thực hiện thao tác này."
 	}
 }
 

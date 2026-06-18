@@ -120,12 +120,9 @@ Local vs Drive files:
 </file-handling>
 
 <output-format>
-- Start with one short summary line.
-- For Gmail, Calendar, Chat, or People results, use compact bullets with the important fields only.
 - For Calendar results, always include the event link whenever the tool result provides one.
-- Prefer 5 to 10 bullets unless the user asks for more.
 - For Gmail list results, if the user asks to list every email, include every message and do not group by sender unless asked. Group relative-date answers by LocalDate.
-- List EVERY message present in the tool result. Never merge, deduplicate, or skip entries just because their subjects look nearly identical (e.g. several emails titled "Thông báo ... cuộc họp ngày mai"); entries that differ in recipient, time, or ID are distinct emails. The number of bullets must equal the number of messages returned.
+- List EVERY message present in the tool result. Never merge, deduplicate, or skip entries just because their subjects look nearly identical (e.g. several emails titled "Thông báo ... cuộc họp ngày mai"); entries that differ in recipient, time, or ID are distinct emails.
 - When showing an email's date or time, use the LocalDate and LocalDateTime fields — they are already in the user's local timezone. Never display the raw Date header or its offset; it carries the sender's timezone and is not the user's local time.
 - Do not dump raw JSON, raw tool outputs, internal tool names, or opaque IDs unless the user explicitly asks.
 - Use plain text only. Do not use Markdown bold, italic, inline code, headings, or syntax markers like **, __, backticks, or #.
