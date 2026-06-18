@@ -1541,8 +1541,107 @@ func compactOutputForLLM(toolName string, output any, location *time.Location) a
 		if list, ok := output.(ListDraftsOutput); ok {
 			return compactListDraftsOutput(list)
 		}
+	case ToolNameGetEmail:
+		if msg, ok := output.(GetEmailOutput); ok {
+			return compactGetEmailOutput(msg, location)
+		}
+	case ToolNameGetThread:
+		if thread, ok := output.(GetThreadOutput); ok {
+			return compactGetThreadOutput(thread, location)
+		}
+	case ToolNameGetDraft:
+		if draft, ok := output.(GetDraftOutput); ok {
+			return compactGetDraftOutput(draft, location)
+		}
 	}
 	return output
+}
+
+// compactEmailDetail mirrors a single message for the LLM, replacing the raw
+// "Date" header (sender timezone) with LocalDate/LocalDateTime in the user's
+// timezone. See compactEmailMessage for why the raw header is omitted.
+type compactEmailDetail struct {
+	ID            string                      `json:"ID"`
+	ThreadID      string                      `json:"ThreadID"`
+	From          string                      `json:"From"`
+	To            string                      `json:"To"`
+	Subject       string                      `json:"Subject"`
+	LocalDate     string                      `json:"LocalDate,omitempty"`
+	LocalDateTime string                      `json:"LocalDateTime,omitempty"`
+	LabelIDs      []string                    `json:"LabelIDs,omitempty"`
+	InternalDate  int64                       `json:"InternalDate"`
+	Attachments   []gmailconnector.Attachment `json:"Attachments,omitempty"`
+}
+
+func compactMessageDetail(m gmailconnector.MessageDetail, location *time.Location) compactEmailDetail {
+	if location == nil {
+		location = time.Local
+	}
+	detail := compactEmailDetail{
+		ID:           m.ID,
+		ThreadID:     m.ThreadID,
+		From:         m.From,
+		To:           m.To,
+		Subject:      m.Subject,
+		LabelIDs:     m.LabelIDs,
+		InternalDate: m.InternalDate,
+		Attachments:  m.Attachments,
+	}
+	if m.InternalDate > 0 {
+		localTime := time.UnixMilli(m.InternalDate).In(location)
+		detail.LocalDate = localTime.Format("2006-01-02")
+		detail.LocalDateTime = localTime.Format(time.RFC3339)
+	}
+	return detail
+}
+
+type compactGetEmail struct {
+	Message compactEmailDetail `json:"Message"`
+	Display DisplayOutput      `json:"Display"`
+}
+
+func compactGetEmailOutput(output GetEmailOutput, location *time.Location) compactGetEmail {
+	return compactGetEmail{Message: compactMessageDetail(output.Message, location), Display: output.Display}
+}
+
+type compactThreadMessage struct {
+	Message compactEmailDetail `json:"Message"`
+	Display DisplayOutput      `json:"Display"`
+}
+
+type compactGetThread struct {
+	ThreadID string                 `json:"ThreadID"`
+	Snippet  string                 `json:"Snippet,omitempty"`
+	Messages []compactThreadMessage `json:"Messages"`
+}
+
+func compactGetThreadOutput(output GetThreadOutput, location *time.Location) compactGetThread {
+	messages := make([]compactThreadMessage, 0, len(output.Messages))
+	for _, m := range output.Messages {
+		messages = append(messages, compactThreadMessage{
+			Message: compactMessageDetail(m.Message, location),
+			Display: m.Display,
+		})
+	}
+	return compactGetThread{ThreadID: output.Thread.ID, Snippet: output.Thread.Snippet, Messages: messages}
+}
+
+type compactGetDraft struct {
+	DraftID   string             `json:"DraftID"`
+	MessageID string             `json:"MessageID,omitempty"`
+	ThreadID  string             `json:"ThreadID,omitempty"`
+	Message   compactEmailDetail `json:"Message"`
+	Display   DisplayOutput      `json:"Display"`
+}
+
+func compactGetDraftOutput(output GetDraftOutput, location *time.Location) compactGetDraft {
+	return compactGetDraft{
+		DraftID:   output.Draft.ID,
+		MessageID: output.Draft.MessageID,
+		ThreadID:  output.Draft.ThreadID,
+		Message:   compactMessageDetail(output.Draft.Message, location),
+		Display:   output.Display,
+	}
 }
 
 type compactListEmails struct {

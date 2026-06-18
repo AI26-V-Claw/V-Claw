@@ -395,6 +395,41 @@ func TestListEmailsLocalizesSendTimeAndOmitsRawDate(t *testing.T) {
 	}
 }
 
+func TestGetEmailLocalizesSendTimeAndOmitsRawDate(t *testing.T) {
+	ict := time.FixedZone("ICT", 7*60*60)
+	// 08:52:37 local (ICT) == 01:52:37 UTC; raw header shows 18:52:37 -0700.
+	internal := time.Date(2026, 6, 18, 1, 52, 37, 0, time.UTC).UnixMilli()
+	service := NewService(&mockConnector{
+		getMessage: func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageDetail, error) {
+			return gmailconnector.MessageDetail{
+				MessageSummary: gmailconnector.MessageSummary{
+					ID:           "m1",
+					Subject:      "Mời tham gia cuộc họp Demo Sprint2 ngày mai",
+					Date:         "Wed, 17 Jun 2026 18:52:37 -0700",
+					InternalDate: internal,
+				},
+				BodyPlain: "Bạn mời Tung tham gia cuộc họp Demo Sprint2.",
+			}, nil
+		},
+	}).WithLocation(ict)
+
+	result := NewTool(ToolNameGetEmail, service).Execute(context.Background(), tools.ToolCall{
+		ID:        "call-get",
+		Name:      ToolNameGetEmail,
+		Arguments: map[string]any{"messageId": "m1"},
+	})
+
+	if !result.Success {
+		t.Fatalf("Execute() failed: %#v", result.Error)
+	}
+	if !strings.Contains(result.ContentForLLM, `"LocalDateTime":"2026-06-18T08:52:37+07:00"`) {
+		t.Fatalf("ContentForLLM missing localized datetime, got: %s", result.ContentForLLM)
+	}
+	if strings.Contains(result.ContentForLLM, "-0700") || strings.Contains(result.ContentForLLM, `"Date"`) {
+		t.Fatalf("ContentForLLM should not expose the raw Date header, got: %s", result.ContentForLLM)
+	}
+}
+
 func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 	longSnippet := strings.Repeat("long snippet should stay out of llm content ", 80)
 	messages := make([]gmailconnector.MessageSummary, 0, 12)
