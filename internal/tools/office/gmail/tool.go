@@ -52,6 +52,14 @@ const (
 	maxAllowedResults     = int64(50)
 	maxDraftAttachments   = 10
 	maxDraftAttachmentRaw = int64(20 * 1024 * 1024)
+
+	// Auto-pagination: when the caller makes a bare list request (no explicit
+	// maxResults and no pageToken), the Service fetches successive pages until
+	// the result set is exhausted or these safety caps are reached, so a
+	// complete list is not silently truncated to one page.
+	autoPaginatePageSize = int64(50)  // per-connector-call page size while auto-paginating
+	maxAutoPaginateTotal = int64(300) // hard cap on total accumulated results
+	maxAutoPaginatePages = 25         // hard cap on round trips (guards against a stuck pageToken)
 )
 
 type ToolRegistryEntry struct {
@@ -63,17 +71,17 @@ type ToolRegistryEntry struct {
 }
 
 var RegistryEntries = []ToolRegistryEntry{
-	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria. This returns message summaries only and does not include attachment information; call gmail.getEmail to inspect attachments.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria. after/before must be date-only YYYY-MM-DD strings (not RFC3339). To list sent mail to a recipient, use query \"in:sent to:<email>\" with labelIds=[\"SENT\"]. Returns message summaries only; call gmail.getEmail to inspect attachments.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetEmail, Owner: "integration", Description: "Read one email in detail, including attachment metadata and message content. This is a sensitive read and requires approval.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameListLabels, Owner: "integration", Description: "List Gmail labels.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetProfile, Owner: "integration", Description: "Read the Gmail account profile.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameListThreads, Owner: "integration", Description: "List Gmail threads by search criteria.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListThreads, Owner: "integration", Description: "List Gmail threads by search criteria. after/before must be date-only YYYY-MM-DD strings (not RFC3339).", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetThread, Owner: "integration", Description: "Read a Gmail thread in detail.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameListDrafts, Owner: "integration", Description: "List Gmail drafts.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetDraft, Owner: "integration", Description: "Read one Gmail draft in detail.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameCreateDraft, Owner: "integration", Description: "Create a Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameCreateDraft, Owner: "integration", Description: "Create a Gmail draft. To attach a Google Drive file, use the driveAttachments field with the Drive file ID from drive.listFiles — do not construct a file path from a Drive filename.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateDraft, Owner: "integration", Description: "Update a Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameSendDraft, Owner: "integration", Description: "Send an existing Gmail draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameSendDraft, Owner: "integration", Description: "Send an existing Gmail draft. Requires a draftId from gmail.createDraft. The email is not delivered until this tool succeeds — createDraft alone does not send.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameDeleteDraft, Owner: "integration", Description: "Delete an existing Gmail draft.", DefaultRiskLevel: "destructive", RequiresApproval: true},
 	{Name: ToolNameReplyDraft, Owner: "integration", Description: "Create a Gmail reply draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameForwardDraft, Owner: "integration", Description: "Create a Gmail forward draft.", DefaultRiskLevel: "external_write", RequiresApproval: true},
@@ -120,6 +128,9 @@ type DriveFileSource interface {
 type Service struct {
 	connector   Connector
 	driveSource DriveFileSource
+	// location is the user's timezone, used to derive a local send time from each
+	// message's InternalDate (epoch ms) for display. Defaults to time.Local.
+	location *time.Location
 }
 
 func NewService(connector Connector) *Service {
@@ -129,6 +140,19 @@ func NewService(connector Connector) *Service {
 func (s *Service) WithDriveSource(source DriveFileSource) *Service {
 	s.driveSource = source
 	return s
+}
+
+// WithLocation sets the timezone used to localize message send times.
+func (s *Service) WithLocation(loc *time.Location) *Service {
+	s.location = loc
+	return s
+}
+
+func (s *Service) localLocation() *time.Location {
+	if s != nil && s.location != nil {
+		return s.location
+	}
+	return time.Local
 }
 
 type ListEmailsInput struct {
@@ -358,19 +382,50 @@ func (s *Service) ListEmails(ctx context.Context, input ListEmailsInput) (ListEm
 	if errShape := s.validateConnector(); errShape != nil {
 		return ListEmailsOutput{}, errShape
 	}
-	maxResults, errShape := normalizeMaxResults(input.MaxResults)
-	if errShape != nil {
-		return ListEmailsOutput{}, errShape
-	}
 	query, err := BuildSearchQuery(input)
 	if err != nil {
 		return ListEmailsOutput{}, invalidInput(err.Error())
 	}
-	messages, nextPageToken, err := s.connector.ListMessages(ctx, normalizeUserID(input.UserID), query, input.LabelIDs, maxResults, input.PageToken)
+	userID := normalizeUserID(input.UserID)
+	// A bare list request (no explicit count, no page cursor) means "list everything":
+	// auto-paginate up to a safe cap so results are not silently truncated to one page.
+	if input.PageToken == "" && input.MaxResults <= 0 {
+		messages, nextPageToken, err := s.listAllMessages(ctx, userID, query, input.LabelIDs)
+		if err != nil {
+			return ListEmailsOutput{}, MapError(err)
+		}
+		return ListEmailsOutput{Query: query, Messages: messages, NextPageToken: nextPageToken}, nil
+	}
+	// Explicit count or manual pagination: return a single page.
+	maxResults, errShape := normalizeMaxResults(input.MaxResults)
+	if errShape != nil {
+		return ListEmailsOutput{}, errShape
+	}
+	messages, nextPageToken, err := s.connector.ListMessages(ctx, userID, query, input.LabelIDs, maxResults, input.PageToken)
 	if err != nil {
 		return ListEmailsOutput{}, MapError(err)
 	}
 	return ListEmailsOutput{Query: query, Messages: messages, NextPageToken: nextPageToken}, nil
+}
+
+// listAllMessages fetches successive pages until the result set is exhausted or
+// a safety cap is reached. The returned token is non-empty only when a cap cut
+// the listing short, signalling there are more results to fetch manually.
+func (s *Service) listAllMessages(ctx context.Context, userID, query string, labelIDs []string) ([]gmailconnector.MessageSummary, string, error) {
+	var all []gmailconnector.MessageSummary
+	pageToken := ""
+	for page := 0; page < maxAutoPaginatePages; page++ {
+		messages, next, err := s.connector.ListMessages(ctx, userID, query, labelIDs, autoPaginatePageSize, pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		all = append(all, messages...)
+		if next == "" || int64(len(all)) >= maxAutoPaginateTotal {
+			return all, next, nil
+		}
+		pageToken = next
+	}
+	return all, pageToken, nil
 }
 
 func (s *Service) ListLabels(ctx context.Context, input ListLabelsInput) (ListLabelsOutput, *ErrorShape) {
@@ -417,19 +472,49 @@ func (s *Service) ListThreads(ctx context.Context, input ListThreadsInput) (List
 	if errShape := s.validateConnector(); errShape != nil {
 		return ListThreadsOutput{}, errShape
 	}
-	maxResults, errShape := normalizeMaxResults(input.MaxResults)
-	if errShape != nil {
-		return ListThreadsOutput{}, errShape
-	}
 	query, err := BuildSearchQuery(ListEmailsInput{Query: input.Query, From: input.From, Subject: input.Subject, After: input.After, Before: input.Before})
 	if err != nil {
 		return ListThreadsOutput{}, invalidInput(err.Error())
 	}
-	threads, nextPageToken, err := s.connector.ListThreads(ctx, normalizeUserID(input.UserID), query, input.LabelIDs, maxResults, input.PageToken)
+	userID := normalizeUserID(input.UserID)
+	// A bare list request (no explicit count, no page cursor) means "list everything":
+	// auto-paginate up to a safe cap so results are not silently truncated to one page.
+	if input.PageToken == "" && input.MaxResults <= 0 {
+		threads, nextPageToken, err := s.listAllThreads(ctx, userID, query, input.LabelIDs)
+		if err != nil {
+			return ListThreadsOutput{}, MapError(err)
+		}
+		return ListThreadsOutput{Query: query, Threads: threads, NextPageToken: nextPageToken}, nil
+	}
+	// Explicit count or manual pagination: return a single page.
+	maxResults, errShape := normalizeMaxResults(input.MaxResults)
+	if errShape != nil {
+		return ListThreadsOutput{}, errShape
+	}
+	threads, nextPageToken, err := s.connector.ListThreads(ctx, userID, query, input.LabelIDs, maxResults, input.PageToken)
 	if err != nil {
 		return ListThreadsOutput{}, MapError(err)
 	}
 	return ListThreadsOutput{Query: query, Threads: threads, NextPageToken: nextPageToken}, nil
+}
+
+// listAllThreads fetches successive pages until the result set is exhausted or
+// a safety cap is reached, mirroring listAllMessages.
+func (s *Service) listAllThreads(ctx context.Context, userID, query string, labelIDs []string) ([]gmailconnector.ThreadSummary, string, error) {
+	var all []gmailconnector.ThreadSummary
+	pageToken := ""
+	for page := 0; page < maxAutoPaginatePages; page++ {
+		threads, next, err := s.connector.ListThreads(ctx, userID, query, labelIDs, autoPaginatePageSize, pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		all = append(all, threads...)
+		if next == "" || int64(len(all)) >= maxAutoPaginateTotal {
+			return all, next, nil
+		}
+		pageToken = next
+	}
+	return all, pageToken, nil
 }
 
 func (s *Service) GetThread(ctx context.Context, input GetThreadInput) (GetThreadOutput, *ErrorShape) {
@@ -816,6 +901,20 @@ func normalizeMaxResults(value int64) (int64, *ErrorShape) {
 		return 0, invalidInput(fmt.Sprintf("maxResults must be between 1 and %d", maxAllowedResults))
 	}
 	return value, nil
+}
+
+// listMaxResultsArg reads the maxResults argument for a list call. When the key
+// is absent it returns 0, signalling the Service to auto-paginate the full
+// result set. When present it is clamped into [1, maxAllowedResults] so an
+// out-of-range request is bounded to a single page rather than rejected.
+func listMaxResultsArg(args map[string]any) int64 {
+	if args == nil {
+		return 0
+	}
+	if _, ok := args["maxResults"]; !ok {
+		return 0
+	}
+	return boundedInt64Arg(args, "maxResults", defaultMaxResults, maxAllowedResults)
 }
 
 func buildDraftMessageInput(input DraftInput, requireRecipient bool, requireSubject bool) (gmailconnector.DraftMessageInput, *ErrorShape) {
@@ -1311,65 +1410,65 @@ func (t GmailTool) RiskLevel() tools.RiskLevel {
 func (t GmailTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
 	switch t.name {
 	case ToolNameListEmails:
-		output, errShape := t.service.ListEmails(ctx, ListEmailsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
-		return outputToolResult(call, output, errShape)
+		output, errShape := t.service.ListEmails(ctx, ListEmailsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: listMaxResultsArg(call.Arguments), PageToken: stringArg(call.Arguments, "pageToken")})
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameListLabels:
 		output, errShape := t.service.ListLabels(ctx, ListLabelsInput{})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameGetProfile:
 		output, errShape := t.service.GetProfile(ctx, GetProfileInput{})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameGetEmail:
 		output, errShape := t.service.GetEmail(ctx, GetEmailInput{MessageID: stringArg(call.Arguments, "messageId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameListThreads:
-		output, errShape := t.service.ListThreads(ctx, ListThreadsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
-		return outputToolResult(call, output, errShape)
+		output, errShape := t.service.ListThreads(ctx, ListThreadsInput{Query: stringArg(call.Arguments, "query"), From: stringArg(call.Arguments, "from"), Subject: stringArg(call.Arguments, "subject"), After: stringArg(call.Arguments, "after"), Before: stringArg(call.Arguments, "before"), LabelIDs: stringSliceArg(call.Arguments, "labelIds"), MaxResults: listMaxResultsArg(call.Arguments), PageToken: stringArg(call.Arguments, "pageToken")})
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameGetThread:
 		output, errShape := t.service.GetThread(ctx, GetThreadInput{ThreadID: stringArg(call.Arguments, "threadId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameListDrafts:
 		output, errShape := t.service.ListDrafts(ctx, ListDraftsInput{MaxResults: boundedInt64Arg(call.Arguments, "maxResults", defaultMaxResults, maxAllowedResults), PageToken: stringArg(call.Arguments, "pageToken")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameGetDraft:
 		output, errShape := t.service.GetDraft(ctx, GetDraftInput{DraftID: stringArg(call.Arguments, "draftId"), RenderMode: stringArg(call.Arguments, "renderMode"), Full: boolArg(call.Arguments, "full"), PreviewChars: intArg(call.Arguments, "previewChars")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameCreateDraft:
 		output, errShape := t.service.CreateDraft(ctx, draftInputFromArgs(call.Arguments))
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameUpdateDraft:
 		input := UpdateDraftInput{DraftInput: draftInputFromArgs(call.Arguments), DraftID: stringArg(call.Arguments, "draftId")}
 		output, errShape := t.service.UpdateDraft(ctx, input)
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameSendDraft:
 		output, errShape := t.service.SendDraft(ctx, SendDraftInput{DraftID: stringArg(call.Arguments, "draftId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameDeleteDraft:
 		output, errShape := t.service.DeleteDraft(ctx, DeleteDraftInput{DraftID: stringArg(call.Arguments, "draftId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameReplyDraft:
 		input := ReplyDraftInput{DraftInput: draftInputFromArgs(call.Arguments), MessageID: stringArg(call.Arguments, "messageId")}
 		output, errShape := t.service.ReplyDraft(ctx, input)
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameForwardDraft:
 		input := ForwardDraftInput{DraftInput: draftInputFromArgs(call.Arguments), MessageID: stringArg(call.Arguments, "messageId")}
 		output, errShape := t.service.ForwardDraft(ctx, input)
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameDownloadAttachments:
 		output, errShape := t.service.DownloadAttachments(ctx, DownloadAttachmentsInput{MessageID: stringArg(call.Arguments, "messageId"), Filenames: stringSliceArg(call.Arguments, "filenames"), OutputDir: stringArg(call.Arguments, "outputDir")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameModifyMessage:
 		output, errShape := t.service.ModifyMessage(ctx, ModifyMessageInput{MessageID: stringArg(call.Arguments, "messageId"), Action: stringArg(call.Arguments, "action"), LabelIDs: stringSliceArg(call.Arguments, "labelIds")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameBatchModifyMessages:
 		output, errShape := t.service.BatchModifyMessages(ctx, BatchModifyMessagesInput{MessageIDs: stringSliceArg(call.Arguments, "messageIds"), Action: stringArg(call.Arguments, "action"), LabelIDs: stringSliceArg(call.Arguments, "labelIds")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameTrashMessage:
 		output, errShape := t.service.TrashMessage(ctx, TrashMessageInput{MessageID: stringArg(call.Arguments, "messageId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	case ToolNameUntrashMessage:
 		output, errShape := t.service.UntrashMessage(ctx, UntrashMessageInput{MessageID: stringArg(call.Arguments, "messageId")})
-		return outputToolResult(call, output, errShape)
+		return outputToolResult(call, output, errShape, t.service.localLocation())
 	default:
 		return tools.ToolNotFoundResult(call)
 	}
@@ -1384,12 +1483,12 @@ func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 	return nil
 }
 
-func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) tools.ToolResult {
+func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape, location *time.Location) tools.ToolResult {
 	if errShape != nil {
 		return toolErrorResult(call, errShape)
 	}
 	userContent := formatJSON(output)
-	llmContent := formatJSON(compactOutputForLLM(call.Name, output))
+	llmContent := formatJSON(compactOutputForLLM(call.Name, output, location))
 	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent, ArtifactRef: gmailArtifactRef(call.Name, output)}
 }
 
@@ -1428,11 +1527,11 @@ func formatJSON(output any) string {
 	return string(data)
 }
 
-func compactOutputForLLM(toolName string, output any) any {
+func compactOutputForLLM(toolName string, output any, location *time.Location) any {
 	switch toolName {
 	case ToolNameListEmails:
 		if list, ok := output.(ListEmailsOutput); ok {
-			return compactListEmailsOutput(list)
+			return compactListEmailsOutput(list, location)
 		}
 	case ToolNameListThreads:
 		if list, ok := output.(ListThreadsOutput); ok {
@@ -1442,8 +1541,107 @@ func compactOutputForLLM(toolName string, output any) any {
 		if list, ok := output.(ListDraftsOutput); ok {
 			return compactListDraftsOutput(list)
 		}
+	case ToolNameGetEmail:
+		if msg, ok := output.(GetEmailOutput); ok {
+			return compactGetEmailOutput(msg, location)
+		}
+	case ToolNameGetThread:
+		if thread, ok := output.(GetThreadOutput); ok {
+			return compactGetThreadOutput(thread, location)
+		}
+	case ToolNameGetDraft:
+		if draft, ok := output.(GetDraftOutput); ok {
+			return compactGetDraftOutput(draft, location)
+		}
 	}
 	return output
+}
+
+// compactEmailDetail mirrors a single message for the LLM, replacing the raw
+// "Date" header (sender timezone) with LocalDate/LocalDateTime in the user's
+// timezone. See compactEmailMessage for why the raw header is omitted.
+type compactEmailDetail struct {
+	ID            string                      `json:"ID"`
+	ThreadID      string                      `json:"ThreadID"`
+	From          string                      `json:"From"`
+	To            string                      `json:"To"`
+	Subject       string                      `json:"Subject"`
+	LocalDate     string                      `json:"LocalDate,omitempty"`
+	LocalDateTime string                      `json:"LocalDateTime,omitempty"`
+	LabelIDs      []string                    `json:"LabelIDs,omitempty"`
+	InternalDate  int64                       `json:"InternalDate"`
+	Attachments   []gmailconnector.Attachment `json:"Attachments,omitempty"`
+}
+
+func compactMessageDetail(m gmailconnector.MessageDetail, location *time.Location) compactEmailDetail {
+	if location == nil {
+		location = time.Local
+	}
+	detail := compactEmailDetail{
+		ID:           m.ID,
+		ThreadID:     m.ThreadID,
+		From:         m.From,
+		To:           m.To,
+		Subject:      m.Subject,
+		LabelIDs:     m.LabelIDs,
+		InternalDate: m.InternalDate,
+		Attachments:  m.Attachments,
+	}
+	if m.InternalDate > 0 {
+		localTime := time.UnixMilli(m.InternalDate).In(location)
+		detail.LocalDate = localTime.Format("2006-01-02")
+		detail.LocalDateTime = localTime.Format(time.RFC3339)
+	}
+	return detail
+}
+
+type compactGetEmail struct {
+	Message compactEmailDetail `json:"Message"`
+	Display DisplayOutput      `json:"Display"`
+}
+
+func compactGetEmailOutput(output GetEmailOutput, location *time.Location) compactGetEmail {
+	return compactGetEmail{Message: compactMessageDetail(output.Message, location), Display: output.Display}
+}
+
+type compactThreadMessage struct {
+	Message compactEmailDetail `json:"Message"`
+	Display DisplayOutput      `json:"Display"`
+}
+
+type compactGetThread struct {
+	ThreadID string                 `json:"ThreadID"`
+	Snippet  string                 `json:"Snippet,omitempty"`
+	Messages []compactThreadMessage `json:"Messages"`
+}
+
+func compactGetThreadOutput(output GetThreadOutput, location *time.Location) compactGetThread {
+	messages := make([]compactThreadMessage, 0, len(output.Messages))
+	for _, m := range output.Messages {
+		messages = append(messages, compactThreadMessage{
+			Message: compactMessageDetail(m.Message, location),
+			Display: m.Display,
+		})
+	}
+	return compactGetThread{ThreadID: output.Thread.ID, Snippet: output.Thread.Snippet, Messages: messages}
+}
+
+type compactGetDraft struct {
+	DraftID   string             `json:"DraftID"`
+	MessageID string             `json:"MessageID,omitempty"`
+	ThreadID  string             `json:"ThreadID,omitempty"`
+	Message   compactEmailDetail `json:"Message"`
+	Display   DisplayOutput      `json:"Display"`
+}
+
+func compactGetDraftOutput(output GetDraftOutput, location *time.Location) compactGetDraft {
+	return compactGetDraft{
+		DraftID:   output.Draft.ID,
+		MessageID: output.Draft.MessageID,
+		ThreadID:  output.Draft.ThreadID,
+		Message:   compactMessageDetail(output.Draft.Message, location),
+		Display:   output.Display,
+	}
 }
 
 type compactListEmails struct {
@@ -1452,30 +1650,44 @@ type compactListEmails struct {
 	NextPageToken string                `json:"NextPageToken,omitempty"`
 }
 
+// compactEmailMessage intentionally omits the raw "Date" header. That header
+// carries the sender's own timezone offset (e.g. -0700) and the model would
+// otherwise echo it verbatim, reporting the wrong local time. LocalDate and
+// LocalDateTime are derived from InternalDate in the user's timezone and are
+// the only date fields the model should display.
 type compactEmailMessage struct {
-	ID           string   `json:"ID"`
-	ThreadID     string   `json:"ThreadID"`
-	From         string   `json:"From"`
-	To           string   `json:"To"`
-	Subject      string   `json:"Subject"`
-	Date         string   `json:"Date"`
-	LabelIDs     []string `json:"LabelIDs,omitempty"`
-	InternalDate int64    `json:"InternalDate"`
+	ID            string   `json:"ID"`
+	ThreadID      string   `json:"ThreadID"`
+	From          string   `json:"From"`
+	To            string   `json:"To"`
+	Subject       string   `json:"Subject"`
+	LocalDate     string   `json:"LocalDate,omitempty"`
+	LocalDateTime string   `json:"LocalDateTime,omitempty"`
+	LabelIDs      []string `json:"LabelIDs,omitempty"`
+	InternalDate  int64    `json:"InternalDate"`
 }
 
-func compactListEmailsOutput(output ListEmailsOutput) compactListEmails {
+func compactListEmailsOutput(output ListEmailsOutput, location *time.Location) compactListEmails {
+	if location == nil {
+		location = time.Local
+	}
 	messages := make([]compactEmailMessage, 0, len(output.Messages))
 	for _, message := range output.Messages {
-		messages = append(messages, compactEmailMessage{
+		compact := compactEmailMessage{
 			ID:           message.ID,
 			ThreadID:     message.ThreadID,
 			From:         message.From,
 			To:           message.To,
 			Subject:      message.Subject,
-			Date:         message.Date,
 			LabelIDs:     message.LabelIDs,
 			InternalDate: message.InternalDate,
-		})
+		}
+		if message.InternalDate > 0 {
+			localTime := time.UnixMilli(message.InternalDate).In(location)
+			compact.LocalDate = localTime.Format("2006-01-02")
+			compact.LocalDateTime = localTime.Format(time.RFC3339)
+		}
+		messages = append(messages, compact)
 	}
 	return compactListEmails{Query: output.Query, Messages: messages, NextPageToken: output.NextPageToken}
 }

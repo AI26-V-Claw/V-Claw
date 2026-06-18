@@ -58,7 +58,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameListMembers,
 		Owner:            "integration",
-		Description:      "List members in a Google Chat space.",
+		Description:      "List members in a Google Chat space. space must be a resource name like spaces/AAAA.",
 		DefaultRiskLevel: "safe_read",
 		RequiresApproval: false,
 	},
@@ -72,14 +72,14 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameListMessages,
 		Owner:            "integration",
-		Description:      "List messages in a Google Chat space.",
+		Description:      "List messages in a Google Chat space. space must be a resource name like spaces/AAAA — resolve a group name with chat.listSpaces first.",
 		DefaultRiskLevel: "safe_read",
 		RequiresApproval: false,
 	},
 	{
 		Name:             ToolNameSendMessage,
 		Owner:            "integration",
-		Description:      "Send a Google Chat message, including a new message, thread reply, and optional file attachments.",
+		Description:      "Send a Google Chat message, thread reply, or file attachment. space must be a resource name like spaces/AAAA. For a named person, call people.searchDirectory then chat.findSpacesByMembers before this tool — never assume a spaces/... value from history.",
 		DefaultRiskLevel: "external_write",
 		RequiresApproval: true,
 	},
@@ -107,7 +107,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameAddMember,
 		Owner:            "integration",
-		Description:      "Add a member to a Google Chat space.",
+		Description:      "Add a member to a Google Chat space. space must be a resource name like spaces/AAAA.",
 		DefaultRiskLevel: "external_write",
 		RequiresApproval: true,
 	},

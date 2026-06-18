@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"vclaw/internal/connectors/google/common"
 	gdrive "vclaw/internal/connectors/google/drive"
@@ -31,6 +32,14 @@ const (
 
 	defaultMaxResults = int64(10)
 	maxResults        = int64(50)
+
+	// Auto-pagination: a bare drive.listFiles call (no explicit maxResults and no
+	// pageToken) fetches successive pages until the result set is exhausted or
+	// these safety caps are reached, so a complete listing is not truncated to
+	// one page.
+	autoPaginatePageSize = int64(50)  // per-connector-call page size while auto-paginating
+	maxAutoPaginateTotal = int64(300) // hard cap on total accumulated files
+	maxAutoPaginatePages = 25         // hard cap on round trips (guards against a stuck pageToken)
 )
 
 type ToolRegistryEntry struct {
@@ -42,19 +51,19 @@ type ToolRegistryEntry struct {
 }
 
 var RegistryEntries = []ToolRegistryEntry{
-	{Name: ToolNameListFiles, Owner: "integration", Description: "List files in Google Drive.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListFiles, Owner: "integration", Description: "List files in Google Drive. Pass a plain file name or a valid Drive query like \"name contains 'X' and trashed = false\". Do not pass arbitrary sentences as query.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetFile, Owner: "integration", Description: "Read Google Drive file metadata.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameExportFile, Owner: "integration", Description: "Export a Google Workspace Drive file as text or another MIME type.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameDownloadFile, Owner: "integration", Description: "Download Drive file content into the tool response with a size cap.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameCreateFolder, Owner: "integration", Description: "Create a Google Drive folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameCreateFolder, Owner: "integration", Description: "Create a Google Drive folder. If the user names a destination parent folder, resolve it first with drive.listFiles and pass the folder ID in parentIds.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameCreateFile, Owner: "integration", Description: "Create a Google Drive file from provided content.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUploadFile, Owner: "integration", Description: "Upload a local file to Google Drive.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateFileMetadata, Owner: "integration", Description: "Update Google Drive file metadata.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameShareFile, Owner: "integration", Description: "Share a Google Drive file.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameListPermissions, Owner: "integration", Description: "List sharing permissions for a Google Drive file.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameRevokePermission, Owner: "integration", Description: "Revoke a Google Drive file permission.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameMoveFile, Owner: "integration", Description: "Move a Google Drive file or folder to another folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameMoveFiles, Owner: "integration", Description: "Move multiple Google Drive files or folders to another folder.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameMoveFile, Owner: "integration", Description: "Move a Google Drive file or folder to another folder. Use this for moving — do not use drive.updateFileMetadata for moves. Resolve source and destination with drive.listFiles first.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameMoveFiles, Owner: "integration", Description: "Move multiple Google Drive files or folders to another folder. Use this for batch moves — do not use drive.updateFileMetadata. Resolve all sources and the destination with drive.listFiles first.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameTrashFile, Owner: "integration", Description: "Move a Google Drive file or folder to trash.", DefaultRiskLevel: "destructive", RequiresApproval: true},
 	{Name: ToolNameUntrashFile, Owner: "integration", Description: "Restore a Google Drive file or folder from trash.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 }
@@ -78,10 +87,51 @@ type Connector interface {
 
 type Service struct {
 	connector Connector
+	// location is the user's timezone, used to render file modifiedTime (which
+	// Drive returns in UTC) in local time. Defaults to time.Local.
+	location *time.Location
 }
 
 func NewService(connector Connector) *Service {
 	return &Service{connector: connector}
+}
+
+// WithLocation sets the timezone used to render file modifiedTime in local time.
+func (s *Service) WithLocation(loc *time.Location) *Service {
+	s.location = loc
+	return s
+}
+
+func (s *Service) localLocation() *time.Location {
+	if s != nil && s.location != nil {
+		return s.location
+	}
+	return time.Local
+}
+
+// localizeModifiedTime reparses a Drive UTC timestamp (RFC3339, e.g.
+// "2026-06-12T02:58:37.000Z") into the user's local timezone. The raw string is
+// returned unchanged if it cannot be parsed.
+func localizeModifiedTime(raw string, location *time.Location) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	if location == nil {
+		location = time.Local
+	}
+	return t.In(location).Format(time.RFC3339)
+}
+
+func (s *Service) localizeFiles(output gdrive.ListFilesOutput) gdrive.ListFilesOutput {
+	loc := s.localLocation()
+	for i := range output.Files {
+		output.Files[i].ModifiedTime = localizeModifiedTime(output.Files[i].ModifiedTime, loc)
+	}
+	return output
 }
 
 type ErrorShape struct {
@@ -167,11 +217,41 @@ func (s *Service) ListFiles(ctx context.Context, input ListFilesInput) (gdrive.L
 	if errShape := s.validateConnector(); errShape != nil {
 		return gdrive.ListFilesOutput{}, errShape
 	}
+	// A bare list request (no explicit count, no page cursor) means "list everything":
+	// auto-paginate up to a safe cap so results are not silently truncated to one page.
+	if input.PageToken == "" && input.MaxResults <= 0 {
+		output, err := s.listAllFiles(ctx, input.Query, input.MimeType)
+		if err != nil {
+			return gdrive.ListFilesOutput{}, mapError(err)
+		}
+		return s.localizeFiles(output), nil
+	}
 	output, err := s.connector.ListFiles(ctx, input.Query, input.MimeType, boundMax(input.MaxResults), input.PageToken)
 	if err != nil {
 		return gdrive.ListFilesOutput{}, mapError(err)
 	}
-	return output, nil
+	return s.localizeFiles(output), nil
+}
+
+// listAllFiles fetches successive pages until the result set is exhausted or a
+// safety cap is reached. The returned NextPageToken is non-empty only when a
+// cap cut the listing short, signalling there are more files to fetch manually.
+func (s *Service) listAllFiles(ctx context.Context, query, mimeType string) (gdrive.ListFilesOutput, error) {
+	var all gdrive.ListFilesOutput
+	pageToken := ""
+	for page := 0; page < maxAutoPaginatePages; page++ {
+		output, err := s.connector.ListFiles(ctx, query, mimeType, autoPaginatePageSize, pageToken)
+		if err != nil {
+			return gdrive.ListFilesOutput{}, err
+		}
+		all.Files = append(all.Files, output.Files...)
+		if output.NextPageToken == "" || int64(len(all.Files)) >= maxAutoPaginateTotal {
+			all.NextPageToken = output.NextPageToken
+			return all, nil
+		}
+		pageToken = output.NextPageToken
+	}
+	return all, nil
 }
 
 func (s *Service) GetFile(ctx context.Context, input GetFileInput) (gdrive.FileSummary, *ErrorShape) {
@@ -185,6 +265,7 @@ func (s *Service) GetFile(ctx context.Context, input GetFileInput) (gdrive.FileS
 	if err != nil {
 		return gdrive.FileSummary{}, mapError(err)
 	}
+	file.ModifiedTime = localizeModifiedTime(file.ModifiedTime, s.localLocation())
 	return file, nil
 }
 

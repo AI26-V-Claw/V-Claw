@@ -48,7 +48,7 @@ func NewListDirTool(guard PathGuard) ListDirTool {
 func (ListDirTool) Name() string { return ToolNameListDir }
 
 func (ListDirTool) Description() string {
-	return "List files and subdirectories at the given path. Returns name, size, type, and last modified time for each entry."
+	return "List files and subdirectories at the given path. Requires a directory path — do not pass a filename. Returns name, size, type, and last modified time for each entry."
 }
 
 func (ListDirTool) Parameters() tools.ToolSchema {
@@ -316,7 +316,7 @@ func NewFileInfoTool(guard PathGuard) FileInfoTool {
 func (FileInfoTool) Name() string { return ToolNameFileInfo }
 
 func (FileInfoTool) Description() string {
-	return "Get metadata about a file or directory: size, last modified time, type, and permissions."
+	return "Get metadata about a file or directory. Pass just a filename to locate it anywhere in the workspace. If not found, call filesystem.listDir with path='.' to list all workspace files."
 }
 
 func (FileInfoTool) Parameters() tools.ToolSchema {

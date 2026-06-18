@@ -101,7 +101,7 @@ func NewRunShellTool(cfg Config) RunShellTool {
 func (RunShellTool) Name() string { return ToolNameRunShell }
 
 func (RunShellTool) Description() string {
-	return "Run a shell command inside the configured sandbox. The result includes workspace_dir — the absolute host path where files persist between runs. To reference a file created or found in the workspace (e.g. for chat.sendMessage attachments), use workspace_dir + filename. This code execution action requires approval."
+	return "Run a shell command inside the configured sandbox (Docker/Linux). Use relative filenames in commands (e.g. \"rm data.txt\"), not Windows absolute paths. For directories: \"rm -r dirname\". The result includes workspace_dir — the absolute host path for file references in other tools. Requires approval."
 }
 
 func (RunShellTool) Parameters() tools.ToolSchema {

@@ -190,7 +190,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	}
 	tz := strings.TrimSpace(config.Timezone)
 	if tz == "" {
-		tz = "Asia/Ho_Chi_Minh"
+		tz = defaultTimezone
 	}
 	localLocation, err := time.LoadLocation(tz)
 	if err != nil {
@@ -340,13 +340,14 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 		return fmt.Errorf("configure Google tools: %w", err)
 	}
 
-	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient)).WithDriveSource(gdrive.NewClient(httpClient))); err != nil {
+	gmailLocation := resolveLocalLocation(config.Timezone)
+	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient)).WithDriveSource(gdrive.NewClient(httpClient)).WithLocation(gmailLocation)); err != nil {
 		return err
 	}
 	// drive.uploadFile may only read local files from the same sandbox workspace
 	// the filesystem tools are restricted to — never arbitrary host paths.
 	driveUploadGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
-	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)), driveUploadGuard); err != nil {
+	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)).WithLocation(gmailLocation), driveUploadGuard); err != nil {
 		return err
 	}
 	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
@@ -511,6 +512,23 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// defaultTimezone is used when no VCLAW_TIMEZONE is configured.
+const defaultTimezone = "Asia/Ho_Chi_Minh"
+
+// resolveLocalLocation loads the configured timezone, falling back to the
+// default and then to time.Local so tool wiring never fails over a bad tz
+// string (BuildRuntime validates it strictly; this is best-effort for tools).
+func resolveLocalLocation(timezone string) *time.Location {
+	tz := strings.TrimSpace(timezone)
+	if tz == "" {
+		tz = defaultTimezone
+	}
+	if loc, err := time.LoadLocation(tz); err == nil {
+		return loc
+	}
+	return time.Local
 }
 
 func normalizeToolMode(mode string) (string, error) {

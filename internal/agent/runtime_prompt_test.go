@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent/reference"
+	drivetool "vclaw/internal/tools/office/drive"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 )
@@ -135,27 +136,45 @@ func TestLongTermMemoryNotInjectedWhenLoaderNil(t *testing.T) {
 }
 
 func TestRuntimePromptRoutesDriveMoveToMoveFile(t *testing.T) {
-	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 11, 18, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
-	for _, want := range []string{
-		"di chuyển file X vào folder Y",
-		"drive.moveFile",
-		"Do not use drive.updateFileMetadata for moving files",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("expected runtime prompt to contain %q", want)
+	// Move rules live in the drive.moveFile tool description, not the system prompt.
+	found := false
+	for _, entry := range drivetool.RegistryEntries {
+		if entry.Name != drivetool.ToolNameMoveFile {
+			continue
 		}
+		found = true
+		for _, want := range []string{
+			"drive.updateFileMetadata",
+			"drive.listFiles",
+		} {
+			if !strings.Contains(entry.Description, want) {
+				t.Fatalf("drive.moveFile description missing %q, got: %q", want, entry.Description)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("drive.moveFile not found in RegistryEntries")
 	}
 }
 
 func TestRuntimePromptRoutesDriveFolderCreationToCreateFolder(t *testing.T) {
-	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 11, 18, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
-	for _, want := range []string{
-		"tạo thư mục X",
-		"drive.createFolder",
-		"parentIds",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("expected runtime prompt to contain %q", want)
+	// Folder creation rules live in the drive.createFolder tool description, not the system prompt.
+	found := false
+	for _, entry := range drivetool.RegistryEntries {
+		if entry.Name != drivetool.ToolNameCreateFolder {
+			continue
 		}
+		found = true
+		for _, want := range []string{
+			"parentIds",
+			"drive.listFiles",
+		} {
+			if !strings.Contains(entry.Description, want) {
+				t.Fatalf("drive.createFolder description missing %q, got: %q", want, entry.Description)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("drive.createFolder not found in RegistryEntries")
 	}
 }
