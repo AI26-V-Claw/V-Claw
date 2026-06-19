@@ -31,10 +31,10 @@ func TestPolicyAssignmentsSummaryUsesCurrentGroups(t *testing.T) {
 		"Tự động cho phép",
 		"Cần phê duyệt",
 		"Luôn chặn",
-		"Đọc thông tin cơ bản",
-		"Xử lý nội bộ",
-		"Chạy lệnh hoặc script",
-		"Xóa vĩnh viễn",
+		"Xem danh sách & thông tin tổng quan",
+		"Tóm tắt, phân tích nội dung",
+		"Chạy lệnh hệ thống",
+		"Xóa dữ liệu",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("expected summary to contain %q, got %q", want, summary)

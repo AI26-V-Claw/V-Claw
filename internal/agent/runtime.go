@@ -20,6 +20,7 @@ import (
 	"vclaw/internal/sessions"
 	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
+	"vclaw/internal/traceutil"
 )
 
 const (
@@ -40,6 +41,7 @@ type RuntimeConfig struct {
 	Provider                   providers.Provider
 	Registry                   *tools.ToolRegistry
 	Observer                   RuntimeObserver
+	Telemetry                  RuntimeTelemetry
 	ReferenceResolver          reference.Resolver
 	Policy                     policies.ToolPolicy
 	SessionStore               sessions.Store
@@ -70,6 +72,7 @@ type Runtime struct {
 	provider                   providers.Provider
 	registry                   *tools.ToolRegistry
 	observer                   RuntimeObserver
+	telemetry                  RuntimeTelemetry
 	referenceResolver          reference.Resolver
 	policy                     policies.ToolPolicy
 	sessionStore               sessions.Store
@@ -135,6 +138,10 @@ type TaskPlanResult struct {
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
+	provider := config.Provider
+	if config.Telemetry != nil && provider != nil {
+		provider = config.Telemetry.WrapProvider(provider)
+	}
 	maxIterations := config.MaxIterations
 	if maxIterations <= 0 {
 		maxIterations = DefaultMaxIterations
@@ -199,10 +206,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	// Tests leave it nil so runtimeLocalLocation falls back to now().Location().
 	referenceResolver := config.ReferenceResolver
 	if referenceResolver == nil {
-		if config.Provider != nil {
+		if provider != nil {
 			referenceResolver = newHeuristicFirstResolver(
 				reference.NewHeuristicResolver(),
-				reference.NewLLMResolver(config.Provider, config.Model),
+				reference.NewLLMResolver(provider, config.Model),
 			)
 		} else {
 			referenceResolver = reference.NewHeuristicResolver()
@@ -226,9 +233,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
 	}
 	return &Runtime{
-		provider:                   config.Provider,
+		provider:                   provider,
 		registry:                   config.Registry,
 		observer:                   config.Observer,
+		telemetry:                  config.Telemetry,
 		referenceResolver:          referenceResolver,
 		policy:                     config.Policy,
 		sessionStore:               sessionStore,
@@ -301,6 +309,10 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		RequestID: message.RequestID,
 		SessionID: message.SessionID,
 		Status:    contracts.AgentStatusFailed,
+		Data:      map[string]any{},
+	}
+	if traceID := traceutil.TraceIDFromContext(ctx); traceID != "" {
+		base.Data["trace_id"] = traceID
 	}
 	if errShape := validateUserMessage(message); errShape != nil {
 		base.Error = errShape
@@ -340,6 +352,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		return base, nil
 	}
 	ctx = withParentRunID(ctx, runState.RunID)
+	ctx = providers.WithUsageRecorder(ctx, func(usage *providers.Usage) {
+		r.recordLLMUsageCost(ctx, &runState, usage)
+	})
 	// Panic guard: ensure finishRunState always runs if a panic occurs after runState is initialized.
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -433,6 +448,11 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 			HasRecentResults:            hasRecentActionResult(transcript) || hasRecentMemoryActionResult(sessionMemory),
 			CheckMemoryMode:             isPotentialWriteRequest(message.Text),
 		})
+		runState.ShortLabel = strings.TrimSpace(turnMeta.ShortLabel)
+		runState.Category = normalizeRunCategory(turnMeta.Category)
+		if errShape := r.updateRunState(ctx, runState); errShape != nil {
+			return failStartedRun(errShape)
+		}
 	}
 	activeClarification := pendingClarificationActive || (hasActiveClarification(transcript) && turnMeta.IsClarificationAnswer)
 	activeTranscript := []providers.Message(nil)
@@ -720,7 +740,7 @@ If required information is missing, ask one concise clarification question inste
 					ToolCallID: call.ID,
 					Message:    "Tool finished",
 				})
-				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, call, result, outcome.duration, ""); errShape != nil {
+				if errShape := r.recordRuntimeToolCall(ctx, &runState, runState.RunID, call, result, outcome.duration, ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -933,7 +953,7 @@ If required information is missing, ask one concise clarification question inste
 				startedAt := time.Now()
 				result := r.executeAllowedTool(ctx, providerToolCall, definition)
 				result.PolicyDecisionRef = decision.PolicyDecisionRef
-				if errShape := r.recordRuntimeToolCall(ctx, runState.RunID, providerToolCall, result, time.Since(startedAt), ""); errShape != nil {
+				if errShape := r.recordRuntimeToolCall(ctx, &runState, runState.RunID, providerToolCall, result, time.Since(startedAt), ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -1030,6 +1050,18 @@ If required information is missing, ask one concise clarification question inste
 					base.Error = err
 					base.Message = err.Message
 					return base, nil
+				}
+				if r.telemetry != nil {
+					r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+						Status:     ActionStatusPendingApproval,
+						ApprovalID: approval.ApprovalID,
+						RequestID:  message.RequestID,
+						SessionID:  message.SessionID,
+						ToolCallID: approval.ToolCallID,
+						ToolName:   providerToolCall.Name,
+						RiskLevel:  approval.RiskLevel,
+						ExpiresAt:  approval.ExpiresAt,
+					})
 				}
 				if err := r.appendSkippedToolObservationsForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because another tool call requires approval"); err != nil {
 					base.Error = err

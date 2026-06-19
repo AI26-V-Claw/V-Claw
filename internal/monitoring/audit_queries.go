@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"vclaw/internal/traceutil"
 )
 
 type LogQuery struct {
@@ -13,6 +15,8 @@ type LogQuery struct {
 	Since time.Time
 	Level string
 	Tool  string
+	RequestID string
+	SessionID string
 }
 
 type LogEvent struct {
@@ -20,6 +24,8 @@ type LogEvent struct {
 	Level      string
 	EventType  string
 	Status     string
+	TraceID    string
+	TraceURL   string
 	RequestID  string
 	SessionID  string
 	ToolName   string
@@ -30,6 +36,8 @@ type LogEvent struct {
 
 type ApprovalQuery struct {
 	Status string
+	Since  time.Time
+	Tool   string
 	Limit  int
 }
 
@@ -61,94 +69,118 @@ func QueryLogs(ctx context.Context, databaseURL string, query LogQuery) ([]LogEv
 	args := []any{nullableTime(query.Since)}
 	levelFilter := strings.ToLower(strings.TrimSpace(query.Level))
 	toolFilter := strings.TrimSpace(query.Tool)
+	requestIDFilter := strings.TrimSpace(query.RequestID)
+	sessionIDFilter := strings.TrimSpace(query.SessionID)
 	argLevel := len(args) + 1
 	args = append(args, nullableString(levelFilter))
 	argTool := len(args) + 1
 	args = append(args, nullableString(toolFilter))
+	argRequestID := len(args) + 1
+	args = append(args, nullableString(requestIDFilter))
+	argSessionID := len(args) + 1
+	args = append(args, nullableString(sessionIDFilter))
 
 	if tables["agent_runs"] {
-		parts = append(parts, fmt.Sprintf(`SELECT started_at AS ts,
-CASE WHEN status IN ('failed', 'blocked', 'max_iterations') THEN 'error' ELSE 'info' END AS level,
+		parts = append(parts, fmt.Sprintf(`SELECT ar.started_at AS ts,
+CASE WHEN ar.status IN ('failed', 'blocked', 'max_iterations') THEN 'error' ELSE 'info' END AS level,
 'run' AS event_type,
-COALESCE(status, '') AS status,
-request_id,
-session_id,
+COALESCE(ar.status, '') AS status,
+COALESCE(ar.data->>'trace_id', '') AS trace_id,
+ar.request_id,
+ar.session_id,
 '' AS tool_name,
 '' AS approval_id,
-COALESCE(original_goal, '') AS message,
+COALESCE(ar.original_goal, '') AS message,
 '' AS error_text
-FROM agent_runs
-WHERE ($1::timestamptz IS NULL OR started_at >= $1)
-  AND ($%d::text IS NULL OR CASE WHEN status IN ('failed', 'blocked', 'max_iterations') THEN 'error' ELSE 'info' END = $%d)
-`, argLevel, argLevel))
+FROM agent_runs ar
+WHERE ($1::timestamptz IS NULL OR ar.started_at >= $1)
+  AND ($%d::text IS NULL OR CASE WHEN ar.status IN ('failed', 'blocked', 'max_iterations') THEN 'error' ELSE 'info' END = $%d)
+  AND ($%d::text IS NULL OR ar.request_id = $%d)
+  AND ($%d::text IS NULL OR ar.session_id = $%d)
+`, argLevel, argLevel, argRequestID, argRequestID, argSessionID, argSessionID))
 	}
 	if tables["tool_executions"] {
-		parts = append(parts, fmt.Sprintf(`SELECT requested_at AS ts,
-CASE WHEN execution_status = 'failed' OR error IS NOT NULL OR result_success = false THEN 'error' ELSE 'info' END AS level,
+		parts = append(parts, fmt.Sprintf(`SELECT te.requested_at AS ts,
+CASE WHEN te.execution_status = 'failed' OR te.error IS NOT NULL OR te.result_success = false THEN 'error' ELSE 'info' END AS level,
 'tool_call' AS event_type,
-execution_status AS status,
-COALESCE(request_id, '') AS request_id,
-COALESCE(session_id, '') AS session_id,
-tool_name,
-tool_call_id AS approval_id,
-'' AS message,
-COALESCE(error::text, '') AS error_text
-FROM tool_executions
-WHERE ($1::timestamptz IS NULL OR requested_at >= $1)
-  AND ($%d::text IS NULL OR CASE WHEN execution_status = 'failed' OR error IS NOT NULL OR result_success = false THEN 'error' ELSE 'info' END = $%d)
-  AND ($%d::text IS NULL OR tool_name = $%d)
-`, argLevel, argLevel, argTool, argTool))
+te.execution_status AS status,
+COALESCE(ar.data->>'trace_id', '') AS trace_id,
+COALESCE(te.request_id, '') AS request_id,
+COALESCE(te.session_id, '') AS session_id,
+te.tool_name,
+te.tool_call_id AS approval_id,
+COALESCE(te.result_data->>'contentForUser', '') AS message,
+COALESCE(te.error::text, '') AS error_text
+FROM tool_executions te
+LEFT JOIN agent_runs ar ON ar.run_id = te.run_id
+WHERE ($1::timestamptz IS NULL OR te.requested_at >= $1)
+  AND ($%d::text IS NULL OR CASE WHEN te.execution_status = 'failed' OR te.error IS NOT NULL OR te.result_success = false THEN 'error' ELSE 'info' END = $%d)
+  AND ($%d::text IS NULL OR te.tool_name = $%d)
+  AND ($%d::text IS NULL OR te.request_id = $%d)
+  AND ($%d::text IS NULL OR te.session_id = $%d)
+`, argLevel, argLevel, argTool, argTool, argRequestID, argRequestID, argSessionID, argSessionID))
 	}
 	if tables["approval_requests"] {
-		parts = append(parts, fmt.Sprintf(`SELECT created_at AS ts,
+		parts = append(parts, fmt.Sprintf(`SELECT apr.created_at AS ts,
 'info' AS level,
 'approval_request' AS event_type,
-status,
-request_id,
-session_id,
-COALESCE(tool_call->>'toolName', '') AS tool_name,
-approval_id,
-summary AS message,
+apr.status,
+COALESCE(ar.data->>'trace_id', '') AS trace_id,
+apr.request_id,
+apr.session_id,
+COALESCE(apr.tool_call->>'toolName', '') AS tool_name,
+apr.approval_id,
+apr.summary AS message,
 '' AS error_text
-FROM approval_requests
-WHERE ($1::timestamptz IS NULL OR created_at >= $1)
+FROM approval_requests apr
+LEFT JOIN agent_runs ar ON ar.run_id = apr.run_id
+WHERE ($1::timestamptz IS NULL OR apr.created_at >= $1)
   AND ($%d::text IS NULL OR $%d = 'info')
-  AND ($%d::text IS NULL OR COALESCE(tool_call->>'toolName', '') = $%d)
-`, argLevel, argLevel, argTool, argTool))
+  AND ($%d::text IS NULL OR COALESCE(apr.tool_call->>'toolName', '') = $%d)
+  AND ($%d::text IS NULL OR apr.request_id = $%d)
+  AND ($%d::text IS NULL OR apr.session_id = $%d)
+`, argLevel, argLevel, argTool, argTool, argRequestID, argRequestID, argSessionID, argSessionID))
 	}
 	if tables["approval_decisions"] {
-		parts = append(parts, fmt.Sprintf(`SELECT decided_at AS ts,
+		parts = append(parts, fmt.Sprintf(`SELECT ad.decided_at AS ts,
 'info' AS level,
 'approval_decision' AS event_type,
-decision AS status,
-request_id,
+ad.decision AS status,
+COALESCE(ar.data->>'trace_id', '') AS trace_id,
+ad.request_id,
 '' AS session_id,
 '' AS tool_name,
-approval_id,
-COALESCE(comment, '') AS message,
+ad.approval_id,
+COALESCE(ad.comment, '') AS message,
 '' AS error_text
-FROM approval_decisions
-WHERE ($1::timestamptz IS NULL OR decided_at >= $1)
+FROM approval_decisions ad
+LEFT JOIN agent_runs ar ON ar.run_id = ad.run_id
+WHERE ($1::timestamptz IS NULL OR ad.decided_at >= $1)
   AND ($%d::text IS NULL OR $%d = 'info')
-`, argLevel, argLevel))
+  AND ($%d::text IS NULL OR ad.request_id = $%d)
+`, argLevel, argLevel, argRequestID, argRequestID))
 	}
 	if tables["audit_entries"] {
-		parts = append(parts, fmt.Sprintf(`SELECT timestamp AS ts,
+		parts = append(parts, fmt.Sprintf(`SELECT ae.timestamp AS ts,
 'error' AS level,
 'error' AS event_type,
-COALESCE(policy_decision, '') AS status,
-COALESCE(request_id, '') AS request_id,
-COALESCE(session_id, '') AS session_id,
-COALESCE(tool_name, '') AS tool_name,
-COALESCE(approval_id, '') AS approval_id,
-COALESCE(output_summary, '') AS message,
-error_message AS error_text
-FROM audit_entries
-WHERE error_message IS NOT NULL AND error_message <> ''
-  AND ($1::timestamptz IS NULL OR timestamp >= $1)
+COALESCE(ae.policy_decision, '') AS status,
+COALESCE(ar.data->>'trace_id', '') AS trace_id,
+COALESCE(ae.request_id, '') AS request_id,
+COALESCE(ae.session_id, '') AS session_id,
+COALESCE(ae.tool_name, '') AS tool_name,
+COALESCE(ae.approval_id, '') AS approval_id,
+COALESCE(ae.output_summary, '') AS message,
+ae.error_message AS error_text
+FROM audit_entries ae
+LEFT JOIN agent_runs ar ON ar.run_id = ae.run_id
+WHERE ae.error_message IS NOT NULL AND ae.error_message <> ''
+  AND ($1::timestamptz IS NULL OR ae.timestamp >= $1)
   AND ($%d::text IS NULL OR $%d = 'error')
-  AND ($%d::text IS NULL OR tool_name = $%d)
-`, argLevel, argLevel, argTool, argTool))
+  AND ($%d::text IS NULL OR ae.tool_name = $%d)
+  AND ($%d::text IS NULL OR ae.request_id = $%d)
+  AND ($%d::text IS NULL OR ae.session_id = $%d)
+`, argLevel, argLevel, argTool, argTool, argRequestID, argRequestID, argSessionID, argSessionID))
 	}
 
 	if len(parts) == 0 {
@@ -167,15 +199,89 @@ WHERE error_message IS NOT NULL AND error_message <> ''
 	var events []LogEvent
 	for rows.Next() {
 		var event LogEvent
-		if err := rows.Scan(&event.Timestamp, &event.Level, &event.EventType, &event.Status, &event.RequestID, &event.SessionID, &event.ToolName, &event.ApprovalID, &event.Message, &event.Error); err != nil {
+		if err := rows.Scan(&event.Timestamp, &event.Level, &event.EventType, &event.Status, &event.TraceID, &event.RequestID, &event.SessionID, &event.ToolName, &event.ApprovalID, &event.Message, &event.Error); err != nil {
 			return nil, fmt.Errorf("scan logs: %w", err)
 		}
+		event.TraceURL = traceutil.BuildTraceURL(event.TraceID)
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate logs: %w", err)
 	}
 	return events, nil
+}
+
+type LatestRun struct {
+	RunID     string
+	RequestID string
+	SessionID string
+	OriginalGoal string
+	Status    string
+	TraceID   string
+	TraceURL  string
+	StartedAt time.Time
+	CompletedAt *time.Time
+}
+
+func QueryLatestRun(ctx context.Context, databaseURL string) (LatestRun, error) {
+	return QueryLatestRunForSession(ctx, databaseURL, "")
+}
+
+func QueryLatestRunForSession(ctx context.Context, databaseURL string, sessionID string) (LatestRun, error) {
+	runs, err := QueryRecentRunsForSession(ctx, databaseURL, sessionID, 1)
+	if err != nil {
+		return LatestRun{}, err
+	}
+	if len(runs) == 0 {
+		return LatestRun{}, nil
+	}
+	return runs[0], nil
+}
+
+func QueryRecentRunsForSession(ctx context.Context, databaseURL string, sessionID string, limit int) ([]LatestRun, error) {
+	db, err := openAuditDB(databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	tables, err := availableAuditTables(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	if !tables["agent_runs"] {
+		return []LatestRun{}, nil
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT run_id, COALESCE(request_id, ''), COALESCE(session_id, ''), COALESCE(original_goal, ''), COALESCE(status, ''), COALESCE(data->>'trace_id', '') AS trace_id, started_at, completed_at
+		FROM agent_runs
+		WHERE ($1::text IS NULL OR session_id = $1)
+		ORDER BY started_at DESC
+		LIMIT $2`, nullableString(strings.TrimSpace(sessionID)), sanitizeQueryLimit(limit, 5))
+	if err != nil {
+		return nil, fmt.Errorf("query recent runs: %w", err)
+	}
+	defer rows.Close()
+
+	runs := []LatestRun{}
+	for rows.Next() {
+		var (
+			run LatestRun
+			completedAt sql.NullTime
+		)
+		if err := rows.Scan(&run.RunID, &run.RequestID, &run.SessionID, &run.OriginalGoal, &run.Status, &run.TraceID, &run.StartedAt, &completedAt); err != nil {
+			return nil, fmt.Errorf("scan recent runs: %w", err)
+		}
+		if completedAt.Valid {
+			run.CompletedAt = &completedAt.Time
+		}
+		run.TraceURL = traceutil.BuildTraceURL(run.TraceID)
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent runs: %w", err)
+	}
+	return runs, nil
 }
 
 func QueryApprovals(ctx context.Context, databaseURL string, query ApprovalQuery) ([]ApprovalRecord, error) {
@@ -194,8 +300,16 @@ func QueryApprovals(ctx context.Context, databaseURL string, query ApprovalQuery
 	}
 
 	statusFilter := strings.ToLower(strings.TrimSpace(query.Status))
+	toolFilter := strings.TrimSpace(query.Tool)
 	limit := sanitizeQueryLimit(query.Limit, 20)
-	const sqlQuery = `SELECT
+	args := []any{nullableTime(query.Since)}
+	argStatus := len(args) + 1
+	args = append(args, nullableString(statusFilter))
+	argTool := len(args) + 1
+	args = append(args, nullableString(toolFilter))
+	argLimit := len(args) + 1
+	args = append(args, limit)
+	sqlQuery := fmt.Sprintf(`SELECT
     ar.approval_id,
     COALESCE(ar.tool_call->>'toolName', '') AS tool_name,
     ar.risk_level,
@@ -213,13 +327,15 @@ LEFT JOIN LATERAL (
     ORDER BY decided_at DESC
     LIMIT 1
 ) ad ON true
-WHERE ($1::text IS NULL OR CASE
+WHERE ($1::timestamptz IS NULL OR ar.created_at >= $1)
+  AND ($%d::text IS NULL OR CASE
         WHEN COALESCE(ad.decision, '') = 'revised' THEN 'revised'
         ELSE ar.status
-    END = $1)
+    END = $%d)
+  AND ($%d::text IS NULL OR COALESCE(ar.tool_call->>'toolName', '') = $%d)
 ORDER BY ar.created_at DESC
-LIMIT $2`
-	rows, err := db.QueryContext(ctx, sqlQuery, nullableString(statusFilter), limit)
+LIMIT $%d`, argStatus, argStatus, argTool, argTool, argLimit)
+	rows, err := db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		if isMissingRelationError(err) {
 			return []ApprovalRecord{}, nil

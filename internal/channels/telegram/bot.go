@@ -22,10 +22,18 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
+	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
+	sandboxtool "vclaw/internal/tools/system/sandbox"
 )
 
 const longPollTimeout = 30
+
+var (
+	queryLatestTelegramRun  = monitoring.QueryLatestRunForSession
+	queryRecentTelegramRuns = monitoring.QueryRecentRunsForSession
+	queryTelegramLogs       = monitoring.QueryLogs
+)
 
 type Bot struct {
 	token         string
@@ -109,6 +117,9 @@ func (b *Bot) Run(ctx context.Context) error {
 		return err
 	}
 	b.logger.Info("telegram bot ready", "username", me.Username, "bot_id", me.ID)
+	if err := b.setMyCommands(ctx); err != nil {
+		b.logger.Warn("failed to register telegram commands", "error", err)
+	}
 
 	// A single worker goroutine processes updates sequentially. This ensures
 	// session state is never read/written concurrently while keeping the
@@ -216,6 +227,24 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		if err := b.sendPolicySettingsMenu(ctx, update.Message.Chat.ID); err != nil {
 			b.logger.Error("telegram policy settings menu failed", "error", err)
 			return false, err
+		}
+		return true, nil
+	}
+	if isTelegramStatusCommand(messageText) {
+		if err := b.sendStatusSummary(ctx, update.Message.Chat.ID); err != nil {
+			b.logger.Error("telegram status summary failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không kiểm tra được trạng thái lúc này. Vui lòng thử lại sau."); sendErr != nil {
+				return false, sendErr
+			}
+		}
+		return true, nil
+	}
+	if isTelegramHistoryCommand(messageText) {
+		if err := b.sendHistorySummary(ctx, update.Message.Chat.ID, messageText); err != nil {
+			b.logger.Error("telegram history summary failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không kiểm tra được trạng thái lúc này. Vui lòng thử lại sau."); sendErr != nil {
+				return false, sendErr
+			}
 		}
 		return true, nil
 	}
@@ -395,6 +424,86 @@ func isTelegramPolicyCommand(text string) bool {
 		command = command[:index]
 	}
 	return strings.EqualFold(command, "policy")
+}
+
+func isTelegramStatusCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "status")
+}
+
+func isTelegramHistoryCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "history")
+}
+
+func (b *Bot) sendStatusSummary(ctx context.Context, chatID int64) error {
+	run, err := queryLatestTelegramRun(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), fmt.Sprintf("telegram_chat_%d", chatID))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(run.RunID) == "" {
+		_, err = b.sendMarkdownMessage(ctx, chatID, FormatStatus(nil))
+		return err
+	}
+	runState, err := queryTelegramRunByID(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), run.RunID)
+	if err != nil {
+		return err
+	}
+	_, err = b.sendMarkdownMessage(ctx, chatID, FormatStatus(runState))
+	return err
+}
+
+func (b *Bot) sendHistorySummary(ctx context.Context, chatID int64, messageText string) error {
+	runs, err := queryRecentTelegramRuns(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), fmt.Sprintf("telegram_chat_%d", chatID), 10)
+	if err != nil {
+		return err
+	}
+	if len(runs) == 0 {
+		_, err = b.sendMarkdownMessage(ctx, chatID, FormatHistory(nil, time.Now()))
+		return err
+	}
+
+	fields := strings.Fields(strings.TrimSpace(messageText))
+	if len(fields) > 1 {
+		index, parseErr := strconv.Atoi(strings.TrimSpace(fields[1]))
+		if parseErr != nil || index <= 0 || index > len(runs) {
+			_, sendErr := b.sendMarkdownMessage(ctx, chatID, "Số thứ tự không hợp lệ. Hãy dùng /history <số>.")
+			return sendErr
+		}
+		runState, err := queryTelegramRunByID(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), runs[index-1].RunID)
+		if err != nil {
+			return err
+		}
+		_, err = b.sendMarkdownMessage(ctx, chatID, FormatStatus(runState))
+		return err
+	}
+
+	states := make([]*agent.RunState, 0, len(runs))
+	for _, run := range runs {
+		runState, err := queryTelegramRunByID(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), run.RunID)
+		if err != nil {
+			return err
+		}
+		if runState != nil {
+			states = append(states, runState)
+		}
+	}
+	_, err = b.sendMarkdownMessage(ctx, chatID, FormatHistory(states, time.Now()))
+	return err
 }
 
 func (b *Bot) rejectPendingApprovalForNewMessage(ctx context.Context, updateID int, approvalContext telegramApprovalContext) error {
@@ -642,6 +751,27 @@ func (b *Bot) getMe(ctx context.Context) (telegramUser, error) {
 	return response.Result, nil
 }
 
+func (b *Bot) setMyCommands(ctx context.Context) error {
+	payload := map[string]any{
+		"commands": []map[string]string{
+			{"command": "status", "description": "Xem trạng thái lệnh gần nhất"},
+			{"command": "history", "description": "Xem lịch sử gần đây"},
+			{"command": "policy", "description": "Mở menu chính sách"},
+		},
+	}
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	_, err := b.doJSON(ctx, http.MethodPost, "/setMyCommands", payload, &response)
+	if err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("telegram setMyCommands returned not ok")
+	}
+	return nil
+}
+
 func (b *Bot) getUpdates(ctx context.Context, offset int64) ([]telegramUpdate, error) {
 	query := url.Values{}
 	if offset > 0 {
@@ -668,6 +798,15 @@ func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) (teleg
 		"chat_id": chatID,
 	}
 	applyTelegramFormattedText(payload, text)
+	return b.sendMessagePayload(ctx, payload)
+}
+
+func (b *Bot) sendMarkdownMessage(ctx context.Context, chatID int64, text string) (telegramSentMessage, error) {
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"text":       text,
+		"parse_mode": "Markdown",
+	}
 	return b.sendMessagePayload(ctx, payload)
 }
 
@@ -1081,7 +1220,7 @@ func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramM
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	outputDir := filepath.Join(b.dataDir, "telegram_attachments", safeTelegramID(strconv.FormatInt(message.Chat.ID, 10)), strconv.Itoa(message.MessageID))
+	outputDir := filepath.Join(telegramAttachmentWorkspaceRoot(), "data", "telegram_attachments", safeTelegramID(strconv.FormatInt(message.Chat.ID, 10)), strconv.Itoa(message.MessageID))
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -1109,6 +1248,19 @@ func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramM
 		})
 	}
 	return downloaded, nil
+}
+
+func telegramAttachmentWorkspaceRoot() string {
+	workspaceRoot := strings.TrimSpace(os.Getenv("VCLAW_SANDBOX_WORKSPACE_DIR"))
+	if workspaceRoot == "" {
+		workspaceRoot = ".sandbox-workspace"
+	}
+	if !filepath.IsAbs(workspaceRoot) {
+		if abs, err := filepath.Abs(workspaceRoot); err == nil {
+			workspaceRoot = abs
+		}
+	}
+	return filepath.Join(workspaceRoot, sandboxtool.DefaultSessionID, "workspace")
 }
 
 type telegramAttachmentCandidate struct {
@@ -1623,19 +1775,19 @@ func telegramPolicySettingsButtonText(level contracts.RiskLevel, group policies.
 func telegramPolicyRiskLevelLabel(level contracts.RiskLevel) string {
 	switch level {
 	case contracts.RiskLevelSafeRead:
-		return "Đọc email, lịch họp, tin nhắn"
+		return "Xem danh sách & thông tin tổng quan"
 	case contracts.RiskLevelSafeCompute:
-		return "Tóm tắt nội dung, dịch văn bản"
+		return "Tóm tắt, phân tích nội dung"
 	case contracts.RiskLevelSensitiveRead:
-		return "Mở và đọc chi tiết email, tài liệu"
+		return "Đọc nội dung riêng tư"
 	case contracts.RiskLevelExternalWrite:
-		return "Gửi email, đặt lịch họp, nhắn tin"
+		return "Tạo, chỉnh sửa & gửi đi"
 	case contracts.RiskLevelLocalWrite:
-		return "Tải file đính kèm, lưu tài liệu"
+		return "Tải & lưu file về máy"
 	case contracts.RiskLevelCodeExecution:
-		return "Thực thi script hoặc lệnh hệ thống"
+		return "Chạy lệnh hệ thống"
 	case contracts.RiskLevelDestructive:
-		return "Xóa email, file, lịch họp"
+		return "Xóa dữ liệu"
 	default:
 		return policies.RiskLevelLabel(level)
 	}

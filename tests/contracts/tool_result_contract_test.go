@@ -341,15 +341,25 @@ func TestDriveDocsSheetsReadFirstAndWriteToolsRequireHITL(t *testing.T) {
 			if def.Capability != tools.CapabilityReadOnly {
 				t.Fatalf("%s capability = %s, want read_only", name, def.Capability)
 			}
-			if def.RiskLevel != tools.RiskLevelSafeRead {
-				t.Fatalf("%s risk = %s, want safe_read", name, def.RiskLevel)
+			wantRisk := tools.RiskLevelSafeRead
+			wantApproval := false
+			if name == docs.ToolNameGetDocument || name == sheets.ToolNameReadValues || name == sheets.ToolNameBatchGetValues {
+				wantRisk = tools.RiskLevelSensitiveRead
+				wantApproval = true
 			}
-			if def.RequiresApproval {
-				t.Fatalf("%s should not require approval", name)
+			if def.RiskLevel != wantRisk {
+				t.Fatalf("%s risk = %s, want %s", name, def.RiskLevel, wantRisk)
+			}
+			if def.RequiresApproval != wantApproval {
+				t.Fatalf("%s requires approval = %v, want %v", name, def.RequiresApproval, wantApproval)
 			}
 			decision := policy.DecideToolCall("call_"+safeTestName(name), def, true, now)
-			if decision.Decision != contracts.RiskDecisionAllow {
-				t.Fatalf("%s policy decision = %s, want allow", name, decision.Decision)
+			wantDecision := contracts.RiskDecisionAllow
+			if wantRisk == tools.RiskLevelSensitiveRead {
+				wantDecision = contracts.RiskDecisionRequiresApproval
+			}
+			if decision.Decision != wantDecision {
+				t.Fatalf("%s policy decision = %s, want %s", name, decision.Decision, wantDecision)
 			}
 		})
 	}

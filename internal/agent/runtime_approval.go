@@ -76,6 +76,17 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				}, nil
 			}
 			r.recordApprovalObservation(ActionStatusExpired)
+			if r.telemetry != nil {
+				r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+					Status:     ActionStatusExpired,
+					ApprovalID: pending.request.ApprovalID,
+					RequestID:  pending.message.RequestID,
+					SessionID:  pending.message.SessionID,
+					ToolCallID: pending.request.ToolCallID,
+					ToolName:   pending.toolCall.Name,
+					RiskLevel:  pending.request.RiskLevel,
+				})
+			}
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonApprovalExpired)); errShape != nil {
 			return contracts.AgentResponse{
@@ -126,6 +137,18 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 			"toolName":   pending.request.ToolCall.ToolName,
 		})
 		r.recordApprovalObservation(ActionStatusApproved)
+		if r.telemetry != nil {
+			r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+				Status:     ActionStatusApproved,
+				ApprovalID: pending.request.ApprovalID,
+				RequestID:  pending.message.RequestID,
+				SessionID:  pending.message.SessionID,
+				ToolCallID: pending.request.ToolCallID,
+				ToolName:   pending.toolCall.Name,
+				RiskLevel:  pending.request.RiskLevel,
+				Comment:    decision.Comment,
+			})
+		}
 		return r.resumeApprovedAction(ctx, pending)
 	case contracts.ApprovalDecisionRejected:
 		if pending.actionID != "" {
@@ -139,6 +162,18 @@ func (r *Runtime) ResolveApproval(ctx context.Context, sessionID string, decisio
 				}, nil
 			}
 			r.recordApprovalObservation(ActionStatusRejected)
+			if r.telemetry != nil {
+				r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+					Status:     ActionStatusRejected,
+					ApprovalID: pending.request.ApprovalID,
+					RequestID:  pending.message.RequestID,
+					SessionID:  pending.message.SessionID,
+					ToolCallID: pending.request.ToolCallID,
+					ToolName:   pending.toolCall.Name,
+					RiskLevel:  pending.request.RiskLevel,
+					Comment:    decision.Comment,
+				})
+			}
 		}
 		r.appendRunEvent(ctx, pending.runID, "approval.rejected", map[string]any{
 			"approvalId": pending.request.ApprovalID,
@@ -240,6 +275,17 @@ func (r *Runtime) ReviseApproval(ctx context.Context, sessionID string, requestI
 				}, nil
 			}
 			r.recordApprovalObservation(ActionStatusExpired)
+			if r.telemetry != nil {
+				r.telemetry.RecordApproval(ctx, ApprovalTelemetryEvent{
+					Status:     ActionStatusExpired,
+					ApprovalID: pending.request.ApprovalID,
+					RequestID:  requestID,
+					SessionID:  sessionID,
+					ToolCallID: pending.request.ToolCallID,
+					ToolName:   pending.toolCall.Name,
+					RiskLevel:  pending.request.RiskLevel,
+				})
+			}
 		}
 		if errShape := r.finishRunByID(ctx, pending.runID, RuntimeRunStatusFailed, string(orchestration.FailureReasonApprovalExpired)); errShape != nil {
 			return contracts.AgentResponse{
@@ -632,7 +678,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 	// Carry the policy reference recorded on the action so the persisted
 	// tool_calls row matches the risk_decisions row and N4 can join on it.
 	result.PolicyDecisionRef = record.PolicyDecisionRef
-	if errShape := r.recordRuntimeToolCall(ctx, record.RunID, pending.toolCall, result, time.Since(startedAt), record.ApprovalID); errShape != nil {
+	if errShape := r.recordRuntimeToolCall(ctx, nil, record.RunID, pending.toolCall, result, time.Since(startedAt), record.ApprovalID); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
 			SessionID: pending.message.SessionID,

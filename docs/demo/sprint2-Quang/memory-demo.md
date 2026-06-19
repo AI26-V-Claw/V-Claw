@@ -13,7 +13,7 @@ Tất cả bước đều chạy tay trên Telegram bot thực tế. Không cầ
 
 - Bot đang chạy: `go run ./cmd/vclaw telegram run --google-tools auto`
 - Google OAuth đã xong (`configs/google/token.json` tồn tại).
-- PostgreSQL đang chạy và đã apply migration `003_governance_metadata.sql`.
+- PostgreSQL đang chạy và đã apply migration `migrations/003_governance_metadata.sql`.
 - File `cache/memory/USER.md` tồn tại và có ít nhất tên hoặc email của user.
 - Log level INFO để quan sát tool call (`VCLAW_LOG_LEVEL=info` hoặc mặc định).
 

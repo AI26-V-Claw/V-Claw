@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,10 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"vclaw/internal/contracts"
 	"vclaw/internal/governance"
 	"vclaw/internal/providers"
 	"vclaw/internal/tools"
+	"vclaw/internal/traceutil"
 )
 
 func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessage) (RunState, *contracts.ErrorShape) {
@@ -31,6 +36,7 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		state.Status = RuntimeRunStatusRunning
 		state.PendingActionID = ""
 		state.PendingClarificationID = ""
+		state.Data = mergeTraceData(state.Data, ctx)
 		state.UpdatedAt = now
 		state.CompletedAt = nil
 		if err := r.stateStore.UpdateRun(ctx, state); err != nil {
@@ -46,6 +52,7 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		SessionID:     message.SessionID,
 		RequestID:     message.RequestID,
 		OriginalGoal:  message.Text,
+		Data:          mergeTraceData(nil, ctx),
 		Status:        RuntimeRunStatusRunning,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -56,6 +63,19 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		return RunState{}, internalError("create run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	return state, nil
+}
+
+func mergeTraceData(data map[string]any, ctx context.Context) map[string]any {
+	traceID := traceutil.TraceIDFromContext(ctx)
+	if traceID == "" {
+		return cloneRunData(data)
+	}
+	merged := cloneRunData(data)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	merged["trace_id"] = traceID
+	return merged
 }
 
 func (r *Runtime) updateRunState(ctx context.Context, state RunState) *contracts.ErrorShape {
@@ -79,6 +99,12 @@ func (r *Runtime) finishRunState(ctx context.Context, state RunState, status Run
 		state.PendingActionID = ""
 		state.PendingClarificationID = ""
 		state.CompletedAt = &now
+	}
+	if status == RuntimeRunStatusFailed && strings.TrimSpace(state.ErrorRef) == "" {
+		state.ErrorRef = newErrorRef()
+	}
+	if status == RuntimeRunStatusFailed && strings.TrimSpace(state.ErrorRef) != "" {
+		r.attachErrorRefTraceMetadata(ctx, state.RunID, state.ErrorRef)
 	}
 	if err := r.stateStore.UpdateRun(ctx, state); err != nil {
 		return state, internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
@@ -111,6 +137,32 @@ func (r *Runtime) finishRunByID(ctx context.Context, runID string, status Runtim
 	}
 	_, errShape := r.finishRunState(ctx, state, status, reason)
 	return errShape
+}
+
+func newErrorRef() string {
+	var bytes [3]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "000000"
+	}
+	return strings.ToUpper(hex.EncodeToString(bytes[:]))
+}
+
+func (r *Runtime) attachErrorRefTraceMetadata(ctx context.Context, runID string, errorRef string) {
+	errorRef = strings.ToUpper(strings.TrimSpace(errorRef))
+	if errorRef == "" {
+		return
+	}
+	span := trace.SpanFromContext(ctx)
+	if !span.SpanContext().IsValid() {
+		if r != nil && r.logger != nil {
+			r.logger.Warn("error_ref not attached to trace: no active span",
+				"error_ref", errorRef,
+				"run_id", runID,
+			)
+		}
+		return
+	}
+	span.SetAttributes(attribute.String("langfuse.trace.metadata.error_ref", errorRef))
 }
 
 func runIDForMessage(message contracts.UserMessage) string {
@@ -250,8 +302,11 @@ func (r *Runtime) appendRunEvent(ctx context.Context, runID string, eventType st
 	})
 }
 
-func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration, approvalID string) *contracts.ErrorShape {
+func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runState *RunState, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration, approvalID string) *contracts.ErrorShape {
 	r.recordToolCallObservation(toolCall.Name, result.Success)
+	if r != nil && r.telemetry != nil {
+		r.telemetry.RecordToolCall(ctx, toolCall, result, latency)
+	}
 	if r.stateStore == nil {
 		return nil
 	}
@@ -293,7 +348,45 @@ func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runID string, toolC
 	}); err != nil {
 		return internalError("record tool call: "+err.Error(), contracts.ErrorSourceAgent)
 	}
+	if errShape := r.recordRunStep(ctx, runState, runID, RunStep{
+		OK:   result.Success,
+		Text: strings.TrimSpace(result.ContentForUser),
+	}); errShape != nil {
+		return errShape
+	}
 	return nil
+}
+
+func (r *Runtime) recordRunStep(ctx context.Context, runState *RunState, runID string, step RunStep) *contracts.ErrorShape {
+	if r == nil || r.stateStore == nil || strings.TrimSpace(runID) == "" {
+		return nil
+	}
+	if err := r.stateStore.AppendRunStep(ctx, runID, step); err != nil {
+		return internalError("append run step: "+err.Error(), contracts.ErrorSourceAgent)
+	}
+	if runState != nil {
+		runState.Steps = append(runState.Steps, step)
+	}
+	return nil
+}
+
+func (r *Runtime) recordLLMUsageCost(ctx context.Context, runState *RunState, usage *providers.Usage) {
+	if r == nil || r.stateStore == nil || usage == nil || runState == nil {
+		return
+	}
+	cost := float64(usage.PromptTokens)*0.000003 + float64(usage.CompletionTokens)*0.000015
+	if cost <= 0 {
+		return
+	}
+	persistCtx := context.WithoutCancel(ctx)
+	if persistCtx == nil {
+		persistCtx = context.Background()
+	}
+	if err := r.stateStore.AddRunCost(persistCtx, runState.RunID, cost); err != nil {
+		r.logger.Warn("persist llm cost failed", "run_id", runState.RunID, "error", err)
+		return
+	}
+	runState.CostUSD += cost
 }
 
 // toolSchemaVersionFor looks up the registered tool's parameter schema and

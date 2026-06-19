@@ -426,8 +426,8 @@ func TestToolRiskMetadata(t *testing.T) {
 	if findTool.Capability() != tools.CapabilityReadOnly || findTool.RiskLevel() != tools.RiskLevelSafeRead {
 		t.Fatalf("find spaces by members tool should be safe read")
 	}
-	if listTool.Capability() != tools.CapabilityReadOnly || listTool.RiskLevel() != tools.RiskLevelSafeRead {
-		t.Fatalf("list tool should be safe read")
+	if listTool.Capability() != tools.CapabilityReadOnly || listTool.RiskLevel() != tools.RiskLevelSensitiveRead {
+		t.Fatalf("list tool should be sensitive read")
 	}
 	if sendTool.Capability() != tools.CapabilityMutating || sendTool.RiskLevel() != tools.RiskLevelExternalWrite {
 		t.Fatalf("send tool should be external write")
@@ -446,6 +446,41 @@ func TestToolRiskMetadata(t *testing.T) {
 	}
 	if removeMemberTool.Capability() != tools.CapabilityMutating || removeMemberTool.RiskLevel() != tools.RiskLevelDestructive {
 		t.Fatalf("remove member tool should be destructive")
+	}
+}
+
+func TestRegisterToolsMetadata(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	if err := RegisterTools(registry, NewService(&fakeConnector{})); err != nil {
+		t.Fatalf("RegisterTools: %v", err)
+	}
+
+	assertToolMetadata(t, registry, ToolNameListSpaces, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
+	assertToolMetadata(t, registry, ToolNameListMembers, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
+	assertToolMetadata(t, registry, ToolNameFindSpacesByMembers, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
+	assertToolMetadata(t, registry, ToolNameListMessages, tools.CapabilityReadOnly, tools.RiskLevelSensitiveRead, true)
+	assertToolMetadata(t, registry, ToolNameSendMessage, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameUpdateMessage, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameDeleteMessage, tools.CapabilityMutating, tools.RiskLevelDestructive, true)
+	assertToolMetadata(t, registry, ToolNameCreateSpace, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameAddMember, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
+	assertToolMetadata(t, registry, ToolNameRemoveMember, tools.CapabilityMutating, tools.RiskLevelDestructive, true)
+}
+
+func assertToolMetadata(t *testing.T, registry *tools.ToolRegistry, name string, capability tools.Capability, risk tools.RiskLevel, approval bool) {
+	t.Helper()
+	definition, ok := registry.GetDefinition(name)
+	if !ok {
+		t.Fatalf("expected %s definition", name)
+	}
+	if definition.Capability != capability {
+		t.Fatalf("%s capability = %s, want %s", name, definition.Capability, capability)
+	}
+	if definition.RiskLevel != risk {
+		t.Fatalf("%s risk = %s, want %s", name, definition.RiskLevel, risk)
+	}
+	if definition.RequiresApproval != approval {
+		t.Fatalf("%s approval = %t, want %t", name, definition.RequiresApproval, approval)
 	}
 }
 

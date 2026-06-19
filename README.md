@@ -65,6 +65,8 @@ Copy the example environment file before running local commands:
 Copy-Item .env.example .env
 ```
 
+Repo `.env` values for runtime provider config such as `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_BASE_URL` take precedence over inherited shell exports.
+
 Google Workspace setup lives in [configs/google/README.md](configs/google/README.md). Telegram and Slack setup lives in [internal/channels/README.md](internal/channels/README.md).
 
 ## Development note

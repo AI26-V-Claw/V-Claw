@@ -67,6 +67,24 @@ func (s *FileRuntimeStateStore) UpdateRun(ctx context.Context, state RunState) e
 	return s.persist()
 }
 
+func (s *FileRuntimeStateStore) AppendRunStep(ctx context.Context, runID string, step RunStep) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.memory.AppendRunStep(ctx, runID, step); err != nil {
+		return err
+	}
+	return s.persist()
+}
+
+func (s *FileRuntimeStateStore) AddRunCost(ctx context.Context, runID string, costUSD float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.memory.AddRunCost(ctx, runID, costUSD); err != nil {
+		return err
+	}
+	return s.persist()
+}
+
 func (s *FileRuntimeStateStore) FindOrCreateAction(ctx context.Context, record ActionRecord) (ActionRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

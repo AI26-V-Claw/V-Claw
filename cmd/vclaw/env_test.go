@@ -45,6 +45,27 @@ func TestLoadDotEnvDoesNotOverrideExistingEnv(t *testing.T) {
 	}
 }
 
+func TestLoadDotEnvOverridesRuntimeProviderEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "from-shell")
+	t.Setenv("OPENAI_MODEL", "from-shell-model")
+
+	path := filepath.Join(t.TempDir(), ".env")
+	content := "OPENAI_API_KEY=from-file\nOPENAI_MODEL=gpt-4o\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := loadDotEnv(path); err != nil {
+		t.Fatalf("loadDotEnv failed: %v", err)
+	}
+	if got := os.Getenv("OPENAI_API_KEY"); got != "from-file" {
+		t.Fatalf("expected provider key from .env, got %q", got)
+	}
+	if got := os.Getenv("OPENAI_MODEL"); got != "gpt-4o" {
+		t.Fatalf("expected provider model from .env, got %q", got)
+	}
+}
+
 func TestLoadDotEnvIgnoresMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	if err := loadDotEnv(path); err != nil {

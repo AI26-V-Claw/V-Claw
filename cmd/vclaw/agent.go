@@ -57,6 +57,10 @@ func runAgent(ctx context.Context, args []string) error {
 		EnableSandboxTools:         true,
 		SandboxWorkspaceDir:        envOrDefault("VCLAW_SANDBOX_WORKSPACE_DIR", ".sandbox-workspace"),
 		SandboxImage:               envFirst("VCLAW_SANDBOX_IMAGE"),
+		LangfusePublicKey:          envFirst("LANGFUSE_PUBLIC_KEY"),
+		LangfuseSecretKey:          envFirst("LANGFUSE_SECRET_KEY"),
+		LangfuseHost:               envFirst("LANGFUSE_HOST"),
+		LangfuseProjectID:          envFirst("LANGFUSE_PROJECT_ID"),
 		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
 		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
 		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),
@@ -65,7 +69,7 @@ func runAgent(ctx context.Context, args []string) error {
 		return err
 	}
 
-	response, err := bundle.Runtime.Run(ctx, contracts.UserMessage{
+	response, err := agent.NewRuntimeMessenger(bundle.Runtime).HandleMessage(ctx, contracts.UserMessage{
 		RequestID: "req_" + time.Now().UTC().Format("20060102T150405.000000000"),
 		SessionID: *sessionID,
 		Channel:   *channel,
@@ -118,6 +122,10 @@ func runAgentChat(ctx context.Context, args []string) error {
 		EnableSandboxTools:         true,
 		SandboxWorkspaceDir:        envOrDefault("VCLAW_SANDBOX_WORKSPACE_DIR", ".sandbox-workspace"),
 		SandboxImage:               envFirst("VCLAW_SANDBOX_IMAGE"),
+		LangfusePublicKey:          envFirst("LANGFUSE_PUBLIC_KEY"),
+		LangfuseSecretKey:          envFirst("LANGFUSE_SECRET_KEY"),
+		LangfuseHost:               envFirst("LANGFUSE_HOST"),
+		LangfuseProjectID:          envFirst("LANGFUSE_PROJECT_ID"),
 		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
 		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
 		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),

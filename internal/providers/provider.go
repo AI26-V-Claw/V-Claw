@@ -40,6 +40,7 @@ type ChatRequest struct {
 
 type ChatResponse struct {
 	Message Message
+	Usage   *Usage
 }
 
 type Message struct {
@@ -108,4 +109,25 @@ type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+}
+
+type usageRecorderKey struct{}
+
+type UsageRecorder func(*Usage)
+
+func WithUsageRecorder(ctx context.Context, recorder UsageRecorder) context.Context {
+	if ctx == nil || recorder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, usageRecorderKey{}, recorder)
+}
+
+func RecordUsageFromContext(ctx context.Context, usage *Usage) {
+	if usage == nil || ctx == nil {
+		return
+	}
+	recorder, _ := ctx.Value(usageRecorderKey{}).(UsageRecorder)
+	if recorder != nil {
+		recorder(usage)
+	}
 }

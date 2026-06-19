@@ -1,6 +1,10 @@
 package agent
 
-import "vclaw/internal/contracts"
+import (
+	"context"
+
+	"vclaw/internal/contracts"
+)
 
 // RuntimeObserver receives narrow runtime lifecycle signals for local metrics.
 type RuntimeObserver interface {
@@ -37,4 +41,11 @@ func (r *Runtime) pendingApprovalCount() int {
 	r.approvalMu.Lock()
 	defer r.approvalMu.Unlock()
 	return len(r.pendingApprovals)
+}
+
+func (r *Runtime) startRequestTelemetry(ctx context.Context, message contracts.UserMessage) (context.Context, func(contracts.AgentResponse, error)) {
+	if r == nil || r.telemetry == nil {
+		return ctx, func(contracts.AgentResponse, error) {}
+	}
+	return r.telemetry.StartRequest(ctx, message)
 }

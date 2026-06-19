@@ -63,19 +63,19 @@ func PolicyGroupLabel(group PolicyGroup) string {
 func RiskLevelLabel(level contracts.RiskLevel) string {
 	switch level {
 	case contracts.RiskLevelSafeRead:
-		return "Đọc thông tin cơ bản"
+		return "Xem danh sách & thông tin tổng quan"
 	case contracts.RiskLevelSafeCompute:
-		return "Xử lý nội bộ"
+		return "Tóm tắt, phân tích nội dung"
 	case contracts.RiskLevelSensitiveRead:
 		return "Đọc nội dung riêng tư"
 	case contracts.RiskLevelExternalWrite:
-		return "Gửi hoặc tạo nội dung"
+		return "Tạo, chỉnh sửa & gửi đi"
 	case contracts.RiskLevelLocalWrite:
-		return "Ghi file xuống máy"
+		return "Tải & lưu file về máy"
 	case contracts.RiskLevelCodeExecution:
-		return "Chạy lệnh hoặc script"
+		return "Chạy lệnh hệ thống"
 	case contracts.RiskLevelDestructive:
-		return "Xóa vĩnh viễn"
+		return "Xóa dữ liệu"
 	default:
 		return string(level)
 	}

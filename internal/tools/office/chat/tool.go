@@ -73,8 +73,8 @@ var RegistryEntries = []ToolRegistryEntry{
 		Name:             ToolNameListMessages,
 		Owner:            "integration",
 		Description:      "List messages in a Google Chat space. space must be a resource name like spaces/AAAA — resolve a group name with chat.listSpaces first.",
-		DefaultRiskLevel: "safe_read",
-		RequiresApproval: false,
+		DefaultRiskLevel: "sensitive_read",
+		RequiresApproval: true,
 	},
 	{
 		Name:             ToolNameSendMessage,
@@ -916,7 +916,7 @@ func (ListMessagesTool) Capability() tools.Capability {
 }
 
 func (ListMessagesTool) RiskLevel() tools.RiskLevel {
-	return tools.RiskLevelSafeRead
+	return tools.RiskLevelSensitiveRead
 }
 
 func (t ListMessagesTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {

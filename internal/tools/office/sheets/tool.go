@@ -37,8 +37,8 @@ type ToolRegistryEntry struct {
 
 var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameGetSpreadsheet, Owner: "integration", Description: "Read Google Sheets spreadsheet metadata.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameReadValues, Owner: "integration", Description: "Read values from a Google Sheets range.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
-	{Name: ToolNameBatchGetValues, Owner: "integration", Description: "Read values from multiple Google Sheets ranges.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameReadValues, Owner: "integration", Description: "Read values from a Google Sheets range.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
+	{Name: ToolNameBatchGetValues, Owner: "integration", Description: "Read values from multiple Google Sheets ranges.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameCreateSpreadsheet, Owner: "integration", Description: "Create a Google Sheets spreadsheet.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameUpdateValues, Owner: "integration", Description: "Update values in a Google Sheets range.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameBatchUpdateValues, Owner: "integration", Description: "Update values in multiple Google Sheets ranges.", DefaultRiskLevel: "external_write", RequiresApproval: true},
@@ -447,8 +447,10 @@ func (t SheetsTool) Capability() tools.Capability {
 
 func (t SheetsTool) RiskLevel() tools.RiskLevel {
 	switch t.name {
-	case ToolNameGetSpreadsheet, ToolNameReadValues, ToolNameBatchGetValues:
+	case ToolNameGetSpreadsheet:
 		return tools.RiskLevelSafeRead
+	case ToolNameReadValues, ToolNameBatchGetValues:
+		return tools.RiskLevelSensitiveRead
 	case ToolNameDeleteSheet:
 		return tools.RiskLevelDestructive
 	default:
@@ -521,10 +523,50 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 		ToolName:       call.Name,
 		Success:        true,
 		ContentForLLM:  string(data),
-		ContentForUser: string(data),
+		ContentForUser: sheetsUserSummary(call.Name, output),
 		ArtifactRef:    sheetsArtifactRef(output),
 		Metadata:       sheetsResultMetadata(output),
 	}
+}
+
+func sheetsUserSummary(toolName string, output any) string {
+	switch toolName {
+	case ToolNameGetSpreadsheet:
+		if out, ok := output.(gsheets.SpreadsheetSummary); ok {
+			return fmt.Sprintf("Đã đọc bảng tính %s", firstNonEmpty(out.Title, out.ID))
+		}
+	case ToolNameReadValues:
+		return "Đã đọc dữ liệu từ bảng tính"
+	case ToolNameBatchGetValues:
+		if out, ok := output.(gsheets.BatchValuesOutput); ok {
+			return fmt.Sprintf("Đã đọc dữ liệu từ %d vùng trong bảng tính", len(out.Ranges))
+		}
+		return "Đã đọc dữ liệu từ bảng tính"
+	case ToolNameCreateSpreadsheet:
+		if out, ok := output.(gsheets.SpreadsheetSummary); ok {
+			return fmt.Sprintf("Đã tạo bảng tính %s", firstNonEmpty(out.Title, out.ID))
+		}
+		return "Đã tạo bảng tính"
+	case ToolNameUpdateValues, ToolNameBatchUpdateValues:
+		return "Đã cập nhật dữ liệu trong bảng tính"
+	case ToolNameAppendValues:
+		return "Đã thêm dữ liệu vào bảng tính"
+	case ToolNameClearValues:
+		return "Đã xóa dữ liệu trong bảng tính"
+	case ToolNameAddSheet:
+		return "Đã thêm trang mới vào bảng tính"
+	case ToolNameRenameSheet:
+		return "Đã đổi tên trang trong bảng tính"
+	case ToolNameDeleteSheet:
+		return "Đã xóa trang trong bảng tính"
+	case ToolNameDuplicateSheet:
+		return "Đã nhân bản trang trong bảng tính"
+	}
+	data, err := json.Marshal(output)
+	if err != nil {
+		return fmt.Sprintf("%#v", output)
+	}
+	return string(data)
 }
 
 func sheetsArtifactRef(output any) *tools.ToolArtifactRef {

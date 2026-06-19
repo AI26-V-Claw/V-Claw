@@ -1,10 +1,10 @@
 # V-Claw Runbook
 
-Practical notes for starting, checking, and debugging the current V-Claw codebase.
+Practical steps for starting, checking, and debugging V-Claw with monitoring enabled.
 
-## 1. Prerequisites
+## 1. Starting the system
 
-### Go and local services
+### Prerequisites
 
 - Go `1.26` (`go.mod`)
 - PostgreSQL 16 is the repo default in `docker-compose.yml`
@@ -14,88 +14,42 @@ Practical notes for starting, checking, and debugging the current V-Claw codebas
 
 ### Current runtime state
 
-- The runtime itself stores transcript and runtime state on local files under `DATA_DIR`
+- Runtime stores transcript and runtime state on local files under `DATA_DIR`
 - `vclaw logs`, `vclaw approvals`, and `GET /metrics/history` read from Postgres audit tables
-- The repo does not currently contain a CLI migration command for those audit tables. Apply `migrations/001_init_vclaw_schema.sql` yourself before expecting audit data
+- Repo does not contain CLI migration command for audit tables. Apply `migrations/001_init_vclaw_schema.sql` before expecting audit data
+- V-Claw loads `.env` automatically on startup
+- Runtime provider vars from repo `.env` override inherited shell values for `OPENAI_*`, `LLM_*`, and Telegram bot token settings so local project config wins over stale global exports
 
-### Required env vars
+### Start Postgres for audit and monitoring data
 
-Required for all real runtimes:
-
-```env
-OPENAI_API_KEY=...
+```bash
+docker compose up -d postgres
 ```
 
-Required for Telegram runtime:
+`DATABASE_URL` is required if you want:
+- `vclaw logs`
+- `vclaw approvals`
+- latest run trace lookup in `vclaw status`
+- monitoring history backed by Postgres
 
-```env
-TELEGRAM_BOT_TOKEN=...
-ALLOWED_TELEGRAM_USER_ID=...
+Apply audit schema before expecting those commands to return data:
+
+```bash
+psql "$DATABASE_URL" -f migrations/001_init_vclaw_schema.sql
 ```
 
-Accepted aliases:
-
-```env
-VCLAW_TELEGRAM_BOT_TOKEN=...
-VCLAW_TELEGRAM_ALLOWED_USER_IDS=...
-```
-
-Required for Slack runtime:
-
-```env
-VCLAW_SLACK_BOT_TOKEN=xoxb-...
-VCLAW_SLACK_APP_TOKEN=xapp-...
-VCLAW_SLACK_OWNER_USER_ID=U...
-```
-
-### Optional env vars
-
-Common optional env vars:
-
-```env
-OPENAI_MODEL=gpt-4o
-OPENAI_BASE_URL=https://api.openai.com/v1
-DATA_DIR=./data
-METRICS_PORT=8080
-DATABASE_URL=postgres://vclaw:vclaw@localhost:5432/vclaw?sslmode=disable
-VCLAW_USER_POLICY_PATH=./data/user-policy.json
-VCLAW_SANDBOX_WORKSPACE_DIR=.sandbox-workspace
-VCLAW_SANDBOX_IMAGE=...
-```
-
-Google OAuth and Google tool wiring:
-
-```env
-VCLAW_GOOGLE_CREDENTIALS_PATH=configs/google/credentials.json
-VCLAW_GOOGLE_TOKEN_PATH=configs/google/token.json
-VCLAW_GOOGLE_TOOLS_MODE=auto
-```
-
-Web tool wiring:
-
-```env
-VCLAW_WEB_TOOLS_MODE=auto
-TAVILY_API_KEY=...
-TAVILY_BASE_URL=...
-```
-
-Slack channel allow-list:
-
-```env
-VCLAW_SLACK_ALLOWED_CHANNEL_IDS=C123...,C456...
-```
-
-## 2. Starting the runtime
-
-V-Claw loads `.env` automatically on startup.
-
-### Telegram
+### Start Telegram runtime
 
 ```bash
 go run ./cmd/vclaw telegram run --google-tools auto --web-tools auto
 ```
 
-Useful flags:
+Exact startup behavior:
+- starts agent runtime
+- starts Telegram bot polling loop
+- starts monitoring HTTP server on `METRICS_PORT` or `8080`
+
+Useful flag overrides:
 
 ```bash
 --token <telegram-bot-token>
@@ -108,13 +62,18 @@ Useful flags:
 --web-tools auto|required|off
 ```
 
-### Slack
+### Start Slack runtime
 
 ```bash
 go run ./cmd/vclaw slack run --google-tools auto --web-tools auto
 ```
 
-Useful flags:
+Exact startup behavior:
+- starts agent runtime
+- starts Slack Socket Mode bot
+- starts monitoring HTTP server on `METRICS_PORT` or `8080`
+
+Useful flag overrides:
 
 ```bash
 --bot-token xoxb-...
@@ -129,6 +88,14 @@ Useful flags:
 --web-tools auto|required|off
 ```
 
+### Start CLI runtime for local debugging
+
+```bash
+go run ./cmd/vclaw agent --prompt "ping" --session dev --channel dev-cli
+```
+
+This runs one agent turn. It does not start Telegram, Slack, or monitoring HTTP server.
+
 ### `--google-tools` values
 
 - `auto`: register Google tools only when both credentials and token files exist
@@ -141,109 +108,366 @@ Useful flags:
 - `required`: fail startup if Tavily is not configured
 - `off`: disable web tool registration
 
-### Postgres for audit commands
+### Environment variables by purpose
 
-Start the repo’s default Postgres container:
+#### Database
 
-```bash
-docker compose up -d postgres
+```env
+DATABASE_URL=postgres://vclaw:vclaw@localhost:5432/vclaw?sslmode=disable
 ```
 
-## 3. Health check
+Behavior:
+- required for Postgres-backed audit and monitoring history features
+- if missing, runtime can still start
+- if missing, `postgres` health becomes `unhealthy`
+- if missing, `vclaw logs` and `vclaw approvals` cannot query audit data successfully
+- if missing, latest run trace lookup in `vclaw status` has no database source
 
-### CLI
+#### LLM provider
 
-Use:
+```env
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4o
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+Behavior:
+- `OPENAI_API_KEY` required for real agent runtime
+- if missing, runtime build fails for real provider usage and `llm_provider` health is `unhealthy`
+- `OPENAI_MODEL` optional, default chosen by runtime if omitted
+- `OPENAI_BASE_URL` optional, used for OpenAI-compatible endpoint override
+
+#### Google OAuth
+
+```env
+VCLAW_GOOGLE_CREDENTIALS_PATH=configs/google/credentials.json
+VCLAW_GOOGLE_TOKEN_PATH=configs/google/token.json
+VCLAW_GOOGLE_TOOLS_MODE=auto
+```
+
+Behavior:
+- credentials path and token path required only when Google tools must be usable
+- with `VCLAW_GOOGLE_TOOLS_MODE=auto`, missing files do not block startup; Google tools stay unregistered and `google_oauth` health becomes `unhealthy`
+- with `VCLAW_GOOGLE_TOOLS_MODE=required`, missing OAuth setup should fail runtime startup
+- with `VCLAW_GOOGLE_TOOLS_MODE=off`, Google tools are disabled intentionally
+
+Prepare OAuth once with:
+
+```bash
+go run ./cmd/vclaw google auth --credentials configs/google/credentials.json --token configs/google/token.json
+```
+
+#### Telegram
+
+```env
+TELEGRAM_BOT_TOKEN=...
+ALLOWED_TELEGRAM_USER_ID=123456789
+```
+
+Accepted aliases:
+
+```env
+VCLAW_TELEGRAM_BOT_TOKEN=...
+VCLAW_TELEGRAM_ALLOWED_USER_IDS=123456789
+```
+
+Behavior:
+- required for `go run ./cmd/vclaw telegram run`
+- if missing, Telegram runtime exits immediately with validation error
+- optional for Slack or CLI-only usage
+
+#### Slack
+
+```env
+VCLAW_SLACK_BOT_TOKEN=xoxb-...
+VCLAW_SLACK_APP_TOKEN=xapp-...
+VCLAW_SLACK_OWNER_USER_ID=U...
+VCLAW_SLACK_ALLOWED_CHANNEL_IDS=C123...,C456...
+```
+
+Accepted aliases for first three fields:
+
+```env
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+VCLAW_SLACK_ALLOWED_USER_ID=U...
+VCLAW_SLACK_ALLOWED_USER_IDS=U...
+```
+
+Behavior:
+- bot token, app token, owner user ID required for `go run ./cmd/vclaw slack run`
+- if any required Slack variable is missing, Slack runtime exits immediately with validation error
+- `VCLAW_SLACK_ALLOWED_CHANNEL_IDS` optional channel allow-list
+
+#### Langfuse
+
+```env
+LANGFUSE_PUBLIC_KEY=...
+LANGFUSE_SECRET_KEY=...
+LANGFUSE_HOST=https://cloud.langfuse.com
+LANGFUSE_PROJECT_ID=...
+```
+
+Behavior:
+- tracing integration depends on Langfuse config in runtime build
+- `LANGFUSE_HOST` optional; defaults to `https://cloud.langfuse.com` when building trace URLs
+- `LANGFUSE_PROJECT_ID` is required to build clickable trace URLs in logs and status output
+- if Langfuse keys are missing, runtime can still start, but trace export may be absent
+- if `LANGFUSE_PROJECT_ID` is missing, runs may still have trace IDs internally, but `traceUrl=` in logs and `Latest run trace:` in status stay empty
+
+#### Tavily
+
+```env
+VCLAW_WEB_TOOLS_MODE=auto
+TAVILY_API_KEY=...
+TAVILY_BASE_URL=...
+```
+
+Behavior:
+- `TAVILY_API_KEY` optional when `VCLAW_WEB_TOOLS_MODE=auto`
+- with `auto`, missing key does not block startup; Tavily tools are skipped
+- with `required`, missing key should fail runtime startup
+- `TAVILY_BASE_URL` optional endpoint override
+- typo-compatible fallback `TALIVY_API_KEY` is still accepted by code, but new config should use `TAVILY_API_KEY`
+
+## 2. Health check
+
+### Status command
+
+Run:
 
 ```bash
 go run ./cmd/vclaw status
 ```
 
-Behavior:
+Important: this command always tries `GET http://127.0.0.1:${METRICS_PORT:-8080}/health`.
+If monitoring server is not running, it returns unreachable error telling you to start runtime first.
 
-- If `METRICS_PORT` is set and the local metrics server is reachable, `vclaw status` calls `GET /health`
-- Otherwise it runs the same health checks directly in-process
+When status says monitoring server is unreachable:
+1. Start Telegram or Slack runtime first.
+2. Confirm `METRICS_PORT` matches runtime environment.
+3. Run `go run ./cmd/vclaw status` again.
+
+### Health fields
+
+`vclaw status` prints these components:
+- `postgres`: checks whether monitoring server can ping `DATABASE_URL`
+- `llm_provider`: reports whether provider configuration exists
+- `google_oauth`: reports whether Google OAuth is configured enough for current mode
+- `tavily`: reports whether Tavily-backed web tools are configured
+- `channel`: reports whether runtime knows active channel identity such as `telegram`, `slack`, or `cli`
+- `tool_registry`: reports whether runtime built any tools; also prints tool count
+
+### Status values
+
+- `ok`: component configured and healthy
+- `degraded`: overall app status only; core dependencies are up, but at least one non-core component is not `ok` or `skipped`
+- `unhealthy`: component missing/broken, or overall status when `postgres` or `llm_provider` is not `ok`
+- `skipped`: component intentionally not active for this configuration, currently used for Tavily when no API key is configured in auto mode
+
+Overall status rules:
+- `unhealthy` if `postgres` is not `ok`
+- `unhealthy` if `llm_provider` is not `ok`
+- `degraded` if core components are healthy but another component is not `ok` and not `skipped`
+- `ok` otherwise
 
 Example output:
 
 ```text
-Status:    ok
-Uptime:    2h34m
-Checked:   2026-06-11T12:30:46+07:00
+Status:    degraded
+Uptime:    12m3s
+Checked:   2026-06-17T10:15:00+07:00
 
-postgres       ok       8ms
+postgres       ok       7ms
 llm_provider   ok
-google_oauth   ok
-tavily         ok
+google_oauth   unhealthy
+tavily         skipped
 channel        ok
 tool_registry  ok       40 tools
 ```
 
-### HTTP endpoint
+If latest run has Langfuse trace URL in audit DB, status also prints:
 
-The metrics/health server starts in a goroutine beside the Slack or Telegram runtime. Port comes from `METRICS_PORT`; default is `8080`.
-
-```bash
-curl http://127.0.0.1:8080/health
+```text
+Latest run trace: https://cloud.langfuse.com/project/<project-id>/traces/<trace-id>
 ```
 
-If you set another port:
+## 3. Debugging a failed run
+
+### Find recent failures
+
+Start with recent error logs:
 
 ```bash
-curl http://127.0.0.1:${METRICS_PORT}/health
+go run ./cmd/vclaw logs --level error
 ```
 
-## 4. Viewing logs and approvals
-
-### Logs
-
-Default behavior:
+Useful filters:
 
 ```bash
-go run ./cmd/vclaw logs
+go run ./cmd/vclaw logs --level error --limit 100
+go run ./cmd/vclaw logs --level error --since 15m
+go run ./cmd/vclaw logs --level error --since 2h
+go run ./cmd/vclaw logs --level error --since 7d
+go run ./cmd/vclaw logs --level error --since 2026-06-01
+go run ./cmd/vclaw logs --level error --since 2026-06-01T15:04:05
+go run ./cmd/vclaw logs --level error --since 2026-06-01T15:04:05Z
+go run ./cmd/vclaw logs --level error --tool gmail.createDraft
 ```
 
-Common examples:
+`--since` supports:
+- duration: `15m`, `2h`, `24h`, `7d`
+- local date: `2026-06-01`
+- local datetime: `2026-06-01T15:04:05`
+- RFC3339 timestamp: `2026-06-01T15:04:05Z`
+
+Logs may include fields like:
+- `tool=...`
+- `requestId=...`
+- `sessionId=...`
+- `approvalId=...`
+- `traceUrl=...`
+- `error=...`
+
+### Filter by session
+
+`vclaw logs` has no direct `--session` flag.
+Use full output and match `sessionId=` manually:
 
 ```bash
-go run ./cmd/vclaw logs --limit 100
-go run ./cmd/vclaw logs --since 15m
-go run ./cmd/vclaw logs --since 2h --level error
-go run ./cmd/vclaw logs --tool gmail.createDraft
+go run ./cmd/vclaw logs --level error --since 24h
+go run ./cmd/vclaw logs --since 24h --tool gmail.createDraft
 ```
 
-Notes:
+Then inspect lines containing target `sessionId=<value>`.
 
-- Default `--limit` is `50`
-- Default `--since` is `1h`
-- Valid levels are `error` and `info`
-- If Postgres is configured but the audit tables are missing or empty, the command prints `No audit log events found.`
+### Inspect full trace in Langfuse Cloud
 
-### Approvals
+When logs include `traceUrl=...`, open that URL directly in browser. Format comes from:
 
-Default behavior:
-
-```bash
-go run ./cmd/vclaw approvals
+```text
+$LANGFUSE_HOST/project/$LANGFUSE_PROJECT_ID/traces/<trace-id>
 ```
 
-Common examples:
+If `LANGFUSE_HOST` is unset, default host is:
+
+```text
+https://cloud.langfuse.com
+```
+
+Use Langfuse trace to inspect:
+- full run timeline
+- prompts and model responses
+- tool calls and failures
+- linked trace and run metadata
+
+If Telegram or status output surfaces latest trace URL, same workflow applies: open URL and inspect trace there.
+
+### Check approvals when run seems stuck
+
+Pending approvals often explain runs that appear stalled.
+Check approval queue with:
 
 ```bash
-go run ./cmd/vclaw approvals --limit 50
 go run ./cmd/vclaw approvals --status pending
-go run ./cmd/vclaw approvals --status approved
-go run ./cmd/vclaw approvals --status expired
+go run ./cmd/vclaw approvals --status rejected
 go run ./cmd/vclaw approvals --status revised
+go run ./cmd/vclaw approvals --since 24h
+go run ./cmd/vclaw approvals --tool gmail.createDraft
+go run ./cmd/vclaw approvals --limit 50
 ```
 
-Notes:
+`vclaw approvals` supports:
+- `--status pending|approved|rejected|expired|revised`
+- `--tool <tool-name>`
+- `--since` with same date/duration formats as logs
+- `--limit <n>`
 
-- Default `--limit` is `20`
-- Valid statuses are `pending`, `approved`, `rejected`, `expired`, and `revised`
-- If Postgres is configured but the approval audit tables are missing or empty, the command prints `No approval requests found.`
+Record fields printed:
+- `approvalId`
+- `tool`
+- `risk`
+- `status`
+- `created`
+- `decided`
 
-## 5. User policy config
+## 4. Common failure scenarios
+
+### Monitoring server unreachable
+
+Symptom:
+- `go run ./cmd/vclaw status` returns unreachable error
+- `/health` cannot be reached on `127.0.0.1:${METRICS_PORT:-8080}`
+
+Likely cause:
+- Telegram or Slack runtime is not running
+- runtime started with different `METRICS_PORT`
+- port already occupied and monitoring server did not bind correctly
+
+Fix:
+- start runtime with `go run ./cmd/vclaw telegram run ...` or `go run ./cmd/vclaw slack run ...`
+- verify same `METRICS_PORT` in shell used for `status`
+- retry `go run ./cmd/vclaw status`
+
+### Langfuse trace URL missing from logs or Telegram
+
+Symptom:
+- log lines have no `traceUrl=` field
+- `Latest run trace:` does not appear in `vclaw status`
+- Telegram messages do not surface clickable Langfuse trace URL
+
+Likely cause:
+- `LANGFUSE_PROJECT_ID` is not set
+
+Fix:
+- set `LANGFUSE_PROJECT_ID`
+- optionally set `LANGFUSE_HOST` if not using Langfuse Cloud default
+- ensure Langfuse keys are present if trace export itself is also missing
+- restart runtime, then trigger new run and check logs again
+
+### Tavily reported as `skipped`
+
+Symptom:
+- `vclaw status` shows `tavily skipped`
+
+Likely cause:
+- no `TAVILY_API_KEY` configured while `VCLAW_WEB_TOOLS_MODE=auto`
+
+Fix:
+- no action needed if web tools are optional
+- set `TAVILY_API_KEY` if you want `web.search` and `web.fetch`
+- treat as real problem only when `VCLAW_WEB_TOOLS_MODE=required`
+
+## 5. Quick reference
+
+```bash
+# Start Postgres
+docker compose up -d postgres
+
+# Start Telegram runtime + monitoring
+go run ./cmd/vclaw telegram run --google-tools auto --web-tools auto
+
+# Start Slack runtime + monitoring
+go run ./cmd/vclaw slack run --google-tools auto --web-tools auto
+
+# Health check
+go run ./cmd/vclaw status
+curl http://127.0.0.1:${METRICS_PORT:-8080}/health
+
+# Logs
+go run ./cmd/vclaw logs
+go run ./cmd/vclaw logs --level error
+go run ./cmd/vclaw logs --since 15m --level error
+go run ./cmd/vclaw logs --since 2026-06-01 --tool gmail.createDraft
+
+# Approvals
+go run ./cmd/vclaw approvals
+go run ./cmd/vclaw approvals --status pending
+go run ./cmd/vclaw approvals --status rejected
+go run ./cmd/vclaw approvals --since 24h --tool gmail.createDraft
+```
+
+## 6. User policy config
 
 ### File location
 
@@ -301,7 +525,7 @@ If the file does not exist:
 - V-Claw uses an empty in-memory policy config
 - the runtime logs a warning that the user policy config is missing and empty defaults are being used
 
-## 6. Common errors and how to fix them
+## 7. Common errors and how to fix them
 
 ### `AUTH_EXPIRED`
 
@@ -401,7 +625,7 @@ Fix:
 
 - inspect sandbox stderr in terminal logs for the timeout reason
 
-## 7. Running tests
+## 8. Running tests
 
 Build the CLI:
 

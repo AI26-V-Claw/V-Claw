@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"strings"
-	"time"
 
 	"vclaw/internal/monitoring"
 )
@@ -21,19 +19,35 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 	printStatusHealth(health)
+	if err := printLatestRunTrace(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func printLatestRunTrace(ctx context.Context) error {
+	run, err := monitoring.QueryLatestRun(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(run.TraceURL) == "" {
+		return nil
+	}
+	fmt.Println()
+	fmt.Printf("Latest run trace: %s\n", run.TraceURL)
 	return nil
 }
 
 func loadStatusHealth(ctx context.Context) (monitoring.HealthResponse, error) {
-	if port, ok := os.LookupEnv("METRICS_PORT"); ok && strings.TrimSpace(port) != "" {
-		baseURL := "http://127.0.0.1:" + strings.TrimSpace(port)
-		requestCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-		if _, err := net.DialTimeout("tcp", "127.0.0.1:"+strings.TrimSpace(port), 500*time.Millisecond); err == nil {
-			return monitoring.FetchHealth(requestCtx, baseURL)
-		}
+	port := strings.TrimSpace(os.Getenv("METRICS_PORT"))
+	if port == "" {
+		port = "8080"
 	}
-	return monitoring.ProbeHealth(ctx, monitoringServerConfig(ctx))
+	health, err := monitoring.FetchHealth(ctx, "http://127.0.0.1:"+port)
+	if err != nil {
+		return monitoring.HealthResponse{}, fmt.Errorf("Không kết nối được tới monitoring server. Hãy chạy vclaw run trước.")
+	}
+	return health, nil
 }
 
 func printStatusHealth(health monitoring.HealthResponse) {

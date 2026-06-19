@@ -30,7 +30,7 @@ type ToolRegistryEntry struct {
 }
 
 var RegistryEntries = []ToolRegistryEntry{
-	{Name: ToolNameGetDocument, Owner: "integration", Description: "Read a Google Docs document.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameGetDocument, Owner: "integration", Description: "Read a Google Docs document in full or preview mode.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameCreateDocument, Owner: "integration", Description: "Create a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameAppendText, Owner: "integration", Description: "Append text to a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameReplaceText, Owner: "integration", Description: "Replace matching text in a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
@@ -290,7 +290,7 @@ func (t DocsTool) Capability() tools.Capability {
 
 func (t DocsTool) RiskLevel() tools.RiskLevel {
 	if t.name == ToolNameGetDocument {
-		return tools.RiskLevelSafeRead
+		return tools.RiskLevelSensitiveRead
 	}
 	return tools.RiskLevelExternalWrite
 }
@@ -356,11 +356,35 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape) too
 		ToolName:       call.Name,
 		Success:        true,
 		ContentForLLM:  string(data),
-		ContentForUser: string(data),
+		ContentForUser: docsUserSummary(call.Name, output),
 		ArtifactRef:    docsArtifactRef(output),
 		Metadata:       docsResultMetadata(output),
 		Truncated:      docsResultTruncated(output),
 	}
+}
+
+func docsUserSummary(toolName string, output any) string {
+	switch toolName {
+	case ToolNameGetDocument:
+		if out, ok := output.(DocumentOutput); ok {
+			return fmt.Sprintf("Đã đọc tài liệu %s", firstNonEmpty(out.Document.Title, out.Document.ID))
+		}
+	case ToolNameCreateDocument:
+		if out, ok := output.(gdocs.Document); ok {
+			return fmt.Sprintf("Đã tạo tài liệu %s", firstNonEmpty(out.Title, out.ID))
+		}
+	case ToolNameAppendText, ToolNameInsertText:
+		return "Đã thêm nội dung vào tài liệu"
+	case ToolNameReplaceText:
+		return "Đã thay thế nội dung trong tài liệu"
+	case ToolNameDeleteContent:
+		return "Đã xóa nội dung trong tài liệu"
+	}
+	data, err := json.Marshal(output)
+	if err != nil {
+		return fmt.Sprintf("%#v", output)
+	}
+	return string(data)
 }
 
 func docsArtifactRef(output any) *tools.ToolArtifactRef {

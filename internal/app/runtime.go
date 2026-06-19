@@ -22,6 +22,7 @@ import (
 	gpeople "vclaw/internal/connectors/google/people"
 	gsheets "vclaw/internal/connectors/google/sheets"
 	"vclaw/internal/connectors/tavily"
+	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
 	"vclaw/internal/safety"
@@ -67,6 +68,7 @@ type AgentRuntimeConfig struct {
 	ToolHooks     toolhooks.Hooks
 	MaxIterations int
 	Observer      agent.RuntimeObserver
+	Telemetry     agent.RuntimeTelemetry
 
 	GoogleToolsMode       string
 	GoogleCredentialsPath string
@@ -81,7 +83,11 @@ type AgentRuntimeConfig struct {
 	SandboxImage        string
 	SandboxRunner       sandboxruntime.Runner
 
-	Timezone string // IANA timezone name, e.g. "Asia/Ho_Chi_Minh"; defaults to "Asia/Ho_Chi_Minh" when empty
+	LangfusePublicKey string
+	LangfuseSecretKey string
+	LangfuseHost      string
+	LangfuseProjectID string
+	Timezone          string // IANA timezone name, e.g. "Asia/Ho_Chi_Minh"; defaults to "Asia/Ho_Chi_Minh" when empty
 
 	ParallelExecutionEnabled   bool
 	ParallelMaxWorkers         int
@@ -130,6 +136,24 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			return RuntimeBundle{}, err
 		}
 		provider = openAI
+	}
+	telemetry := config.Telemetry
+	if telemetry == nil {
+		langfuse, err := monitoring.NewLangfuse(ctx, monitoring.LangfuseConfig{
+			PublicKey:   config.LangfusePublicKey,
+			SecretKey:   config.LangfuseSecretKey,
+			Host:        config.LangfuseHost,
+			ProjectID:   config.LangfuseProjectID,
+			ServiceName: "vclaw",
+			Logger:      config.Logger,
+		})
+		if err != nil {
+			return RuntimeBundle{}, err
+		}
+		telemetry = langfuse
+	}
+	if telemetry != nil && provider != nil {
+		provider = telemetry.WrapProvider(provider)
 	}
 
 	databaseURL := strings.TrimSpace(config.DatabaseURL)
@@ -203,9 +227,10 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	}
 
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Observer: config.Observer,
+		Provider:  provider,
+		Registry:  registry,
+		Observer:  config.Observer,
+		Telemetry: telemetry,
 		ReferenceResolver: reference.NewFallbackResolver(
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),

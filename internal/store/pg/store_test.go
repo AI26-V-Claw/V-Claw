@@ -291,6 +291,57 @@ func TestStoreIntegrationPersistsRuntimeStateAndApproval(t *testing.T) {
 	}
 }
 
+func TestNewAppliesEmbeddedMigrations(t *testing.T) {
+	databaseURL := os.Getenv("VCLAW_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = os.Getenv("DATABASE_URL")
+	}
+	if databaseURL == "" {
+		t.Skip("set VCLAW_TEST_DATABASE_URL or DATABASE_URL to run PostgreSQL persistence integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	schema := "vclaw_test_auto_migrate_" + time.Now().UTC().Format("20060102t150405000000")
+	if _, err := db.ExecContext(ctx, `CREATE SCHEMA `+schema); err != nil {
+		t.Fatalf("create test schema: %v", err)
+	}
+	defer db.ExecContext(ctx, `DROP SCHEMA `+schema+` CASCADE`)
+	if _, err := db.ExecContext(ctx, `SET search_path TO `+schema); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	store, err := pg.New(ctx, databaseURL+"&search_path="+schema)
+	if err != nil {
+		t.Fatalf("pg.New: %v", err)
+	}
+	defer store.Close()
+
+	verifyDB, err := sql.Open("pgx", databaseURL+"&search_path="+schema)
+	if err != nil {
+		t.Fatalf("open verify db: %v", err)
+	}
+	defer verifyDB.Close()
+
+	var count int
+	if err := verifyDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'tool_registry_entries'`).Scan(&count); err != nil {
+		t.Fatalf("query information_schema: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected tool_registry_entries table, got %d", count)
+	}
+	if err := applyEmbeddedMigrationsForTest(ctx, verifyDB); err != nil {
+		t.Fatalf("re-apply embedded migrations: %v", err)
+	}
+}
+
 func applyMigrations(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	for _, name := range []string{
@@ -298,7 +349,7 @@ func applyMigrations(t *testing.T, ctx context.Context, db *sql.DB) {
 		"002_persistence_runtime_state.sql",
 		"003_governance_metadata.sql",
 	} {
-		path := filepath.Join("..", "..", "..", "migrations", name)
+		path := filepath.Join("migrations", name)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)
@@ -307,6 +358,23 @@ func applyMigrations(t *testing.T, ctx context.Context, db *sql.DB) {
 			t.Fatalf("apply migration %s: %v", name, err)
 		}
 	}
+}
+
+func applyEmbeddedMigrationsForTest(ctx context.Context, db *sql.DB) error {
+	for _, name := range []string{
+		filepath.Join("migrations", "001_init_vclaw_schema.sql"),
+		filepath.Join("migrations", "002_persistence_runtime_state.sql"),
+		filepath.Join("migrations", "003_governance_metadata.sql"),
+	} {
+		data, err := os.ReadFile(filepath.Join(".", name))
+		if err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, string(data)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TestStoreIntegrationPersistsGovernanceMetadata verifies that the five

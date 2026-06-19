@@ -57,6 +57,12 @@ type RunState struct {
 	SessionID              string
 	RequestID              string
 	OriginalGoal           string
+	Data                   map[string]any
+	CostUSD                float64
+	Steps                  []RunStep
+	ShortLabel             string
+	Category               string
+	ErrorRef               string
 	Status                 RuntimeRunStatus
 	FailureReason          string
 	IterationCount         int
@@ -69,6 +75,11 @@ type RunState struct {
 	// record that belongs to this run so N4 can filter/group without joining.
 	Model         string // LLM model ID, e.g. "claude-opus-4-8"
 	PromptVersion string // content-hash fingerprint of the effective system prompt
+}
+
+type RunStep struct {
+	OK   bool   `json:"ok"`
+	Text string `json:"text"`
 }
 
 type ActionRecord struct {
@@ -161,6 +172,8 @@ type RuntimeStateStore interface {
 	CreateRun(ctx context.Context, state RunState) error
 	GetRun(ctx context.Context, runID string) (RunState, error)
 	UpdateRun(ctx context.Context, state RunState) error
+	AppendRunStep(ctx context.Context, runID string, step RunStep) error
+	AddRunCost(ctx context.Context, runID string, costUSD float64) error
 
 	FindOrCreateAction(ctx context.Context, record ActionRecord) (ActionRecord, bool, error)
 	GetAction(ctx context.Context, actionID string) (ActionRecord, error)
@@ -230,6 +243,30 @@ func (s *InMemoryRuntimeStateStore) UpdateRun(_ context.Context, state RunState)
 	return nil
 }
 
+func (s *InMemoryRuntimeStateStore) AppendRunStep(_ context.Context, runID string, step RunStep) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.runs[runID]
+	if !ok {
+		return ErrRuntimeStateNotFound
+	}
+	state.Steps = append(state.Steps, step)
+	s.runs[runID] = cloneRunState(state)
+	return nil
+}
+
+func (s *InMemoryRuntimeStateStore) AddRunCost(_ context.Context, runID string, costUSD float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.runs[runID]
+	if !ok {
+		return ErrRuntimeStateNotFound
+	}
+	state.CostUSD += costUSD
+	s.runs[runID] = cloneRunState(state)
+	return nil
+}
+
 func (s *InMemoryRuntimeStateStore) FindOrCreateAction(_ context.Context, record ActionRecord) (ActionRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -257,6 +294,57 @@ func (s *InMemoryRuntimeStateStore) FindOrCreateAction(_ context.Context, record
 		s.actionsByIdempotency[record.IdempotencyKey] = record.ActionID
 	}
 	return cloneActionRecord(record), true, nil
+}
+
+func cloneRunData(data map[string]any) map[string]any {
+	if len(data) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(data))
+	for key, value := range data {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneRunSteps(steps []RunStep) []RunStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	cloned := make([]RunStep, len(steps))
+	copy(cloned, steps)
+	return cloned
+}
+
+func cloneRunState(state RunState) RunState {
+	state.Data = cloneRunData(state.Data)
+	state.Steps = cloneRunSteps(state.Steps)
+	return state
+}
+
+func mergeRunState(existing RunState, incoming RunState) RunState {
+	if incoming.CreatedAt.IsZero() {
+		incoming.CreatedAt = existing.CreatedAt
+	}
+	if len(incoming.Data) == 0 {
+		incoming.Data = cloneRunData(existing.Data)
+	}
+	if len(incoming.Steps) == 0 {
+		incoming.Steps = cloneRunSteps(existing.Steps)
+	}
+	if incoming.ShortLabel == "" {
+		incoming.ShortLabel = existing.ShortLabel
+	}
+	if incoming.Category == "" {
+		incoming.Category = existing.Category
+	}
+	if incoming.ErrorRef == "" {
+		incoming.ErrorRef = existing.ErrorRef
+	}
+	if incoming.CostUSD == 0 {
+		incoming.CostUSD = existing.CostUSD
+	}
+	return incoming
 }
 
 func (s *InMemoryRuntimeStateStore) GetAction(_ context.Context, actionID string) (ActionRecord, error) {
@@ -447,21 +535,6 @@ func actionRecordTime(record ActionRecord) time.Time {
 		return record.CreatedAt
 	}
 	return record.UpdatedAt
-}
-
-func mergeRunState(existing RunState, next RunState) RunState {
-	if next.CreatedAt.IsZero() {
-		next.CreatedAt = existing.CreatedAt
-	}
-	return next
-}
-
-func cloneRunState(state RunState) RunState {
-	if state.CompletedAt != nil {
-		completedAt := *state.CompletedAt
-		state.CompletedAt = &completedAt
-	}
-	return state
 }
 
 func cloneActionRecord(record ActionRecord) ActionRecord {

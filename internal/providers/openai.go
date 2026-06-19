@@ -146,7 +146,13 @@ func (c *OpenAIClient) chatOnce(ctx context.Context, body []byte, contractName f
 		return ChatResponse{}, fmt.Errorf("openai response contained no choices")
 	}
 
-	return ChatResponse{Message: providerMessageFromOpenAI(wireResponse.Choices[0].Message, contractName)}, nil
+	usage := openAIUsageFromResponse(wireResponse.Usage)
+	RecordUsageFromContext(ctx, usage)
+
+	return ChatResponse{
+		Message: providerMessageFromOpenAI(wireResponse.Choices[0].Message, contractName),
+		Usage:   usage,
+	}, nil
 }
 
 type retryableProviderError struct {
@@ -211,10 +217,10 @@ func (c *OpenAIClient) Generate(ctx context.Context, req *GenerateRequest) (*Gen
 	if err != nil {
 		return nil, err
 	}
-
 	return &GenerateResponse{
 		Text:         resp.Message.Content,
 		FinishReason: "stop",
+		Usage:        resp.Usage,
 		Latency:      time.Since(start),
 		Model:        model,
 	}, nil
@@ -269,9 +275,24 @@ type openAIChatResponse struct {
 	Choices []struct {
 		Message openAIMessage `json:"message"`
 	} `json:"choices"`
+	Usage openAIUsage `json:"usage"`
 	Error struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
+}
+
+type openAIUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+func openAIUsageFromResponse(usage openAIUsage) *Usage {
+	return &Usage{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+	}
 }
 
 func openAIMessageFromProvider(message Message, safeName func(string) string) openAIMessage {

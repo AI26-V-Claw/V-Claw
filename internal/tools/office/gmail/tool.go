@@ -1526,9 +1526,94 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape, loc
 	if errShape != nil {
 		return toolErrorResult(call, errShape)
 	}
-	userContent := formatJSON(output)
+	userContent := gmailUserSummary(call.Name, output)
+	if call.Name == ToolNameGetEmail {
+		userContent = formatJSON(output)
+	} else if call.Name == ToolNameListEmails {
+		if out, ok := output.(ListEmailsOutput); ok && len(out.Messages) == 1 {
+			userContent = formatJSON(output)
+		}
+	}
 	llmContent := formatJSON(compactOutputForLLM(call.Name, output, location))
 	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent, ArtifactRef: gmailArtifactRef(call.Name, output)}
+}
+
+func gmailUserSummary(toolName string, output any) string {
+	switch toolName {
+	case ToolNameListEmails:
+		if out, ok := output.(ListEmailsOutput); ok {
+			return fmt.Sprintf("Đã tìm thấy %d email", len(out.Messages))
+		}
+	case ToolNameGetEmail:
+		if out, ok := output.(GetEmailOutput); ok {
+			from := strings.TrimSpace(out.Message.From)
+			subject := strings.TrimSpace(out.Message.Subject)
+			if from != "" && subject != "" {
+				return fmt.Sprintf("Đã đọc email từ %s với chủ đề: %s", from, subject)
+			}
+			if subject != "" {
+				return fmt.Sprintf("Đã đọc email với chủ đề: %s", subject)
+			}
+			return "Đã đọc email"
+		}
+	case ToolNameCreateDraft, ToolNameUpdateDraft, ToolNameReplyDraft, ToolNameForwardDraft:
+		return "Đã tạo bản nháp email"
+	case ToolNameSendDraft:
+		if out, ok := output.(SendDraftOutput); ok {
+			if recipient := strings.TrimSpace(out.Message.To); recipient != "" {
+				return fmt.Sprintf("Đã gửi email tới %s", recipient)
+			}
+		}
+		return "Đã gửi email"
+	case ToolNameDeleteDraft:
+		return "Đã xóa bản nháp"
+	case ToolNameTrashMessage:
+		return "Đã chuyển email vào thùng rác"
+	case ToolNameUntrashMessage:
+		return "Đã khôi phục email từ thùng rác"
+	case ToolNameListLabels:
+		if out, ok := output.(ListLabelsOutput); ok {
+			return fmt.Sprintf("Đã tìm thấy %d nhãn Gmail", len(out.Labels))
+		}
+	case ToolNameGetProfile:
+		if out, ok := output.(GetProfileOutput); ok {
+			if email := strings.TrimSpace(out.Profile.EmailAddress); email != "" {
+				return fmt.Sprintf("Đã đọc hồ sơ Gmail của %s", email)
+			}
+			return "Đã đọc hồ sơ Gmail"
+		}
+	case ToolNameListThreads:
+		if out, ok := output.(ListThreadsOutput); ok {
+			return fmt.Sprintf("Đã tìm thấy %d chuỗi email", len(out.Threads))
+		}
+	case ToolNameGetThread:
+		if out, ok := output.(GetThreadOutput); ok {
+			return fmt.Sprintf("Đã đọc chuỗi email gồm %d tin nhắn", len(out.Messages))
+		}
+	case ToolNameListDrafts:
+		if out, ok := output.(ListDraftsOutput); ok {
+			return fmt.Sprintf("Đã tìm thấy %d bản nháp", len(out.Drafts))
+		}
+	case ToolNameGetDraft:
+		if out, ok := output.(GetDraftOutput); ok {
+			if subject := strings.TrimSpace(out.Draft.Message.Subject); subject != "" {
+				return fmt.Sprintf("Đã đọc bản nháp với chủ đề: %s", subject)
+			}
+			return "Đã đọc bản nháp"
+		}
+	case ToolNameDownloadAttachments:
+		if out, ok := output.(DownloadAttachmentsOutput); ok {
+			return fmt.Sprintf("Đã tải xuống %d tệp đính kèm", len(out.Files))
+		}
+	case ToolNameModifyMessage:
+		return "Đã cập nhật nhãn email"
+	case ToolNameBatchModifyMessages:
+		if out, ok := output.(BatchModifyMessagesOutput); ok {
+			return fmt.Sprintf("Đã cập nhật nhãn cho %d email", len(out.Result.MessageIDs))
+		}
+		return "Đã cập nhật nhãn cho nhiều email"
+	}
+	return formatJSON(output)
 }
 
 // gmailArtifactRef returns a typed reference to the message produced by a Gmail
