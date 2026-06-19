@@ -54,6 +54,7 @@ type Bot struct {
 
 type messageHandler interface {
 	HandleMessage(ctx context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error)
+	ResetSession(ctx context.Context, sessionID string) error
 	FinalizeAudit(msg contracts.UserMessage, err error)
 	RecordIgnored(msg contracts.UserMessage, actionTaken string)
 }
@@ -245,6 +246,22 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không kiểm tra được trạng thái lúc này. Vui lòng thử lại sau."); sendErr != nil {
 				return false, sendErr
 			}
+		}
+		return true, nil
+	}
+	if isTelegramNewCommand(messageText) {
+		if b.handler == nil {
+			return true, nil
+		}
+		if err := b.handler.ResetSession(ctx, inbound.SessionID); err != nil {
+			b.logger.Error("telegram session reset failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không thể tạo phiên mới lúc này. Vui lòng thử lại sau."); sendErr != nil {
+				return false, sendErr
+			}
+			return true, nil
+		}
+		if _, err := b.sendMessage(ctx, update.Message.Chat.ID, "Đã tạo phiên mới. Mình sẽ bỏ qua ngữ cảnh hội thoại cũ trong chat này."); err != nil {
+			return false, err
 		}
 		return true, nil
 	}
@@ -448,6 +465,18 @@ func isTelegramHistoryCommand(text string) bool {
 		command = command[:index]
 	}
 	return strings.EqualFold(command, "history")
+}
+
+func isTelegramNewCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "new")
 }
 
 func (b *Bot) sendStatusSummary(ctx context.Context, chatID int64) error {
@@ -754,6 +783,7 @@ func (b *Bot) getMe(ctx context.Context) (telegramUser, error) {
 func (b *Bot) setMyCommands(ctx context.Context) error {
 	payload := map[string]any{
 		"commands": []map[string]string{
+			{"command": "new", "description": "Bắt đầu phiên mới"},
 			{"command": "status", "description": "Xem trạng thái lệnh gần nhất"},
 			{"command": "history", "description": "Xem lịch sử gần đây"},
 			{"command": "policy", "description": "Mở menu chính sách"},
