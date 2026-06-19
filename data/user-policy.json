@@ -1,5 +1,5 @@
 {
-  "require_approval": [
+  "auto_allow": [
     "safe_read",
     "safe_compute",
     "sensitive_read",
@@ -7,7 +7,7 @@
     "local_write",
     "code_execution"
   ],
-  "always_block": [
+  "require_approval": [
     "destructive"
   ]
 }
