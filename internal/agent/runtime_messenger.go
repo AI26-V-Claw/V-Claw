@@ -22,6 +22,13 @@ func NewRuntimeMessenger(runtime *Runtime) *RuntimeMessenger {
 	return &RuntimeMessenger{runtime: runtime}
 }
 
+func (m *RuntimeMessenger) ResetSession(ctx context.Context, sessionID string) error {
+	if m == nil || m.runtime == nil {
+		return fmt.Errorf("runtime is required")
+	}
+	return m.runtime.sessionStore.ClearSession(ctx, sessionID)
+}
+
 func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.UserMessage) (response contracts.AgentResponse, err error) {
 	if m == nil || m.runtime == nil {
 		return contracts.AgentResponse{}, fmt.Errorf("runtime is required")

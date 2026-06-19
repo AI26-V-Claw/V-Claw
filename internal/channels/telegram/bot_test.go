@@ -25,6 +25,7 @@ type fakeHandler struct {
 	finalized    int
 	received     contracts.UserMessage
 	receivedAll  []contracts.UserMessage
+	resetSession string
 	outbound     contracts.AgentResponse
 	progress     []agent.ProgressEvent
 	handleErr    error
@@ -212,6 +213,11 @@ func (f *fakeHandler) HandleMessage(ctx context.Context, message contracts.UserM
 	return f.outbound, f.handleErr
 }
 
+func (f *fakeHandler) ResetSession(_ context.Context, sessionID string) error {
+	f.resetSession = sessionID
+	return nil
+}
+
 func (f *fakeHandler) FinalizeAudit(_ contracts.UserMessage, err error) {
 	f.finalized++
 	f.finalizedErr = err
@@ -388,6 +394,62 @@ func TestIsTelegramHistoryCommand(t *testing.T) {
 		if isTelegramHistoryCommand(input) {
 			t.Fatalf("unexpected match for %q", input)
 		}
+	}
+}
+
+func TestIsTelegramNewCommand(t *testing.T) {
+	for _, input := range []string{"/new", "/new@vclaw_bot", "/new extra args"} {
+		if !isTelegramNewCommand(input) {
+			t.Fatalf("expected %q to match /new command", input)
+		}
+	}
+	for _, input := range []string{"new", "tạo phiên mới", "/other"} {
+		if isTelegramNewCommand(input) {
+			t.Fatalf("unexpected match for %q", input)
+		}
+	}
+}
+
+func TestProcessUpdateRoutesNewCommandToSessionReset(t *testing.T) {
+	handler := &fakeHandler{}
+	var sentText string
+	botTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		sentText = fmt.Sprint(payload["text"])
+		return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
+	})
+
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
+	bot.client = &http.Client{Transport: botTransport}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 8,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "/new",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.resetSession != "telegram_chat_55" {
+		t.Fatalf("unexpected reset session id: %q", handler.resetSession)
+	}
+	if handler.calls != 0 {
+		t.Fatalf("/new should not call HandleMessage, got %d calls", handler.calls)
+	}
+	if !strings.Contains(sentText, "Đã tạo phiên mới") {
+		t.Fatalf("unexpected reset confirmation: %q", sentText)
 	}
 }
 
