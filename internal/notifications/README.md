@@ -4,7 +4,7 @@ Outbound user notifications live here.
 
 This package is responsible for V-Claw proactively sending approval requests,
 reminders, job completion notices, and user-actionable errors to configured
-channels such as CLI, Telegram, Google Chat, Slack, or Discord.
+channels such as CLI, Telegram, Google Chat, or Discord.
 
 Dependency direction:
 

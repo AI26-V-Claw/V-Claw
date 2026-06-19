@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,18 @@ const (
 	defaultContentMIME = "text/plain"
 	maxContentBytes    = int64(10 * 1024 * 1024)
 )
+
+var uploadMimeTypes = map[string]string{
+	".doc":  "application/msword",
+	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	".pdf":  "application/pdf",
+	".ppt":  "application/vnd.ms-powerpoint",
+	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	".xls":  "application/vnd.ms-excel",
+	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	".csv":  "text/csv",
+	".txt":  "text/plain",
+}
 
 type Client struct {
 	httpClient *http.Client
@@ -256,7 +269,37 @@ func UploadFile(ctx context.Context, client *http.Client, localPath string, name
 	if strings.TrimSpace(name) == "" {
 		name = filepath.Base(path)
 	}
+	mimeType = inferUploadMimeType(path, name, mimeType)
 	return CreateFile(ctx, client, name, mimeType, file, parentIDs)
+}
+
+func inferUploadMimeType(localPath, name, mimeType string) string {
+	if strings.TrimSpace(mimeType) != "" {
+		return strings.TrimSpace(mimeType)
+	}
+	if detected := mimeTypeFromName(name); detected != "" {
+		return detected
+	}
+	if detected := mimeTypeFromName(localPath); detected != "" {
+		return detected
+	}
+	return defaultContentMIME
+}
+
+func mimeTypeFromName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	ext := filepath.Ext(name)
+	if ext == "" {
+		return ""
+	}
+	ext = strings.ToLower(ext)
+	if mt, ok := uploadMimeTypes[ext]; ok {
+		return mt
+	}
+	return mime.TypeByExtension(ext)
 }
 
 func ExportFile(ctx context.Context, client *http.Client, fileID string, mimeType string, maxBytes int64) (FileContentOutput, error) {

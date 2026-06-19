@@ -1338,7 +1338,7 @@ func TestRuntimeDoesNotBatchWhenParallelDisabled(t *testing.T) {
 func TestRuntimePassesCompactGmailListResultWithoutTruncation(t *testing.T) {
 	gmailContent := `{"Query":"in:inbox ((after:2026/06/11 before:2026/06/12) OR (after:2026/06/09 before:2026/06/10))","Messages":[` +
 		`{"ID":"msg-1","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Mời tham dự sự kiện Test Sprint2","Date":"Wed, 10 Jun 2026 21:04:15 -0700"},` +
-		`{"ID":"msg-2","From":"Slack <no-reply@email.slackhq.com>","Subject":"How to start a conversation in Slack","Date":"Tue, 09 Jun 2026 10:53:25 -0600"},` +
+		`{"ID":"msg-2","From":"V-Claw <no-reply@vclaw.site>","Subject":"How to start a conversation","Date":"Tue, 09 Jun 2026 10:53:25 -0600"},` +
 		`{"ID":"msg-3","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Thông báo tham gia sự kiện Test memory for Sprint2","Date":"Mon, 8 Jun 2026 21:36:50 -0700"},` +
 		`{"ID":"msg-4","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Re: thông tin lịch trình hôm nay","Date":"Mon, 8 Jun 2026 20:37:29 -0700"}` +
 		`]}`

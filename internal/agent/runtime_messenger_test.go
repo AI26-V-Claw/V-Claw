@@ -46,11 +46,43 @@ func TestRenderAgentResponseFormatsApprovalForChat(t *testing.T) {
 		}
 	}
 	for _, notWant := range []string{
-		"Tool:", "Risk:", "Approval ID:", "Input:", "spaces/AAAA",
+		"Tool:", "Risk:", "Approval ID:", "Input:", "spaces/AAAA", "localPath",
 	} {
 		if strings.Contains(got, notWant) {
 			t.Fatalf("expected rendered approval NOT to contain %q, got:\n%s", notWant, got)
 		}
+	}
+}
+
+func TestRenderAgentResponseHidesDriveUploadLocalPath(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_drive_upload",
+			RequestID:  "req_drive_upload",
+			SessionID:  "sess_1",
+			ToolCallID: "tool_1",
+			Status:     contracts.ApprovalStatusPending,
+			RiskLevel:  contracts.RiskLevelExternalWrite,
+			Summary:    "Tôi cần bạn xác nhận trước khi tạo hoặc upload file lên Google Drive.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "drive.uploadFile",
+				Input: map[string]any{
+					"localPath": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/telegram_attachments/8727787326/788/Untitled presentation.pptx",
+					"name":      "Untitled presentation.pptx",
+				},
+			},
+			CreatedAt: time.Now(),
+			ExpiresAt: time.Now().Add(time.Minute),
+		},
+	}
+
+	got := renderAgentResponse(response)
+	if strings.Contains(got, "localPath") {
+		t.Fatalf("expected drive upload approval to hide localPath, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Tên: Untitled presentation.pptx") {
+		t.Fatalf("expected drive upload approval to still show the file name, got:\n%s", got)
 	}
 }
 
