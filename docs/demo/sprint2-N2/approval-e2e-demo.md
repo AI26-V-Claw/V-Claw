@@ -1,238 +1,148 @@
-﻿# Demo: N2 Approval & E2E Harness — Sprint 2
+﻿# Demo: Sprint 2 N2 Production Stress E2E
 
-Kịch bản này kiểm chứng Milestone N2 của V-Claw: approval boundary, scripted E2E harness, read/write/read-back/cleanup với Google Workspace, và các nhánh lifecycle không được tạo side-effect ngoài ý muốn.
+Bộ E2E N2 đã được viết lại theo hướng ít scenario hơn nhưng sâu hơn. Thay vì nhiều case nhỏ như approve/reject/cancel rời rạc, Sprint 2 hiện tập trung vào 2 stress test lớn mô phỏng agent production: nhiều bước, nhiều tool, nhiều approval, nhiều artifact, nhiều fallback.
 
 ---
 
-## Prerequisites
+## Mục Tiêu Chung
 
-- Google OAuth đã cấu hình cho account test.
-- File fixture tồn tại: `testing-e2e/e2e.env.ps1`.
-- Policy hiện tại yêu cầu approval cho `external_write`.
-- Chạy command từ repo root.
-- Nếu chạy N2.4 full lifecycle với Postgres, cần set `DATABASE_URL`.
+- Kiểm thử orchestration dài nhiều bước trong một session agent.
+- Ép agent đọc nhiều nguồn Workspace trước khi write.
+- Ép agent tạo nhiều artifact thật: Drive, Docs, Sheets, Gmail draft.
+- Kiểm thử approval boundary cho nhiều `external_write` liên tiếp.
+- Kiểm thử context retention: mọi artifact phải giữ `[VCLAW-E2E]` và `run_id`.
+- Kiểm thử fallback khi tool thiếu env, thiếu quyền, hoặc không cleanup-safe.
+- Không tính pass nếu object write không read-back được hoặc cleanup không pass.
 
-Kiểm tra nhanh env fixture:
+---
+
+## Scenario 1 — Production Briefing Mega Flow
+
+**File**: `testing-e2e/scenarios/n2.1-production-briefing-mega-flow.json`
+
+### Use Case
+
+Agent nhận một yêu cầu kiểu production:
+
+- Tìm/tổng hợp thông tin hôm nay nếu web search khả dụng.
+- Audit Gmail, Calendar, Drive, và Chat nếu có quyền.
+- Viết briefing tiếng Việt khoảng 300 từ.
+- Tạo kế hoạch tuần tới dạng `plan.md` trong Drive.
+- Copy/nâng cấp nội dung sang Google Docs.
+- Tạo Google Sheets checklist/task table.
+- Tạo Gmail draft thông báo demo chiều nay.
+- Ghi rõ limitation/fallback cho Telegram và Calendar send nếu không cleanup-safe hoặc không có tool.
+
+### Năng Lực Được Test
+
+- `multi_step_orchestration`: agent phải tự chia workflow dài thành các bước hợp lý.
+- `parallel_or_subtask_delegation_when_available`: scenario khuyến khích dùng `spawn_subtask` nếu tool có sẵn.
+- `workspace_read_audit`: bắt buộc đọc Gmail/Calendar/Drive; Chat là nhánh optional/fallback.
+- `web_research_or_fallback`: nếu thiếu `TAVILY_API_KEY`, agent phải nói rõ fallback thay vì fail toàn bộ.
+- `multi_artifact_generation`: phải tạo Drive file, Docs document, Sheets spreadsheet, Gmail draft.
+- `approval_boundary`: mỗi write external phải đi qua approval.
+- `context_retention`: artifact read-back phải chứa `run_id`.
+- `cleanup_hygiene`: artifact tạo ra phải cleanup được.
+- `user_handoff`: response cuối phải nêu successful tools, fallback, limitation, next steps.
+
+### Command
 
 ```powershell
-. testing-e2e/e2e.env.ps1
-$env:VCLAW_E2E_TARGET_EMAIL
-$env:VCLAW_E2E_CALENDAR_ID
-$env:VCLAW_E2E_DRIVE_FOLDER_ID
-$env:VCLAW_E2E_CHAT_SPACE
+powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\run_n2_e2e.ps1" -Scenario n2.1-production-briefing-mega-flow -RunChat
 ```
 
----
-
-## S1 — Golden Workspace Flow
-
-**Mục tiêu**: Xác nhận agent thật sự đọc Gmail/Calendar/Drive, request approval đúng policy `external_write`, execute write sau approve, read-back object, cleanup object, và summary không false-positive.
-
-### Bước
-
-1. Chạy:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\run_n2_e2e.ps1" -Scenario n2.1-golden-workspace-flow -RunChat
-   ```
-2. Ghi lại `run_id` và path `summary.json` được in ra.
-3. Validate artifact:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\validate_artifact.ps1" -SummaryPath "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\artifacts\<run_id>\summary.json"
-   ```
-
-### Kết quả kỳ vọng
+### Pass Criteria
 
 - `status = pass`.
-- `readiness_counted = true`.
-- `objects_written` không rỗng.
-- `read_back_assertions` có pass.
-- `cleanup.attempted = true`.
-- `cleanup.status = pass`.
-- `hard_assertions` không có số rác `0..n`.
-- `hard_assertions` có pass cho:
-  - `expected_tool_observed:gmail.listEmails`
-  - `expected_tool_observed:calendar.listEvents`
-  - `expected_tool_observed:drive.listFiles`
-  - `approval_required_observed`
-  - `write_tool_executed`
-  - `write_object_contains_run_id`
-  - `object_read_back_matches_final_content`
-  - `cleanup_attempted`
-
-### Evidence đã có
-
-Run pass gần nhất:
-
-```text
-run_id: vclaw-e2e-20260619-090957
-summary: testing-e2e/artifacts/vclaw-e2e-20260619-090957/summary.json
-validator: valid=true
-object: 1dl1Vfx-tn0uKXVpt7qsZn5yFWzi9ehve
-cleanup: pass
-```
+- Có ít nhất 4 successful write results.
+- Có ít nhất 4 objects written.
+- Các object có `[VCLAW-E2E]` và `run_id`.
+- Read-back pass cho artifact cleanup-safe.
+- Cleanup pass.
+- Có approval request cho write.
+- Trace có Gmail, Calendar, Drive reads.
+- Trace có Drive, Docs, Sheets, Gmail draft writes.
+- Response cuối có `Telegram`, `fallback`, `15:00`, `next steps`.
 
 ---
 
-## S2 — Google Workspace Manual Verification
+## Scenario 2 — Resilience Continuation Mega Flow
 
-**Mục tiêu**: Xác nhận object Google Drive tạo bởi E2E đã được cleanup thật trên Workspace.
+**File**: `testing-e2e/scenarios/n2.2-resilience-continuation-mega-flow.json`
 
-### Bước
+### Use Case
 
-1. Check object theo ID từ `summary.json`:
-   ```powershell
-   . testing-e2e/e2e.env.ps1
-   go run ./cmd/vclaw google drive get -id 1dl1Vfx-tn0uKXVpt7qsZn5yFWzi9ehve
-   ```
-2. Mở Google Drive bằng account fixture và search object ID hoặc tên folder.
+Agent xử lý một session dài có nhiều điểm dễ fail:
 
-### Kết quả kỳ vọng
+- Audit Gmail/Drive/Calendar.
+- Tạo Drive `plan.md`.
+- Tạo Docs narrative.
+- Tạo Sheets checklist.
+- Tạo Gmail draft.
+- Nếu Chat, Web Search hoặc Telegram không khả dụng, không được đứng im hoặc abort sớm.
+- Agent phải chọn fallback an toàn: lưu thông tin vào Docs/Gmail draft và giải thích rõ.
 
-- Object name chứa `[VCLAW-E2E]` và `run_id`.
-- Field `Trashed` là `true`, hoặc object không còn hiện trong folder fixture active.
-- Folder fixture không còn rác active từ run cũ.
+### Năng Lực Được Test
 
----
+- `long_context_retention`: giữ đúng `run_id` xuyên suốt nhiều tool call.
+- `multi_turn_like_scripted_continuation`: nhiều approval liên tiếp trong một session.
+- `tool_failure_recovery`: nếu một tool fail, agent phải tiếp tục bằng tool khác.
+- `safe_fallback_instead_of_abort`: fallback phải rõ và an toàn.
+- `artifact_traceability`: response cuối phải có artifact refs/object ids.
+- `clear_user_handoff`: trả lời cuối phải có successful tools, failed/skipped tools, fallback decisions, next step.
 
-## S3 — Approval Lifecycle E2E Coverage
-
-**Mục tiêu**: Xác nhận các nhánh approval ngoài N2.1 chạy E2E thật với Google Drive: approve+duplicate tạo đúng một side-effect, reject/cancel không tạo side-effect.
-
-### Bước
-
-Chạy từng scenario E2E:
+### Command
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\run_n2_e2e.ps1" -Scenario n2.2-approval-duplicate-drive-write -RunChat
-powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\run_n2_e2e.ps1" -Scenario n2.3-approval-reject-no-write -RunChat
-powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\run_n2_e2e.ps1" -Scenario n2.5-approval-cancel-no-write -RunChat
+powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\run_n2_e2e.ps1" -Scenario n2.2-resilience-continuation-mega-flow -RunChat
 ```
 
-Validate từng artifact:
+### Pass Criteria
+
+- `status = pass`.
+- Read tools chạy trước write tools.
+- Có approval request.
+- Có ít nhất 4 successful writes và 4 objects written.
+- Tất cả artifact cleanup-safe đều read-back chứa `run_id`.
+- Cleanup pass.
+- Response cuối có `successful tools`, `failed`, `fallback`, `artifact`, `next`.
+
+---
+
+## Dry-Run Verification
+
+Đã kiểm tra dry-run cho cả 2 scenario:
+
+```text
+n2.1-production-briefing-mega-flow => DryRun OK
+n2.2-resilience-continuation-mega-flow => DryRun OK
+```
+
+Dry-run chỉ xác nhận scenario/env/harness load được. Real pass chỉ được claim sau khi chạy `-RunChat`, read-back pass và cleanup pass.
+
+---
+
+## Lưu Ý Thiết Kế
+
+- Telegram hiện không phải direct agent chat tool trong registry, nên scenario ép agent phải nhận diện limitation và dùng fallback thay vì giả vờ đã gửi Telegram.
+- Calendar write thật chưa được bật làm hard requirement vì harness chưa có cleanup Calendar event an toàn qua CLI. Scenario yêu cầu tạo event proposal 15:00 trong artifacts thay vì tạo event thật không cleanup được.
+- Chat write có thể thiếu quyền trong fixture hiện tại; scenario xem Chat là nhánh optional/fallback, nhưng vẫn bắt agent audit hoặc nêu limitation.
+- Web search phụ thuộc `TAVILY_API_KEY`; nếu thiếu env, agent phải fallback và giải thích.
+
+---
+
+## Artifact Validation
+
+Sau khi chạy thật:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\validate_artifact.ps1" -SummaryPath "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\artifacts\<run_id>\summary.json"
 ```
 
-### Kết quả kỳ vọng
+Không claim pass nếu:
 
-- N2.2: có approval `external_write`, write đúng một Drive folder, duplicate approve không tạo side-effect lần hai, read-back pass, cleanup pass.
-- N2.3: reject approval, không có write tool success, `objects_written` rỗng, cleanup not needed pass.
-- N2.5: cancel approval, không có write tool success, `objects_written` rỗng, cleanup not needed pass.
-
-### Evidence đã có
-
-```text
-n2.2 run_id: vclaw-e2e-20260619-100837 | status=pass | validator=true | objects=1 | read_back=pass | cleanup=pass
-n2.3 run_id: vclaw-e2e-20260619-101156 | status=pass | validator=true | objects=0 | no_write=pass | cleanup_not_needed=pass
-n2.5 run_id: vclaw-e2e-20260619-101237 | status=pass | validator=true | objects=0 | no_write=pass | cleanup_not_needed=pass
-```
-
----
-
-## S3b — Approval Lifecycle Unit Coverage
-
-**Mục tiêu**: Bổ sung unit coverage cho nhánh khó E2E hóa ổn định nếu chưa có Postgres/time control: expire và revise.
-
-### Bước
-
-Chạy targeted tests:
-
-```powershell
-go test ./internal/agent -run "TestApproval(RejectDoesNotExecuteWrite|ApproveDuplicateExecutesOnce|ExpiredDoesNotExecuteWrite|ReviseCreatesReplacementApprovalWithoutExecutingOriginal)$"
-```
-
-Hoặc chạy toàn bộ agent package:
-
-```powershell
-go test ./internal/agent
-```
-
-### Kết quả kỳ vọng
-
-- Reject/cancel semantics không execute write.
-- Duplicate approve trả `APPROVAL_NOT_FOUND` và không execute lần hai.
-- Expired approval trả `APPROVAL_EXPIRED` và không execute write.
-- Revise tạo approval thay thế, giữ `ParentApprovalID`, dùng args revised, và chưa execute original write.
-
-### Evidence đã có
-
-```text
-go test ./internal/agent -run "TestApproval(...)$" => ok
-go test ./internal/agent => ok
-```
-
----
-
-## S4 — N2.4 Full Lifecycle Gate
-
-**Mục tiêu**: Xác nhận full lifecycle scenario không được tính readiness nếu thiếu Postgres state store.
-
-### Bước
-
-Chạy dry-run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "D:\01_learning\ai_ml\AI20K_VINUNI\V-Claw\testing-e2e\scripts\run_n2_e2e.ps1" -Scenario n2.4-approval-full-lifecycle -DryRun
-```
-
-### Kết quả kỳ vọng khi chưa có DB
-
-- `status = blocked_env`.
-- `missing_env` có `DATABASE_URL`.
 - `readiness_counted = false`.
-- Không được claim pass.
-
-### Evidence đã có
-
-```text
-run_id: vclaw-e2e-20260619-092036
-status: blocked_env
-missing_env: DATABASE_URL
-readiness_counted: false
-```
-
----
-
-## S5 — Cleanup Orphan Fixtures
-
-**Mục tiêu**: Không để lại folder Drive test sau các run fail/pending.
-
-### Bước
-
-Trash object theo ID nếu summary cũ chưa cleanup:
-
-```powershell
-. testing-e2e/e2e.env.ps1
-go run ./cmd/vclaw google drive trash -id <object_id>
-```
-
-### Orphan đã cleanup
-
-```text
-1H5pxul26u0JbcYEKt1kay5gGd_PuWgXl
-1oYfEOS_TtGvr8gs3lCIdHwckZszw-MZb
-1MOY3vtdxb5yNsdi4oS6sMKSINM31btOG
-1Dy81AEAs9RRr_b8L4HhRiwg4cx5IM_0e
-1-0DEUqD9mC-gZf3dxKPeXLRlCY6MSvO-
-```
-
----
-
-## Demo Checklist
-
-| Scenario | Command / Evidence | Expected |
-|---|---|---|
-| N2.1 golden E2E | `run_n2_e2e.ps1 -Scenario n2.1-golden-workspace-flow -RunChat` | `pass`, readiness counted |
-| Artifact validator | `validate_artifact.ps1 -SummaryPath ...` | `valid=true` |
-| Workspace cleanup | `go run ./cmd/vclaw google drive get -id <object>` | object trashed |
-| N2.3 reject E2E | `n2.3-approval-reject-no-write -RunChat` | `pass`, no object written |
-| N2.5 cancel E2E | `n2.5-approval-cancel-no-write -RunChat` | `pass`, no object written |
-| N2.2 duplicate E2E | `n2.2-approval-duplicate-drive-write -RunChat` | exactly one object, cleanup pass |
-| Expire | `TestApprovalExpiredDoesNotExecuteWrite` | no write, expired error |
-| Revise | `TestApprovalReviseCreatesReplacementApprovalWithoutExecutingOriginal` | replacement approval |
-| N2.4 DB gate | `n2.4-approval-full-lifecycle -DryRun` without DB | `blocked_env`, not readiness |
-
-> Không claim N2 pass nếu read-back hoặc cleanup còn `pending_verification`, hoặc nếu `blocked_env` đang bị tính readiness.
-
-
+- Có hard assertion `fail`, `pending_verification`, hoặc `blocked_env`.
+- `objects_written` ít hơn minimum của scenario.
+- Object không có `run_id` khi read-back.
+- Cleanup không pass.
