@@ -74,6 +74,27 @@ func TestFileStoreMemoryPersistsAcrossInstances(t *testing.T) {
 	}
 }
 
+func TestFileStoreSaveMemoryOverwritesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	store, _ := NewFileStore(dir)
+
+	if err := store.SaveMemory(ctx, "sess", SessionMemory{Summary: "first"}); err != nil {
+		t.Fatalf("initial SaveMemory: %v", err)
+	}
+	if err := store.SaveMemory(ctx, "sess", SessionMemory{Summary: "second"}); err != nil {
+		t.Fatalf("overwrite SaveMemory: %v", err)
+	}
+
+	loaded, err := store.LoadMemory(ctx, "sess")
+	if err != nil {
+		t.Fatalf("LoadMemory: %v", err)
+	}
+	if loaded.Summary != "second" {
+		t.Fatalf("expected overwritten summary, got %q", loaded.Summary)
+	}
+}
+
 func TestFileStoreClearSessionRemovesFiles(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

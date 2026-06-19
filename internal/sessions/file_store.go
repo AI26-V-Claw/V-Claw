@@ -9,8 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 	"unicode"
 
 	"vclaw/internal/providers"
@@ -170,7 +173,41 @@ func atomicWriteJSON(path string, v any) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	return renameWithTransientRetry(tmpPath, path)
+}
+
+var atomicWriteRenameBackoff = []time.Duration{
+	25 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+}
+
+const (
+	windowsErrorAccessDenied     syscall.Errno = 5
+	windowsErrorSharingViolation syscall.Errno = 32
+)
+
+func renameWithTransientRetry(oldPath, newPath string) error {
+	err := os.Rename(oldPath, newPath)
+	if err == nil || runtime.GOOS != "windows" || !isWindowsTransientRenameError(err) {
+		return err
+	}
+	for _, delay := range atomicWriteRenameBackoff {
+		time.Sleep(delay)
+		err = os.Rename(oldPath, newPath)
+		if err == nil || !isWindowsTransientRenameError(err) {
+			return err
+		}
+	}
+	return err
+}
+
+func isWindowsTransientRenameError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, windowsErrorAccessDenied) || errors.Is(err, windowsErrorSharingViolation)
 }
 
 // sanitizeSessionID replaces characters unsafe for directory names with underscores,
