@@ -1283,7 +1283,6 @@ func internalError(message string) *ErrorShape {
 func normalizeDate(value string) (string, error) {
 	for _, layout := range []string{
 		"2006-01-02",
-		"2006/01/02",
 		time.RFC3339,
 		time.RFC3339Nano,
 		"2006-01-02T15:04:05",
