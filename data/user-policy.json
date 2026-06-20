@@ -2,12 +2,12 @@
   "auto_allow": [
     "safe_read",
     "safe_compute",
-    "sensitive_read",
-    "external_write",
-    "local_write",
-    "code_execution"
+    "sensitive_read"
   ],
   "require_approval": [
+    "external_write",
+    "local_write",
+    "code_execution",
     "destructive"
   ]
 }

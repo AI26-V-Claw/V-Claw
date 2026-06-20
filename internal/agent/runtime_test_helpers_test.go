@@ -210,7 +210,7 @@ func (gmailDownloadAttachmentsRuntimeTool) Parameters() tools.ToolSchema {
 			"outputDir": map[string]any{"type": "string"},
 			"filenames": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		},
-		"required": []string{"messageId", "outputDir"},
+		"required": []string{"messageId"},
 	}
 }
 func (gmailDownloadAttachmentsRuntimeTool) Capability() tools.Capability {
