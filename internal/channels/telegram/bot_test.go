@@ -1522,33 +1522,31 @@ func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
 	}
 }
 
-func TestTelegramApprovalTextResolvesDownloadDirectoryForGmailAttachments(t *testing.T) {
-	homeDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(homeDir, "Downloads"), 0o755); err != nil {
-		t.Fatalf("mkdir downloads: %v", err)
-	}
-	t.Setenv("HOME", homeDir)
-
-	text := telegramTextFromResponse(contracts.AgentResponse{
-		Status: contracts.AgentStatusApprovalRequired,
-		ApprovalRequest: &contracts.ApprovalRequest{
-			ApprovalID: "appr_download",
-			Summary:    "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local.",
-			ToolCall: contracts.ToolCall{
-				ToolName: "gmail.downloadAttachments",
-				Input: map[string]any{
-					"messageId": "msg-1",
-					"outputDir": "./",
+func TestTelegramApprovalTextShowsWorkspaceDefaultForGmailAttachments(t *testing.T) {
+	// Relative and absent outputDir should both show the workspace sandbox label —
+	// not a Downloads path, which is outside the workspace guard's allowed roots.
+	for _, outputDir := range []any{"./", "", nil} {
+		input := map[string]any{"messageId": "msg-1"}
+		if outputDir != nil {
+			input["outputDir"] = outputDir
+		}
+		text := telegramTextFromResponse(contracts.AgentResponse{
+			Status: contracts.AgentStatusApprovalRequired,
+			ApprovalRequest: &contracts.ApprovalRequest{
+				ApprovalID: "appr_download",
+				Summary:    "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local.",
+				ToolCall: contracts.ToolCall{
+					ToolName: "gmail.downloadAttachments",
+					Input:    input,
 				},
 			},
-		},
-	})
-
-	if strings.Contains(text, "Output Dir: ./") {
-		t.Fatalf("expected approval text to resolve outputDir, got %q", text)
-	}
-	if !strings.Contains(text, "Output Dir: ~/Downloads/Vclaw/") {
-		t.Fatalf("expected approval text to show resolved download dir, got %q", text)
+		})
+		if strings.Contains(text, "~/Downloads") {
+			t.Fatalf("outputDir=%v: expected no Downloads path in approval text, got %q", outputDir, text)
+		}
+		if !strings.Contains(text, "workspace sandbox") {
+			t.Fatalf("outputDir=%v: expected workspace sandbox label in approval text, got %q", outputDir, text)
+		}
 	}
 }
 

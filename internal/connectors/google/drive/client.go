@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -255,6 +256,13 @@ func UploadFile(ctx context.Context, client *http.Client, localPath string, name
 	}
 	if strings.TrimSpace(name) == "" {
 		name = filepath.Base(path)
+	}
+	if strings.TrimSpace(mimeType) == "" {
+		if ext := filepath.Ext(path); ext != "" {
+			if detected := mime.TypeByExtension(ext); detected != "" {
+				mimeType = detected
+			}
+		}
 	}
 	return CreateFile(ctx, client, name, mimeType, file, parentIDs)
 }

@@ -637,25 +637,24 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 }
 
 func telegramDisplayDownloadAttachmentInput(input map[string]any) map[string]any {
-	outputDir, ok := input["outputDir"]
-	if !ok {
-		return input
-	}
-	text := strings.TrimSpace(fmt.Sprint(outputDir))
-	if text == "" || filepath.IsAbs(text) {
-		return input
+	outputDirText := ""
+	if v, ok := input["outputDir"]; ok {
+		outputDirText = strings.TrimSpace(fmt.Sprint(v))
 	}
 
-	resolved, err := telegramDownloadOutputDir()
-	if err != nil || strings.TrimSpace(resolved) == "" {
-		return input
+	var displayDir string
+	if outputDirText == "" || !filepath.IsAbs(outputDirText) {
+		// Absent or relative — the workspace guard defaults to sandbox workspace root.
+		displayDir = "workspace sandbox (mặc định)"
+	} else {
+		displayDir = telegramDisplayDownloadDir(outputDirText)
 	}
 
-	clone := make(map[string]any, len(input))
+	clone := make(map[string]any, len(input)+1)
 	for key, value := range input {
 		clone[key] = value
 	}
-	clone["outputDir"] = telegramDisplayDownloadDir(filepath.Join(resolved, "attachment"))
+	clone["outputDir"] = displayDir
 	return clone
 }
 
