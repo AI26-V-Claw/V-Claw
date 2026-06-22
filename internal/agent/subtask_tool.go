@@ -524,6 +524,7 @@ func concreteSubtaskDenyTools() map[string]bool {
 		"gmail.untrashMessage":      true,
 		"calendar.createEvent":      true,
 		"calendar.updateEvent":      true,
+		"calendar.respondEvent":     true,
 		"calendar.deleteEvent":      true,
 		"drive.createFolder":        true,
 		"drive.createFile":          true,

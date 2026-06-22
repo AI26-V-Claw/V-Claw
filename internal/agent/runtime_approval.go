@@ -392,9 +392,78 @@ func enrichApprovalInput(toolName string, input map[string]any, transcript []pro
 	switch strings.TrimSpace(toolName) {
 	case "drive.moveFile", "drive.moveFiles":
 		return enrichDriveMoveApprovalInput(input, transcript)
+	case "calendar.respondEvent":
+		return enrichCalendarRespondApprovalInput(input, transcript)
 	default:
 		return input
 	}
+}
+
+func enrichCalendarRespondApprovalInput(input map[string]any, transcript []providers.Message) map[string]any {
+	if len(input) == 0 {
+		return input
+	}
+	if strings.TrimSpace(stringArgument(input, "eventTitle")) != "" || strings.TrimSpace(stringArgument(input, "title")) != "" {
+		return input
+	}
+	eventID := strings.TrimSpace(stringArgument(input, "eventId"))
+	if eventID == "" {
+		return input
+	}
+	title := calendarEventTitleByIDFromTranscript(transcript, eventID)
+	if title == "" {
+		return input
+	}
+	enriched := cloneArguments(input)
+	enriched["eventTitle"] = title
+	return enriched
+}
+
+func calendarEventTitleByIDFromTranscript(transcript []providers.Message, eventID string) string {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return ""
+	}
+	for i := len(transcript) - 1; i >= 0; i-- {
+		message := transcript[i]
+		if message.Role != providers.MessageRoleTool || strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		if title := calendarEventTitleFromJSON(message.Content, eventID); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func calendarEventTitleFromJSON(content string, eventID string) string {
+	var payload any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return ""
+	}
+	return calendarEventTitleFromPayload(payload, eventID)
+}
+
+func calendarEventTitleFromPayload(payload any, eventID string) string {
+	switch typed := payload.(type) {
+	case []any:
+		for _, item := range typed {
+			if title := calendarEventTitleFromPayload(item, eventID); title != "" {
+				return title
+			}
+		}
+	case map[string]any:
+		if event, ok := typed["Event"]; ok {
+			if title := calendarEventTitleFromPayload(event, eventID); title != "" {
+				return title
+			}
+		}
+		id := firstStringMapValue(typed, "id", "ID", "eventId", "EventID")
+		if strings.TrimSpace(id) == eventID {
+			return firstStringMapValue(typed, "title", "Title", "summary", "Summary", "eventTitle")
+		}
+	}
+	return ""
 }
 
 func enrichDriveMoveApprovalInput(input map[string]any, transcript []providers.Message) map[string]any {
@@ -974,10 +1043,14 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar."
 	case "calendar.updateEvent":
 		return "Tôi cần bạn xác nhận trước khi sửa sự kiện Calendar."
+	case "calendar.respondEvent":
+		return "Tôi cần bạn xác nhận trước khi phản hồi lời mời Calendar."
 	case "calendar.deleteEvent":
 		return "Tôi cần bạn xác nhận trước khi xóa sự kiện Calendar."
 	case "calendar.listEvents":
 		return "Cho phép tôi xem lịch Calendar nhé?"
+	case "calendar.getEvent":
+		return "Cho phép tôi xem chi tiết sự kiện Calendar nhé?"
 	case "chat.listSpaces":
 		return "Cho phép tôi xem danh sách Google Chat space nhé?"
 	case "chat.listMembers":

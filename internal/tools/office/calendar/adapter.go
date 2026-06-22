@@ -63,6 +63,48 @@ func (t *ListEventsTool) Execute(ctx context.Context, call tools.ToolCall) tools
 	return toToolSuccess(call, formatListEventsOutput(output))
 }
 
+// --- GetEvent Tool ---
+
+// GetEventTool implements tools.Tool for calendar.getEvent.
+type GetEventTool struct {
+	service *Service
+}
+
+func (t *GetEventTool) Name() string { return ToolNameGetEvent }
+
+func (t *GetEventTool) Description() string {
+	return "Get details for one Google Calendar event by eventId, including organizer, creator, attendees, location, description, event link, Meet link, and recurrence flag."
+}
+
+func (t *GetEventTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"eventId": map[string]any{
+				"type":        "string",
+				"description": "ID of the event to inspect. Use calendar.listEvents first if the event ID is unknown.",
+			},
+		},
+		"required":             []string{"eventId"},
+		"additionalProperties": false,
+	}
+}
+
+func (t *GetEventTool) Capability() tools.Capability { return tools.CapabilityReadOnly }
+
+func (t *GetEventTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelSafeRead }
+
+func (t *GetEventTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	output, errShape := t.service.GetEvent(ctx, GetEventInput{EventID: stringArg(call.Arguments, "eventId")})
+	if errShape != nil {
+		return toToolError(call, errShape)
+	}
+
+	result := toToolSuccess(call, formatGetEventOutput(output))
+	result.ArtifactRef = calendarEventArtifactRef(output.Event)
+	return result
+}
+
 // --- CreateEvent Tool ---
 
 // CreateEventTool implements tools.Tool for calendar.createEvent.
@@ -73,7 +115,7 @@ type CreateEventTool struct {
 func (t *CreateEventTool) Name() string { return ToolNameCreateEvent }
 
 func (t *CreateEventTool) Description() string {
-	return "Create a new event in Google Calendar. Both start and end times are required. If the user did not explicitly provide an end time, ask for it before calling this tool — do not assume or auto-fill a default duration."
+	return "Create a new event in Google Calendar. Title, explicit start date+time, and explicit end date+time or duration are required. A date-only phrase like tomorrow is not a start time. If start time or end time/duration is missing, ask one clarification question for all missing time fields before calling this tool. Do not assume or auto-fill a default duration."
 }
 
 func (t *CreateEventTool) Parameters() tools.ToolSchema {
@@ -86,11 +128,11 @@ func (t *CreateEventTool) Parameters() tools.ToolSchema {
 			},
 			"start": map[string]any{
 				"type":        "string",
-				"description": "Event start time in ISO-8601 format",
+				"description": "Event start time in ISO-8601 format. Must include an explicit time of day from the user; a date-only phrase like tomorrow is insufficient.",
 			},
 			"end": map[string]any{
 				"type":        "string",
-				"description": "Event end time in ISO-8601 format. Must be explicitly stated by the user. If not provided, ask the user for the end time before calling this tool.",
+				"description": "Event end time in ISO-8601 format. Must come from an explicit user-provided end time or duration. If not provided, ask for it before calling this tool.",
 			},
 			"attendees": map[string]any{
 				"type":        "array",
@@ -164,7 +206,7 @@ type UpdateEventTool struct {
 func (t *UpdateEventTool) Name() string { return ToolNameUpdateEvent }
 
 func (t *UpdateEventTool) Description() string {
-	return "Update an existing event in Google Calendar."
+	return "Update an existing event in Google Calendar. Do not use this to RSVP or change an attendee responseStatus; use calendar.respondEvent for accept, decline, tentative, or needsAction."
 }
 
 func (t *UpdateEventTool) Parameters() tools.ToolSchema {
@@ -190,7 +232,7 @@ func (t *UpdateEventTool) Parameters() tools.ToolSchema {
 			"attendees": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "Updated list of attendee email addresses",
+				"description": "Updated list of attendee email addresses only. Do not pass attendee objects or responseStatus here; use calendar.respondEvent for RSVP.",
 			},
 			"location": map[string]any{
 				"type":        "string",
@@ -227,6 +269,65 @@ func (t *UpdateEventTool) Execute(ctx context.Context, call tools.ToolCall) tool
 	}
 
 	return toToolSuccess(call, formatUpdateEventOutput(output))
+}
+
+// --- RespondEvent Tool ---
+
+// RespondEventTool implements tools.Tool for calendar.respondEvent.
+type RespondEventTool struct {
+	service *Service
+}
+
+func (t *RespondEventTool) Name() string { return ToolNameRespondEvent }
+
+func (t *RespondEventTool) Description() string {
+	return "Respond to a Google Calendar event invitation. Use this when the user asks to confirm attendance, accept, decline, mark tentative, or reset their RSVP for an event."
+}
+
+func (t *RespondEventTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"eventId": map[string]any{
+				"type":        "string",
+				"description": "ID of the event to respond to. Use calendar.listEvents or calendar.getEvent first if unknown.",
+			},
+			"eventTitle": map[string]any{
+				"type":        "string",
+				"description": "Optional event title for approval display. If known from calendar.listEvents or calendar.getEvent, include it so the user sees a readable event name instead of an ID.",
+			},
+			"email": map[string]any{
+				"type":        "string",
+				"description": "Attendee email to update. Optional if the event contains an attendee marked as self.",
+			},
+			"responseStatus": map[string]any{
+				"type":        "string",
+				"enum":        []string{"accepted", "declined", "tentative", "needsAction"},
+				"description": "RSVP status. Use accepted to confirm attendance, declined to reject, tentative if unsure, or needsAction to reset.",
+			},
+		},
+		"required":             []string{"eventId", "responseStatus"},
+		"additionalProperties": false,
+	}
+}
+
+func (t *RespondEventTool) Capability() tools.Capability { return tools.CapabilityMutating }
+
+func (t *RespondEventTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelExternalWrite }
+
+func (t *RespondEventTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	output, errShape := t.service.RespondEvent(ctx, RespondEventInput{
+		EventID:        stringArg(call.Arguments, "eventId"),
+		Email:          stringArg(call.Arguments, "email"),
+		ResponseStatus: stringArg(call.Arguments, "responseStatus"),
+	})
+	if errShape != nil {
+		return toToolError(call, errShape)
+	}
+
+	result := toToolSuccess(call, formatRespondEventOutput(output))
+	result.ArtifactRef = calendarEventArtifactRef(output.Event)
+	return result
 }
 
 // --- DeleteEvent Tool ---
@@ -279,8 +380,10 @@ func (t *DeleteEventTool) Execute(ctx context.Context, call tools.ToolCall) tool
 func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
 	for _, t := range []tools.Tool{
 		&ListEventsTool{service: service},
+		&GetEventTool{service: service},
 		&CreateEventTool{service: service},
 		&UpdateEventTool{service: service},
+		&RespondEventTool{service: service},
 		&DeleteEventTool{service: service},
 	} {
 		if err := registry.RegisterWithEntry(t, tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
@@ -357,6 +460,14 @@ func formatListEventsOutput(output ListEventsOutput) string {
 	return string(data)
 }
 
+func formatGetEventOutput(output GetEventOutput) string {
+	data, err := json.Marshal(calendarEventPayload(output.Event))
+	if err != nil {
+		return fmt.Sprintf("Tìm thấy sự kiện với ID: %s", output.Event.ID)
+	}
+	return string(data)
+}
+
 func formatCreateEventOutput(output CreateEventOutput) string {
 	payload := map[string]any{
 		"Event": calendarEventPayload(output.Event),
@@ -376,6 +487,17 @@ func formatUpdateEventOutput(output UpdateEventOutput) string {
 	return fmt.Sprintf("Đã cập nhật sự kiện: %s", string(data))
 }
 
+func formatRespondEventOutput(output RespondEventOutput) string {
+	payload := map[string]any{
+		"Event": calendarEventPayload(output.Event),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "Da cap nhat phan hoi tham du su kien."
+	}
+	return fmt.Sprintf("Da cap nhat phan hoi tham du: %s", string(data))
+}
+
 func calendarEventPayload(event EventSummary) map[string]any {
 	payload := map[string]any{
 		"id":          event.ID,
@@ -385,6 +507,8 @@ func calendarEventPayload(event EventSummary) map[string]any {
 		"start":       event.Start,
 		"end":         event.End,
 		"attendees":   event.Attendees,
+		"organizer":   event.Organizer,
+		"creator":     event.Creator,
 		"eventLink":   event.EventLink,
 		"meetLink":    event.MeetLink,
 		"isRecurring": event.IsRecurring,

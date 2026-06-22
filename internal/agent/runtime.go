@@ -112,6 +112,7 @@ type longTermMemoryLoader interface {
 
 type longTermMemoryFlusher interface {
 	Flush(context.Context, string) error
+	RecordRepeatedHabits(context.Context, longmem.HabitInput) error
 }
 
 type pendingApproval struct {
@@ -506,6 +507,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		errShape.Message = strings.Replace(errShape.Message, "append message:", "append user message:", 1)
 		return failStartedRun(errShape)
 	}
+	r.recordRepeatedLongTermHabits(ctx, message.SessionID, runState.RunID, message.RequestID, transcript)
 	if clarification := r.referenceClarificationResponse(message, referenceResolution); clarification != nil {
 		if errShape := r.appendAssistantTranscriptForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, clarification.Message); errShape != nil {
 			clarification.Error = errShape

@@ -5,20 +5,29 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"vclaw/internal/contracts"
+	"vclaw/internal/longmem"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
+	"vclaw/internal/tools"
 )
 
 // fakeLTMemFlusher records Flush calls for assertions.
 type fakeLTMemFlusher struct {
-	calls   atomic.Int32
+	calls       atomic.Int32
+	habitCalls  atomic.Int32
 	lastSummary string
-	err     error
+	err         error
 }
 
 func (f *fakeLTMemFlusher) Flush(_ context.Context, summary string) error {
 	f.calls.Add(1)
 	f.lastSummary = summary
+	return f.err
+}
+
+func (f *fakeLTMemFlusher) RecordRepeatedHabits(_ context.Context, _ longmem.HabitInput) error {
+	f.habitCalls.Add(1)
 	return f.err
 }
 
@@ -187,6 +196,43 @@ func TestMaybeCompactAsyncFlusherErrorDoesNotFailCompaction(t *testing.T) {
 	}
 	if memory.Summary == "" {
 		t.Error("compaction summary should be saved even when flusher errors")
+	}
+}
+
+func TestRuntimeRecordsRepeatedHabitsAfterUserMessageAppend(t *testing.T) {
+	ctx := context.Background()
+	store := sessions.NewInMemoryStore()
+	sessionID := "sess_repeated_habit"
+	if err := store.AppendMessage(ctx, sessionID, providers.Message{
+		Role:    providers.MessageRoleUser,
+		Content: "Xem mail lúc 8h sáng giúp tôi",
+	}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	flusher := &fakeLTMemFlusher{}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     &fakeProvider{},
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: store,
+	})
+	runtime.ltMemFlusher = flusher
+
+	response, err := runtime.Run(ctx, contracts.UserMessage{
+		RequestID: "req_repeated_habit",
+		SessionID: sessionID,
+		Channel:   "telegram",
+		Text:      "Check email lúc 8h sáng",
+		Timestamp: runtime.now(),
+	})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("unexpected response status: %s", response.Status)
+	}
+	if flusher.habitCalls.Load() == 0 {
+		t.Fatal("expected repeated habit recorder to be called")
 	}
 }
 

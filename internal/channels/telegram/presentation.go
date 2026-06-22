@@ -494,6 +494,8 @@ func telegramActionLabel(toolName string) string {
 		return "Tạo sự kiện Google Calendar"
 	case "calendar.updateEvent":
 		return "Cập nhật sự kiện Google Calendar"
+	case "calendar.respondEvent":
+		return "Phản hồi lời mời Google Calendar"
 	case "calendar.deleteEvent":
 		return "Xóa sự kiện Google Calendar"
 	case "drive.createFolder":
@@ -607,7 +609,7 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		if detail := telegramDraftApprovalDetailText(input); detail != "" {
 			return detail
 		}
-	case "calendar.createEvent", "calendar.updateEvent":
+	case "calendar.createEvent", "calendar.updateEvent", "calendar.respondEvent":
 		if detail := telegramCalendarApprovalDetailText(input); detail != "" {
 			return detail
 		}
@@ -686,7 +688,7 @@ func telegramDraftApprovalDetailText(input map[string]any) string {
 func telegramCalendarApprovalDetailText(input map[string]any) string {
 	lines := []string{}
 
-	if title := firstNonEmptyStringMapValue(input, "title", "name", "subject"); title != "" {
+	if title := firstNonEmptyStringMapValue(input, "eventTitle", "title", "name", "subject"); title != "" {
 		lines = append(lines, telegramTextField("Tiêu đề", title))
 	}
 
@@ -702,8 +704,19 @@ func telegramCalendarApprovalDetailText(input map[string]any) string {
 		lines = append(lines, telegramTextField("Thời lượng", duration))
 	}
 
-	if attendees := stringSliceMapValue(input, "attendees"); len(attendees) > 0 {
-		lines = append(lines, telegramTextField("Người tham gia", strings.Join(attendees, ", ")))
+	if email := stringMapValue(input, "email"); email != "" {
+		lines = append(lines, telegramTextField("Email", email))
+	}
+	if responseStatus := stringMapValue(input, "responseStatus"); responseStatus != "" {
+		lines = append(lines, telegramTextField("Trạng thái tham dự", responseStatus))
+	}
+	if value, ok := input["attendees"]; ok {
+		attendees := telegramApprovalValueText(value)
+		if strings.Contains(attendees, "\n") {
+			lines = append(lines, "Người tham gia:", attendees)
+		} else if attendees != "" {
+			lines = append(lines, telegramTextField("Người tham gia", attendees))
+		}
 	}
 	if location := stringMapValue(input, "location"); location != "" {
 		lines = append(lines, telegramTextField("Địa điểm", location))
@@ -897,7 +910,7 @@ func stringSliceMapValue(input map[string]any, keys ...string) []string {
 		case []any:
 			items := make([]string, 0, len(typed))
 			for _, item := range typed {
-				if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				if text := strings.TrimSpace(telegramApprovalValueText(item)); text != "" {
 					items = append(items, text)
 				}
 			}
@@ -970,18 +983,32 @@ func telegramShouldSkipApprovalField(key string, value any) bool {
 
 func telegramApprovalValueText(value any) string {
 	switch typed := value.(type) {
+	case nil:
+		return ""
 	case string:
 		return strings.TrimSpace(typed)
 	case []string:
 		return strings.Join(cleanStringSlice(typed), ", ")
 	case []any:
 		items := make([]string, 0, len(typed))
+		structured := false
 		for _, item := range typed {
-			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+			if _, ok := item.(map[string]any); ok {
+				structured = true
+			}
+			if text := strings.TrimSpace(telegramApprovalValueText(item)); text != "" {
 				items = append(items, text)
 			}
 		}
+		if structured {
+			for i, item := range items {
+				items[i] = "- " + item
+			}
+			return strings.Join(items, "\n")
+		}
 		return strings.Join(items, ", ")
+	case map[string]any:
+		return telegramApprovalMapText(typed)
 	case bool:
 		if typed {
 			return "Có"
@@ -990,6 +1017,43 @@ func telegramApprovalValueText(value any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(value))
 	}
+}
+
+func telegramApprovalMapText(value map[string]any) string {
+	if len(value) == 0 {
+		return ""
+	}
+	labels := []struct {
+		key   string
+		label string
+	}{
+		{key: "email", label: "email"},
+		{key: "displayName", label: "tên"},
+		{key: "responseStatus", label: "trạng thái"},
+		{key: "eventId", label: "eventId"},
+		{key: "title", label: "tiêu đề"},
+	}
+	seen := map[string]bool{}
+	parts := make([]string, 0, len(value))
+	for _, item := range labels {
+		if text := strings.TrimSpace(telegramApprovalValueText(value[item.key])); text != "" {
+			parts = append(parts, item.label+": "+text)
+			seen[item.key] = true
+		}
+	}
+	extraKeys := make([]string, 0, len(value))
+	for key := range value {
+		if !seen[key] && !telegramShouldSkipApprovalField(key, value[key]) {
+			extraKeys = append(extraKeys, key)
+		}
+	}
+	sort.Strings(extraKeys)
+	for _, key := range extraKeys {
+		if text := strings.TrimSpace(telegramApprovalValueText(value[key])); text != "" {
+			parts = append(parts, humanizeApprovalKey(key)+": "+text)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func humanizeApprovalKey(key string) string {

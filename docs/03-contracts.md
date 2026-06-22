@@ -53,7 +53,9 @@ Ví dụ:
 gmail.listEmails
 gmail.sendEmail
 calendar.listEvents
+calendar.getEvent
 calendar.createEvent
+calendar.respondEvent
 chat.sendMessage
 sandbox.runPython
 sandbox.runShell
@@ -681,9 +683,13 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
 | `calendar.listEvents` | Integration | `safe_read` | No |
+| `calendar.getEvent` | Integration | `safe_read` | No |
 | `calendar.createEvent` | Integration | `external_write` | Yes |
 | `calendar.updateEvent` | Integration | `external_write` | Yes |
+| `calendar.respondEvent` | Integration | `external_write` | Yes |
 | `calendar.deleteEvent` | Integration | `destructive` | Yes |
+
+> `calendar.createEvent` requires an explicit start date+time and an explicit end date+time or duration before approval. Date-only phrases such as `tomorrow` / `ngay mai` are not enough to infer a start time. If the user also asks to send an email about the event, Calendar attendees/invitations do not satisfy that separate Gmail action.
 
 ### Chat
 
@@ -1001,7 +1007,31 @@ Rules:
 
 ---
 
-### 9.3. Loading rules (Sprint 3)
+### 9.3. Provenance sidecar
+
+Current implementation stores provenance in `cache/memory/memory_sources.json`.
+Markdown bullets in `USER.md` and `NOTES.md` may include an internal marker comment:
+
+```markdown
+- <fact text> <!-- mem:<memoryFactId> -->
+```
+
+Rules:
+
+- `memory_sources.json` is machine-readable provenance for each long-term fact.
+- Each source entry records `id`, `kind`, `file`, `section`, `text`, timestamps, and observations.
+- Observations record `sourceType` such as `session_compaction`, `session_compaction_fallback`, `repeated_habit`, or `manual_migration`.
+- Session compaction observations should include `sessionId`, optional `runId`/`requestId`, classifier model, and summary hash when available.
+- Repeated habit counting is global across sessions in `cache/memory/habit_patterns.json`.
+- A repeated habit is promoted only when the same normalized pattern has `count >= 5` and either appears in at least 2 distinct sessions or spans at least 72 hours from `firstSeen` to `lastSeen`.
+- Habit dedup happens in 3 layers: normalized pattern (`promoted=true` prevents re-promotion), normalized fact text in `USER.md`, and exact observation dedup in `memory_sources.json`.
+- Repeated-habit observations in `memory_sources.json` must include the promoted aggregate `count`.
+- Loader must strip `<!-- mem:... -->` markers before injecting memory into the runtime prompt.
+- Long-term memory is context only. It must never override Tool Policy, approval decisions, HITL state, system prompt, or tool contracts.
+
+---
+
+### 9.4. Loading rules (Sprint 3)
 
 Thứ tự load và token budget khi inject vào system prompt:
 
@@ -1017,7 +1047,7 @@ Thứ tự load và token budget khi inject vào system prompt:
 
 ---
 
-### 9.4. Pending Approval — In-memory Limitation
+### 9.5. Pending Approval — In-memory Limitation
 
 **Đây là giới hạn thiết kế được chấp nhận trong MVP:**
 
@@ -1025,7 +1055,7 @@ Thứ tự load và token budget khi inject vào system prompt:
 - Pending approvals **không persist** vào session store hoặc file.
 - Nếu process restart xảy ra trong khi có approval đang chờ, approval đó bị mất.
 - Approval có TTL `10 phút` (`approvalTTL = 10 * time.Minute`); sau TTL tự expire và không thể execute.
-- Compaction **bắt buộc skip** khi session đang có pending approval (xem Section 9.5).
+- Compaction **bắt buộc skip** khi session đang có pending approval (xem Section 9.6).
 
 Implication cho user:
 
@@ -1039,7 +1069,7 @@ User cần gửi lại yêu cầu từ đầu.
 
 ---
 
-### 9.5. Compaction Guard — Pending Approval Protection
+### 9.6. Compaction Guard — Pending Approval Protection
 
 Compaction (transcript truncation) chỉ được chạy khi **không** có pending approval trên session hiện tại.
 
