@@ -25,6 +25,7 @@ type fakeHandler struct {
 	finalized    int
 	received     contracts.UserMessage
 	receivedAll  []contracts.UserMessage
+	resetSession string
 	outbound     contracts.AgentResponse
 	progress     []agent.ProgressEvent
 	handleErr    error
@@ -212,6 +213,11 @@ func (f *fakeHandler) HandleMessage(ctx context.Context, message contracts.UserM
 	return f.outbound, f.handleErr
 }
 
+func (f *fakeHandler) ResetSession(_ context.Context, sessionID string) error {
+	f.resetSession = sessionID
+	return nil
+}
+
 func (f *fakeHandler) FinalizeAudit(_ contracts.UserMessage, err error) {
 	f.finalized++
 	f.finalizedErr = err
@@ -388,6 +394,72 @@ func TestIsTelegramHistoryCommand(t *testing.T) {
 		if isTelegramHistoryCommand(input) {
 			t.Fatalf("unexpected match for %q", input)
 		}
+	}
+}
+
+func TestIsTelegramNewCommand(t *testing.T) {
+	for _, input := range []string{"/new", "/new@vclaw_bot", "/new extra args"} {
+		if !isTelegramNewCommand(input) {
+			t.Fatalf("expected %q to match /new command", input)
+		}
+	}
+	for _, input := range []string{"new", "tạo phiên mới", "/other"} {
+		if isTelegramNewCommand(input) {
+			t.Fatalf("unexpected match for %q", input)
+		}
+	}
+}
+
+func TestProcessUpdateRoutesNewCommandToNewActiveSession(t *testing.T) {
+	handler := &fakeHandler{}
+	var sentText string
+	botTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		sentText = fmt.Sprint(payload["text"])
+		return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
+	})
+
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
+	bot.client = &http.Client{Transport: botTransport}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 8,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "/new",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.resetSession != "" {
+		t.Fatalf("/new should not reset an existing session, got %q", handler.resetSession)
+	}
+	if handler.calls != 0 {
+		t.Fatalf("/new should not call HandleMessage, got %d calls", handler.calls)
+	}
+	if !strings.Contains(sentText, "Đã tạo phiên mới") {
+		t.Fatalf("unexpected reset confirmation: %q", sentText)
+	}
+	index, err := bot.sessionIndex.List(context.Background(), 55, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("load session index: %v", err)
+	}
+	if len(index.Sessions) != 2 {
+		t.Fatalf("expected legacy + new session, got %#v", index.Sessions)
+	}
+	if index.ActiveSessionKey == "legacy" {
+		t.Fatalf("expected /new to switch active session, got %#v", index)
 	}
 }
 
@@ -1460,33 +1532,31 @@ func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
 	}
 }
 
-func TestTelegramApprovalTextResolvesDownloadDirectoryForGmailAttachments(t *testing.T) {
-	homeDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(homeDir, "Downloads"), 0o755); err != nil {
-		t.Fatalf("mkdir downloads: %v", err)
-	}
-	t.Setenv("HOME", homeDir)
-
-	text := telegramTextFromResponse(contracts.AgentResponse{
-		Status: contracts.AgentStatusApprovalRequired,
-		ApprovalRequest: &contracts.ApprovalRequest{
-			ApprovalID: "appr_download",
-			Summary:    "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local.",
-			ToolCall: contracts.ToolCall{
-				ToolName: "gmail.downloadAttachments",
-				Input: map[string]any{
-					"messageId": "msg-1",
-					"outputDir": "./",
+func TestTelegramApprovalTextShowsWorkspaceDefaultForGmailAttachments(t *testing.T) {
+	// Relative and absent outputDir should both show the workspace sandbox label —
+	// not a Downloads path, which is outside the workspace guard's allowed roots.
+	for _, outputDir := range []any{"./", "", nil} {
+		input := map[string]any{"messageId": "msg-1"}
+		if outputDir != nil {
+			input["outputDir"] = outputDir
+		}
+		text := telegramTextFromResponse(contracts.AgentResponse{
+			Status: contracts.AgentStatusApprovalRequired,
+			ApprovalRequest: &contracts.ApprovalRequest{
+				ApprovalID: "appr_download",
+				Summary:    "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local.",
+				ToolCall: contracts.ToolCall{
+					ToolName: "gmail.downloadAttachments",
+					Input:    input,
 				},
 			},
-		},
-	})
-
-	if strings.Contains(text, "Output Dir: ./") {
-		t.Fatalf("expected approval text to resolve outputDir, got %q", text)
-	}
-	if !strings.Contains(text, "Output Dir: ~/Downloads/Vclaw/") {
-		t.Fatalf("expected approval text to show resolved download dir, got %q", text)
+		})
+		if strings.Contains(text, "~/Downloads") {
+			t.Fatalf("outputDir=%v: expected no Downloads path in approval text, got %q", outputDir, text)
+		}
+		if !strings.Contains(text, "workspace sandbox") {
+			t.Fatalf("outputDir=%v: expected workspace sandbox label in approval text, got %q", outputDir, text)
+		}
 	}
 }
 

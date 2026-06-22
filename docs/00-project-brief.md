@@ -45,25 +45,28 @@ Khi gặp hành động nguy hiểm, AI sẽ:
 
 ---
 
-### Sprint 2 — Phát Triển Kỹ Năng Hệ Thống & HITL
+### Sprint 2 — Hoàn Thiện Nền Tảng Agent, Tool, HITL & Memory
 
 | Mục tiêu | Mô tả |
 |---|---|
-| **G1** | AI tự viết và chạy được code Python/Shell trong môi trường sandbox để thực hiện các tác vụ như: lọc file, gom thư mục, đọc file Excel, tạo và sửa file Word. |
-| **G2** | Hoàn thiện tính năng HITL: Khi AI định gửi mail hoặc chạy lệnh hệ thống, agent loop sẽ dừng lại, yêu cầu sự đồng ý của người dùng kèm lời giải thích rõ ràng bằng tiếng Việt. |
-| **G3** | Kết nối luồng liên thông: AI đọc Email → Calendar → Chat để đưa ra các đề xuất và xử lý công việc hàng ngày. |
-| **G4** | Tích hợp bộ nhớ ngắn hạn để AI nhớ được chuỗi hội thoại hiện tại. *(Ví dụ: "Nãy giờ về dự án AI Agent, tôi và bạn trao đổi gì — note lại giúp tôi.")* |
+| **G1** | Hoàn thiện agent loop nhiều bước để AI có thể suy nghĩ, gọi công cụ, đọc kết quả và tiếp tục xử lý cho đến khi hoàn thành yêu cầu. |
+| **G2** | AI chạy được Python/Shell trong môi trường sandbox để xử lý file, dữ liệu, Excel/Word và các tác vụ máy tính cơ bản một cách an toàn. |
+| **G3** | Hoàn thiện HITL: mọi hành động rủi ro như gửi mail, sửa lịch, ghi file hoặc chạy lệnh hệ thống đều phải dừng lại và chờ người dùng duyệt bằng tiếng Việt rõ ràng. |
+| **G4** | Kết nối các luồng công việc hằng ngày giữa Gmail, Calendar, Chat, Drive/Docs/Sheets và Web Search theo hướng đọc trước, đề xuất sau, chỉ ghi/sửa khi được duyệt. |
+| **G5** | Cải thiện bộ nhớ ngắn hạn, lưu trạng thái phiên làm việc, lịch sử tool call, approval và log để agent không mất ngữ cảnh khi chạy nhiều bước. |
 
 ---
 
-### Sprint 3 — Đồng Bộ Bộ Nhớ Dài Hạn, Test & Release
+### Sprint 3 — Memory Dài Hạn, Luồng Thực Tế & Bản Trải Nghiệm Gần Production
 
 | Mục tiêu | Mô tả |
 |---|---|
-| **G1** | Tích hợp bộ nhớ dài hạn, giúp AI nhớ được thói quen làm việc và danh sách những người quen thuộc của người dùng để xử lý thông minh hơn. |
-| **G2** | Xây dựng hệ thống log chi tiết: ghi lại từng hành động, lệnh nào đã được người dùng duyệt, lệnh nào bị từ chối. |
-| **G3** | Tối ưu hóa tốc độ phản hồi của AI khi phối hợp nhiều công cụ cùng lúc. |
-| **G4** | Hoàn thành kiểm thử với các kịch bản kết hợp thực tế. *(Ví dụ: "Kiểm tra mail xem có ai hẹn không, nếu có thì xếp vào lịch trống và gom các tài liệu họ gửi vào một thư mục riêng trên máy.")* |
+| **G1** | Tích hợp bộ nhớ dài hạn ở mức dễ kiểm soát: AI nhớ người quen, dự án, tài liệu quan trọng, thói quen làm việc và các ghi chú ổn định của người dùng. |
+| **G2** | Bổ sung lớp liên kết thông tin đơn giản để AI hiểu quan hệ giữa người, dự án, cuộc họp và tài liệu mà không làm hệ thống quá phức tạp. |
+| **G3** | Hoàn thiện log, health check và hướng dẫn vận hành để người dùng xem lại được hành động nào đã chạy, hành động nào được duyệt, bị từ chối hoặc gặp lỗi. |
+| **G4** | Tối ưu các luồng phối hợp nhiều công cụ cùng lúc, đặc biệt là các thao tác đọc an toàn có thể chạy song song để phản hồi nhanh hơn. |
+| **G5** | Hoàn thành kiểm thử và demo hybrid nổi bật: AI xử lý việc văn phòng qua Gmail/Calendar/Chat/Drive, đồng thời xử lý file hoặc lệnh máy tính trong sandbox, mọi hành động rủi ro đều có HITL tiếng Việt. |
+| **G6** | Đóng gói bản gần production để user trải nghiệm: cấu hình rõ ràng, checklist khởi chạy, smoke test, runbook và kịch bản demo cuối sprint. |
 
 ---
 
@@ -71,10 +74,9 @@ Khi gặp hành động nguy hiểm, AI sẽ:
 
 | Nhóm | Số thành viên | Trách nhiệm |
 |---|---|---|
-| **Kiến trúc hệ thống** | Toàn bộ | Ngồi lại thảo luận về kiến trúc hệ thống, cơ sở dữ liệu, lên diagram cho các luồng chính của dự án. |
-| **Tích hợp API** | 2 người | Tập trung làm việc với API của Mail, Calendar, Chat và đồng bộ dữ liệu về database. |
-| **Hệ thống & Sandbox** | 2 người | Chịu trách nhiệm về môi trường cô lập, xử lý để AI chạy lệnh Shell/Python an toàn khi tương tác với máy tính. |
-| **Agent & Bộ nhớ** | 2 người | Viết prompt, xây dựng agent-native tool loop, xử lý policy boundary cho hành động cần HITL và xây dựng bộ nhớ dài hạn (Knowledge Graph đơn giản). |
-| **Phương thức kết nối** | 2 người | Kết nối với Telegram để giao tiếp với Agent. |
+| **Memory & Context** | 2 người | Phụ trách bộ nhớ ngắn hạn/dài hạn, ghi chú người dùng, liên kết người-dự án-tài liệu và cách agent dùng context đúng lúc. |
+| **Agent Flow** | 2 người | Phụ trách agent loop, chạy nhiều bước, tiếp tục sau khi người dùng duyệt/từ chối và tối ưu phối hợp nhiều công cụ. |
+| **Tools & Workspace** | 2 người | Phụ trách Google Workspace, Web Search, sandbox/file tools và đảm bảo công cụ có mô tả/risk rõ ràng để agent dùng an toàn. |
+| **Safety & Release** | 2 người | Phụ trách HITL, log, monitoring, channel UX, runbook, smoke test và đóng gói bản trải nghiệm gần production. |
 
 ---

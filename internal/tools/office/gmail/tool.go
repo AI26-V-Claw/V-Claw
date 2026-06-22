@@ -1281,11 +1281,18 @@ func internalError(message string) *ErrorShape {
 }
 
 func normalizeDate(value string) (string, error) {
-	parsed, err := time.Parse("2006-01-02", value)
-	if err != nil {
-		return "", err
+	for _, layout := range []string{
+		"2006-01-02",
+		time.RFC3339,
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+	} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.Format("2006/01/02"), nil
+		}
 	}
-	return parsed.Format("2006/01/02"), nil
+	return "", fmt.Errorf("unrecognized date format: %q", value)
 }
 
 func quoteIfNeeded(value string) string {
@@ -1390,7 +1397,7 @@ func (t GmailTool) Parameters() tools.ToolSchema {
 	case ToolNameForwardDraft:
 		return forwardDraftSchema()
 	case ToolNameDownloadAttachments:
-		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "filenames": arrayStringSchema(), "outputDir": map[string]any{"type": "string", "description": "Optional workspace-relative directory. Omit to save into the workspace root. Paths outside the workspace are rejected."}}, "required": []string{"messageId"}, "additionalProperties": false}
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{"messageId": map[string]any{"type": "string"}, "filenames": arrayStringSchema(), "outputDir": map[string]any{"type": "string", "description": "Optional. Omit to save into the workspace root. Do not pass relative paths or paths derived from workspace_dir — relative paths create nested subdirectories. If provided, use an absolute path that is already within the workspace."}}, "required": []string{"messageId"}, "additionalProperties": false}
 	case ToolNameModifyMessage:
 		return tools.ToolSchema{
 			"type": "object",

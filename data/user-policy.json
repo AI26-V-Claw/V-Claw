@@ -1,13 +1,13 @@
 {
-  "require_approval": [
+  "auto_allow": [
     "safe_read",
     "safe_compute",
-    "sensitive_read",
+    "sensitive_read"
+  ],
+  "require_approval": [
     "external_write",
     "local_write",
-    "code_execution"
-  ],
-  "always_block": [
+    "code_execution",
     "destructive"
   ]
 }

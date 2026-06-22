@@ -43,7 +43,7 @@ func NewRunPythonTool(cfg Config) RunPythonTool {
 func (RunPythonTool) Name() string { return ToolNameRunPython }
 
 func (RunPythonTool) Description() string {
-	return "Run Python code or a workspace-relative Python script inside the configured sandbox. The result includes workspace_dir — the absolute host path where files persist between runs. To reference a file created or found in the workspace (e.g. for chat.sendMessage attachments), use workspace_dir + filename. This code execution action requires approval."
+	return "Run Python code or a workspace-relative Python script inside the configured sandbox. Use this tool whenever you need to process a file that cannot be read as plain text — for example: extract text from a PDF using pdfplumber, parse Excel/CSV data with pandas, or read a Word document with python-docx. Available libraries: pdfplumber (PDF text extraction), pandas, numpy, openpyxl, xlrd, python-docx, chardet, PyYAML. The result includes workspace_dir — the absolute host path where files persist between runs. To reference a file created or found in the workspace (e.g. for chat.sendMessage attachments), use workspace_dir + filename. This code execution action requires approval."
 }
 
 func (RunPythonTool) Parameters() tools.ToolSchema {

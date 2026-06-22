@@ -10,28 +10,21 @@ import (
 	"vclaw/internal/providers"
 )
 
-func applyChannelToolDefaults(message contracts.UserMessage, toolCall providers.ToolCall) providers.ToolCall {
-	if !strings.EqualFold(strings.TrimSpace(message.Channel), "telegram") {
-		return toolCall
-	}
+func applyChannelToolDefaults(_ contracts.UserMessage, toolCall providers.ToolCall) providers.ToolCall {
 	if toolCall.Name != "gmail.downloadAttachments" {
 		return toolCall
 	}
-	if outputDir := strings.TrimSpace(stringArg(toolCall.Arguments, "outputDir")); outputDir != "" && filepath.IsAbs(outputDir) {
-		return toolCall
+	outputDir, _ := toolCall.Arguments["outputDir"].(string)
+	outputDir = strings.TrimSpace(outputDir)
+	// Relative outputDir would be joined with workspace root by PathGuard, silently
+	// creating a nested directory (e.g. ".sandbox-workspace/agent/workspace" becomes
+	// workspace_root/.sandbox-workspace/agent/workspace). Clear it so the tool defaults
+	// to workspace root. Absolute paths are kept and validated by PathGuard at execution.
+	if outputDir != "" && !filepath.IsAbs(outputDir) {
+		args := cloneArguments(toolCall.Arguments)
+		delete(args, "outputDir")
+		toolCall.Arguments = args
 	}
-
-	outputDir, err := telegramDownloadOutputDir()
-	if err != nil || strings.TrimSpace(outputDir) == "" {
-		return toolCall
-	}
-
-	args := cloneArguments(toolCall.Arguments)
-	if args == nil {
-		args = map[string]any{}
-	}
-	args["outputDir"] = outputDir
-	toolCall.Arguments = args
 	return toolCall
 }
 

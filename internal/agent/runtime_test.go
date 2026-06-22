@@ -3,8 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -838,14 +836,7 @@ func TestRuntimeResolvesNamedChatSpaceBeforeApproval(t *testing.T) {
 	}
 }
 
-func TestRuntimeDefaultsTelegramDownloadAttachmentsOutputDir(t *testing.T) {
-	homeDir := t.TempDir()
-	downloadsDir := filepath.Join(homeDir, "Downloads")
-	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
-		t.Fatalf("mkdir downloads: %v", err)
-	}
-	t.Setenv("HOME", homeDir)
-
+func TestRuntimeDownloadAttachmentsApprovalWithRelativeOutputDir(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{
 			Role: providers.MessageRoleAssistant,
@@ -880,15 +871,14 @@ func TestRuntimeDefaultsTelegramDownloadAttachmentsOutputDir(t *testing.T) {
 	if response.ApprovalRequest == nil {
 		t.Fatal("expected approval request")
 	}
-	if got, want := response.ApprovalRequest.ToolCall.Input["outputDir"], filepath.Join(homeDir, "Downloads", "Vclaw"); got != want {
-		t.Fatalf("expected default outputDir %q, got %#v", want, got)
+	// Relative outputDir is stripped — PathGuard would join it with workspace root and create
+	// a nested subdirectory. The tool defaults to workspace root when outputDir is absent.
+	if _, hasOutputDir := response.ApprovalRequest.ToolCall.Input["outputDir"]; hasOutputDir {
+		t.Fatalf("expected relative outputDir to be stripped, got %#v", response.ApprovalRequest.ToolCall.Input["outputDir"])
 	}
 }
 
-func TestRuntimeFallsBackTelegramDownloadAttachmentsOutputDir(t *testing.T) {
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
-
+func TestRuntimeDownloadAttachmentsApprovalWithoutOutputDir(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{
 			Role: providers.MessageRoleAssistant,
@@ -923,8 +913,9 @@ func TestRuntimeFallsBackTelegramDownloadAttachmentsOutputDir(t *testing.T) {
 	if response.ApprovalRequest == nil {
 		t.Fatal("expected approval request")
 	}
-	if got, want := response.ApprovalRequest.ToolCall.Input["outputDir"], filepath.Join(homeDir, "Vclaw"); got != want {
-		t.Fatalf("expected fallback outputDir %q, got %#v", want, got)
+	// outputDir omitted by agent — workspace guard defaults to workspace root at execution time.
+	if _, hasOutputDir := response.ApprovalRequest.ToolCall.Input["outputDir"]; hasOutputDir {
+		t.Fatalf("expected outputDir to be absent from approval input, got %#v", response.ApprovalRequest.ToolCall.Input["outputDir"])
 	}
 }
 

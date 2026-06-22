@@ -328,8 +328,7 @@ func sentMailSearchQuery(userText string) (string, []string, bool) {
 	hasSentCue := containsAnyText(lower,
 		"toi da gui", "minh da gui",
 		"mail da gui", "email da gui",
-		"da gui den", "da gui toi", "da gui cho",
-		"sent to", "sent mail", "sent email",
+		"sent mail", "sent email",
 	)
 	if !hasSentCue {
 		return "", nil, false
