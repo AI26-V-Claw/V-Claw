@@ -105,9 +105,21 @@ func TestRuntimeBypassesRedundantClarificationForSafeChat(t *testing.T) {
 	if provider.calls[0].ToolChoice != "auto" {
 		t.Fatalf("expected auto tool choice, got %q", provider.calls[0].ToolChoice)
 	}
-	if len(provider.calls[0].Tools) != 1 || provider.calls[0].Tools[0].Name != clarifyToolName {
+	if !providerToolNamesInclude(provider.calls[0].Tools, clarifyToolName) {
 		t.Fatalf("expected clarify tool to be exposed, got %#v", provider.calls[0].Tools)
 	}
+	if !providerToolNamesInclude(provider.calls[0].Tools, PlanToolName) {
+		t.Fatalf("expected plan tool to be exposed, got %#v", provider.calls[0].Tools)
+	}
+}
+
+func providerToolNamesInclude(definitions []providers.ToolDefinition, name string) bool {
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRuntimeIncludesAttachmentPathsInProviderUserMessage(t *testing.T) {

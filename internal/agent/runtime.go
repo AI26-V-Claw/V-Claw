@@ -101,6 +101,7 @@ type Runtime struct {
 	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
 	promptVersion string
+	planStore     *PlanStore
 	subtasks      *subtaskCoordinator
 	ltMemLoader   longTermMemoryLoader  // nil = disabled
 	ltMemFlusher  longTermMemoryFlusher // nil = disabled
@@ -227,6 +228,12 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
 	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
 	subtasks.now = now
+	planStore := NewPlanStore()
+	if config.Registry != nil {
+		if _, found := config.Registry.GetDefinition(PlanToolName); !found {
+			_ = config.Registry.RegisterWithEntry(NewPlanTool(planStore), tools.ToolRegistryEntry{Group: "builtin", Owner: "agent_core"})
+		}
+	}
 	var ltLoader longTermMemoryLoader
 	var ltFlusher longTermMemoryFlusher
 	if dir := strings.TrimSpace(config.LongMemDir); dir != "" && config.Provider != nil {
@@ -262,6 +269,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
 		promptVersion:              promptVersion,
+		planStore:                  planStore,
 		subtasks:                   subtasks,
 		ltMemLoader:                ltLoader,
 		ltMemFlusher:               ltFlusher,
@@ -353,6 +361,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		return base, nil
 	}
 	ctx = withParentRunID(ctx, runState.RunID)
+	ctx = WithPlanScope(ctx, message.SessionID, runState.RunID)
 	ctx = providers.WithUsageRecorder(ctx, func(usage *providers.Usage) {
 		r.recordLLMUsageCost(ctx, &runState, usage)
 	})
@@ -390,6 +399,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	if err != nil {
 		return failStartedRun(internalError("load session transcript: "+err.Error(), contracts.ErrorSourceSession))
 	}
+	r.hydratePlanFromTranscript(message.SessionID, transcript)
 	if errShape := r.refreshSessionSummary(ctx, message.SessionID, transcript); errShape != nil {
 		return failStartedRun(errShape)
 	}
@@ -574,6 +584,9 @@ agentLoop:
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
 		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
+		if prompt := r.activePlanPrompt(message.SessionID); prompt != "" {
+			providerMessages = append([]providers.Message{{Role: providers.MessageRoleSystem, Content: prompt}}, providerMessages...)
+		}
 		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
@@ -674,6 +687,7 @@ If required information is missing, ask one concise clarification question inste
 				Message:     assistantMessage.Content,
 				Data:        r.traceData(referenceResolution),
 				ToolResults: toolResults,
+				Plan:        r.responsePlan(message.SessionID),
 			}, nil
 		}
 
