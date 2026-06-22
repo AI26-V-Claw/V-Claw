@@ -246,6 +246,8 @@ func renderCalendarPayload(toolName string, prefix string, payload map[string]an
 		title = "Đã tạo sự kiện Calendar."
 	case "calendar.updateEvent":
 		title = "Đã cập nhật sự kiện Calendar."
+	case "calendar.respondEvent":
+		title = "Đã cập nhật phản hồi tham dự Calendar."
 	case "calendar.deleteEvent":
 		title = "Đã xóa sự kiện Calendar."
 	default:
@@ -264,6 +266,8 @@ func renderCalendarPayload(toolName string, prefix string, payload map[string]an
 		{"Location", "Địa điểm"},
 		{"EventLink", "Link sự kiện"},
 		{"MeetLink", "Google Meet"},
+		{"Organizer", "Người tổ chức"},
+		{"Creator", "Người tạo"},
 		{"Attendees", "Người tham gia"},
 	})...)
 }
@@ -494,6 +498,10 @@ func payloadKeyAliases(key string) []string {
 		return []string{"eventLink"}
 	case "MeetLink":
 		return []string{"meetLink"}
+	case "Organizer":
+		return []string{"organizer"}
+	case "Creator":
+		return []string{"creator"}
 	case "Attendees":
 		return []string{"attendees"}
 	default:

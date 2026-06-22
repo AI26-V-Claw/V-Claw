@@ -28,12 +28,12 @@ func (l *Loader) Load() string {
 
 	// USER.md: always include if present, no token cap.
 	if content := l.readFile("USER.md"); strings.TrimSpace(content) != "" {
-		parts = append(parts, strings.TrimSpace(content))
+		parts = append(parts, stripMemoryMarkers(content))
 	}
 
 	// NOTES.md: rolling context, capped at notesMaxTokens.
 	if content := l.readFile("NOTES.md"); strings.TrimSpace(content) != "" {
-		content = strings.TrimSpace(content)
+		content = stripMemoryMarkers(content)
 		if sessions.EstimateTokens(content) > notesMaxTokens {
 			content = trimNotesContent(content, notesMaxTokens)
 		}

@@ -15,6 +15,8 @@ type Event struct {
 	StartTime   time.Time
 	EndTime     time.Time
 	Attendees   []Attendee
+	Organizer   Person
+	Creator     Person
 	EventLink   string
 	MeetLink    string
 	IsRecurring bool
@@ -23,7 +25,16 @@ type Event struct {
 // Attendee represents a participant in a calendar event.
 type Attendee struct {
 	Email          string
+	DisplayName    string
 	ResponseStatus string // e.g., "needsAction", "declined", "tentative", "accepted"
+	Self           bool
+}
+
+// Person represents a calendar organizer or creator.
+type Person struct {
+	Email       string
+	DisplayName string
+	Self        bool
 }
 
 // toDomainEvent maps a Google Calendar API event to our domain Event type.
@@ -55,7 +66,9 @@ func toDomainEvent(gEvent *gcal.Event) Event {
 		if a != nil {
 			attendees = append(attendees, Attendee{
 				Email:          a.Email,
+				DisplayName:    a.DisplayName,
 				ResponseStatus: a.ResponseStatus,
+				Self:           a.Self,
 			})
 		}
 	}
@@ -68,9 +81,28 @@ func toDomainEvent(gEvent *gcal.Event) Event {
 		StartTime:   startTime,
 		EndTime:     endTime,
 		Attendees:   attendees,
+		Organizer:   toPerson(gEvent.Organizer),
+		Creator:     toPerson(gEvent.Creator),
 		EventLink:   gEvent.HtmlLink,
 		MeetLink:    gEvent.HangoutLink,
 		IsRecurring: len(gEvent.Recurrence) > 0 || gEvent.RecurringEventId != "",
+	}
+}
+
+func toPerson(value any) Person {
+	switch v := value.(type) {
+	case *gcal.EventOrganizer:
+		if v == nil {
+			return Person{}
+		}
+		return Person{Email: v.Email, DisplayName: v.DisplayName, Self: v.Self}
+	case *gcal.EventCreator:
+		if v == nil {
+			return Person{}
+		}
+		return Person{Email: v.Email, DisplayName: v.DisplayName, Self: v.Self}
+	default:
+		return Person{}
 	}
 }
 
@@ -97,6 +129,7 @@ func toGoogleEvent(e Event) *gcal.Event {
 	for _, a := range e.Attendees {
 		gEvent.Attendees = append(gEvent.Attendees, &gcal.EventAttendee{
 			Email:          a.Email,
+			DisplayName:    a.DisplayName,
 			ResponseStatus: a.ResponseStatus,
 		})
 	}

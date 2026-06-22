@@ -1906,13 +1906,13 @@ func getDraftSchema() tools.ToolSchema {
 
 func draftSchema(required []string) tools.ToolSchema {
 	return tools.ToolSchema{"type": "object", "properties": map[string]any{
-		"to":          emailArraySchema("Recipient email addresses. Only include valid non-empty email addresses. Do not include empty strings."),
-		"cc":          emailArraySchema("CC email addresses. Only include valid non-empty email addresses."),
-		"bcc":         emailArraySchema("BCC email addresses. Only include valid non-empty email addresses."),
-		"subject":     map[string]any{"type": "string"},
-		"textBody":    map[string]any{"type": "string"},
-		"htmlBody":    map[string]any{"type": "string"},
-		"threadId":    map[string]any{"type": "string"},
+		"to":               emailArraySchema("Recipient email addresses. Only include valid non-empty email addresses. Do not include empty strings."),
+		"cc":               emailArraySchema("CC email addresses. Only include valid non-empty email addresses."),
+		"bcc":              emailArraySchema("BCC email addresses. Only include valid non-empty email addresses."),
+		"subject":          map[string]any{"type": "string"},
+		"textBody":         map[string]any{"type": "string", "description": "Plain text email body. For human-facing emails, preserve readable paragraph breaks using newline characters: greeting, blank line, main content, blank line, closing/signature. Do not collapse a normal email into one paragraph unless the user explicitly asks for a single-line message."},
+		"htmlBody":         map[string]any{"type": "string", "description": "HTML email body. Use paragraph tags or line breaks for readable email structure; do not collapse a normal email into one paragraph unless the user explicitly asks for a single-line message."},
+		"threadId":         map[string]any{"type": "string"},
 		"attachments":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Local file system paths to attach (e.g. /tmp/file.pdf). Do NOT use this for Google Drive files — use driveAttachments instead."},
 		"driveAttachments": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Google Drive file IDs to attach (not filenames or URLs — the Drive file ID string such as '1abc...'). Use this whenever the file is on Google Drive."},
 	}, "required": required, "additionalProperties": false}

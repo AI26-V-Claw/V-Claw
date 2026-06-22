@@ -2,6 +2,7 @@ package calendar
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,11 +15,38 @@ import (
 // --- Mock connector ---
 
 type mockConnector struct {
-	listEventsFunc  func(ctx context.Context, timeMin, timeMax time.Time, query string) ([]gcal.Event, error)
-	getEventFunc    func(ctx context.Context, eventID string) (gcal.Event, error)
-	createEventFunc func(ctx context.Context, e gcal.Event) (gcal.Event, error)
-	updateEventFunc func(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error)
-	deleteEventFunc func(ctx context.Context, eventID string) error
+	listEventsFunc   func(ctx context.Context, timeMin, timeMax time.Time, query string) ([]gcal.Event, error)
+	getEventFunc     func(ctx context.Context, eventID string) (gcal.Event, error)
+	createEventFunc  func(ctx context.Context, e gcal.Event) (gcal.Event, error)
+	updateEventFunc  func(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error)
+	respondEventFunc func(ctx context.Context, eventID string, email string, responseStatus string) (gcal.Event, error)
+	deleteEventFunc  func(ctx context.Context, eventID string) error
+}
+
+func TestCreateEventToolDescribesExplicitStartAndEndRequirements(t *testing.T) {
+	tool := &CreateEventTool{service: NewService(&mockConnector{})}
+	if !strings.Contains(tool.Description(), "explicit start date+time") || !strings.Contains(tool.Description(), "date-only") {
+		t.Fatalf("description should require explicit start time and reject date-only inference: %q", tool.Description())
+	}
+	params := tool.Parameters()
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties in schema, got %#v", params["properties"])
+	}
+	start, ok := props["start"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected start schema, got %#v", props["start"])
+	}
+	end, ok := props["end"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected end schema, got %#v", props["end"])
+	}
+	if !strings.Contains(fmt.Sprint(start["description"]), "explicit time of day") {
+		t.Fatalf("start description should require explicit time of day, got %#v", start["description"])
+	}
+	if !strings.Contains(fmt.Sprint(end["description"]), "end time or duration") {
+		t.Fatalf("end description should require explicit end/duration, got %#v", end["description"])
+	}
 }
 
 func (m *mockConnector) ListEvents(ctx context.Context, timeMin, timeMax time.Time, query string) ([]gcal.Event, error) {
@@ -45,6 +73,13 @@ func (m *mockConnector) CreateEvent(ctx context.Context, e gcal.Event) (gcal.Eve
 func (m *mockConnector) UpdateEvent(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error) {
 	if m.updateEventFunc != nil {
 		return m.updateEventFunc(ctx, eventID, e)
+	}
+	return gcal.Event{}, nil
+}
+
+func (m *mockConnector) RespondEvent(ctx context.Context, eventID string, email string, responseStatus string) (gcal.Event, error) {
+	if m.respondEventFunc != nil {
+		return m.respondEventFunc(ctx, eventID, email, responseStatus)
 	}
 	return gcal.Event{}, nil
 }
@@ -205,6 +240,55 @@ func TestListEvents_KeepsSpecificSearchQuery(t *testing.T) {
 	}
 }
 
+func TestGetEvent_Success(t *testing.T) {
+	mock := &mockConnector{
+		getEventFunc: func(ctx context.Context, eventID string) (gcal.Event, error) {
+			if eventID != "event_001" {
+				t.Fatalf("unexpected eventID: %s", eventID)
+			}
+			return gcal.Event{
+				ID:    "event_001",
+				Title: "Project review",
+				Organizer: gcal.Person{
+					Email:       "organizer@example.com",
+					DisplayName: "Organizer",
+				},
+				Creator: gcal.Person{
+					Email:       "creator@example.com",
+					DisplayName: "Creator",
+				},
+				Attendees: []gcal.Attendee{
+					{Email: "alice@example.com", DisplayName: "Alice", ResponseStatus: "accepted"},
+				},
+			}, nil
+		},
+	}
+	svc := NewService(mock)
+
+	output, errShape := svc.GetEvent(context.Background(), GetEventInput{EventID: "event_001"})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if output.Event.Organizer.Email != "organizer@example.com" {
+		t.Fatalf("organizer missing: %+v", output.Event.Organizer)
+	}
+	if len(output.Event.Attendees) != 1 || output.Event.Attendees[0].DisplayName != "Alice" {
+		t.Fatalf("attendees missing display name: %+v", output.Event.Attendees)
+	}
+}
+
+func TestGetEvent_MissingEventID(t *testing.T) {
+	svc := NewService(&mockConnector{})
+
+	_, errShape := svc.GetEvent(context.Background(), GetEventInput{})
+	if errShape == nil {
+		t.Fatal("expected error for missing eventId")
+	}
+	if errShape.Code != "INVALID_INPUT" {
+		t.Errorf("expected INVALID_INPUT, got %s", errShape.Code)
+	}
+}
+
 func TestCreateEvent_Success(t *testing.T) {
 	mock := &mockConnector{
 		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {
@@ -304,6 +388,64 @@ func TestUpdateEvent_MissingEventID(t *testing.T) {
 		Title: "Updated",
 	})
 
+	if errShape == nil {
+		t.Fatal("expected error for missing eventId")
+	}
+	if errShape.Code != "INVALID_INPUT" {
+		t.Errorf("expected INVALID_INPUT, got %s", errShape.Code)
+	}
+}
+
+func TestRespondEvent_Success(t *testing.T) {
+	mock := &mockConnector{
+		respondEventFunc: func(ctx context.Context, eventID string, email string, responseStatus string) (gcal.Event, error) {
+			if eventID != "event_001" || email != "quanghtd@vclaw.site" || responseStatus != "accepted" {
+				t.Fatalf("unexpected respond args: eventID=%q email=%q status=%q", eventID, email, responseStatus)
+			}
+			return gcal.Event{
+				ID:    eventID,
+				Title: "N1 Long-term Test",
+				Attendees: []gcal.Attendee{
+					{Email: email, ResponseStatus: responseStatus},
+				},
+			}, nil
+		},
+	}
+	svc := NewService(mock)
+
+	output, errShape := svc.RespondEvent(context.Background(), RespondEventInput{
+		EventID:        "event_001",
+		Email:          "quanghtd@vclaw.site",
+		ResponseStatus: "ACCEPTED",
+	})
+
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if len(output.Event.Attendees) != 1 || output.Event.Attendees[0].ResponseStatus != "accepted" {
+		t.Fatalf("unexpected RSVP output: %+v", output.Event.Attendees)
+	}
+}
+
+func TestRespondEvent_InvalidStatus(t *testing.T) {
+	svc := NewService(&mockConnector{})
+
+	_, errShape := svc.RespondEvent(context.Background(), RespondEventInput{
+		EventID:        "event_001",
+		ResponseStatus: "yes",
+	})
+	if errShape == nil {
+		t.Fatal("expected error for invalid responseStatus")
+	}
+	if errShape.Code != "INVALID_INPUT" {
+		t.Errorf("expected INVALID_INPUT, got %s", errShape.Code)
+	}
+}
+
+func TestRespondEvent_MissingEventID(t *testing.T) {
+	svc := NewService(&mockConnector{})
+
+	_, errShape := svc.RespondEvent(context.Background(), RespondEventInput{ResponseStatus: "accepted"})
 	if errShape == nil {
 		t.Fatal("expected error for missing eventId")
 	}
@@ -422,6 +564,48 @@ func TestListEventsTool_Execute(t *testing.T) {
 	}
 }
 
+func TestGetEventTool_Execute(t *testing.T) {
+	mock := &mockConnector{
+		getEventFunc: func(ctx context.Context, eventID string) (gcal.Event, error) {
+			return gcal.Event{
+				ID:        eventID,
+				Title:     "Project review",
+				EventLink: "https://calendar.google.com/calendar/event?eid=get_event_1",
+				Organizer: gcal.Person{
+					Email:       "organizer@example.com",
+					DisplayName: "Organizer",
+				},
+				Attendees: []gcal.Attendee{
+					{Email: "alice@example.com", DisplayName: "Alice", ResponseStatus: "accepted"},
+				},
+			}, nil
+		},
+	}
+	svc := NewService(mock)
+	tool := &GetEventTool{service: svc}
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "tc_get_event",
+		Name: ToolNameGetEvent,
+		Arguments: map[string]any{
+			"eventId": "event_001",
+		},
+	})
+
+	if !result.Success {
+		t.Errorf("expected success, got error: %v", result.Error)
+	}
+	if !strings.Contains(result.ContentForUser, "\"organizer\":{\"email\":\"organizer@example.com\"") {
+		t.Fatalf("expected organizer in output, got %q", result.ContentForUser)
+	}
+	if !strings.Contains(result.ContentForUser, "\"displayName\":\"Alice\"") {
+		t.Fatalf("expected attendee display name in output, got %q", result.ContentForUser)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.URI != "https://calendar.google.com/calendar/event?eid=get_event_1" {
+		t.Fatalf("expected artifact ref URI for event, got %#v", result.ArtifactRef)
+	}
+}
+
 func TestCreateEventTool_Execute(t *testing.T) {
 	mock := &mockConnector{
 		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {
@@ -494,6 +678,43 @@ func TestCreateEventToolRejectsInvalidAttendeeEmail(t *testing.T) {
 	}
 }
 
+func TestRespondEventTool_Execute(t *testing.T) {
+	mock := &mockConnector{
+		respondEventFunc: func(ctx context.Context, eventID string, email string, responseStatus string) (gcal.Event, error) {
+			return gcal.Event{
+				ID:        eventID,
+				Title:     "N1 Long-term Test",
+				EventLink: "https://calendar.google.com/calendar/event?eid=respond_event_1",
+				Attendees: []gcal.Attendee{
+					{Email: email, ResponseStatus: responseStatus},
+				},
+			}, nil
+		},
+	}
+	svc := NewService(mock)
+	tool := &RespondEventTool{service: svc}
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "tc_respond_event",
+		Name: ToolNameRespondEvent,
+		Arguments: map[string]any{
+			"eventId":        "event_001",
+			"email":          "quanghtd@vclaw.site",
+			"responseStatus": "accepted",
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected success, got error: %v", result.Error)
+	}
+	if !strings.Contains(result.ContentForUser, "\"responseStatus\":\"accepted\"") {
+		t.Fatalf("expected responseStatus in output, got %q", result.ContentForUser)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.URI != "https://calendar.google.com/calendar/event?eid=respond_event_1" {
+		t.Fatalf("expected artifact ref URI for responded event, got %#v", result.ArtifactRef)
+	}
+}
+
 func TestDeleteEventTool_Execute_Error(t *testing.T) {
 	mock := &mockConnector{
 		deleteEventFunc: func(ctx context.Context, eventID string) error {
@@ -554,8 +775,10 @@ func TestRegisterTools(t *testing.T) {
 
 	expectedTools := []string{
 		ToolNameListEvents,
+		ToolNameGetEvent,
 		ToolNameCreateEvent,
 		ToolNameUpdateEvent,
+		ToolNameRespondEvent,
 		ToolNameDeleteEvent,
 	}
 
@@ -571,8 +794,8 @@ func TestRegisterTools(t *testing.T) {
 	}
 
 	defs := registry.ListTools()
-	if len(defs) != 4 {
-		t.Errorf("expected 4 tools in registry, got %d", len(defs))
+	if len(defs) != 6 {
+		t.Errorf("expected 6 tools in registry, got %d", len(defs))
 	}
 }
 
@@ -645,9 +868,11 @@ func TestToEventSummary(t *testing.T) {
 		StartTime:   now,
 		EndTime:     now.Add(30 * time.Minute),
 		Attendees: []gcal.Attendee{
-			{Email: "alice@example.com", ResponseStatus: "accepted"},
+			{Email: "alice@example.com", DisplayName: "Alice", ResponseStatus: "accepted"},
 			{Email: "bob@example.com", ResponseStatus: "needsAction"},
 		},
+		Organizer:   gcal.Person{Email: "organizer@example.com", DisplayName: "Organizer"},
+		Creator:     gcal.Person{Email: "creator@example.com", DisplayName: "Creator"},
 		EventLink:   "https://calendar.google.com/calendar/event?eid=summary_event_1",
 		MeetLink:    "https://meet.google.com/abc-def",
 		IsRecurring: true,
@@ -663,6 +888,15 @@ func TestToEventSummary(t *testing.T) {
 	}
 	if len(summary.Attendees) != 2 {
 		t.Errorf("expected 2 attendees, got %d", len(summary.Attendees))
+	}
+	if summary.Attendees[0].DisplayName != "Alice" {
+		t.Errorf("expected attendee display name Alice, got %q", summary.Attendees[0].DisplayName)
+	}
+	if summary.Organizer.Email != "organizer@example.com" {
+		t.Errorf("unexpected Organizer: %+v", summary.Organizer)
+	}
+	if summary.Creator.Email != "creator@example.com" {
+		t.Errorf("unexpected Creator: %+v", summary.Creator)
 	}
 	if summary.Start == "" || summary.End == "" {
 		t.Error("expected non-empty start/end times")

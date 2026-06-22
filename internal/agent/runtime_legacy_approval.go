@@ -236,6 +236,8 @@ func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) strin
 		return "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar."
 	case "calendar.updateEvent":
 		return "Tôi cần bạn xác nhận trước khi sửa sự kiện Calendar."
+	case "calendar.respondEvent":
+		return "Tôi cần bạn xác nhận trước khi phản hồi lời mời Calendar."
 	case "calendar.deleteEvent":
 		return "Tôi cần bạn xác nhận trước khi xóa sự kiện Calendar."
 	case "chat.sendMessage":
