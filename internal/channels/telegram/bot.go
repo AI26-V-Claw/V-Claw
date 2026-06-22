@@ -151,6 +151,25 @@ func (b *Bot) Run(ctx context.Context) error {
 				b.logger.Error("failed to persist offset", "offset", offset, "error", err)
 			}
 
+			// /cancel is dispatched immediately in the polling loop (not via
+			// workCh) so it can interrupt a run blocking the worker goroutine.
+			if update.Message != nil &&
+				update.Message.From != nil &&
+				update.Message.From.ID == b.allowedUserID {
+				msgText := strings.TrimSpace(update.Message.Text)
+				if msgText == "" {
+					msgText = strings.TrimSpace(update.Message.Caption)
+				}
+				if isTelegramCancelCommand(msgText) {
+					go func(u telegramUpdate) {
+						if _, err := b.processUpdate(ctx, u); err != nil {
+							b.logger.Error("telegram cancel update failed", "update_id", u.UpdateID, "error", err)
+						}
+					}(update)
+					continue
+				}
+			}
+
 			// Callback queries (approval buttons) always go through.
 			// For regular messages, drop and reply if the session is already busy.
 			if update.Message != nil {
