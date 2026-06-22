@@ -105,9 +105,21 @@ func TestRuntimeBypassesRedundantClarificationForSafeChat(t *testing.T) {
 	if provider.calls[0].ToolChoice != "auto" {
 		t.Fatalf("expected auto tool choice, got %q", provider.calls[0].ToolChoice)
 	}
-	if len(provider.calls[0].Tools) != 1 || provider.calls[0].Tools[0].Name != clarifyToolName {
+	if !providerToolNamesInclude(provider.calls[0].Tools, clarifyToolName) {
 		t.Fatalf("expected clarify tool to be exposed, got %#v", provider.calls[0].Tools)
 	}
+	if !providerToolNamesInclude(provider.calls[0].Tools, PlanToolName) {
+		t.Fatalf("expected plan tool to be exposed, got %#v", provider.calls[0].Tools)
+	}
+}
+
+func providerToolNamesInclude(definitions []providers.ToolDefinition, name string) bool {
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRuntimeIncludesAttachmentPathsInProviderUserMessage(t *testing.T) {
@@ -3634,7 +3646,7 @@ func TestRuntimeToolTimeoutReturnsFailedErrorShape(t *testing.T) {
 	}
 }
 
-func TestRuntimeStopsAtMaxIterations(t *testing.T) {
+func TestRuntimeStopsAtIterationBudget(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_1", Name: "calculator", Arguments: map[string]any{"operation": "add", "a": 1, "b": 1}}}}},
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_2", Name: "calculator", Arguments: map[string]any{"operation": "add", "a": 2, "b": 2}}}}},
@@ -3644,19 +3656,45 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 		t.Fatalf("register calculator: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:      provider,
-		Registry:      registry,
-		MaxIterations: 2,
+		Provider:        provider,
+		Registry:        registry,
+		IterationBudget: 2,
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
 	if err != nil {
 		t.Fatalf("run runtime: %v", err)
 	}
-	if response.Status != contracts.AgentStatusMaxIterationsReached {
-		t.Fatalf("expected max iterations reached, got %#v", response)
+	if response.Status != contracts.AgentStatusIterationBudgetExhausted {
+		t.Fatalf("expected iteration budget exhausted, got %#v", response)
 	}
-	if response.Error == nil || response.Error.Code != contracts.ErrorMaxIterationsExceeded {
-		t.Fatalf("expected max iteration error, got %#v", response.Error)
+	if response.Error == nil || response.Error.Code != contracts.ErrorIterationBudgetExhausted {
+		t.Fatalf("expected iteration budget error, got %#v", response.Error)
+	}
+}
+
+func TestRuntimeRefundsPlanOnlyIterationBudget(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_plan", Name: PlanToolName, Arguments: map[string]any{"steps": []any{map[string]any{"id": "1", "description": "Plan", "status": "in_progress"}}}}}}},
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "final result"}},
+	}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:        provider,
+		Registry:        tools.NewToolRegistry(),
+		IterationBudget: 1,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed after refunded plan iteration, got %#v", response)
+	}
+	if response.Message != "final result" {
+		t.Fatalf("unexpected message: %q", response.Message)
+	}
+	if len(provider.calls) != 2 {
+		t.Fatalf("expected plan turn plus final turn, got %d", len(provider.calls))
 	}
 }

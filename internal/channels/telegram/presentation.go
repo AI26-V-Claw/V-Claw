@@ -219,7 +219,7 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	}
 
 	switch response.Status {
-	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusMaxIterationsReached:
+	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusIterationBudgetExhausted:
 		return telegramGenericErrorText()
 	case contracts.AgentStatusApprovalRequired:
 		if response.ApprovalRequest != nil {

@@ -64,11 +64,11 @@ type AgentRuntimeConfig struct {
 	AuditLogger  audit.AuditEventLogger
 	DatabaseURL  string
 
-	Logger        *slog.Logger
-	ToolHooks     toolhooks.Hooks
-	MaxIterations int
-	Observer      agent.RuntimeObserver
-	Telemetry     agent.RuntimeTelemetry
+	Logger          *slog.Logger
+	ToolHooks       toolhooks.Hooks
+	IterationBudget int
+	Observer        agent.RuntimeObserver
+	Telemetry       agent.RuntimeTelemetry
 
 	GoogleToolsMode       string
 	GoogleCredentialsPath string
@@ -240,7 +240,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		StateStore:                 stateStore,
 		Logger:                     config.Logger,
 		ToolHooks:                  runtimeHooks,
-		MaxIterations:              config.MaxIterations,
+		IterationBudget:            config.IterationBudget,
 		Model:                      model,
 		LocalLocation:              localLocation,
 		Compactor:                  compactor,

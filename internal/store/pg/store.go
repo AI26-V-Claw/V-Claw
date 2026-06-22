@@ -174,7 +174,7 @@ func runStatusEventType(status agent.RuntimeRunStatus) (string, bool) {
 	switch status {
 	case agent.RuntimeRunStatusCompleted:
 		return "agent.run.completed", true
-	case agent.RuntimeRunStatusFailed, agent.RuntimeRunStatusMaxIterations:
+	case agent.RuntimeRunStatusFailed, agent.RuntimeRunStatusIterationBudget:
 		return "agent.run.failed", true
 	case agent.RuntimeRunStatusBlocked:
 		return "agent.run.cancelled", true
@@ -241,13 +241,13 @@ func (s *Store) FindOrCreateAction(ctx context.Context, record agent.ActionRecor
 			SessionID:         record.SessionID,
 			ToolCallID:        record.ToolCallID,
 			ApprovalID:        record.ApprovalID,
-			ToolName:           record.ToolName,
-			RiskLevel:          string(record.RiskLevel),
-			PolicyDecision:     string(contracts.RiskDecisionRequiresApproval),
-			Model:              record.Model,
-			PromptVersion:      record.PromptVersion,
-			ToolSchemaVersion:  record.ToolSchemaVersion,
-			PolicyDecisionRef:  record.PolicyDecisionRef,
+			ToolName:          record.ToolName,
+			RiskLevel:         string(record.RiskLevel),
+			PolicyDecision:    string(contracts.RiskDecisionRequiresApproval),
+			Model:             record.Model,
+			PromptVersion:     record.PromptVersion,
+			ToolSchemaVersion: record.ToolSchemaVersion,
+			PolicyDecisionRef: record.PolicyDecisionRef,
 			Details: map[string]any{
 				"actionId": record.ActionID,
 				"summary":  record.ApprovalSummary,

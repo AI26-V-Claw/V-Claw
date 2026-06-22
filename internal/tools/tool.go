@@ -113,12 +113,12 @@ type ToolError struct {
 }
 
 const (
-	ErrorToolNotFound         = "TOOL_NOT_FOUND"
-	ErrorInvalidArgument      = "TOOL_INPUT_INVALID"
-	ErrorExecutionFailed      = "INTERNAL_ERROR"
-	ErrorBlockedByPolicy      = "ACTION_BLOCKED_BY_POLICY"
-	ErrorTimeout              = "PROVIDER_TIMEOUT"
-	ErrorMaxIterationsReached = "INTERNAL_ERROR"
+	ErrorToolNotFound             = "TOOL_NOT_FOUND"
+	ErrorInvalidArgument          = "TOOL_INPUT_INVALID"
+	ErrorExecutionFailed          = "INTERNAL_ERROR"
+	ErrorBlockedByPolicy          = "ACTION_BLOCKED_BY_POLICY"
+	ErrorTimeout                  = "PROVIDER_TIMEOUT"
+	ErrorIterationBudgetExhausted = "INTERNAL_ERROR"
 )
 
 func ToolNotFoundResult(call ToolCall) ToolResult {
