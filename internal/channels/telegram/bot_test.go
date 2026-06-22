@@ -1532,6 +1532,30 @@ func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
 	}
 }
 
+func TestTelegramApprovalTextForChatListMessagesHidesSpaceID(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_chat_list",
+			Summary:    "Cho phép tôi đọc tin nhắn trong Google Chat nhé?",
+			ToolCall: contracts.ToolCall{
+				ToolName: "chat.listMessages",
+				Input: map[string]any{
+					"space":      "spaces/AAQAEUb3OG4",
+					"maxResults": 50,
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(text, "Cuộc trò chuyện: Google Chat đã chọn") {
+		t.Fatalf("expected chat list approval to show neutral conversation context, got %q", text)
+	}
+	if strings.Contains(text, "Space:") || strings.Contains(text, "spaces/AAQAEUb3OG4") {
+		t.Fatalf("expected chat list approval to omit raw space identifier, got %q", text)
+	}
+}
+
 func TestTelegramApprovalTextShowsWorkspaceDefaultForGmailAttachments(t *testing.T) {
 	// Relative and absent outputDir should both show the workspace sandbox label —
 	// not a Downloads path, which is outside the workspace guard's allowed roots.

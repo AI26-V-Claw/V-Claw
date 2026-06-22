@@ -15,9 +15,11 @@ import (
 	docstool "vclaw/internal/tools/office/docs"
 	drivetool "vclaw/internal/tools/office/drive"
 	gmailtool "vclaw/internal/tools/office/gmail"
+	peopletool "vclaw/internal/tools/office/people"
 	sheetstool "vclaw/internal/tools/office/sheets"
 	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
+	webtool "vclaw/internal/tools/web"
 )
 
 // TestContinuationMessageFullTextReachesProvider verifies that when r.Run() is called
@@ -89,11 +91,11 @@ func TestContinuationMessageFullTextReachesProvider(t *testing.T) {
 	}
 }
 
-func TestApprovalSummariesCoverApprovalRequiredProductionTools(t *testing.T) {
+func TestApprovalSummariesCoverProductionTools(t *testing.T) {
 	fallback := approvalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
 	legacyFallback := legacyApprovalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
 
-	for _, toolName := range approvalRequiredProductionToolNames() {
+	for _, toolName := range productionToolNames() {
 		if got := approvalSummary(toolName, contracts.RiskLevelExternalWrite); got == fallback {
 			t.Errorf("approvalSummary(%q) returned fallback summary", toolName)
 		}
@@ -103,41 +105,41 @@ func TestApprovalSummariesCoverApprovalRequiredProductionTools(t *testing.T) {
 	}
 }
 
-func approvalRequiredProductionToolNames() []string {
+func productionToolNames() []string {
 	names := []string{
+		"get_current_time",
+		"calculator",
+		SubtaskToolName,
+		fstool.ToolNameListDir,
+		fstool.ToolNameReadFile,
+		fstool.ToolNameFileInfo,
 		fstool.ToolNameWriteFile,
 		sandboxtool.ToolNameRunPython,
 		sandboxtool.ToolNameRunShell,
 	}
 	for _, entry := range gmailtool.RegistryEntries {
-		if entry.RequiresApproval {
-			names = append(names, entry.Name)
-		}
+		names = append(names, entry.Name)
 	}
 	for _, entry := range drivetool.RegistryEntries {
-		if entry.RequiresApproval {
-			names = append(names, entry.Name)
-		}
+		names = append(names, entry.Name)
 	}
 	for _, entry := range docstool.RegistryEntries {
-		if entry.RequiresApproval {
-			names = append(names, entry.Name)
-		}
+		names = append(names, entry.Name)
 	}
 	for _, entry := range sheetstool.RegistryEntries {
-		if entry.RequiresApproval {
-			names = append(names, entry.Name)
-		}
+		names = append(names, entry.Name)
 	}
 	for _, entry := range calendartool.RegistryEntries {
-		if entry.RequiresApproval {
-			names = append(names, entry.Name)
-		}
+		names = append(names, entry.Name)
 	}
 	for _, entry := range chattool.RegistryEntries {
-		if entry.RequiresApproval {
-			names = append(names, entry.Name)
-		}
+		names = append(names, entry.Name)
+	}
+	for _, entry := range peopletool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	for _, entry := range webtool.RegistryEntries {
+		names = append(names, entry.Name)
 	}
 	return names
 }

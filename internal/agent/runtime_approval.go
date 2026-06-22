@@ -920,6 +920,40 @@ Ghi chú chỉnh sửa:
 
 func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 	switch toolName {
+	case "get_current_time":
+		return "Cho phép tôi xem thời gian hiện tại nhé?"
+	case "calculator":
+		return "Cho phép tôi tính toán phép tính này nhé?"
+	case "spawn_subtask":
+		return "Cho phép tôi tạo subtask nội bộ để xử lý tiếp nhé?"
+	case "filesystem.listDir":
+		return "Cho phép tôi liệt kê file trong workspace nhé?"
+	case "filesystem.readFile":
+		return "Cho phép tôi đọc file trong workspace nhé?"
+	case "filesystem.fileInfo":
+		return "Cho phép tôi xem thông tin file trong workspace nhé?"
+	case "filesystem.writeFile":
+		return "Tôi cần bạn xác nhận trước khi ghi file trong workspace."
+	case "web.search":
+		return "Cho phép tôi tìm kiếm trên web nhé?"
+	case "web.fetch":
+		return "Cho phép tôi đọc nội dung trang web này nhé?"
+	case "people.searchDirectory":
+		return "Cho phép tôi tìm kiếm danh bạ Google Workspace nhé?"
+	case "gmail.listEmails":
+		return "Cho phép tôi xem danh sách email trong Gmail nhé?"
+	case "gmail.listLabels":
+		return "Cho phép tôi xem nhãn trong Gmail nhé?"
+	case "gmail.getProfile":
+		return "Cho phép tôi xem thông tin tài khoản Gmail nhé?"
+	case "gmail.listThreads":
+		return "Cho phép tôi xem danh sách thread trong Gmail nhé?"
+	case "gmail.getThread":
+		return "Cho phép tôi đọc nội dung thread trong Gmail nhé?"
+	case "gmail.listDrafts":
+		return "Cho phép tôi xem danh sách Gmail draft nhé?"
+	case "gmail.getDraft":
+		return "Cho phép tôi đọc nội dung Gmail draft nhé?"
 	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft":
 		return "Tôi cần bạn xác nhận trước khi tạo hoặc sửa Gmail draft."
 	case "gmail.sendDraft":
@@ -942,6 +976,14 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi sửa sự kiện Calendar."
 	case "calendar.deleteEvent":
 		return "Tôi cần bạn xác nhận trước khi xóa sự kiện Calendar."
+	case "calendar.listEvents":
+		return "Cho phép tôi xem lịch Calendar nhé?"
+	case "chat.listSpaces":
+		return "Cho phép tôi xem danh sách Google Chat space nhé?"
+	case "chat.listMembers":
+		return "Cho phép tôi xem thành viên trong Google Chat nhé?"
+	case "chat.findSpacesByMembers":
+		return "Cho phép tôi tìm cuộc trò chuyện Google Chat theo thành viên nhé?"
 	case "chat.listMessages":
 		return "Cho phép tôi đọc tin nhắn trong Google Chat nhé?"
 	case "chat.sendMessage":
@@ -956,6 +998,14 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi thêm thành viên Google Chat."
 	case "chat.removeMember":
 		return "Tôi cần bạn xác nhận trước khi xóa thành viên Google Chat."
+	case "drive.listFiles":
+		return "Cho phép tôi xem danh sách file trong Google Drive nhé?"
+	case "drive.getFile":
+		return "Cho phép tôi xem thông tin file Google Drive nhé?"
+	case "drive.exportFile":
+		return "Cho phép tôi export nội dung file Google Drive nhé?"
+	case "drive.downloadFile":
+		return "Cho phép tôi đọc nội dung file Google Drive nhé?"
 	case "drive.saveFile":
 		return "Tôi cần bạn xác nhận trước khi lưu file Google Drive xuống workspace."
 	case "drive.createFolder":
@@ -966,6 +1016,8 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi sửa metadata file Google Drive."
 	case "drive.shareFile":
 		return "Tôi cần bạn xác nhận trước khi chia sẻ file Google Drive."
+	case "drive.listPermissions":
+		return "Cho phép tôi xem quyền chia sẻ file Google Drive nhé?"
 	case "drive.revokePermission":
 		return "Tôi cần bạn xác nhận trước khi thu hồi quyền chia sẻ file Google Drive."
 	case "drive.moveFile", "drive.moveFiles":
@@ -982,6 +1034,8 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi sửa nội dung Google Docs document."
 	case "docs.deleteContent":
 		return "Tôi cần bạn xác nhận trước khi xóa nội dung trong Google Docs document."
+	case "sheets.getSpreadsheet":
+		return "Cho phép tôi xem thông tin Google Sheets spreadsheet nhé?"
 	case "sheets.readValues", "sheets.batchGetValues":
 		return "Cho phép tôi đọc dữ liệu trong Google Sheets nhé?"
 	case "sheets.createSpreadsheet":
@@ -992,8 +1046,6 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 		return "Tôi cần bạn xác nhận trước khi thay đổi tab trong Google Sheets."
 	case "sheets.deleteSheet":
 		return "Tôi cần bạn xác nhận trước khi xóa tab trong Google Sheets."
-	case "filesystem.writeFile":
-		return "Tôi cần bạn xác nhận trước khi ghi file trong workspace."
 	case "sandbox.runPython", "sandbox.runShell":
 		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
 	default:
