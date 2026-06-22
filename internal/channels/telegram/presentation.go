@@ -617,6 +617,8 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		if detail := telegramChatApprovalDetailText(input); detail != "" {
 			return detail
 		}
+	case "chat.listMessages":
+		return "Cuộc trò chuyện: Google Chat đã chọn"
 	case "gmail.sendDraft":
 		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
 	case "gmail.downloadAttachments":
@@ -970,7 +972,7 @@ func telegramShouldSkipApprovalField(key string, value any) bool {
 		return true
 	}
 	switch key {
-	case "draftid", "messageid", "threadid", "userid", "user_id", "approvalid", "toolcallid", "tool_call_id", "rendermode", "previewchars", "full", "pagetoken", "page_token", "source":
+	case "draftid", "messageid", "threadid", "userid", "user_id", "approvalid", "toolcallid", "tool_call_id", "rendermode", "previewchars", "full", "pagetoken", "page_token", "source", "space":
 		return true
 	}
 	if strings.HasSuffix(key, "id") || strings.HasSuffix(key, "ids") {

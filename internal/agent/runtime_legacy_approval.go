@@ -215,48 +215,7 @@ Ghi chú chỉnh sửa:
 }
 
 func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) string {
-	switch toolName {
-	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft":
-		return "Tôi cần bạn xác nhận trước khi tạo hoặc sửa Gmail draft."
-	case "gmail.sendDraft":
-		return "Tôi cần bạn xác nhận trước khi gửi email."
-	case "gmail.deleteDraft":
-		return "Tôi cần bạn xác nhận trước khi xóa Gmail draft."
-	case "gmail.downloadAttachments":
-		return "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local."
-	case "gmail.getEmail":
-		return "Tôi cần bạn xác nhận trước khi đọc nội dung email này."
-	case "gmail.modifyMessage", "gmail.batchModifyMessages":
-		return "Tôi cần bạn xác nhận trước khi sửa trạng thái hoặc nhãn Gmail."
-	case "gmail.trashMessage":
-		return "Tôi cần bạn xác nhận trước khi chuyển email vào thùng rác."
-	case "gmail.untrashMessage":
-		return "Tôi cần bạn xác nhận trước khi khôi phục email khỏi thùng rác."
-	case "calendar.createEvent":
-		return "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar."
-	case "calendar.updateEvent":
-		return "Tôi cần bạn xác nhận trước khi sửa sự kiện Calendar."
-	case "calendar.respondEvent":
-		return "Tôi cần bạn xác nhận trước khi phản hồi lời mời Calendar."
-	case "calendar.deleteEvent":
-		return "Tôi cần bạn xác nhận trước khi xóa sự kiện Calendar."
-	case "chat.sendMessage":
-		return "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat."
-	case "chat.updateMessage":
-		return "Tôi cần bạn xác nhận trước khi sửa tin nhắn Google Chat."
-	case "chat.deleteMessage":
-		return "Tôi cần bạn xác nhận trước khi xóa tin nhắn Google Chat."
-	case "chat.createSpace":
-		return "Tôi cần bạn xác nhận trước khi tạo Google Chat space."
-	case "chat.addMember":
-		return "Tôi cần bạn xác nhận trước khi thêm thành viên Google Chat."
-	case "chat.removeMember":
-		return "Tôi cần bạn xác nhận trước khi xóa thành viên Google Chat."
-	case "sandbox.runPython", "sandbox.runShell":
-		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
-	default:
-		return "Tôi cần bạn xác nhận trước khi thực hiện thao tác này."
-	}
+	return approvalSummary(toolName, riskLevel)
 }
 
 func legacyApprovalExecutionMessage(result tools.ToolResult, contractResult contracts.ToolResult) string {
