@@ -644,7 +644,7 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
-| `docs.getDocument` | Integration | `safe_read` | No |
+| `docs.getDocument` | Integration | `sensitive_read` | No |
 | `docs.createDocument` | Integration | `external_write` | Yes |
 | `docs.appendText` | Integration | `external_write` | Yes |
 | `docs.replaceText` | Integration | `external_write` | Yes |
@@ -656,7 +656,7 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
 | `sheets.getSpreadsheet` | Integration | `safe_read` | No |
-| `sheets.readValues` | Integration | `safe_read` | No |
+| `sheets.readValues` | Integration | `sensitive_read` | No |
 | `sheets.batchGetValues` | Integration | `safe_read` | No |
 | `sheets.createSpreadsheet` | Integration | `external_write` | Yes |
 | `sheets.updateValues` | Integration | `external_write` | Yes |
