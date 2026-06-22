@@ -1,4 +1,4 @@
-﻿{
+{
     "schema_version":  "n2-e2e-scenario/v2",
     "scenario_id":  "n2.1-production-briefing-mega-flow",
     "title":  "N2.1 production-style multi-tool briefing and weekly execution plan",
@@ -142,6 +142,6 @@
                                }
                            ],
     "agent":  {
-                  "max_iterations":  20
+                  "iteration_budget":  20
               }
 }

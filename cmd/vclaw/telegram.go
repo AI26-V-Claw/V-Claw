@@ -42,7 +42,7 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	botToken := fs.String("token", envFirst("TELEGRAM_BOT_TOKEN", "VCLAW_TELEGRAM_BOT_TOKEN"), "Telegram bot token")
 	allowedUserID := fs.Int64("allowed-user", envInt64FirstOrDefault(0, "ALLOWED_TELEGRAM_USER_ID", "VCLAW_TELEGRAM_ALLOWED_USER_IDS"), "allowed Telegram user id")
 	dataDir := fs.String("data-dir", envOrDefault("DATA_DIR", "./data"), "runtime data directory")
-	maxIterations := fs.Int("max-iterations", agent.DefaultMaxIterations, "maximum agent iterations")
+	iterationBudget := fs.Int("iteration-budget", agent.DefaultIterationBudget, "maximum agent iteration budget")
 	googleToolsMode := fs.String("google-tools", envOrDefault("VCLAW_GOOGLE_TOOLS_MODE", app.ToolModeAuto), "Google Workspace tool mode: auto, required, or off")
 	webToolsMode := fs.String("web-tools", envOrDefault("VCLAW_WEB_TOOLS_MODE", app.ToolModeAuto), "Web search/fetch tool mode: auto, required, or off")
 	credentialsPath := fs.String("credentials", envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", defaultCredentialsPath), "Google OAuth desktop client credentials JSON")
@@ -76,7 +76,7 @@ func runTelegramRun(ctx context.Context, args []string) error {
 		CompactorModel:             envFirst("VCLAW_COMPACTOR_MODEL"),
 		Timezone:                   envOrDefault("VCLAW_TIMEZONE", "Asia/Ho_Chi_Minh"),
 		DatabaseURL:                envFirst("DATABASE_URL"),
-		MaxIterations:              *maxIterations,
+		IterationBudget:            *iterationBudget,
 		GoogleToolsMode:            *googleToolsMode,
 		WebToolsMode:               *webToolsMode,
 		GoogleCredentialsPath:      *credentialsPath,

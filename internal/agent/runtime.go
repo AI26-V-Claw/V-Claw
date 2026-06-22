@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	DefaultMaxIterations    = 8
+	DefaultIterationBudget  = 8
 	DefaultToolTimeout      = 30 * time.Second
 	DefaultProviderTimeout  = 60 * time.Second
 	approvalTTL             = 10 * time.Minute
@@ -48,7 +48,7 @@ type RuntimeConfig struct {
 	StateStore                 RuntimeStateStore
 	Logger                     *slog.Logger
 	ToolHooks                  toolhooks.Hooks
-	MaxIterations              int
+	IterationBudget            int
 	ProviderTimeout            time.Duration
 	ToolTimeout                time.Duration
 	ParallelExecutionEnabled   bool
@@ -82,7 +82,7 @@ type Runtime struct {
 	approvalMu                 sync.Mutex
 	pendingApprovals           map[string]pendingApproval
 	pendingBySession           map[string]string
-	maxIterations              int
+	iterationBudgetLimit       int
 	providerTimeout            time.Duration
 	toolTimeout                time.Duration
 	parallelExecutionEnabled   bool
@@ -144,9 +144,9 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if config.Telemetry != nil && provider != nil {
 		provider = config.Telemetry.WrapProvider(provider)
 	}
-	maxIterations := config.MaxIterations
-	if maxIterations <= 0 {
-		maxIterations = DefaultMaxIterations
+	iterationBudgetLimit := config.IterationBudget
+	if iterationBudgetLimit <= 0 {
+		iterationBudgetLimit = DefaultIterationBudget
 	}
 	toolTimeout := config.ToolTimeout
 	if toolTimeout <= 0 {
@@ -253,7 +253,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		toolHooks:                  hooks,
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
-		maxIterations:              maxIterations,
+		iterationBudgetLimit:       iterationBudgetLimit,
 		providerTimeout:            providerTimeout,
 		toolTimeout:                toolTimeout,
 		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
@@ -568,9 +568,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	}
 
 	toolResults := []contracts.ToolResult{}
-	iterationBudget := NewIterationBudget(r.maxIterations)
+	iterationBudget := NewIterationBudget(r.iterationBudgetLimit)
 	housekeepingRefunds := 0
-	housekeepingRefundLimit := r.maxIterations
+	housekeepingRefundLimit := r.iterationBudgetLimit
 agentLoop:
 	for iteration := 1; ; iteration++ {
 		if !iterationBudget.Consume() {
@@ -1174,7 +1174,7 @@ If required information is missing, ask one concise clarification question inste
 		}
 	}
 
-	updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations, string(orchestration.FailureReasonMaxIteration))
+	updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusIterationBudget, string(orchestration.FailureReasonIterationBudget))
 	if errShape != nil {
 		base.Error = errShape
 		base.Message = errShape.Message
@@ -1184,14 +1184,14 @@ If required information is missing, ask one concise clarification question inste
 	return contracts.AgentResponse{
 		RequestID:     message.RequestID,
 		SessionID:     message.SessionID,
-		Status:        contracts.AgentStatusMaxIterationsReached,
+		Status:        contracts.AgentStatusIterationBudgetExhausted,
 		FailureReason: updatedState.FailureReason,
-		Message:       "agent exceeded max iterations",
+		Message:       "agent exhausted iteration budget",
 		Data:          r.traceData(referenceResolution),
 		ToolResults:   toolResults,
 		Error: &contracts.ErrorShape{
-			Code:      contracts.ErrorMaxIterationsExceeded,
-			Message:   "agent exceeded max iterations",
+			Code:      contracts.ErrorIterationBudgetExhausted,
+			Message:   "agent exhausted iteration budget",
 			Source:    contracts.ErrorSourceAgent,
 			Retryable: false,
 		},

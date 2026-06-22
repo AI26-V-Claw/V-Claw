@@ -323,7 +323,7 @@ func (t *SubtaskTool) runChild(ctx context.Context, taskID string, parentRunID s
 		StateStore:                 t.parent.stateStore,
 		Logger:                     t.parent.logger,
 		ToolHooks:                  t.parent.toolHooks,
-		MaxIterations:              t.parent.maxIterations,
+		IterationBudget:            t.parent.iterationBudgetLimit,
 		ToolTimeout:                t.parent.toolTimeout,
 		ParallelExecutionEnabled:   t.parent.parallelExecutionEnabled,
 		ParallelMaxWorkers:         t.parent.parallelMaxWorkers,

@@ -1,4 +1,4 @@
-﻿param(
+param(
   [Parameter(Mandatory=$true)]
   [string]$Scenario,
   [switch]$DryRun,
@@ -292,9 +292,9 @@ function Invoke-VClawChatScript {
   )
 
   $sessionId = "e2e-$RunId"
-  $maxIterations = 20
-  if ($null -ne $ScenarioDoc.agent -and $null -ne $ScenarioDoc.agent.max_iterations) {
-    $maxIterations = [int]$ScenarioDoc.agent.max_iterations
+  $iterationBudget = 20
+  if ($null -ne $ScenarioDoc.agent -and $null -ne $ScenarioDoc.agent.iteration_budget) {
+    $iterationBudget = [int]$ScenarioDoc.agent.iteration_budget
   }
   $inputLines = Get-ScriptedInputLines -ScenarioDoc $ScenarioDoc -RunId $RunId
   $userMessages = Get-ScriptedUserMessages -ScenarioDoc $ScenarioDoc -RunId $RunId
@@ -311,7 +311,7 @@ function Invoke-VClawChatScript {
     [Environment]::SetEnvironmentVariable("LANGFUSE_PUBLIC_KEY", $null, "Process")
     [Environment]::SetEnvironmentVariable("LANGFUSE_SECRET_KEY", $null, "Process")
   }
-  $command = "$CommandLine agent chat -session $sessionId -channel e2e-terminal -json -trace -max-iterations $maxIterations"
+  $command = "$CommandLine agent chat -session $sessionId -channel e2e-terminal -json -trace -iteration-budget $iterationBudget"
   $started = Get-Date
   $previousErrorActionPreference = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
@@ -1148,29 +1148,3 @@ $summaryPath = Save-Summary -Summary $summary -ArtifactDir $artifactDir
 "pending_verification: thêm -RunChat để chạy vclaw agent chat scripted approval"
 "summary: $summaryPath"
 exit 0
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

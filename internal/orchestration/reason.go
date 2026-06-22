@@ -8,7 +8,7 @@ const (
 	FailureReasonNone                FailureReason = ""
 	FailureReasonTimeout             FailureReason = "timeout"
 	FailureReasonCanceled            FailureReason = "canceled"
-	FailureReasonMaxIteration        FailureReason = "max_iteration"
+	FailureReasonIterationBudget     FailureReason = "iteration_budget"
 	FailureReasonProviderError       FailureReason = "provider_error"
 	FailureReasonProviderUnavailable FailureReason = "provider_unavailable"
 	FailureReasonToolError           FailureReason = "tool_error"

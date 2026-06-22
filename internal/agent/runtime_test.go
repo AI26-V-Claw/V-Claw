@@ -3646,7 +3646,7 @@ func TestRuntimeToolTimeoutReturnsFailedErrorShape(t *testing.T) {
 	}
 }
 
-func TestRuntimeStopsAtMaxIterations(t *testing.T) {
+func TestRuntimeStopsAtIterationBudget(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_1", Name: "calculator", Arguments: map[string]any{"operation": "add", "a": 1, "b": 1}}}}},
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_2", Name: "calculator", Arguments: map[string]any{"operation": "add", "a": 2, "b": 2}}}}},
@@ -3656,20 +3656,20 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 		t.Fatalf("register calculator: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:      provider,
-		Registry:      registry,
-		MaxIterations: 2,
+		Provider:        provider,
+		Registry:        registry,
+		IterationBudget: 2,
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
 	if err != nil {
 		t.Fatalf("run runtime: %v", err)
 	}
-	if response.Status != contracts.AgentStatusMaxIterationsReached {
-		t.Fatalf("expected max iterations reached, got %#v", response)
+	if response.Status != contracts.AgentStatusIterationBudgetExhausted {
+		t.Fatalf("expected iteration budget exhausted, got %#v", response)
 	}
-	if response.Error == nil || response.Error.Code != contracts.ErrorMaxIterationsExceeded {
-		t.Fatalf("expected max iteration error, got %#v", response.Error)
+	if response.Error == nil || response.Error.Code != contracts.ErrorIterationBudgetExhausted {
+		t.Fatalf("expected iteration budget error, got %#v", response.Error)
 	}
 }
 
@@ -3679,9 +3679,9 @@ func TestRuntimeRefundsPlanOnlyIterationBudget(t *testing.T) {
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "final result"}},
 	}}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:      provider,
-		Registry:      tools.NewToolRegistry(),
-		MaxIterations: 1,
+		Provider:        provider,
+		Registry:        tools.NewToolRegistry(),
+		IterationBudget: 1,
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())

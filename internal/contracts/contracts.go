@@ -8,12 +8,12 @@ import (
 type AgentStatus string
 
 const (
-	AgentStatusCompleted            AgentStatus = "completed"
-	AgentStatusApprovalRequired     AgentStatus = "approval_required"
-	AgentStatusNeedClarification    AgentStatus = "need_clarification"
-	AgentStatusFailed               AgentStatus = "failed"
-	AgentStatusBlocked              AgentStatus = "blocked"
-	AgentStatusMaxIterationsReached AgentStatus = "max_iterations_reached"
+	AgentStatusCompleted                AgentStatus = "completed"
+	AgentStatusApprovalRequired         AgentStatus = "approval_required"
+	AgentStatusNeedClarification        AgentStatus = "need_clarification"
+	AgentStatusFailed                   AgentStatus = "failed"
+	AgentStatusBlocked                  AgentStatus = "blocked"
+	AgentStatusIterationBudgetExhausted AgentStatus = "iteration_budget_exhausted"
 )
 
 type UserOutputKind string
@@ -78,19 +78,19 @@ const (
 )
 
 const (
-	ErrorInvalidInput           = "INVALID_INPUT"
-	ErrorMissingRequiredField   = "MISSING_REQUIRED_FIELD"
-	ErrorToolNotFound           = "TOOL_NOT_FOUND"
-	ErrorToolInputInvalid       = "TOOL_INPUT_INVALID"
-	ErrorProviderError          = "PROVIDER_ERROR"
-	ErrorProviderTimeout        = "PROVIDER_TIMEOUT"
-	ErrorProviderUnavailable    = "PROVIDER_UNAVAILABLE"
-	ErrorActionRequiresApproval = "ACTION_REQUIRES_APPROVAL"
-	ErrorActionBlockedByPolicy  = "ACTION_BLOCKED_BY_POLICY"
-	ErrorApprovalNotFound       = "APPROVAL_NOT_FOUND"
-	ErrorApprovalExpired        = "APPROVAL_EXPIRED"
-	ErrorInternal               = "INTERNAL_ERROR"
-	ErrorMaxIterationsExceeded  = "MAX_ITERATIONS_EXCEEDED"
+	ErrorInvalidInput             = "INVALID_INPUT"
+	ErrorMissingRequiredField     = "MISSING_REQUIRED_FIELD"
+	ErrorToolNotFound             = "TOOL_NOT_FOUND"
+	ErrorToolInputInvalid         = "TOOL_INPUT_INVALID"
+	ErrorProviderError            = "PROVIDER_ERROR"
+	ErrorProviderTimeout          = "PROVIDER_TIMEOUT"
+	ErrorProviderUnavailable      = "PROVIDER_UNAVAILABLE"
+	ErrorActionRequiresApproval   = "ACTION_REQUIRES_APPROVAL"
+	ErrorActionBlockedByPolicy    = "ACTION_BLOCKED_BY_POLICY"
+	ErrorApprovalNotFound         = "APPROVAL_NOT_FOUND"
+	ErrorApprovalExpired          = "APPROVAL_EXPIRED"
+	ErrorInternal                 = "INTERNAL_ERROR"
+	ErrorIterationBudgetExhausted = "ITERATION_BUDGET_EXHAUSTED"
 )
 
 // GovernanceMetadata captures the provenance fields that must be attached to

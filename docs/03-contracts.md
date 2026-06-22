@@ -133,10 +133,10 @@ approval_required
 need_clarification
 failed
 blocked
-max_iterations_reached
+iteration_budget_exhausted
 ```
 
-`max_iterations_reached` is reserved for an agent runtime that exhausts its loop budget before producing a final answer. It must not be used as a `RiskLevel`.
+`iteration_budget_exhausted` is reserved for an agent runtime that exhausts its loop budget before producing a final answer. It must not be used as a `RiskLevel`.
 
 `output` is an optional user-facing rendering for channels/CLI. When present, integrations should prefer `output` over raw `message`.
 
@@ -173,7 +173,7 @@ Known artifact kinds in Sprint 1: `gmail.message`, `chat.message`, `calendar.eve
 | `` (empty) | Status is `completed` - happy path |
 | `timeout` | Context deadline exceeded |
 | `canceled` | Request was cancelled |
-| `max_iteration` | Agent exhausted iteration budget |
+| `iteration_budget` | Agent exhausted iteration budget |
 | `provider_error` | LLM provider returned an error |
 | `provider_unavailable` | LLM provider returned retryable error |
 | `tool_error` | Tool execution failed |
@@ -465,12 +465,12 @@ SANDBOX_TIMEOUT
 COMMAND_NOT_ALLOWED
 FILE_ACCESS_DENIED
 INTERNAL_ERROR
-MAX_ITERATIONS_EXCEEDED
+ITERATION_BUDGET_EXHAUSTED
 ```
 
 `PROVIDER_ERROR` is used for non-retryable LLM/provider failures. `PROVIDER_UNAVAILABLE` is used for retryable provider outages.
 
-`MAX_ITERATIONS_EXCEEDED` is used when the agent runtime reaches its configured iteration limit before completing the request.
+`ITERATION_BUDGET_EXHAUSTED` is used when the agent runtime reaches its configured iteration limit before completing the request.
 
 ---
 
