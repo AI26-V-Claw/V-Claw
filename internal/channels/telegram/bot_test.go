@@ -410,7 +410,7 @@ func TestIsTelegramNewCommand(t *testing.T) {
 	}
 }
 
-func TestProcessUpdateRoutesNewCommandToSessionReset(t *testing.T) {
+func TestProcessUpdateRoutesNewCommandToNewActiveSession(t *testing.T) {
 	handler := &fakeHandler{}
 	var sentText string
 	botTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
@@ -442,14 +442,24 @@ func TestProcessUpdateRoutesNewCommandToSessionReset(t *testing.T) {
 	if !processed {
 		t.Fatal("expected update to be processed")
 	}
-	if handler.resetSession != "telegram_chat_55" {
-		t.Fatalf("unexpected reset session id: %q", handler.resetSession)
+	if handler.resetSession != "" {
+		t.Fatalf("/new should not reset an existing session, got %q", handler.resetSession)
 	}
 	if handler.calls != 0 {
 		t.Fatalf("/new should not call HandleMessage, got %d calls", handler.calls)
 	}
 	if !strings.Contains(sentText, "Đã tạo phiên mới") {
 		t.Fatalf("unexpected reset confirmation: %q", sentText)
+	}
+	index, err := bot.sessionIndex.List(context.Background(), 55, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("load session index: %v", err)
+	}
+	if len(index.Sessions) != 2 {
+		t.Fatalf("expected legacy + new session, got %#v", index.Sessions)
+	}
+	if index.ActiveSessionKey == "legacy" {
+		t.Fatalf("expected /new to switch active session, got %#v", index)
 	}
 }
 
