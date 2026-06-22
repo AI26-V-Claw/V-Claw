@@ -17,6 +17,7 @@ type fakeProvider struct {
 	responses []providers.ChatResponse
 	err       error
 	calls     []providers.ChatRequest
+	hook      func()
 }
 
 type blockingProvider struct {
@@ -368,6 +369,9 @@ func (s failingAssistantAppendSessionStore) AppendMessage(ctx context.Context, s
 
 func (p *fakeProvider) Chat(_ context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
 	p.calls = append(p.calls, request)
+	if p.hook != nil {
+		p.hook()
+	}
 	if p.err != nil {
 		return providers.ChatResponse{}, p.err
 	}

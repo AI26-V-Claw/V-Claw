@@ -249,6 +249,19 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+	if isTelegramCancelCommand(messageText) {
+		sessionID := fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID)
+		if canceller, ok := b.handler.(interface{ CancelSession(string) bool }); ok && canceller.CancelSession(sessionID) {
+			if _, err := b.sendMessage(ctx, update.Message.Chat.ID, "Đã hủy lệnh đang chạy."); err != nil {
+				return false, err
+			}
+		} else {
+			if _, err := b.sendMessage(ctx, update.Message.Chat.ID, "Không có lệnh nào đang chạy."); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	}
 	if isTelegramNewCommand(messageText) {
 		if b.handler == nil {
 			return true, nil
@@ -465,6 +478,18 @@ func isTelegramHistoryCommand(text string) bool {
 		command = command[:index]
 	}
 	return strings.EqualFold(command, "history")
+}
+
+func isTelegramCancelCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "cancel")
 }
 
 func isTelegramNewCommand(text string) bool {
@@ -786,6 +811,7 @@ func (b *Bot) setMyCommands(ctx context.Context) error {
 			{"command": "new", "description": "Bắt đầu phiên mới"},
 			{"command": "status", "description": "Xem trạng thái lệnh gần nhất"},
 			{"command": "history", "description": "Xem lịch sử gần đây"},
+			{"command": "cancel", "description": "Hủy lệnh đang chạy"},
 			{"command": "policy", "description": "Mở menu chính sách"},
 		},
 	}

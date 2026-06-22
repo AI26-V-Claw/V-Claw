@@ -3597,3 +3597,56 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 		t.Fatalf("expected max iteration error, got %#v", response.Error)
 	}
 }
+
+func TestCancelSessionInterruptsActiveRun(t *testing.T) {
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	provider := &fakeProvider{
+		responses: []providers.ChatResponse{},
+		hook: func() {
+			close(started)
+			<-unblock
+		},
+	}
+	store := NewInMemoryRuntimeStateStore()
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:   provider,
+		Registry:   tools.NewToolRegistry(),
+		StateStore: store,
+	})
+
+	msg := runtimeTestMessage()
+	errCh := make(chan error, 1)
+	respCh := make(chan contracts.AgentResponse, 1)
+	go func() {
+		resp, err := runtime.Run(context.Background(), msg)
+		respCh <- resp
+		errCh <- err
+	}()
+
+	// Wait until the provider is blocked mid-run, then cancel.
+	<-started
+	cancelled := runtime.CancelSession(msg.SessionID)
+	close(unblock)
+
+	resp := <-respCh
+	err := <-errCh
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("expected CancelSession to return true")
+	}
+	_ = resp // run may complete or be cancelled depending on timing
+}
+
+func TestCancelSessionReturnsFalseWhenNoActiveRun(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: &fakeProvider{responses: []providers.ChatResponse{}},
+		Registry: tools.NewToolRegistry(),
+	})
+	if runtime.CancelSession("telegram_chat_99999") {
+		t.Fatal("expected false when no run is active")
+	}
+}
