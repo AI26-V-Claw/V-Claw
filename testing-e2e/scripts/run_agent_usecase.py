@@ -28,7 +28,6 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_USECASE = REPO_ROOT / "testing-e2e" / "usecases"
 DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "agent-usecases"
-DEFAULT_SUMMARY_FILE = "all-usecases.summary.json"
 ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 DEFAULT_ENV_FILES = [
     REPO_ROOT / ".env",
@@ -363,6 +362,15 @@ def normalize_step(step: dict[str, Any] | str, variables: dict[str, str]) -> dic
         normalized["kind"] = "send"
         return normalized
 
+    step_type = str(normalized.get("type") or "").strip().lower()
+    if step_type == "user_message":
+        message = str(normalized.get("message") or normalized.get("content") or "").strip()
+        if not message:
+            raise ValueError(f"step {normalized['id']!r} has empty message")
+        normalized["prompt"] = message
+        normalized["kind"] = "send"
+        return normalized
+
     if "content" in normalized:
         normalized["prompt"] = str(normalized["content"])
         normalized["kind"] = "send"
@@ -406,6 +414,11 @@ def should_execute_step(step: Any) -> bool:
         return True
     if not isinstance(step, dict):
         return False
+    step_type = str(step.get("type") or "").strip().lower()
+    if step_type in {"agent_expectation", "expectation"}:
+        return False
+    if step_type in {"user_message", "user_approval", "user_rejection", "user_revision"}:
+        return True
     role = str(step.get("role") or "user").strip().lower()
     return role == "user"
 
@@ -533,16 +546,6 @@ def resolve_usecase_paths(target: Path) -> list[Path]:
     if path.is_dir():
         return sorted(p for p in path.glob("*.json") if p.is_file())
     return [path]
-
-
-def write_summary(artifact_dir: Path, summaries: list[dict[str, Any]], passed: bool) -> Path:
-    path = artifact_dir.resolve() / DEFAULT_SUMMARY_FILE
-    write_json(path, {
-        "passed": passed,
-        "finishedAt": utc_now(),
-        "usecasesRun": summaries,
-    })
-    return path
 
 
 def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, dict[str, Any]]:
@@ -702,22 +705,18 @@ def main() -> int:
         log(f"RUN FAIL: no usecase JSON files found in {args.usecase}")
         return 2
 
-    summaries: list[dict[str, Any]] = []
+    runs_completed = 0
     for usecase_path in usecase_paths:
         args.loaded_env = loaded_env
-        code, summary = run_one_usecase(args, usecase_path)
-        summaries.append(summary)
+        code, _summary = run_one_usecase(args, usecase_path)
+        runs_completed += 1
         if code != 0:
-            summary_path = write_summary(args.artifact_dir, summaries, False)
             log("")
-            log(f"SUMMARY FAIL ({len(summaries)}/{len(usecase_paths)} run)")
-            log(f"Summary: {display_path(summary_path)}")
+            log(f"RUNS FAIL ({runs_completed}/{len(usecase_paths)} run)")
             return code
 
-    summary_path = write_summary(args.artifact_dir, summaries, True)
     log("")
-    log(f"SUMMARY OK ({len(summaries)}/{len(usecase_paths)} run)")
-    log(f"Summary: {display_path(summary_path)}")
+    log(f"RUNS OK ({runs_completed}/{len(usecase_paths)} run)")
     return 0
 
 
