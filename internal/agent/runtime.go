@@ -568,8 +568,14 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	}
 
 	toolResults := []contracts.ToolResult{}
+	iterationBudget := NewIterationBudget(r.maxIterations)
+	housekeepingRefunds := 0
+	housekeepingRefundLimit := r.maxIterations
 agentLoop:
-	for iteration := 1; iteration <= r.maxIterations; iteration++ {
+	for iteration := 1; ; iteration++ {
+		if !iterationBudget.Consume() {
+			break agentLoop
+		}
 		runState.IterationCount = iteration
 		if errShape := r.updateRunState(ctx, runState); errShape != nil {
 			base.Error = errShape
@@ -793,6 +799,10 @@ If required information is missing, ask one concise clarification question inste
 				base.Error = toolErrorShape(batchResults[0].result)
 				base.Message = base.Error.Message
 				return base, nil
+			}
+			if onlyPlanToolCalls(assistantMessage.ToolCalls) && housekeepingRefunds < housekeepingRefundLimit {
+				iterationBudget.Refund()
+				housekeepingRefunds++
 			}
 			continue agentLoop
 		}
@@ -1157,6 +1167,10 @@ If required information is missing, ask one concise clarification question inste
 				base.FailureReason = updatedState.FailureReason
 				return base, nil
 			}
+		}
+		if onlyPlanToolCalls(assistantMessage.ToolCalls) && housekeepingRefunds < housekeepingRefundLimit {
+			iterationBudget.Refund()
+			housekeepingRefunds++
 		}
 	}
 

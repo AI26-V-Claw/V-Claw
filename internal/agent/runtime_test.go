@@ -3672,3 +3672,29 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 		t.Fatalf("expected max iteration error, got %#v", response.Error)
 	}
 }
+
+func TestRuntimeRefundsPlanOnlyIterationBudget(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_plan", Name: PlanToolName, Arguments: map[string]any{"steps": []any{map[string]any{"id": "1", "description": "Plan", "status": "in_progress"}}}}}}},
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "final result"}},
+	}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:      provider,
+		Registry:      tools.NewToolRegistry(),
+		MaxIterations: 1,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed after refunded plan iteration, got %#v", response)
+	}
+	if response.Message != "final result" {
+		t.Fatalf("unexpected message: %q", response.Message)
+	}
+	if len(provider.calls) != 2 {
+		t.Fatalf("expected plan turn plus final turn, got %d", len(provider.calls))
+	}
+}
