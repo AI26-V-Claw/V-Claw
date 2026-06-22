@@ -196,6 +196,70 @@ def observed_tool_names(response: dict[str, Any] | None) -> set[str]:
     return names
 
 
+def tool_trace_from_response(response: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not response:
+        return []
+
+    trace: list[dict[str, Any]] = []
+    request = response.get("approvalRequest")
+    if isinstance(request, dict):
+        tool_call = request.get("toolCall")
+        if isinstance(tool_call, dict):
+            item: dict[str, Any] = {
+                "phase": "approval_requested",
+                "toolName": str(tool_call.get("toolName") or "").strip(),
+                "toolCallId": str(tool_call.get("toolCallId") or "").strip(),
+            }
+            if request.get("approvalId"):
+                item["approvalId"] = request.get("approvalId")
+            if request.get("riskLevel"):
+                item["riskLevel"] = request.get("riskLevel")
+            if isinstance(tool_call.get("input"), dict):
+                item["input"] = tool_call["input"]
+            trace.append({key: value for key, value in item.items() if value not in ("", None)})
+
+    for result in response.get("toolResults") or []:
+        if not isinstance(result, dict):
+            continue
+        item = {
+            "phase": "completed",
+            "toolName": str(result.get("toolName") or "").strip(),
+            "toolCallId": str(result.get("toolCallId") or "").strip(),
+            "success": result.get("success"),
+        }
+        if result.get("data") is not None:
+            item["data"] = result.get("data")
+        if result.get("error") is not None:
+            item["error"] = result.get("error")
+        if result.get("artifactRef") is not None:
+            item["artifactRef"] = result.get("artifactRef")
+        if result.get("metadata") is not None:
+            item["metadata"] = result.get("metadata")
+        trace.append({key: value for key, value in item.items() if value not in ("", None)})
+
+    return trace
+
+
+def tool_names_from_trace(trace: list[dict[str, Any]]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in trace:
+        name = str(item.get("toolName") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def response_trace_data(response: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(response, dict) or not isinstance(response.get("data"), dict):
+        return {}
+    data = dict(response["data"])
+    data.pop("toolsExposed", None)
+    return data
+
+
 def artifact_from_response(response: dict[str, Any] | None) -> dict[str, Any] | None:
     if not response:
         return None
@@ -210,6 +274,7 @@ def artifact_from_response(response: dict[str, Any] | None) -> dict[str, Any] | 
 
 def summarize_run(run: dict[str, Any], user_message: str) -> dict[str, Any]:
     response = run.get("response")
+    tool_trace = tool_trace_from_response(response)
     summary: dict[str, Any] = {
         "user": user_message,
         "status": response_status(response),
@@ -217,6 +282,11 @@ def summarize_run(run: dict[str, Any], user_message: str) -> dict[str, Any]:
         "durationMs": run.get("durationMs"),
         "exitCode": run.get("exitCode"),
     }
+    if tool_trace:
+        summary["tools"] = tool_names_from_trace(tool_trace)
+        summary["toolTrace"] = tool_trace
+    if trace := response_trace_data(response):
+        summary["trace"] = trace
     if appr_id := approval_id(response):
         summary["approvalId"] = appr_id
     if tool_name := approval_tool_name(response):
@@ -743,28 +813,27 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
             for message in step_result.get("messages", []):
                 if not isinstance(message, dict):
                     continue
+                turn_entry: dict[str, Any] = {
+                    "step": step_result.get("id"),
+                }
                 user_text = str(message.get("user") or "").strip()
                 if user_text:
-                    user_entry = {
-                        "step": step_result.get("id"),
-                        "role": "user",
-                        "text": user_text,
+                    turn_entry["user"] = {
+                        "message": user_text,
                     }
-                    agent_expectations = step_result.get("agent")
-                    if isinstance(agent_expectations, dict) and agent_expectations:
-                        user_entry["agent"] = agent_expectations
-                    report["conversation"].append(user_entry)
+
+                agent_payload: dict[str, Any] = {}
                 agent_text = str(message.get("agent") or "").strip()
                 if agent_text:
-                    report["conversation"].append({
-                        "step": step_result.get("id"),
-                        "role": "agent",
-                        "status": message.get("status"),
-                        "approvalId": message.get("approvalId"),
-                        "approvalTool": message.get("approvalTool"),
-                        "artifact": message.get("artifact"),
-                        "text": agent_text,
-                    })
+                    agent_payload["message"] = agent_text
+                for key in ("status", "approvalId", "approvalTool", "artifact", "tools", "toolTrace", "trace"):
+                    if key in message and message[key] not in (None, "", [], {}):
+                        agent_payload[key] = message[key]
+                if agent_payload:
+                    turn_entry["agent"] = agent_payload
+
+                if "user" in turn_entry or "agent" in turn_entry:
+                    report["conversation"].append(turn_entry)
             latest_approval = str(step_result.get("lastApprovalId") or "").strip()
             if latest_approval:
                 variables["LAST_APPROVAL_ID"] = latest_approval

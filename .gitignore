@@ -59,3 +59,6 @@ docs/testing-e2e/
 testing-e2e/artifacts/
 testing-e2e/**/*.log
 .gomodcache/
+
+
+__pycache__/

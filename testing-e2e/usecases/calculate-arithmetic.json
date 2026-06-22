@@ -1,0 +1,14 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Tính chính xác cho mình: 9382472 * 83240 - 23948293"
+    },
+    "agent": {
+      "expectation": "Agent cần sử dụng tool calculator để tính toán và trả về kết quả chính xác là 780973020987.",
+      "requires_approval": false,
+      "expected_tools": ["calculator"],
+      "response_contains": ["780973020987"]
+    }
+  }
+]
