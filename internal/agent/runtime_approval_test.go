@@ -10,6 +10,14 @@ import (
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
+	calendartool "vclaw/internal/tools/office/calendar"
+	chattool "vclaw/internal/tools/office/chat"
+	docstool "vclaw/internal/tools/office/docs"
+	drivetool "vclaw/internal/tools/office/drive"
+	gmailtool "vclaw/internal/tools/office/gmail"
+	sheetstool "vclaw/internal/tools/office/sheets"
+	fstool "vclaw/internal/tools/os/filesystem"
+	sandboxtool "vclaw/internal/tools/system/sandbox"
 )
 
 // TestContinuationMessageFullTextReachesProvider verifies that when r.Run() is called
@@ -79,6 +87,59 @@ func TestContinuationMessageFullTextReachesProvider(t *testing.T) {
 	if strings.Contains(lastUserContent, "Tiếp tục sau khi") {
 		t.Fatalf("provider received stripped placeholder instead of full continuation text\nlast user content: %q", lastUserContent)
 	}
+}
+
+func TestApprovalSummariesCoverApprovalRequiredProductionTools(t *testing.T) {
+	fallback := approvalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
+	legacyFallback := legacyApprovalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
+
+	for _, toolName := range approvalRequiredProductionToolNames() {
+		if got := approvalSummary(toolName, contracts.RiskLevelExternalWrite); got == fallback {
+			t.Errorf("approvalSummary(%q) returned fallback summary", toolName)
+		}
+		if got := legacyApprovalSummary(toolName, contracts.RiskLevelExternalWrite); got == legacyFallback {
+			t.Errorf("legacyApprovalSummary(%q) returned fallback summary", toolName)
+		}
+	}
+}
+
+func approvalRequiredProductionToolNames() []string {
+	names := []string{
+		fstool.ToolNameWriteFile,
+		sandboxtool.ToolNameRunPython,
+		sandboxtool.ToolNameRunShell,
+	}
+	for _, entry := range gmailtool.RegistryEntries {
+		if entry.RequiresApproval {
+			names = append(names, entry.Name)
+		}
+	}
+	for _, entry := range drivetool.RegistryEntries {
+		if entry.RequiresApproval {
+			names = append(names, entry.Name)
+		}
+	}
+	for _, entry := range docstool.RegistryEntries {
+		if entry.RequiresApproval {
+			names = append(names, entry.Name)
+		}
+	}
+	for _, entry := range sheetstool.RegistryEntries {
+		if entry.RequiresApproval {
+			names = append(names, entry.Name)
+		}
+	}
+	for _, entry := range calendartool.RegistryEntries {
+		if entry.RequiresApproval {
+			names = append(names, entry.Name)
+		}
+	}
+	for _, entry := range chattool.RegistryEntries {
+		if entry.RequiresApproval {
+			names = append(names, entry.Name)
+		}
+	}
+	return names
 }
 
 func TestEnrichDriveMoveApprovalInputUsesRecentListFilesResults(t *testing.T) {

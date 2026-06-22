@@ -225,7 +225,7 @@ func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) strin
 	case "gmail.downloadAttachments":
 		return "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local."
 	case "gmail.getEmail":
-		return "Tôi cần bạn xác nhận trước khi đọc nội dung email này."
+		return "Cho phép tôi đọc nội dung email trong Gmail nhé?"
 	case "gmail.modifyMessage", "gmail.batchModifyMessages":
 		return "Tôi cần bạn xác nhận trước khi sửa trạng thái hoặc nhãn Gmail."
 	case "gmail.trashMessage":
@@ -238,6 +238,8 @@ func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) strin
 		return "Tôi cần bạn xác nhận trước khi sửa sự kiện Calendar."
 	case "calendar.deleteEvent":
 		return "Tôi cần bạn xác nhận trước khi xóa sự kiện Calendar."
+	case "chat.listMessages":
+		return "Cho phép tôi đọc tin nhắn trong Google Chat nhé?"
 	case "chat.sendMessage":
 		return "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat."
 	case "chat.updateMessage":
@@ -250,6 +252,44 @@ func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) strin
 		return "Tôi cần bạn xác nhận trước khi thêm thành viên Google Chat."
 	case "chat.removeMember":
 		return "Tôi cần bạn xác nhận trước khi xóa thành viên Google Chat."
+	case "drive.saveFile":
+		return "Tôi cần bạn xác nhận trước khi lưu file Google Drive xuống workspace."
+	case "drive.createFolder":
+		return "Tôi cần bạn xác nhận trước khi tạo folder trên Google Drive."
+	case "drive.createFile", "drive.uploadFile":
+		return "Tôi cần bạn xác nhận trước khi tạo hoặc upload file lên Google Drive."
+	case "drive.updateFileMetadata":
+		return "Tôi cần bạn xác nhận trước khi sửa metadata file Google Drive."
+	case "drive.shareFile":
+		return "Tôi cần bạn xác nhận trước khi chia sẻ file Google Drive."
+	case "drive.revokePermission":
+		return "Tôi cần bạn xác nhận trước khi thu hồi quyền chia sẻ file Google Drive."
+	case "drive.moveFile", "drive.moveFiles":
+		return "Tôi cần bạn xác nhận trước khi di chuyển file hoặc folder Google Drive."
+	case "drive.trashFile":
+		return "Tôi cần bạn xác nhận trước khi chuyển file hoặc folder Google Drive vào thùng rác."
+	case "drive.untrashFile":
+		return "Tôi cần bạn xác nhận trước khi khôi phục file hoặc folder Google Drive."
+	case "docs.getDocument":
+		return "Cho phép tôi đọc nội dung Google Docs document nhé?"
+	case "docs.createDocument":
+		return "Tôi cần bạn xác nhận trước khi tạo Google Docs document."
+	case "docs.appendText", "docs.replaceText", "docs.insertText":
+		return "Tôi cần bạn xác nhận trước khi sửa nội dung Google Docs document."
+	case "docs.deleteContent":
+		return "Tôi cần bạn xác nhận trước khi xóa nội dung trong Google Docs document."
+	case "sheets.readValues", "sheets.batchGetValues":
+		return "Cho phép tôi đọc dữ liệu trong Google Sheets nhé?"
+	case "sheets.createSpreadsheet":
+		return "Tôi cần bạn xác nhận trước khi tạo Google Sheets spreadsheet."
+	case "sheets.updateValues", "sheets.batchUpdateValues", "sheets.appendValues", "sheets.clearValues":
+		return "Tôi cần bạn xác nhận trước khi thay đổi dữ liệu trong Google Sheets."
+	case "sheets.addSheet", "sheets.renameSheet", "sheets.duplicateSheet":
+		return "Tôi cần bạn xác nhận trước khi thay đổi tab trong Google Sheets."
+	case "sheets.deleteSheet":
+		return "Tôi cần bạn xác nhận trước khi xóa tab trong Google Sheets."
+	case "filesystem.writeFile":
+		return "Tôi cần bạn xác nhận trước khi ghi file trong workspace."
 	case "sandbox.runPython", "sandbox.runShell":
 		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
 	default:
