@@ -126,6 +126,25 @@ func TestEnrichDriveMoveFilesApprovalInputShowsEverySource(t *testing.T) {
 	}
 }
 
+func TestEnrichCalendarRespondApprovalInputUsesEventTitle(t *testing.T) {
+	input := map[string]any{
+		"eventId":        "event_1",
+		"responseStatus": "accepted",
+	}
+	transcript := []providers.Message{{
+		Role:    providers.MessageRoleTool,
+		Content: `[{"id":"event_1","title":"N1 Long-term Test"},{"id":"event_2","title":"Other Event"}]`,
+	}}
+
+	got := enrichApprovalInput("calendar.respondEvent", input, transcript)
+	if got["eventTitle"] != "N1 Long-term Test" {
+		t.Fatalf("eventTitle = %#v, want N1 Long-term Test", got["eventTitle"])
+	}
+	if got["eventId"] != "event_1" {
+		t.Fatalf("eventId changed unexpectedly: %#v", got["eventId"])
+	}
+}
+
 func TestApprovalRejectDoesNotExecuteWrite(t *testing.T) {
 	ctx := context.Background()
 	executions := 0

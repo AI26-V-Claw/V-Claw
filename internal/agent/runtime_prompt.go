@@ -60,6 +60,7 @@ Do not answer explicit Google Workspace read requests from conversation memory a
 Never claim that an external action was completed unless a tool result confirms it.
 For write, destructive, local file, or code execution actions, propose the action through the matching tool call; the runtime will stop for human approval before execution.
 When the user asks for multiple actions in one request, generate ALL required tool calls in a single response — do not wait for intermediate results unless the next call strictly depends on an output (such as an ID) that cannot be known until the first call completes. The runtime processes approvals sequentially and resumes remaining tool calls automatically.
+Preserve independent side effects exactly. Adding Calendar attendees or relying on Google Calendar invitation notifications does NOT satisfy a separate user request to send an email or chat message. If the user asks to create a Calendar event and send an email about it, keep both actions in the plan: calendar.createEvent plus the Gmail draft/send workflow after required details are known.
 When details seem missing, prefer calling a read tool to discover them (e.g. gmail.listEmails to find the right email, drive.listFiles to find a file, calendar.listEvents to find an event) rather than asking the user. Call clarify only when: (a) a tool result returns multiple candidates and human judgment is needed to select the right one, or (b) a write/destructive action needs a parameter that no read tool can provide. Never ask for information the user has already given in their message.
 Keep final answers concise and include the useful result, not internal implementation details.
 </identity>
@@ -87,6 +88,12 @@ Sending email (two-step):
 - gmail.createDraft alone does NOT send — the draft sits unsent until gmail.sendDraft is called.
 - When the user asks to send (not draft) an email, plan both tools. Generate gmail.createDraft first; after the draftId is returned, call gmail.sendDraft in the continuation.
 - Do not consider the email task complete after createDraft — only after sendDraft succeeds.
+- When drafting a human-facing email body, write readable plain text with paragraph breaks. For normal invitations or business emails, separate greeting, main content, and closing/signature with blank lines in textBody. Do not collapse the whole email into one paragraph unless the user explicitly asks for a single-line message.
+
+Calendar event creation:
+- calendar.createEvent requires a title, an explicit start date+time, and an explicit end date+time or duration.
+- A date-only phrase such as "tomorrow", "ngay mai", or "hom nay" is not a valid start time. Ask one concise clarification question for every missing time field before calling calendar.createEvent.
+- Attendees are only Calendar participants. They do not replace a separate email-send request.
 
 Bulk calendar delete:
 - After all calendar.deleteEvent calls in a batch are confirmed and executed, call calendar.listEvents with the SAME timeMin and timeMax to verify the range is now empty.
@@ -259,7 +266,12 @@ func shouldRetryTextualApprovalAsToolCall(content string) bool {
 	if lower == "" {
 		return false
 	}
-	if !containsAnyText(lower, "xác nhận", "xac nhan", "confirm", "tiến hành", "tien hanh") {
+	if !containsAnyText(lower,
+		"tạo", "tao", "create",
+		"gửi", "gui", "send",
+		"xóa", "xoa", "delete",
+		"cập nhật", "cap nhat", "update",
+	) {
 		return false
 	}
 	// "đã xác nhận" is past-tense Vietnamese ("already confirmed/verified") — not a request for approval.
@@ -267,10 +279,15 @@ func shouldRetryTextualApprovalAsToolCall(content string) bool {
 		return false
 	}
 	return containsAnyText(lower,
-		"tạo", "tao", "create",
-		"gửi", "gui", "send",
-		"xóa", "xoa", "delete",
-		"cập nhật", "cap nhat", "update",
+		"vui lòng xác nhận", "vui long xac nhan",
+		"xin vui lòng xác nhận", "xin vui long xac nhan",
+		"hãy xác nhận", "hay xac nhan",
+		"bạn xác nhận", "ban xac nhan",
+		"cần bạn xác nhận", "can ban xac nhan",
+		"xác nhận trước", "xac nhan truoc",
+		"xác nhận để", "xac nhan de",
+		"confirm before", "please confirm", "confirm to proceed",
+		"need your confirmation", "please approve", "approve before",
 	)
 }
 
@@ -278,6 +295,7 @@ func isSideEffectToolName(name string) bool {
 	switch strings.TrimSpace(name) {
 	case "calendar.createEvent",
 		"calendar.updateEvent",
+		"calendar.respondEvent",
 		"calendar.deleteEvent",
 		"gmail.createDraft",
 		"gmail.updateDraft",

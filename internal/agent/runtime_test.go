@@ -537,6 +537,55 @@ func TestRuntimeClarifiesCalendarCreateEventWhenCurrentRequestIsUnderspecified(t
 	}
 }
 
+func TestCalendarCreateEventEvidenceRequiresExplicitStartAndEndTime(t *testing.T) {
+	args := map[string]any{
+		"title": "meeting",
+		"start": "2026-06-23T10:00:00+07:00",
+		"end":   "2026-06-23T11:00:00+07:00",
+	}
+
+	missing := missingCalendarCreateEventEvidence("create meeting tomorrow", args)
+	if !containsString(missing, "start") || !containsString(missing, "end") {
+		t.Fatalf("date-only request must require both start and end, got %#v", missing)
+	}
+
+	missing = missingCalendarCreateEventEvidence("create meeting tomorrow at 10am", args)
+	if containsString(missing, "start") || !containsString(missing, "end") {
+		t.Fatalf("single start time should only require end/duration, got %#v", missing)
+	}
+
+	missing = missingCalendarCreateEventEvidence("create meeting tomorrow at 10am and send email to tungpt@vclaw.site", args)
+	if containsString(missing, "start") || !containsString(missing, "end") {
+		t.Fatalf("email recipient should not be mistaken for end time evidence, got %#v", missing)
+	}
+
+	missing = missingCalendarCreateEventEvidence("create meeting tomorrow from 10am to 11am", args)
+	if len(missing) != 0 {
+		t.Fatalf("explicit start and end should be complete, got %#v", missing)
+	}
+}
+
+func TestCalendarCreateEventClarificationAsksForStartAndEndTogether(t *testing.T) {
+	question := missingToolArgumentQuestion("calendar.createEvent", []string{"start", "end"})
+	if !strings.Contains(question, "bắt đầu") || !strings.Contains(question, "kết thúc") {
+		t.Fatalf("expected combined start/end clarification, got %q", question)
+	}
+}
+
+func TestRuntimePromptPreservesCalendarAndEmailAsSeparateActions(t *testing.T) {
+	prompt := runtimeSystemPrompt(runtimeTestMessage().Timestamp)
+	for _, expected := range []string{
+		"Adding Calendar attendees",
+		"does NOT satisfy a separate user request to send an email",
+		"calendar.createEvent plus the Gmail draft/send workflow",
+		"Attendees are only Calendar participants",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("runtime prompt missing %q", expected)
+		}
+	}
+}
+
 func TestRuntimeRemovesStaleAttendeesFromActiveFollowUpApproval(t *testing.T) {
 	executions := 0
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
@@ -665,6 +714,20 @@ Xin vui lòng xác nhận để tôi tiến hành tạo sự kiện này.`,
 	}
 	if executions != 0 {
 		t.Fatalf("calendar create must wait for approval, executions=%d", executions)
+	}
+}
+
+func TestTextualApprovalRetryDoesNotCatchConfirmationEmailCompletion(t *testing.T) {
+	text := `Email xác nhận tham gia sự kiện "N1 Long-term Test" đã được gửi đến Bao Le. Nếu bạn cần hỗ trợ thêm việc gì, hãy cho tôi biết nhé!`
+	if shouldRetryTextualApprovalAsToolCall(text) {
+		t.Fatalf("confirmation email completion must not be treated as an approval request")
+	}
+}
+
+func TestTextualApprovalRetryStillCatchesPlainApprovalRequest(t *testing.T) {
+	text := "Xin vui lòng xác nhận để tôi tiến hành gửi email này."
+	if !shouldRetryTextualApprovalAsToolCall(text) {
+		t.Fatalf("plain approval request without tool call should still be retried")
 	}
 }
 
