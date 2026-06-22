@@ -8,6 +8,7 @@
       "expectation": "Agent cần sử dụng tool calculator để tính toán và trả về kết quả chính xác là 780973020987.",
       "requires_approval": false,
       "expected_tools": ["calculator"],
+      "expected_approval_tool": null,
       "response_contains": ["780973020987"]
     }
   }

@@ -181,6 +181,42 @@ def approval_tool_name(response: dict[str, Any] | None) -> str:
     return str(tool_call.get("toolName") or "").strip()
 
 
+def approval_tool_ref(response: dict[str, Any] | None) -> dict[str, str]:
+    if not response:
+        return {}
+    request = response.get("approvalRequest")
+    if not isinstance(request, dict):
+        return {}
+    tool_call = request.get("toolCall")
+    if not isinstance(tool_call, dict):
+        return {}
+    ref = {
+        "toolCallId": str(tool_call.get("toolCallId") or "").strip(),
+        "toolName": str(tool_call.get("toolName") or "").strip(),
+    }
+    return {key: value for key, value in ref.items() if value}
+
+
+def pending_approval_tool_refs(variables: dict[str, str]) -> list[dict[str, str]]:
+    ref = {
+        "toolCallId": str(variables.get("LAST_APPROVAL_TOOL_CALL_ID") or "").strip(),
+        "toolName": str(variables.get("LAST_APPROVAL_TOOL_NAME") or "").strip(),
+    }
+    ref = {key: value for key, value in ref.items() if value}
+    return [ref] if ref else []
+
+
+def same_tool_call(item: dict[str, Any], ref: dict[str, str]) -> bool:
+    item_call_id = str(item.get("toolCallId") or "").strip()
+    ref_call_id = str(ref.get("toolCallId") or "").strip()
+    if item_call_id and ref_call_id:
+        return item_call_id == ref_call_id
+
+    item_name = str(item.get("toolName") or "").strip()
+    ref_name = str(ref.get("toolName") or "").strip()
+    return bool(item_name and ref_name and item_name == ref_name)
+
+
 def observed_tool_names(response: dict[str, Any] | None) -> set[str]:
     names: set[str] = set()
     if not response:
@@ -240,10 +276,18 @@ def tool_trace_from_response(response: dict[str, Any] | None) -> list[dict[str, 
     return trace
 
 
-def tool_names_from_trace(trace: list[dict[str, Any]]) -> list[str]:
+def tool_names_from_trace(
+    trace: list[dict[str, Any]],
+    exclude_completed_tool_calls: list[dict[str, str]] | None = None,
+) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()
+    exclude_completed_tool_calls = exclude_completed_tool_calls or []
     for item in trace:
+        if item.get("phase") == "completed" and any(
+            same_tool_call(item, ref) for ref in exclude_completed_tool_calls
+        ):
+            continue
         name = str(item.get("toolName") or "").strip()
         if not name or name in seen:
             continue
@@ -272,7 +316,11 @@ def artifact_from_response(response: dict[str, Any] | None) -> dict[str, Any] | 
     return None
 
 
-def summarize_run(run: dict[str, Any], user_message: str) -> dict[str, Any]:
+def summarize_run(
+    run: dict[str, Any],
+    user_message: str,
+    exclude_completed_tool_calls: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     response = run.get("response")
     tool_trace = tool_trace_from_response(response)
     summary: dict[str, Any] = {
@@ -283,7 +331,9 @@ def summarize_run(run: dict[str, Any], user_message: str) -> dict[str, Any]:
         "exitCode": run.get("exitCode"),
     }
     if tool_trace:
-        summary["tools"] = tool_names_from_trace(tool_trace)
+        tools = tool_names_from_trace(tool_trace, exclude_completed_tool_calls)
+        if tools:
+            summary["tools"] = tools
         summary["toolTrace"] = tool_trace
     if trace := response_trace_data(response):
         summary["trace"] = trace
@@ -428,7 +478,14 @@ def agent_expectations_for_step(step: Any) -> dict[str, Any]:
         if value:
             expectations["expectation"] = str(value).strip()
             break
-    for key in ("requires_approval", "expected_tools", "tool", "expected_status", "response_contains"):
+    for key in (
+        "requires_approval",
+        "expected_tools",
+        "tool",
+        "expected_approval_tool",
+        "expected_status",
+        "response_contains",
+    ):
         if key in step:
             expectations[key] = step[key]
     return expectations
@@ -440,8 +497,20 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
         return True, ""
 
     response = final_run.get("response")
+    summary = final_run.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
     status = response_status(response)
-    supported = {"expectation", "agent_expectation", "requires_approval", "expected_tools", "tool", "expected_status", "response_contains"}
+    supported = {
+        "expectation",
+        "agent_expectation",
+        "requires_approval",
+        "expected_tools",
+        "tool",
+        "expected_approval_tool",
+        "expected_status",
+        "response_contains",
+    }
     for key in agent:
         if key not in supported:
             return False, f"unsupported agent expectation key {key!r}"
@@ -458,16 +527,22 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
     if expected_status and status != expected_status:
         return False, f"expected status {expected_status!r}, got {status!r}"
 
-    expected_tools = str_list(agent.get("expected_tools", agent.get("tool")))
-    if expected_tools:
-        observed_tools = observed_tool_names(response)
-        missing = [tool for tool in expected_tools if tool not in observed_tools]
-        if missing:
-            return False, f"expected tool(s) {missing!r} not observed; observed {sorted(observed_tools)!r}"
+    if "expected_tools" in agent or "tool" in agent:
+        expected_tools = str_list(agent.get("expected_tools", agent.get("tool")))
+        observed_tools = str_list(summary.get("tools"))
+        if sorted(observed_tools) != sorted(expected_tools):
+            return False, f"expected tools {expected_tools!r}, got {observed_tools!r}"
+
+    if "expected_approval_tool" in agent:
+        expected_approval_tool = agent.get("expected_approval_tool")
+        expected_approval_tool = "" if expected_approval_tool is None else str(expected_approval_tool).strip()
+        observed_approval_tool = str(summary.get("approvalTool") or "").strip()
+        if observed_approval_tool != expected_approval_tool:
+            return False, f"expected approvalTool {expected_approval_tool!r}, got {observed_approval_tool!r}"
 
     response_contains = str_list(agent.get("response_contains"))
     if response_contains:
-        agent_text = user_text_from_response(response)
+        agent_text = str(summary.get("agent") or "")
         missing = [text for text in response_contains if text not in agent_text]
         if missing:
             return False, f"response missing expected text {missing!r}"
@@ -640,7 +715,13 @@ def run_step(
         return result
 
     first_run = run_agent_command(command, timeout_seconds)
-    result["messages"].append(summarize_run(first_run, prompt))
+    first_summary = summarize_run(
+        first_run,
+        prompt,
+        pending_approval_tool_refs(variables),
+    )
+    first_run["summary"] = first_summary
+    result["messages"].append(first_summary)
     first_response = first_run.get("response")
     first_status = response_status(first_response)
     first_approval = approval_id(first_response)
@@ -680,9 +761,16 @@ def run_step(
         log("USER >")
         log_block(approve_prompt)
         approve_command = build_agent_command(approve_prompt, session_id, channel, usecase, timeout_seconds)
+        pending_tool_ref = approval_tool_ref(current.get("response"))
         approve_run = run_agent_command(approve_command, timeout_seconds)
         approve_run["approvalFor"] = appr_id
-        result["messages"].append(summarize_run(approve_run, approve_prompt))
+        approve_summary = summarize_run(
+            approve_run,
+            approve_prompt,
+            [pending_tool_ref] if pending_tool_ref else None,
+        )
+        approve_run["summary"] = approve_summary
+        result["messages"].append(approve_summary)
         current = approve_run
         approve_response = approve_run.get("response")
         approve_status = response_status(approve_response)
@@ -707,6 +795,11 @@ def run_step(
     final_approval = approval_id(current.get("response"))
     if final_approval:
         result["lastApprovalId"] = final_approval
+        if final_tool_ref := approval_tool_ref(current.get("response")):
+            if tool_call_id := final_tool_ref.get("toolCallId"):
+                result["lastApprovalToolCallId"] = tool_call_id
+            if tool_name := final_tool_ref.get("toolName"):
+                result["lastApprovalToolName"] = tool_name
     if reason:
         result["failureReason"] = reason
         log("")
@@ -815,7 +908,10 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
                     continue
                 turn_entry: dict[str, Any] = {
                     "step": step_result.get("id"),
+                    "passed": bool(step_result.get("passed")),
                 }
+                if failure_reason := str(step_result.get("failureReason") or "").strip():
+                    turn_entry["failureReason"] = failure_reason
                 user_text = str(message.get("user") or "").strip()
                 if user_text:
                     turn_entry["user"] = {
@@ -837,6 +933,16 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
             latest_approval = str(step_result.get("lastApprovalId") or "").strip()
             if latest_approval:
                 variables["LAST_APPROVAL_ID"] = latest_approval
+                variables["LAST_APPROVAL_TOOL_CALL_ID"] = str(
+                    step_result.get("lastApprovalToolCallId") or ""
+                ).strip()
+                variables["LAST_APPROVAL_TOOL_NAME"] = str(
+                    step_result.get("lastApprovalToolName") or ""
+                ).strip()
+            else:
+                variables.pop("LAST_APPROVAL_ID", None)
+                variables.pop("LAST_APPROVAL_TOOL_CALL_ID", None)
+                variables.pop("LAST_APPROVAL_TOOL_NAME", None)
             write_json(artifact_path, report)
             if not step_result.get("passed"):
                 report["finishedAt"] = utc_now()
