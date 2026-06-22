@@ -155,13 +155,19 @@ func (b *Bot) Run(ctx context.Context) error {
 			// For regular messages, drop and reply if the session is already busy.
 			if update.Message != nil {
 				chatID := update.Message.Chat.ID
-				if _, alreadyBusy := b.busySessions.LoadOrStore(chatID, struct{}{}); alreadyBusy {
-					go func(cid int64) {
-						if _, err := b.sendMessage(ctx, cid, "Mình đang xử lý tin nhắn trước của bạn, vui lòng đợi một chút."); err != nil {
-							b.logger.Error("telegram busy reply failed", "chat_id", cid, "error", err)
-						}
-					}(chatID)
-					continue
+				msgText := strings.TrimSpace(update.Message.Text)
+				if msgText == "" {
+					msgText = strings.TrimSpace(update.Message.Caption)
+				}
+				if !isTelegramCancelCommand(msgText) {
+					if _, alreadyBusy := b.busySessions.LoadOrStore(chatID, struct{}{}); alreadyBusy {
+						go func(cid int64) {
+							if _, err := b.sendMessage(ctx, cid, "Mình đang xử lý tin nhắn trước của bạn, vui lòng đợi một chút."); err != nil {
+								b.logger.Error("telegram busy reply failed", "chat_id", cid, "error", err)
+							}
+						}(chatID)
+						continue
+					}
 				}
 			}
 
