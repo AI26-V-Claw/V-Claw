@@ -94,6 +94,15 @@ hãy liệt kê 10 tin nhắn tôi nhắn với Bao
 
 Detailed tool/provider errors are logged in the local terminal. Telegram should receive a short user-friendly failure message instead of raw tokens, IDs, stack traces, or provider errors.
 
+### Telegram Sessions
+
+Telegram keeps a per-chat session index under `data/telegram_sessions/`.
+
+- `/new` creates a new active session without deleting the previous session.
+- `/sessions` opens the session picker. Sessions are shown by their first user message, not by raw `sessionId`.
+- Use the picker buttons to switch sessions or delete a session. Delete requires a confirmation tap and then clears that session's transcript/memory.
+- Session switching and deletion are blocked while a HITL approval is pending; approve, reject, or revise first.
+
 ### Policy Settings In Telegram
 
 Send `/policy` in the same chat to open the policy menu.
