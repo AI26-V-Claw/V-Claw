@@ -27,7 +27,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_USECASE = REPO_ROOT / "testing-e2e" / "usecases"
-DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "agent-usecases"
+DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "usecases"
 ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 DEFAULT_ENV_FILES = [
     REPO_ROOT / ".env",
@@ -44,7 +44,7 @@ def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def load_json(path: Path) -> dict[str, Any]:
+def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -179,6 +179,21 @@ def approval_tool_name(response: dict[str, Any] | None) -> str:
     if not isinstance(tool_call, dict):
         return ""
     return str(tool_call.get("toolName") or "").strip()
+
+
+def observed_tool_names(response: dict[str, Any] | None) -> set[str]:
+    names: set[str] = set()
+    if not response:
+        return names
+    if tool_name := approval_tool_name(response):
+        names.add(tool_name)
+    for result in response.get("toolResults") or []:
+        if not isinstance(result, dict):
+            continue
+        tool_name = str(result.get("toolName") or "").strip()
+        if tool_name:
+            names.add(tool_name)
+    return names
 
 
 def artifact_from_response(response: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -322,6 +337,74 @@ def run_agent_command(command: list[str], timeout_seconds: int) -> dict[str, Any
     }
 
 
+def str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def agent_expectations_for_step(step: Any) -> dict[str, Any]:
+    if not isinstance(step, dict):
+        return {}
+    agent = step.get("agent")
+    if isinstance(agent, dict):
+        return dict(agent)
+    expectations: dict[str, Any] = {}
+    for key in ("expectation", "agent_expectation", "expect", "expectedAgent", "agentExpectation"):
+        value = step.get(key)
+        if value:
+            expectations["expectation"] = str(value).strip()
+            break
+    for key in ("requires_approval", "expected_tools", "tool", "expected_status", "response_contains"):
+        if key in step:
+            expectations[key] = step[key]
+    return expectations
+
+
+def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) -> tuple[bool, str]:
+    agent = agent_expectations_for_step(step)
+    if not agent:
+        return True, ""
+
+    response = final_run.get("response")
+    status = response_status(response)
+    supported = {"expectation", "agent_expectation", "requires_approval", "expected_tools", "tool", "expected_status", "response_contains"}
+    for key in agent:
+        if key not in supported:
+            return False, f"unsupported agent expectation key {key!r}"
+
+    if "requires_approval" in agent:
+        requires_approval = bool(agent["requires_approval"])
+        approval_required = status == "approval_required"
+        if requires_approval and not approval_required:
+            return False, f"expected approval_required status, got {status!r}"
+        if not requires_approval and approval_required:
+            return False, "expected no approval request, got approval_required"
+
+    expected_status = str(agent.get("expected_status") or "").strip()
+    if expected_status and status != expected_status:
+        return False, f"expected status {expected_status!r}, got {status!r}"
+
+    expected_tools = str_list(agent.get("expected_tools", agent.get("tool")))
+    if expected_tools:
+        observed_tools = observed_tool_names(response)
+        missing = [tool for tool in expected_tools if tool not in observed_tools]
+        if missing:
+            return False, f"expected tool(s) {missing!r} not observed; observed {sorted(observed_tools)!r}"
+
+    response_contains = str_list(agent.get("response_contains"))
+    if response_contains:
+        agent_text = user_text_from_response(response)
+        missing = [text for text in response_contains if text not in agent_text]
+        if missing:
+            return False, f"response missing expected text {missing!r}"
+
+    return True, ""
+
+
 def step_passed(step: dict[str, Any], final_run: dict[str, Any]) -> tuple[bool, str]:
     if final_run.get("timedOut"):
         return False, "agent command timed out"
@@ -336,6 +419,10 @@ def step_passed(step: dict[str, Any], final_run: dict[str, Any]) -> tuple[bool, 
         allowed = {str(item) for item in expected}
         if status not in allowed:
             return False, f"status {status!r} was not in {sorted(allowed)!r}"
+
+    agent_ok, agent_reason = check_agent_expectations(step, final_run)
+    if not agent_ok:
+        return False, agent_reason
 
     return True, ""
 
@@ -354,8 +441,26 @@ def normalize_step(step: dict[str, Any] | str, variables: dict[str, str]) -> dic
         raise ValueError(f"step {step_number} must be a string or object")
 
     normalized = dict(step)
+    if "step" in normalized and "id" not in normalized:
+        normalized["id"] = str(normalized["step"])
     normalized.setdefault("id", f"step_{step_number}")
-    normalized.setdefault("name", f"Step {step_number}")
+    normalized.setdefault("name", f"Step {normalized['id']}")
+
+    user = normalized.get("user")
+    if isinstance(user, dict):
+        message = str(user.get("message") or user.get("content") or "").strip()
+        if not message:
+            raise ValueError(f"step {normalized['id']!r} has empty user.message")
+        normalized["prompt"] = message
+        normalized["kind"] = "send"
+        return normalized
+    if "user" in normalized:
+        message = str(normalized["user"]).strip()
+        if not message:
+            raise ValueError(f"step {normalized['id']!r} has empty user")
+        normalized["prompt"] = message
+        normalized["kind"] = "send"
+        return normalized
 
     if "send" in normalized:
         normalized["prompt"] = str(normalized["send"])
@@ -374,15 +479,6 @@ def normalize_step(step: dict[str, Any] | str, variables: dict[str, str]) -> dic
     if "content" in normalized:
         normalized["prompt"] = str(normalized["content"])
         normalized["kind"] = "send"
-        return normalized
-
-    if "approve" in normalized:
-        approval = variables.get("LAST_APPROVAL_ID", "").strip()
-        if not approval:
-            raise ValueError(f"step {normalized['id']!r} asked to approve but no previous approvalId was found")
-        normalized["prompt"] = f"approve {approval}"
-        normalized["kind"] = "approve"
-        normalized["approvalId"] = approval
         return normalized
 
     if "reject" in normalized:
@@ -406,7 +502,7 @@ def normalize_step(step: dict[str, Any] | str, variables: dict[str, str]) -> dic
         normalized.setdefault("kind", "send")
         return normalized
 
-    raise ValueError(f"step {normalized['id']!r} must contain send, approve, reject, revise, or prompt")
+    raise ValueError(f"step {normalized['id']!r} must contain user, send, reject, revise, or prompt")
 
 
 def should_execute_step(step: Any) -> bool:
@@ -444,12 +540,22 @@ def run_step(
         "prompt": prompt,
         "messages": [],
     }
+    agent_expectations = agent_expectations_for_step(step)
+    if agent_expectations:
+        result["agent"] = agent_expectations
 
     command = build_agent_command(prompt, session_id, channel, usecase, timeout_seconds)
     log("")
     log(step_separator(result["id"]))
     log("USER >")
     log_block(prompt)
+    agent_expectation = str(
+        agent_expectations.get("expectation") or agent_expectations.get("agent_expectation") or ""
+    ).strip()
+    if agent_expectation:
+        log("")
+        log("EXPECTED AGENT >")
+        log_block(agent_expectation)
     if dry_run:
         log("")
         log("AGENT < dry_run")
@@ -548,10 +654,23 @@ def resolve_usecase_paths(target: Path) -> list[Path]:
     return [path]
 
 
+def usecase_steps_and_config(raw_usecase: Any, usecase_path: Path) -> tuple[list[Any], dict[str, Any]]:
+    if isinstance(raw_usecase, list):
+        return raw_usecase, {}
+    if isinstance(raw_usecase, dict):
+        steps = raw_usecase.get("steps", [])
+        if not isinstance(steps, list):
+            raise ValueError(f"{usecase_path.name} steps must be a list")
+        return steps, raw_usecase
+    raise ValueError(f"{usecase_path.name} must be a list or object")
+
+
 def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, dict[str, Any]]:
-    usecase = load_json(usecase_path)
+    raw_usecase = load_json(usecase_path)
+    steps, usecase = usecase_steps_and_config(raw_usecase, usecase_path)
+    usecase_name = usecase_path.stem
     run_id = "uc_" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
-    session_prefix = str(usecase.get("sessionPrefix") or usecase.get("name") or "eval_agent").strip()
+    session_prefix = str(usecase.get("sessionPrefix") or usecase_name).strip()
     session_id = args.session.strip() or f"{session_prefix}_{run_id}"
     channel = args.channel.strip() or str(usecase.get("channel") or "eval-cmd").strip()
 
@@ -569,17 +688,16 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
 
     required_env = usecase.get("requiredEnv", ["OPENAI_API_KEY"])
     missing = [] if args.dry_run else require_env([str(x) for x in required_env])
-    artifact_name = safe_filename(str(usecase.get("name") or usecase_path.stem))
-    artifact_path = args.artifact_dir.resolve() / f"{artifact_name}.result.json"
+    artifact_path = args.artifact_dir.resolve() / usecase_path.name
     log("")
     log("=" * 72)
-    log(f"Use case : {usecase.get('name') or usecase_path.stem}")
+    log(f"Use case : {usecase_name}")
     log(f"Source   : {display_path(usecase_path)}")
     log(f"Session  : {session_id}")
     log("=" * 72)
     report: dict[str, Any] = {
         "runId": run_id,
-        "usecase": usecase.get("name") or usecase_path.stem,
+        "usecase": usecase_name,
         "sessionId": session_id,
         "startedAt": utc_now(),
         "finishedAt": "",
@@ -607,7 +725,7 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
 
     try:
         executable_index = 0
-        for step in usecase.get("steps", []):
+        for step in steps:
             if not should_execute_step(step):
                 continue
             executable_index += 1
@@ -627,11 +745,15 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
                     continue
                 user_text = str(message.get("user") or "").strip()
                 if user_text:
-                    report["conversation"].append({
+                    user_entry = {
                         "step": step_result.get("id"),
                         "role": "user",
                         "text": user_text,
-                    })
+                    }
+                    agent_expectations = step_result.get("agent")
+                    if isinstance(agent_expectations, dict) and agent_expectations:
+                        user_entry["agent"] = agent_expectations
+                    report["conversation"].append(user_entry)
                 agent_text = str(message.get("agent") or "").strip()
                 if agent_text:
                     report["conversation"].append({
