@@ -106,7 +106,8 @@ func (r *Runtime) finishRunState(ctx context.Context, state RunState, status Run
 	if status == RuntimeRunStatusFailed && strings.TrimSpace(state.ErrorRef) != "" {
 		r.attachErrorRefTraceMetadata(ctx, state.RunID, state.ErrorRef)
 	}
-	if err := r.stateStore.UpdateRun(ctx, state); err != nil {
+	persistCtx := context.WithoutCancel(ctx)
+	if err := r.stateStore.UpdateRun(persistCtx, state); err != nil {
 		return state, internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	switch status {
