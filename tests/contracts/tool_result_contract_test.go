@@ -26,6 +26,7 @@ import (
 	"vclaw/internal/tools/office/sheets"
 	"vclaw/internal/tools/os/filesystem"
 	"vclaw/internal/tools/web"
+	"vclaw/internal/tools/memory"
 )
 
 // ─── RiskLevel enum drift ─────────────────────────────────────────────────────
@@ -441,6 +442,43 @@ func addGoogleWorkspaceFixtures(dest map[string]toolMetaFixture, entries any) {
 			riskLevel:        riskLevel,
 			requiresApproval: requiresApproval,
 		}
+	}
+}
+
+// ─── Memory tool metadata drift ──────────────────────────────────────────────
+
+func TestMemoryToolMetadataNoDrift(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	if err := memory.RegisterTools(registry, t.TempDir(), nil); err != nil {
+		t.Fatalf("RegisterTools: %v", err)
+	}
+
+	for _, entry := range memory.RegistryEntries {
+		entry := entry
+		t.Run(entry.Name, func(t *testing.T) {
+			def, ok := registry.GetDefinition(entry.Name)
+			if !ok {
+				t.Fatalf("contract drift detected: tool %q not found in registry", entry.Name)
+			}
+			if def.Capability != entry.Capability {
+				t.Errorf("contract drift detected: %s.Capability = %q, want %q", entry.Name, def.Capability, entry.Capability)
+			}
+			if def.RiskLevel != entry.RiskLevel {
+				t.Errorf("contract drift detected: %s.RiskLevel = %q, want %q", entry.Name, def.RiskLevel, entry.RiskLevel)
+			}
+			if def.RequiresApproval != entry.RequiresApproval {
+				t.Errorf("contract drift detected: %s.RequiresApproval = %v, want %v", entry.Name, def.RequiresApproval, entry.RequiresApproval)
+			}
+			if def.Group != "memory" {
+				t.Errorf("contract drift detected: %s.Group = %q, want memory", entry.Name, def.Group)
+			}
+			if def.Capability == tools.CapabilityMutating && !def.RequiresApproval {
+				t.Errorf("contract drift detected: mutating tool %s must require approval", entry.Name)
+			}
+			if def.RiskLevel == tools.RiskLevelDestructive && !def.RequiresApproval {
+				t.Errorf("contract drift detected: destructive tool %s must require approval", entry.Name)
+			}
+		})
 	}
 }
 
