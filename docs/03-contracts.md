@@ -13,7 +13,7 @@ Channel -> Agent Core -> Agent Loop -> Tool Policy -> Tool Layer -> Tool Executi
 - Agent Loop receives the runtime-filtered tool set and lets the provider decide whether to answer directly, call a tool, or call `clarify`.
 - Agent Loop may return `need_clarification` by calling the internal `clarify` tool when required information is missing.
 - `Plan` is optional/advisory only; it must not authorize tool execution.
-- Channel approval UI, such as Telegram/Slack buttons or modal comments, must resolve to `ApprovalDecision`.
+- Channel approval UI, such as Telegram buttons or modal comments, must resolve to `ApprovalDecision`.
 
 - Channel chuẩn hóa input thành `UserMessage`.
 - Agent Core chỉ gọi tool qua `ToolCall`.
@@ -180,7 +180,7 @@ Known artifact kinds in Sprint 1: `gmail.message`, `chat.message`, `calendar.eve
 | `policy_blocked` | Action blocked by safety policy |
 | `aborted` | Internal setup failure or unclassified error |
 
-`failureReason` contains only typed constant values - never raw error messages or internal paths. Safe to expose to channel adapters (Telegram/Slack).
+`failureReason` contains only typed constant values - never raw error messages or internal paths. Safe to expose to channel adapters (Telegram).
 
 ---
 
@@ -384,7 +384,7 @@ Safety / Agent Core -> Channel / User
 }
 ```
 
-`governance` makes the approval record self-contained for audit/trace — see §3.11. Channel UIs that render approvals (Telegram/Slack) MUST NOT display these fields to the end user; they are for backend consumers (logs, dashboards, N4 trace) only.
+`governance` makes the approval record self-contained for audit/trace — see §3.11. Channel UIs that render approvals (Telegram) MUST NOT display these fields to the end user; they are for backend consumers (logs, dashboards, N4 trace) only.
 
 Status:
 
@@ -573,7 +573,7 @@ Rules:
 
 - The runtime computes governance values once per construction (`promptVersion`) or once per call (`toolSchemaVersion`, `policyDecisionRef`) — they are not provided by the channel adapter or LLM.
 - All fields are optional strings. Empty values mean "unknown" and round-trip cleanly; existing producers that do not yet stamp governance keep working.
-- Channel UIs (Telegram, Slack, web) MUST NOT display governance to end users — these are backend trace identifiers, not human-facing context.
+- Channel UIs (Telegram, web) MUST NOT display governance to end users — these are backend trace identifiers, not human-facing context.
 - Governance values are stable identifiers, not secrets. They may be logged, indexed, and shipped to monitoring without redaction.
 - A change in any input that contributes to a hash (system prompt body, SOUL.md, tool parameter schema) automatically shifts the corresponding version. There is no manual version-bump step.
 

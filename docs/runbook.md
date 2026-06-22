@@ -62,39 +62,13 @@ Useful flag overrides:
 --web-tools auto|required|off
 ```
 
-### Start Slack runtime
-
-```bash
-go run ./cmd/vclaw slack run --google-tools auto --web-tools auto
-```
-
-Exact startup behavior:
-- starts agent runtime
-- starts Slack Socket Mode bot
-- starts monitoring HTTP server on `METRICS_PORT` or `8080`
-
-Useful flag overrides:
-
-```bash
---bot-token xoxb-...
---app-token xapp-...
---owner-user U...
---allowed-channels C123...,C456...
---data-dir ./data
---max-iterations 8
---credentials configs/google/credentials.json
---google-token configs/google/token.json
---google-tools auto|required|off
---web-tools auto|required|off
-```
-
 ### Start CLI runtime for local debugging
 
 ```bash
 go run ./cmd/vclaw agent --prompt "ping" --session dev --channel dev-cli
 ```
 
-This runs one agent turn. It does not start Telegram, Slack, or monitoring HTTP server.
+This runs one agent turn. It does not start Telegram or the monitoring HTTP server.
 
 ### `--google-tools` values
 
@@ -174,30 +148,7 @@ VCLAW_TELEGRAM_ALLOWED_USER_IDS=123456789
 Behavior:
 - required for `go run ./cmd/vclaw telegram run`
 - if missing, Telegram runtime exits immediately with validation error
-- optional for Slack or CLI-only usage
-
-#### Slack
-
-```env
-VCLAW_SLACK_BOT_TOKEN=xoxb-...
-VCLAW_SLACK_APP_TOKEN=xapp-...
-VCLAW_SLACK_OWNER_USER_ID=U...
-VCLAW_SLACK_ALLOWED_CHANNEL_IDS=C123...,C456...
-```
-
-Accepted aliases for first three fields:
-
-```env
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-VCLAW_SLACK_ALLOWED_USER_ID=U...
-VCLAW_SLACK_ALLOWED_USER_IDS=U...
-```
-
-Behavior:
-- bot token, app token, owner user ID required for `go run ./cmd/vclaw slack run`
-- if any required Slack variable is missing, Slack runtime exits immediately with validation error
-- `VCLAW_SLACK_ALLOWED_CHANNEL_IDS` optional channel allow-list
+- optional for CLI-only usage
 
 #### Langfuse
 
@@ -244,7 +195,7 @@ Important: this command always tries `GET http://127.0.0.1:${METRICS_PORT:-8080}
 If monitoring server is not running, it returns unreachable error telling you to start runtime first.
 
 When status says monitoring server is unreachable:
-1. Start Telegram or Slack runtime first.
+1. Start Telegram runtime first.
 2. Confirm `METRICS_PORT` matches runtime environment.
 3. Run `go run ./cmd/vclaw status` again.
 
@@ -255,7 +206,7 @@ When status says monitoring server is unreachable:
 - `llm_provider`: reports whether provider configuration exists
 - `google_oauth`: reports whether Google OAuth is configured enough for current mode
 - `tavily`: reports whether Tavily-backed web tools are configured
-- `channel`: reports whether runtime knows active channel identity such as `telegram`, `slack`, or `cli`
+- `channel`: reports whether runtime knows active channel identity such as `telegram` or `cli`
 - `tool_registry`: reports whether runtime built any tools; also prints tool count
 
 ### Status values
@@ -400,12 +351,12 @@ Symptom:
 - `/health` cannot be reached on `127.0.0.1:${METRICS_PORT:-8080}`
 
 Likely cause:
-- Telegram or Slack runtime is not running
+- Telegram runtime is not running
 - runtime started with different `METRICS_PORT`
 - port already occupied and monitoring server did not bind correctly
 
 Fix:
-- start runtime with `go run ./cmd/vclaw telegram run ...` or `go run ./cmd/vclaw slack run ...`
+- start runtime with `go run ./cmd/vclaw telegram run ...`
 - verify same `METRICS_PORT` in shell used for `status`
 - retry `go run ./cmd/vclaw status`
 
@@ -446,9 +397,6 @@ docker compose up -d postgres
 
 # Start Telegram runtime + monitoring
 go run ./cmd/vclaw telegram run --google-tools auto --web-tools auto
-
-# Start Slack runtime + monitoring
-go run ./cmd/vclaw slack run --google-tools auto --web-tools auto
 
 # Health check
 go run ./cmd/vclaw status
@@ -509,7 +457,7 @@ Known risk levels:
 
 ### Reloading policy
 
-Slack and Telegram runtimes install a `SIGHUP` watcher. Reload policy without restarting:
+The Telegram runtime installs a `SIGHUP` watcher. Reload policy without restarting:
 
 ```bash
 kill -HUP <pid>

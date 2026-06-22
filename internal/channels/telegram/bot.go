@@ -47,6 +47,7 @@ type Bot struct {
 	policyStore   *policies.UserPolicyStore
 	policyMu      sync.Mutex
 	policyDrafts  map[int64]map[contracts.RiskLevel]policies.PolicyGroup
+	sessionIndex  *telegramSessionIndexStore
 	state         *telegramChannelState
 	workCh        chan telegramUpdate
 	busySessions  sync.Map // chat ID (int64) → struct{} while a message is being processed
@@ -100,6 +101,7 @@ func New(token string, allowedUserID int64, dataDir string, args ...any) *Bot {
 		apiBase:      "https://api.telegram.org",
 		policyStore:  policyStore,
 		policyDrafts: make(map[int64]map[contracts.RiskLevel]policies.PolicyGroup),
+		sessionIndex: newTelegramSessionIndexStore(dataDir),
 		state:        newTelegramChannelState(),
 	}
 }
@@ -206,7 +208,7 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	}
 	inbound := contracts.UserMessage{
 		RequestID: fmt.Sprintf("telegram_update_%d", update.UpdateID),
-		SessionID: fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID),
+		SessionID: telegramLegacySessionID(update.Message.Chat.ID),
 		Channel:   "telegram",
 		Text:      messageText,
 		Locale:    "",
@@ -231,6 +233,35 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+	if isTelegramNewCommand(messageText) {
+		if _, ok := b.state.approvalForChat(update.Message.Chat.ID); ok {
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Phiên này đang có yêu cầu xác nhận. Hãy approve, reject hoặc revise trước khi tạo phiên mới."); sendErr != nil {
+				return false, sendErr
+			}
+			return true, nil
+		}
+		record, err := b.sessionIndex.Create(ctx, update.Message.Chat.ID, time.Now().UTC())
+		if err != nil {
+			b.logger.Error("telegram session create failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không thể tạo phiên mới lúc này. Vui lòng thử lại sau."); sendErr != nil {
+				return false, sendErr
+			}
+			return true, nil
+		}
+		if _, err := b.sendMessage(ctx, update.Message.Chat.ID, fmt.Sprintf("Đã tạo phiên mới: %s", telegramSessionDisplayTitle(record))); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if isTelegramSessionsCommand(messageText) {
+		if err := b.sendTelegramSessionsMenu(ctx, update.Message.Chat.ID, ""); err != nil {
+			b.logger.Error("telegram sessions menu failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không thể mở danh sách phiên lúc này. Vui lòng thử lại sau."); sendErr != nil {
+				return false, sendErr
+			}
+		}
+		return true, nil
+	}
 	if isTelegramStatusCommand(messageText) {
 		if err := b.sendStatusSummary(ctx, update.Message.Chat.ID); err != nil {
 			b.logger.Error("telegram status summary failed", "error", err)
@@ -249,22 +280,15 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
-	if isTelegramNewCommand(messageText) {
-		if b.handler == nil {
-			return true, nil
-		}
-		if err := b.handler.ResetSession(ctx, inbound.SessionID); err != nil {
-			b.logger.Error("telegram session reset failed", "error", err)
-			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không thể tạo phiên mới lúc này. Vui lòng thử lại sau."); sendErr != nil {
-				return false, sendErr
-			}
-			return true, nil
-		}
-		if _, err := b.sendMessage(ctx, update.Message.Chat.ID, "Đã tạo phiên mới. Mình sẽ bỏ qua ngữ cảnh hội thoại cũ trong chat này."); err != nil {
-			return false, err
+	activeSession, err := b.sessionIndex.Active(ctx, update.Message.Chat.ID, time.Now().UTC())
+	if err != nil {
+		b.logger.Error("telegram active session resolve failed", "error", err)
+		if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không thể mở phiên hội thoại lúc này. Vui lòng thử lại sau."); sendErr != nil {
+			return false, sendErr
 		}
 		return true, nil
 	}
+	inbound.SessionID = activeSession.SessionID
 	attachments, err := b.downloadMessageAttachments(ctx, update.Message)
 	if err != nil {
 		if b.handler != nil {
@@ -296,10 +320,12 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+	touchSession := !isTelegramApprovalTextCommand(inbound.Text)
 	if approvalContext, ok := b.state.approvalForChat(update.Message.Chat.ID); ok {
 		action := telegramApprovalTextAction(inbound.Text)
 		switch action {
 		case "approve", "reject":
+			touchSession = false
 			if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
 				b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
 			}
@@ -309,6 +335,7 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 			inbound.Text = action + " " + approvalContext.ApprovalID
 			inbound.Metadata["telegramCallback"] = action
 		case "revise":
+			touchSession = false
 			if err := b.dismissApprovalKeyboard(ctx, approvalContext); err != nil {
 				b.logger.Error("telegram approval keyboard dismiss failed", "chat_id", approvalContext.ChatID, "message_id", approvalContext.MessageID, "error", err)
 			}
@@ -331,6 +358,7 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 			inbound.SessionID = approvalContext.SessionID
 		}
 	} else if revision, ok := b.state.consumeRevision(update.Message.Chat.ID); ok {
+		touchSession = false
 		inbound.SessionID = revision.SessionID
 		inbound.Text = "revise " + strings.TrimSpace(inbound.Text)
 		inbound.Metadata["telegramCallback"] = "revise"
@@ -338,6 +366,11 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 	}
 	if b.handler == nil {
 		return false, fmt.Errorf("message handler is not configured")
+	}
+	if touchSession {
+		if err := b.sessionIndex.Touch(ctx, update.Message.Chat.ID, inbound.SessionID, inbound.Text, time.Now().UTC()); err != nil {
+			b.logger.Warn("telegram session touch failed", "session_id", inbound.SessionID, "error", err)
+		}
 	}
 
 	processingMessage, err := b.sendMessage(ctx, update.Message.Chat.ID, "Đang xử lý...")
@@ -479,8 +512,46 @@ func isTelegramNewCommand(text string) bool {
 	return strings.EqualFold(command, "new")
 }
 
+func isTelegramSessionsCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "sessions")
+}
+
+func isTelegramApprovalTextCommand(text string) bool {
+	action := telegramApprovalTextAction(text)
+	return action == "approve" || action == "reject" || action == "revise"
+}
+
+func (b *Bot) sendTelegramSessionsMenu(ctx context.Context, chatID int64, confirmDeleteKey string) error {
+	index, err := b.sessionIndex.List(ctx, chatID, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	_, err = b.sendMessageWithReplyMarkup(ctx, chatID, telegramSessionListText(index, time.Now()), telegramSessionKeyboard(index, confirmDeleteKey))
+	return err
+}
+
+func (b *Bot) activeTelegramSessionID(ctx context.Context, chatID int64) (string, error) {
+	record, err := b.sessionIndex.Active(ctx, chatID, time.Now().UTC())
+	if err != nil {
+		return "", err
+	}
+	return record.SessionID, nil
+}
+
 func (b *Bot) sendStatusSummary(ctx context.Context, chatID int64) error {
-	run, err := queryLatestTelegramRun(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), fmt.Sprintf("telegram_chat_%d", chatID))
+	sessionID, err := b.activeTelegramSessionID(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	run, err := queryLatestTelegramRun(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), sessionID)
 	if err != nil {
 		return err
 	}
@@ -497,7 +568,11 @@ func (b *Bot) sendStatusSummary(ctx context.Context, chatID int64) error {
 }
 
 func (b *Bot) sendHistorySummary(ctx context.Context, chatID int64, messageText string) error {
-	runs, err := queryRecentTelegramRuns(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), fmt.Sprintf("telegram_chat_%d", chatID), 10)
+	sessionID, err := b.activeTelegramSessionID(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	runs, err := queryRecentTelegramRuns(ctx, strings.TrimSpace(os.Getenv("DATABASE_URL")), sessionID, 10)
 	if err != nil {
 		return err
 	}
@@ -614,6 +689,9 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 			_ = b.answerCallbackQuery(ctx, callback.ID, "Unknown action.")
 			return true, nil
 		}
+	}
+	if action, key, ok := parseTelegramSessionCallback(callback.Data); ok {
+		return b.processTelegramSessionCallback(ctx, update, action, key)
 	}
 	action, approvalID, ok := parseTelegramApprovalCallback(callback.Data)
 	if !ok {
@@ -751,6 +829,78 @@ func (b *Bot) processCallbackQuery(ctx context.Context, update telegramUpdate) (
 	return true, nil
 }
 
+func (b *Bot) processTelegramSessionCallback(ctx context.Context, update telegramUpdate, action string, key string) (bool, error) {
+	callback := update.CallbackQuery
+	chatID := callback.Message.Chat.ID
+	if action != "cancel_delete" {
+		if _, ok := b.state.approvalForChat(chatID); ok {
+			_ = b.answerCallbackQuery(ctx, callback.ID, "Phiên này đang có yêu cầu xác nhận. Hãy approve, reject hoặc revise trước.")
+			return true, nil
+		}
+	}
+
+	switch action {
+	case "select":
+		record, err := b.sessionIndex.Select(ctx, chatID, key, time.Now().UTC())
+		if err != nil {
+			_ = b.answerCallbackQuery(ctx, callback.ID, "Phiên không còn tồn tại.")
+			return true, nil
+		}
+		index, err := b.sessionIndex.List(ctx, chatID, time.Now().UTC())
+		if err != nil {
+			return false, err
+		}
+		if err := b.editMessageTextWithReplyMarkup(ctx, chatID, callback.Message.MessageID, telegramSessionListText(index, time.Now()), telegramSessionKeyboard(index, "")); err != nil {
+			return false, err
+		}
+		_ = b.answerCallbackQuery(ctx, callback.ID, "Đã chuyển sang: "+telegramSessionDisplayTitle(record))
+		return true, nil
+	case "delete":
+		index, err := b.sessionIndex.List(ctx, chatID, time.Now().UTC())
+		if err != nil {
+			return false, err
+		}
+		if err := b.editMessageTextWithReplyMarkup(ctx, chatID, callback.Message.MessageID, telegramSessionListText(index, time.Now()), telegramSessionKeyboard(index, key)); err != nil {
+			return false, err
+		}
+		_ = b.answerCallbackQuery(ctx, callback.ID, "Xác nhận trước khi xóa.")
+		return true, nil
+	case "confirm_delete":
+		if b.handler == nil {
+			return false, fmt.Errorf("message handler is not configured")
+		}
+		deleted, _, err := b.sessionIndex.Delete(ctx, chatID, key, time.Now().UTC(), func(sessionID string) error {
+			return b.handler.ResetSession(ctx, sessionID)
+		})
+		if err != nil {
+			_ = b.answerCallbackQuery(ctx, callback.ID, "Không thể xóa phiên này.")
+			return true, nil
+		}
+		index, err := b.sessionIndex.List(ctx, chatID, time.Now().UTC())
+		if err != nil {
+			return false, err
+		}
+		if err := b.editMessageTextWithReplyMarkup(ctx, chatID, callback.Message.MessageID, telegramSessionListText(index, time.Now()), telegramSessionKeyboard(index, "")); err != nil {
+			return false, err
+		}
+		_ = b.answerCallbackQuery(ctx, callback.ID, "Đã xóa: "+telegramSessionDisplayTitle(deleted))
+		return true, nil
+	case "cancel_delete":
+		index, err := b.sessionIndex.List(ctx, chatID, time.Now().UTC())
+		if err != nil {
+			return false, err
+		}
+		if err := b.editMessageTextWithReplyMarkup(ctx, chatID, callback.Message.MessageID, telegramSessionListText(index, time.Now()), telegramSessionKeyboard(index, "")); err != nil {
+			return false, err
+		}
+		_ = b.answerCallbackQuery(ctx, callback.ID, "Đã hủy.")
+		return true, nil
+	default:
+		_ = b.answerCallbackQuery(ctx, callback.ID, "Unknown action.")
+		return true, nil
+	}
+}
+
 func (b *Bot) deleteWebhook(ctx context.Context) error {
 	var response struct {
 		OK bool `json:"ok"`
@@ -784,6 +934,7 @@ func (b *Bot) setMyCommands(ctx context.Context) error {
 	payload := map[string]any{
 		"commands": []map[string]string{
 			{"command": "new", "description": "Bắt đầu phiên mới"},
+			{"command": "sessions", "description": "Chọn hoặc xóa phiên"},
 			{"command": "status", "description": "Xem trạng thái lệnh gần nhất"},
 			{"command": "history", "description": "Xem lịch sử gần đây"},
 			{"command": "policy", "description": "Mở menu chính sách"},

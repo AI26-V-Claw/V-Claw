@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Luồng chuẩn cho việc nhận một tin nhắn từ Telegram/Slack, chuẩn hóa thành `UserMessage`, đưa vào Agent Core và trả `AgentResponse`.
+Luồng chuẩn cho việc nhận một tin nhắn từ Telegram, chuẩn hóa thành `UserMessage`, đưa vào Agent Core và trả `AgentResponse`.
 
 Scenario này đại diện cho:
 
 - Sprint 1 G3: định tuyến lượt chat và clarify tối thiểu.
-- Sprint 1 G4: channel Telegram/Slack.
+- Sprint 1 G4: channel Telegram.
 - Sprint 1 G5: agent loop tối giản.
 
 Không mô tả login/logout. `allowed_user_id` hoặc `allowed_chat_id` là allowlist của channel trong single-owner deployment.
@@ -19,7 +19,7 @@ sequenceDiagram
     autonumber
 
     actor User as Người dùng
-    participant Channel as Message Channel<br/>(Telegram / Slack)
+    participant Channel as Message Channel<br/>(Telegram)
     participant Adapter as Channel Adapter
     participant Agent as Agent Core
     participant LLM as LLM Provider

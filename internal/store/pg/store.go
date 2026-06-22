@@ -1082,15 +1082,13 @@ func coalesce(values ...string) string {
 }
 
 // channelFromSessionID derives the originating channel from the session id
-// prefix (telegram_chat_*, slack_channel_*). Returns "" when the prefix is
+// prefix (telegram_chat_*). Returns "" when the prefix is
 // unrecognized so the column stays NULL rather than holding a guess.
 func channelFromSessionID(sessionID string) string {
 	sessionID = strings.TrimSpace(sessionID)
 	switch {
 	case strings.HasPrefix(sessionID, "telegram_"):
 		return "telegram"
-	case strings.HasPrefix(sessionID, "slack_"):
-		return "slack"
 	default:
 		return ""
 	}

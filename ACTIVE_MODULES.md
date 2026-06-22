@@ -26,7 +26,7 @@ Phụ trách tích hợp API và các phương thức kết nối.
 Bao gồm:
 
 - Google Workspace connectors: Gmail, Calendar, Chat.
-- Telegram/Slack/channel adapters.
+- Telegram/channel adapters.
 - OAuth/config/secrets liên quan external services.
 - Mock/fake adapters cho external APIs.
 - Tool implementation cho các thao tác external API.
@@ -91,9 +91,8 @@ Các module dưới đây được phép implement theo đúng sprint/task tươ
 | `internal/connectors/google/gmail/` | Integration | Gmail API client. |
 | `internal/connectors/google/calendar/` | Integration | Calendar API client. |
 | `internal/connectors/google/chat/` | Integration | Google Chat API client theo roadmap Google Workspace. |
-| `internal/channels/` | Integration | User-facing adapters: Telegram/Slack. |
+| `internal/channels/` | Integration | User-facing adapters: Telegram. |
 | `internal/channels/telegram/` | Integration | Kênh giao tiếp với Agent theo Sprint 1. |
-| `internal/channels/slack/` | Integration | Kênh giao tiếp với Agent theo Sprint 1. |
 
 ### 3.5. Safety, HITL & sandbox
 
@@ -210,7 +209,7 @@ internal/tools/gmail/list_emails.*
   - khai báo risk level
 ```
 
-Agent Core chỉ gọi tool interface, không gọi trực tiếp Google/Slack SDK.
+Agent Core chỉ gọi tool interface, không gọi trực tiếp Google SDK.
 
 ---
 
