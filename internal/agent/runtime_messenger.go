@@ -277,7 +277,7 @@ var approvalSkipFields = map[string]bool{
 	"threadId": true, "threadKey": true, "threadName": true,
 	"space": true, "calendarId": true, "messageName": true,
 	"replyToMessageId": true, "messageReplyOption": true, "requestId": true,
-	"pageToken": true, "previewChars": true, "full": true,
+	"pageToken": true, "previewChars": true, "full": true, "localPath": true,
 }
 
 // approvalFieldPriority controls display order; lower = shown first.

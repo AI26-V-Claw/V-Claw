@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -114,5 +116,76 @@ func TestListFilesKeepsExplicitDriveQuery(t *testing.T) {
 
 	if _, err := ListFiles(context.Background(), client, explicitQuery, "", 10, ""); err != nil {
 		t.Fatalf("ListFiles: %v", err)
+	}
+}
+
+func TestUploadFileInfersMimeTypeFromExtension(t *testing.T) {
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "Google Workspace Message-2026-05-29-024245.png")
+	if err := os.WriteFile(localPath, []byte("png"), 0600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	client := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", request.Method)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if !strings.Contains(request.Header.Get("Content-Type"), "multipart/related") {
+			t.Fatalf("content-type = %q, want multipart/related", request.Header.Get("Content-Type"))
+		}
+		if !strings.Contains(string(body), "image/png") {
+			t.Fatalf("request body does not contain inferred mime type: %s", string(body))
+		}
+		if !strings.Contains(string(body), "Google Workspace Message-2026-05-29-024245.png") {
+			t.Fatalf("request body does not contain file name: %s", string(body))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"file_123","name":"Google Workspace Message-2026-05-29-024245.png","mimeType":"image/png","webViewLink":"https://drive.google.com/file/d/file_123/view"}`)),
+		}, nil
+	})}
+
+	file, err := UploadFile(context.Background(), client, localPath, "", "", nil)
+	if err != nil {
+		t.Fatalf("UploadFile: %v", err)
+	}
+	if file.MimeType != "image/png" {
+		t.Fatalf("file mimeType = %q, want image/png", file.MimeType)
+	}
+}
+
+func TestUploadFileInfersDocxMimeTypeFromExtension(t *testing.T) {
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "11.docx")
+	if err := os.WriteFile(localPath, []byte("docx"), 0600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	client := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if !strings.Contains(string(body), "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+			t.Fatalf("request body does not contain docx mime type: %s", string(body))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"file_456","name":"11.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","webViewLink":"https://drive.google.com/file/d/file_456/view"}`)),
+		}, nil
+	})}
+
+	file, err := UploadFile(context.Background(), client, localPath, "", "", nil)
+	if err != nil {
+		t.Fatalf("UploadFile: %v", err)
+	}
+	if file.MimeType != "application/vnd.openxmlformats-officedocument.wordprocessingml.document" {
+		t.Fatalf("file mimeType = %q, want docx mime type", file.MimeType)
 	}
 }

@@ -83,9 +83,6 @@ func configuredChannelName() string {
 	if envBool("VCLAW_TELEGRAM_ENABLED", false) || strings.TrimSpace(envFirst("TELEGRAM_BOT_TOKEN", "VCLAW_TELEGRAM_BOT_TOKEN")) != "" {
 		return "telegram"
 	}
-	if envBool("VCLAW_SLACK_ENABLED", false) || strings.TrimSpace(envFirst("VCLAW_SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN")) != "" {
-		return "slack"
-	}
 	return "cli"
 }
 

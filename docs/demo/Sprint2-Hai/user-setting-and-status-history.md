@@ -13,6 +13,8 @@ Mục tiêu của demo là cho thấy người dùng có thể:
 3. Xem danh sách lịch sử gọn, có phân loại theo category và mở chi tiết từng run.
 4. Dev có thể mở Langfuse để soi trace chi tiết, tool call, metadata và error ref.
 
+Ngoài ba luồng trên, kịch bản này còn kèm một bảng risk matrix ngắn cho tool thường gặp để khi demo Telegram bạn có thể đối chiếu nhanh: tool nào tự chạy, tool nào dừng ở approval, và tool nào bị chặn.
+
 ---
 
 ## Prerequisites
@@ -21,6 +23,49 @@ Mục tiêu của demo là cho thấy người dùng có thể:
 - Google OAuth đã sẵn sàng nếu demo có dùng Google Workspace tools.
 - PostgreSQL đang chạy.
 - User đang dùng đúng Telegram account đã được allow.
+
+---
+
+## S0 - Risk matrix các tool thường dùng
+
+**Mục tiêu**: nhìn nhanh tool nào thuộc nhóm read, write, local write, code execution hay destructive để giải thích vì sao bot có hoặc không hỏi phê duyệt.
+
+| Tool | Risk | Approval | Ghi chú demo |
+|---|---|---|---|
+| `gmail.listEmails` | `safe_read` | Không | Dùng để show auto-allow khi policy cho phép |
+| `gmail.getEmail` | `sensitive_read` | Có | Đọc raw email nên luôn phải xác nhận |
+| `calendar.listEvents` | `safe_read` | Không | Dùng để kiểm tra lịch nhanh |
+| `calendar.createEvent` | `external_write` | Có | Demo approval flow rõ nhất |
+| `drive.listFiles` | `safe_read` | Không | Xem file/tài liệu có sẵn |
+| `drive.downloadFile` | `safe_read` | Không | Chỉ đọc nội dung, không ghi local |
+| `drive.saveFile` | `local_write` | Có | Tải file về workspace, cần xác nhận |
+| `drive.uploadFile` | `external_write` | Có | Upload file lên Drive, cần xác nhận |
+| `docs.getDocument` | `sensitive_read` | Có | Đọc nội dung tài liệu nhạy cảm |
+| `docs.createDocument` | `external_write` | Có | Tạo tài liệu mới |
+| `sheets.readValues` | `sensitive_read` | Có | Đọc dữ liệu bảng tính |
+| `chat.sendMessage` | `external_write` | Có | Gửi tin nhắn lên Google Chat |
+| `web.search` | `safe_read` | Không | Tìm kiếm web, không cần approval |
+| `sandbox.runPython` | `code_execution` | Có | Demo nguy cơ cao nhất trong sandbox |
+| `sandbox.runShell` | `code_execution` | Có | Cũng phải dừng ở approval |
+
+### Kết quả kỳ vọng của risk matrix
+
+- Các tool `safe_read` có thể auto-run nếu user policy để auto-allow.
+- Các tool `sensitive_read`, `external_write`, `local_write`, `code_execution` sẽ chặn ở approval.
+- Các tool `destructive` phải bị chặn hoặc luôn yêu cầu kiểm soát rất chặt tùy policy.
+- Khi demo, có thể dùng `/policy` để bật auto-allow cho `safe_read` và `safe_compute`, rồi so sánh với các tool còn lại.
+
+---
+
+## S0.1 - Vòng đời approval
+
+**Mục tiêu**: giải thích ngắn gọn trạng thái approval khi demo Telegram.
+
+- `pending`: tool nguy hiểm vừa được đề xuất, bot đang chờ bạn quyết định.
+- `approved`: bạn bấm hoặc nhắn `approve`, tool chạy tiếp.
+- `rejected`: bạn từ chối, tool dừng.
+- `revised`: bạn chọn sửa, bot nhận comment rồi tạo yêu cầu mới hoặc đi theo nội dung đã sửa.
+- `expired`: bạn để `pending` quá TTL, tức **10 phút**, nên approval không còn hợp lệ nữa.
 
 ---
 

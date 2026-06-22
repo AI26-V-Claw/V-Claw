@@ -73,7 +73,7 @@ Key package groups:
 | `internal/agent/` | Agent loop, planning, request handling, and tool-call orchestration. |
 | `internal/approvals/` | Human-in-the-loop approval state and approve/reject flow. |
 | `internal/audit/` | Action logs and execution evidence. |
-| `internal/channels/` | User-facing message adapters such as Telegram or Slack. |
+| `internal/channels/` | User-facing message adapters such as Telegram. |
 | `internal/connectors/` | Raw external API clients and adapters. |
 | `internal/connectors/google/` | Gmail, Calendar, Chat, OAuth, and related Google Workspace clients. |
 | `internal/contracts/` | Shared runtime objects when implemented: messages, tool calls, results, risk, approvals, and errors. |
