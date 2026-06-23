@@ -171,6 +171,14 @@ func (t *editUserMemoryTool) Execute(_ context.Context, call tools.ToolCall) too
 	if action == "add" && target == "user" && category == "" {
 		return invalidArgumentResult(call, "category bắt buộc khi thêm fact vào USER.md")
 	}
+	// Enforce the data contract (docs/03-contracts.md §9.1): never write
+	// credentials/tokens/secrets into long-term memory. Applies to 'add' only;
+	// for 'remove', content is a search keyword, not stored data.
+	if action == "add" {
+		if err := longmem.ValidateMemoryContent(content); err != nil {
+			return invalidArgumentResult(call, err.Error())
+		}
+	}
 
 	var msg, preview string
 

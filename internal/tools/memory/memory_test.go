@@ -240,6 +240,31 @@ func TestResetMemory(t *testing.T) {
 	}
 }
 
+func TestEditUserMemory_RejectsSecretContent(t *testing.T) {
+	svc := NewService(t.TempDir())
+	tool := &editUserMemoryTool{service: svc}
+
+	call := tools.ToolCall{
+		ID:   "call_1",
+		Name: ToolNameEditUserMemory,
+		Arguments: map[string]any{
+			"action":  "add",
+			"target":  "notes",
+			"content": "OPENAI_API_KEY=sk-test-secret-value",
+		},
+	}
+	result := tool.Execute(context.Background(), call)
+
+	if result.Success {
+		t.Fatal("expected failure for secret content")
+	}
+	if result.Error == nil || result.Error.Code != tools.ErrorInvalidArgument {
+		t.Fatalf("expected invalid argument error, got: %#v", result.Error)
+	}
+	if !contains(result.Error.Message, "secret") && !contains(result.Error.Message, "credential") {
+		t.Fatalf("expected secret rejection message, got: %q", result.Error.Message)
+	}
+}
 func TestRegisterTools(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	if err := RegisterTools(registry, t.TempDir(), nil); err != nil {
@@ -318,3 +343,5 @@ func readFile(t *testing.T, path string) string {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+

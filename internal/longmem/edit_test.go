@@ -198,13 +198,6 @@ func TestResetAll(t *testing.T) {
 
 // --- helpers ---
 
-func writeFileContent(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatalf("writeFileContent %s: %v", path, err)
-	}
-}
-
 // readFile reads a file and returns its content as string.
 func readFile(t *testing.T, path string) string {
 	t.Helper()
@@ -214,3 +207,60 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+// ─── Read-error handling (P2 regression) ────────────────────────────────────
+// A read error on the existing memory file must NOT be treated as "empty" —
+// otherwise the next add would overwrite the file and drop existing content.
+// We simulate a non-IsNotExist read error by placing a directory where the
+// memory file is expected; os.ReadFile then fails with a real error.
+
+func TestAddUserFact_ReadErrorDoesNotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	// Make USER.md a directory so os.ReadFile returns a non-IsNotExist error.
+	if err := os.Mkdir(filepath.Join(dir, "USER.md"), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	err := AddUserFact(dir, "Thông tin cơ bản", "Email: test@example.com")
+	if err == nil {
+		t.Fatal("expected error when existing USER.md is unreadable, got nil")
+	}
+}
+
+func TestAddNotesFact_ReadErrorDoesNotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "NOTES.md"), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	err := AddNotesFact(dir, "Ghi chú mới")
+	if err == nil {
+		t.Fatal("expected error when existing NOTES.md is unreadable, got nil")
+	}
+}
+
+func TestRemoveUserFact_ReadError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "USER.md"), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := RemoveUserFact(dir, "test"); err == nil {
+		t.Fatal("expected error when existing USER.md is unreadable, got nil")
+	}
+}
+
+func TestRemoveNotesFact_ReadError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "NOTES.md"), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := RemoveNotesFact(dir, "test"); err == nil {
+		t.Fatal("expected error when existing NOTES.md is unreadable, got nil")
+	}
+}
+
+func writeFileContent(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("writeFileContent %s: %v", path, err)
+	}
+}
+

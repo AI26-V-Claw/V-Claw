@@ -9,6 +9,7 @@ package contracts_test
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,6 +29,56 @@ import (
 	"vclaw/internal/tools/web"
 	"vclaw/internal/tools/memory"
 )
+
+const docsToolRegistryPath = "../../docs/03-contracts.md"
+
+// ─── Memory Tool Metadata in Docs anti-drift ───────────────────────────────────
+// Verifies that all memory tools declared in internal/tools/memory/RegistryEntries
+// are present in the Tool Registry table within docs/03-contracts.md. This prevents
+// self-referential drift where tests only compare against the Go source and not
+// the canonical docs.
+func TestMemoryToolMetadataDocsMatchesRegistry(t *testing.T) {
+	registryPath := docsToolRegistryPath
+	docs, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Skipf("cannot read docs file for drift test: %v", err)
+	}
+
+	// Parse the Memory section table in docs.
+	docsContent := string(docs)
+	startIdx := strings.Index(docsContent, "### Memory")
+	if startIdx < 0 {
+		t.Fatalf("docs missing '### Memory' section")
+	}
+	section := docsContent[startIdx:]
+
+	// Extract tool names from the markdown table lines (| `tool.name` |).
+	var docsTools = map[string]bool{}
+	lines := strings.Split(section, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		// Format: | `tool.name` | Owner | Risk | Approval |
+		parts := strings.Split(line, "|")
+		if len(parts) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "`"))
+		if name != "" {
+			docsTools[name] = true
+		}
+	}
+
+	// Compare with memory.RegistryEntries.
+	for _, entry := range memory.RegistryEntries {
+		name := entry.Name
+		if !docsTools[name] {
+			t.Errorf("contract drift: tool %q missing in docs/03-contracts.md Tool Registry (Memory section)", name)
+		}
+	}
+}
 
 // ─── RiskLevel enum drift ─────────────────────────────────────────────────────
 
@@ -549,3 +600,4 @@ func TestToolResultErrorShapeContract(t *testing.T) {
 		t.Error("ToolResult.ContentForLLM must not be empty even for error results")
 	}
 }
+

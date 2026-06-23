@@ -34,9 +34,9 @@ func AddUserFact(dir, category, fact string) error {
 	}
 
 	path := filepath.Join(dir, "USER.md")
-	existing := ""
-	if data, err := os.ReadFile(path); err == nil {
-		existing = string(data)
+	existing, err := readFileSafe(path)
+	if err != nil {
+		return fmt.Errorf("read USER.md: %w", err)
 	}
 
 	result := mergeUserFacts(existing, []CategorizedFact{{Category: category, Fact: fact}})
@@ -52,9 +52,9 @@ func RemoveUserFact(dir, pattern string) (bool, error) {
 	}
 
 	path := filepath.Join(dir, "USER.md")
-	existing := ""
-	if data, err := os.ReadFile(path); err == nil {
-		existing = string(data)
+	existing, err := readFileSafe(path)
+	if err != nil {
+		return false, fmt.Errorf("read USER.md: %w", err)
 	}
 	if strings.TrimSpace(existing) == "" {
 		return false, nil
@@ -84,9 +84,9 @@ func AddNotesFact(dir, fact string) error {
 	}
 
 	path := filepath.Join(dir, "NOTES.md")
-	existing := ""
-	if data, err := os.ReadFile(path); err == nil {
-		existing = string(data)
+	existing, err := readFileSafe(path)
+	if err != nil {
+		return fmt.Errorf("read NOTES.md: %w", err)
 	}
 
 	result := appendNotesFacts(existing, []string{fact})
@@ -102,9 +102,9 @@ func RemoveNotesFact(dir, pattern string) (bool, error) {
 	}
 
 	path := filepath.Join(dir, "NOTES.md")
-	existing := ""
-	if data, err := os.ReadFile(path); err == nil {
-		existing = string(data)
+	existing, err := readFileSafe(path)
+	if err != nil {
+		return false, fmt.Errorf("read NOTES.md: %w", err)
 	}
 	if strings.TrimSpace(existing) == "" {
 		return false, nil
