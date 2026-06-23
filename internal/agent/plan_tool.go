@@ -167,9 +167,10 @@ type PlanTool struct {
 }
 
 type planToolResponse struct {
-	Plan    contracts.Plan `json:"plan"`
-	Summary string         `json:"summary"`
-	RunID   string         `json:"runId,omitempty"`
+	Plan     contracts.Plan `json:"plan"`
+	Summary  string         `json:"summary"`
+	RunID    string         `json:"runId,omitempty"`
+	Revision int64          `json:"revision,omitempty"`
 }
 
 func NewPlanTool(store *PlanStore) *PlanTool {
@@ -225,13 +226,14 @@ func (t *PlanTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	if err != nil {
 		return planToolError(call, tools.ErrorInvalidArgument, err.Error())
 	}
+	var meta PlanMetadata
 	if ok {
-		plan, _ = t.store.Set(scope.SessionID, scope.RunID, plan)
+		plan, meta = t.store.Set(scope.SessionID, scope.RunID, plan)
 	} else {
-		plan, _, _ = t.store.Get(scope.SessionID, scope.RunID)
+		plan, meta, _ = t.store.Get(scope.SessionID, scope.RunID)
 	}
 
-	response := planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: scope.RunID}
+	response := planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: scope.RunID, Revision: meta.Revision}
 	content, err := json.Marshal(response)
 	if err != nil {
 		return planToolError(call, tools.ErrorExecutionFailed, err.Error())
@@ -242,7 +244,7 @@ func (t *PlanTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		Success:        true,
 		ContentForLLM:  string(content),
 		ContentForUser: response.Summary,
-		Metadata:       map[string]any{"summary": response.Summary, "step_count": len(plan.Steps)},
+		Metadata:       map[string]any{"summary": response.Summary, "step_count": len(plan.Steps), "revision": meta.Revision},
 	}
 }
 
@@ -334,14 +336,15 @@ func (r *Runtime) activePlanPrompt(sessionID string, runID string) string {
 	if r == nil || r.planStore == nil {
 		return ""
 	}
-	plan, _, ok := r.planStore.Get(sessionID, runID)
+	plan, meta, ok := r.planStore.Get(sessionID, runID)
 	if !ok {
 		return ""
 	}
-	data, err := json.Marshal(planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: strings.TrimSpace(runID)})
+	data, err := json.Marshal(planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: strings.TrimSpace(runID), Revision: meta.Revision})
 	if err != nil {
 		return ""
 	}
+	r.logger.Debug("plan prompt injected", "session_id", sessionID, "run_id", runID, "step_count", len(plan.Steps), "revision", meta.Revision, "reason", "active_plan")
 	return "<active-plan>\n" + string(data) + "\n</active-plan>"
 }
 
@@ -362,13 +365,26 @@ func (r *Runtime) hydratePlanFromTranscript(sessionID string, runID string, tran
 			continue
 		}
 		var payload planToolResponse
-		if err := json.Unmarshal([]byte(message.Content), &payload); err != nil || len(payload.Plan.Steps) == 0 {
+		if err := json.Unmarshal([]byte(message.Content), &payload); err != nil || !validHydratedPlan(payload, runID) {
 			continue
 		}
-		if strings.TrimSpace(payload.RunID) != runID {
-			continue
-		}
-		r.planStore.Set(sessionID, runID, payload.Plan)
+		plan, meta := r.planStore.Set(sessionID, runID, payload.Plan)
+		r.logger.Info("plan hydrated", "session_id", sessionID, "run_id", runID, "step_count", len(plan.Steps), "revision", meta.Revision, "reason", "transcript")
 		return
 	}
+}
+
+func validHydratedPlan(payload planToolResponse, runID string) bool {
+	if strings.TrimSpace(payload.RunID) == "" || strings.TrimSpace(payload.RunID) != strings.TrimSpace(runID) {
+		return false
+	}
+	if len(payload.Plan.Steps) == 0 || len(payload.Plan.Steps) > 50 {
+		return false
+	}
+	for _, step := range payload.Plan.Steps {
+		if strings.TrimSpace(step.Description) == "" || !validPlanStatus(strings.TrimSpace(step.Status)) {
+			return false
+		}
+	}
+	return true
 }

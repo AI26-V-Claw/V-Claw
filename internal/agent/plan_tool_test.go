@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"vclaw/internal/contracts"
+	"vclaw/internal/providers"
 	"vclaw/internal/tools"
 )
 
@@ -133,6 +134,47 @@ func TestPlanStorePrunesExpiredPlans(t *testing.T) {
 	}
 	if _, _, ok := store.Get("session-1", "run-new"); !ok {
 		t.Fatal("expected new plan to remain")
+	}
+}
+
+func TestHydratePlanFromTranscriptIgnoresBlankRunID(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Registry: tools.NewToolRegistry()})
+	transcript := []providers.Message{{
+		Role:    providers.MessageRoleTool,
+		Content: `{"plan":{"steps":[{"description":"Old","status":"pending"}]},"summary":"1 pending"}`,
+	}}
+
+	runtime.hydratePlanFromTranscript("session-1", "run-1", transcript)
+	if plan := runtime.responsePlan("session-1", "run-1"); plan != nil {
+		t.Fatalf("expected blank runId hydration to be ignored, got %+v", plan)
+	}
+}
+
+func TestHydratePlanFromTranscriptUsesLastValidCurrentRunPlan(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Registry: tools.NewToolRegistry()})
+	transcript := []providers.Message{
+		{Role: providers.MessageRoleTool, Content: `{"plan":{"steps":[{"description":"Old run","status":"pending"}]},"summary":"1 pending","runId":"run-old"}`},
+		{Role: providers.MessageRoleTool, Content: `not-json`},
+		{Role: providers.MessageRoleTool, Content: `{"plan":{"steps":[{"description":"Current","status":"in_progress"}]},"summary":"1 in_progress","runId":"run-1"}`},
+	}
+
+	runtime.hydratePlanFromTranscript("session-1", "run-1", transcript)
+	plan := runtime.responsePlan("session-1", "run-1")
+	if plan == nil || len(plan.Steps) != 1 || plan.Steps[0].Description != "Current" {
+		t.Fatalf("expected current run plan, got %+v", plan)
+	}
+}
+
+func TestHydratePlanFromTranscriptIgnoresInvalidPlanSchema(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Registry: tools.NewToolRegistry()})
+	transcript := []providers.Message{{
+		Role:    providers.MessageRoleTool,
+		Content: `{"plan":{"steps":[{"description":"Bad","status":"started"}]},"summary":"1 started","runId":"run-1"}`,
+	}}
+
+	runtime.hydratePlanFromTranscript("session-1", "run-1", transcript)
+	if plan := runtime.responsePlan("session-1", "run-1"); plan != nil {
+		t.Fatalf("expected invalid plan schema to be ignored, got %+v", plan)
 	}
 }
 
