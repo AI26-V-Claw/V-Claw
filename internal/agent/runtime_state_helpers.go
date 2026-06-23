@@ -26,7 +26,8 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 	}
 	now := r.now()
 	runID := runIDForMessage(message)
-	state, err := r.stateStore.GetRun(ctx, runID)
+	persistCtx := context.WithoutCancel(ctx)
+	state, err := r.stateStore.GetRun(persistCtx, runID)
 	if err == nil {
 		// Do not resume a cancelled run - treat it as a fresh start.
 		if state.Status == RuntimeRunStatusCancelled {
@@ -45,7 +46,7 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		state.Data = mergeTraceData(state.Data, ctx)
 		state.UpdatedAt = now
 		state.CompletedAt = nil
-		if err := r.stateStore.UpdateRun(ctx, state); err != nil {
+		if err := r.stateStore.UpdateRun(persistCtx, state); err != nil {
 			return RunState{}, internalError("update run state: "+err.Error(), contracts.ErrorSourceAgent)
 		}
 		return state, nil
@@ -65,7 +66,7 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 		Model:         r.model,
 		PromptVersion: r.promptVersion,
 	}
-	if err := r.stateStore.CreateRun(ctx, state); err != nil {
+	if err := r.stateStore.CreateRun(persistCtx, state); err != nil {
 		return RunState{}, internalError("create run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	return state, nil
@@ -89,7 +90,8 @@ func (r *Runtime) updateRunState(ctx context.Context, state RunState) *contracts
 		return internalError("runtime state store is required", contracts.ErrorSourceAgent)
 	}
 	state.UpdatedAt = r.now()
-	if err := r.stateStore.UpdateRun(ctx, state); err != nil {
+	persistCtx := context.WithoutCancel(ctx)
+	if err := r.stateStore.UpdateRun(persistCtx, state); err != nil {
 		return internalError("update run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	return nil

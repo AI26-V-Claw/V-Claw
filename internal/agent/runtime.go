@@ -614,6 +614,29 @@ agentLoop:
 			return *resp, nil
 		}
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				code := contracts.ErrorProviderUnavailable
+				messageText := "provider chat canceled: " + err.Error()
+				base.Error = &contracts.ErrorShape{
+					Code:      code,
+					Message:   messageText,
+					Source:    contracts.ErrorSourceProvider,
+					Retryable: true,
+				}
+				r.appendRunEvent(ctx, runState.RunID, "provider.failed", map[string]any{
+					"iteration": iteration,
+					"code":      string(code),
+					"retryable": true,
+					"timeout":   false,
+				})
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCancelled, string(orchestration.FailureReasonAborted))
+				if errShape != nil {
+					base.Error = errShape
+				}
+				base.FailureReason = updatedState.FailureReason
+				base.Message = base.Error.Message
+				return base, nil
+			}
 			code := contracts.ErrorProviderError
 			retryable := providers.IsRetryableError(err)
 			messageText := "provider chat failed: " + err.Error()
@@ -621,10 +644,6 @@ agentLoop:
 				code = contracts.ErrorProviderUnavailable
 				retryable = true
 				messageText = fmt.Sprintf("provider chat timed out after %s", r.providerTimeout)
-			} else if errors.Is(err, context.Canceled) {
-				code = contracts.ErrorProviderUnavailable
-				retryable = true
-				messageText = "provider chat canceled: " + err.Error()
 			}
 			if retryable {
 				code = contracts.ErrorProviderUnavailable
