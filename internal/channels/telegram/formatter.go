@@ -1,7 +1,10 @@
 package telegram
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -9,6 +12,11 @@ import (
 )
 
 const usdToVnd = 25700.0
+const maxTelegramStatusRunes = 3200
+const maxStatusStepRunes = 220
+const maxStatusListItems = 8
+
+var statusEmailItemPattern = regexp.MustCompile(`(?m)^\d+\.\s+Từ:`)
 
 func categoryIcon(category string) string {
 	switch strings.ToLower(strings.TrimSpace(category)) {
@@ -80,11 +88,18 @@ func FormatStatus(run *agent.RunState) string {
 			if !step.OK {
 				prefix = "❌"
 			}
-			text := strings.TrimSpace(step.Text)
-			if text == "" {
-				text = "(không có nội dung)"
+			texts := summarizeStatusStepText(step.Text)
+			if len(texts) == 0 {
+				texts = []string{"(không có nội dung)"}
 			}
-			lines = append(lines, fmt.Sprintf("%s %s", prefix, escapeTelegramMarkdown(text)))
+				for i, text := range texts {
+					text = truncateRune(text, maxStatusStepRunes)
+					if i == 0 {
+						lines = append(lines, fmt.Sprintf("%s %s", prefix, escapeTelegramMarkdown(text)))
+						continue
+					}
+					lines = append(lines, "   "+escapeTelegramMarkdown(text))
+			}
 		}
 	}
 
@@ -96,7 +111,7 @@ func FormatStatus(run *agent.RunState) string {
 		lines = append(lines, fmt.Sprintf("🔍 Ref: %s", escapeTelegramMarkdown(strings.ToUpper(strings.TrimSpace(run.ErrorRef)))))
 	}
 
-	return strings.Join(lines, "\n")
+	return trimTelegramStatusText(strings.Join(lines, "\n"))
 }
 
 func FormatHistory(runs []*agent.RunState, now time.Time) string {
@@ -163,6 +178,301 @@ func textOrFallback(value string, fallback string) string {
 		return fallback
 	}
 	return strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
+}
+
+func summarizeStatusStepText(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if lines := summarizeFriendlyEmailListText(text); len(lines) > 0 {
+		return lines
+	}
+	if lines := summarizeStructuredStatusText(text); len(lines) > 0 {
+		return lines
+	}
+	return []string{text}
+}
+
+func summarizeFriendlyEmailListText(text string) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || !strings.Contains(trimmed, "Đây là danh sách email") {
+		return nil
+	}
+	itemCount := len(statusEmailItemPattern.FindAllString(trimmed, -1))
+	if itemCount == 0 {
+		return nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	notable := make([]string, 0, 3)
+	seen := map[string]bool{}
+	attachmentCount := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "• Tệp đính kèm: Có") {
+			attachmentCount++
+			continue
+		}
+		if !strings.Contains(line, "Từ:") {
+			continue
+		}
+		sender := statusSenderNameFromLine(line)
+		if sender == "" || sender == "Bạn" || seen[sender] {
+			continue
+		}
+		seen[sender] = true
+		notable = append(notable, sender)
+		if len(notable) == 3 {
+			break
+		}
+	}
+
+	summary := []string{fmt.Sprintf("Tìm thấy %d email phù hợp.", itemCount)}
+	if len(notable) > 0 {
+		summary = append(summary, "Người gửi đáng chú ý: "+strings.Join(notable, ", ")+".")
+	}
+	if attachmentCount > 0 {
+		summary = append(summary, fmt.Sprintf("Có %d email có tệp đính kèm.", attachmentCount))
+	} else {
+		summary = append(summary, "Không thấy email nào có tệp đính kèm.")
+	}
+	return []string{strings.Join(summary, " ")}
+}
+
+func statusSenderNameFromLine(line string) string {
+	start := strings.Index(line, "Từ:")
+	if start < 0 {
+		return ""
+	}
+	text := strings.TrimSpace(line[start+len("Từ:"):])
+	if text == "" {
+		return ""
+	}
+	if idx := strings.Index(text, " gửi tới "); idx >= 0 {
+		text = text[:idx]
+	}
+	if idx := strings.Index(text, "("); idx >= 0 {
+		text = text[:idx]
+	}
+	return strings.TrimSpace(text)
+}
+
+func summarizeStructuredStatusText(text string) []string {
+	trimmed := strings.TrimSpace(text)
+	start := strings.IndexAny(trimmed, "[{")
+	if start < 0 {
+		return nil
+	}
+	prefix := strings.TrimSpace(trimmed[:start])
+	payloadText := strings.TrimSpace(trimmed[start:])
+	var payload any
+	if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+		return nil
+	}
+	lines := summarizeStructuredValue(payload)
+	if len(lines) == 0 {
+		return nil
+	}
+	if prefix != "" {
+		lines[0] = prefix + ": " + lines[0]
+	}
+	return lines
+}
+
+func summarizeStructuredValue(value any) []string {
+	switch typed := value.(type) {
+	case []any:
+		return summarizeStructuredList(typed)
+	case map[string]any:
+		return summarizeStructuredMap(typed)
+	default:
+		return nil
+	}
+}
+
+func summarizeStructuredList(items []any) []string {
+	if len(items) == 0 {
+		return []string{"Không có dữ liệu."}
+	}
+	limit := len(items)
+	if limit > maxStatusListItems {
+		limit = maxStatusListItems
+	}
+	lines := make([]string, 0, limit+1)
+	for i := 0; i < limit; i++ {
+		item := items[i]
+		summary := summarizeSingleRecord(item)
+		if summary == "" {
+			summary = fmt.Sprintf("Mục %d", i+1)
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, summary))
+	}
+	if len(items) > limit {
+		lines = append(lines, fmt.Sprintf("...và %d mục khác", len(items)-limit))
+	}
+	return lines
+}
+
+func summarizeStructuredMap(payload map[string]any) []string {
+	for _, key := range []string{"Event", "Message", "Draft", "File"} {
+		if nested, ok := payload[key].(map[string]any); ok {
+			if summary := summarizeSingleRecord(nested); summary != "" {
+				return []string{summary}
+			}
+		}
+	}
+	for _, key := range []string{"Events", "Messages", "Drafts", "Files"} {
+		if list, ok := payload[key].([]any); ok {
+			return summarizeStructuredList(list)
+		}
+	}
+	if summary := summarizeSingleRecord(payload); summary != "" {
+		return []string{summary}
+	}
+	return nil
+}
+
+func summarizeSingleRecord(value any) string {
+	record, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	if title := firstRecordValue(record, "title", "Title", "summary", "Subject", "subject", "Name", "name", "Text", "text"); title != "" {
+		parts = append(parts, title)
+	}
+	if timeText := summarizeRecordTime(record); timeText != "" {
+		parts = append(parts, "Thời gian: "+timeText)
+	}
+	if audience := summarizeRecordAudience(record); audience != "" {
+		parts = append(parts, audience)
+	}
+	if link := firstRecordValue(record, "eventLink", "EventLink", "WebViewLink", "meetLink"); link != "" {
+		parts = append(parts, "Link: "+link)
+	}
+	if location := firstRecordValue(record, "location", "Location"); location != "" {
+		parts = append(parts, "Địa điểm: "+location)
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " | ")
+	}
+	return summarizeFallbackRecord(record)
+}
+
+func summarizeRecordTime(record map[string]any) string {
+	start := firstRecordValue(record, "start", "StartTime", "startTime", "LocalDateTime", "ModifiedTime", "Date")
+	end := firstRecordValue(record, "end", "EndTime", "endTime")
+	switch {
+	case start != "" && end != "":
+		return start + " - " + end
+	case start != "":
+		return start
+	case end != "":
+		return end
+	default:
+		return ""
+	}
+}
+
+func summarizeRecordAudience(record map[string]any) string {
+	to := firstRecordValue(record, "To", "to")
+	from := firstRecordValue(record, "From", "from")
+	switch {
+	case from != "" && to != "":
+		return "Từ: " + from + " | Đến: " + to
+	case to != "":
+		return "Người nhận: " + to
+	case from != "":
+		return "Người gửi: " + from
+	default:
+		return ""
+	}
+}
+
+func summarizeFallbackRecord(record map[string]any) string {
+	keys := make([]string, 0, len(record))
+	for key := range record {
+		if shouldSkipStatusField(key, record[key]) {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, 3)
+	for _, key := range keys {
+		value := firstRecordValue(record, key)
+		if value == "" {
+			continue
+		}
+		parts = append(parts, humanizeStatusField(key)+": "+value)
+		if len(parts) == 3 {
+			break
+		}
+	}
+	return strings.Join(parts, " | ")
+}
+
+func firstRecordValue(record map[string]any, keys ...string) string {
+	for _, key := range keys {
+		raw, ok := record[key]
+		if !ok {
+			continue
+		}
+		switch value := raw.(type) {
+		case string:
+			value = strings.TrimSpace(value)
+			if value != "" {
+				return value
+			}
+		case float64:
+			return fmt.Sprintf("%.0f", value)
+		case bool:
+			if value {
+				return "Có"
+			}
+		}
+	}
+	return ""
+}
+
+func shouldSkipStatusField(key string, value any) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	switch lower {
+	case "id", "threadid", "messageid", "historyid", "isrecurring":
+		return true
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case bool:
+		return !typed
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	default:
+		return value == nil
+	}
+}
+
+func humanizeStatusField(key string) string {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "title", "summary", "subject", "name":
+		return "Tên"
+	case "webviewlink", "eventlink", "meetlink":
+		return "Link"
+	case "start", "starttime", "localdatetime", "date", "modifiedtime":
+		return "Thời gian"
+	case "to":
+		return "Người nhận"
+	case "from":
+		return "Người gửi"
+	case "location":
+		return "Địa điểm"
+	default:
+		return key
+	}
 }
 
 func sameLocalDay(a, b time.Time) bool {
@@ -235,4 +545,18 @@ func runDurationSeconds(run *agent.RunState, now time.Time) float64 {
 		return 0
 	}
 	return elapsed.Seconds()
+}
+
+func trimTelegramStatusText(text string) string {
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if len(runes) <= maxTelegramStatusRunes {
+		return text
+	}
+	suffix := "\n\n...[đã rút gọn]"
+	suffixRunes := []rune(suffix)
+	if len(suffixRunes) >= maxTelegramStatusRunes {
+		return string(suffixRunes[:maxTelegramStatusRunes])
+	}
+	return strings.TrimSpace(string(runes[:maxTelegramStatusRunes-len(suffixRunes)])) + suffix
 }

@@ -171,9 +171,10 @@ Local vs Drive files:
 
 <output-format>
 - For Calendar results, always include the event link whenever the tool result provides one.
-- For Gmail list results, if the user asks to list every email, include every message and do not group by sender unless asked. Group relative-date answers by LocalDate.
-- List EVERY message present in the tool result. Never merge, deduplicate, or skip entries just because their subjects look nearly identical (e.g. several emails titled "Thông báo ... cuộc họp ngày mai"); entries that differ in recipient, time, or ID are distinct emails.
-- When showing an email's date or time, use the LocalDate and LocalDateTime fields — they are already in the user's local timezone. Never display the raw Date header or its offset; it carries the sender's timezone and is not the user's local time.
+- Khi người dùng hỏi về email, gọi gmail.listEmails.
+- Giữ nguyên format danh sách cũ, nhưng nếu email có tệp đính kèm thì thêm một dòng:
+    • Tệp đính kèm: Có
+- Không thêm giải thích ngoài danh sách email.
 - Do not dump raw JSON, raw tool outputs, internal tool names, or opaque IDs unless the user explicitly asks.
 - Use plain text only. Do not use Markdown bold, italic, inline code, headings, or syntax markers like **, __, backticks, or #.
 - Avoid Markdown tables because Telegram renders them poorly in plain text.

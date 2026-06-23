@@ -15,6 +15,7 @@ import (
 
 func (r *Runtime) legacyApprovalRequest(message contracts.UserMessage, toolCall providers.ToolCall, decision contracts.RiskDecision) contracts.ApprovalRequest {
 	now := r.now()
+	input := cloneArguments(toolCall.Arguments)
 	// Stamp the governance bundle on the contract ToolCall before it leaves
 	// Agent Core (docs/03-contracts.md §3.11). The same bundle is mirrored on
 	// the ApprovalRequest so approval records are self-contained for audit.
@@ -24,10 +25,10 @@ func (r *Runtime) legacyApprovalRequest(message contracts.UserMessage, toolCall 
 		RequestID:  message.RequestID,
 		SessionID:  message.SessionID,
 		ToolName:   toolCall.Name,
-		Input:      cloneArguments(toolCall.Arguments),
+		Input:      input,
 		Governance: governanceMeta,
 	}
-	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
+	summary := approvalSummary(toolCall.Name, decision.RiskLevel, input)
 	parentApprovalID := ""
 	if message.Metadata != nil {
 		if value, ok := message.Metadata["parentApprovalId"].(string); ok && strings.TrimSpace(value) != "" {
@@ -216,7 +217,7 @@ Ghi chú chỉnh sửa:
 }
 
 func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) string {
-	return approvalSummary(toolName, riskLevel)
+	return approvalSummary(toolName, riskLevel, nil)
 }
 
 func legacyApprovalExecutionMessage(result tools.ToolResult, contractResult contracts.ToolResult) string {

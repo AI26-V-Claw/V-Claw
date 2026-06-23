@@ -230,6 +230,24 @@ func TestBuildRuntimeUsesFileBackedStoresByDefault(t *testing.T) {
 	}
 }
 
+func TestResolveCompactorModel(t *testing.T) {
+	tests := []struct {
+		name     string
+		override string
+		want     string
+	}{
+		{name: "default uses mini", want: defaultCompactorModel},
+		{name: "trimmed override wins", override: "  gpt-4o  ", want: "gpt-4o"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveCompactorModel(tt.override); got != tt.want {
+				t.Fatalf("resolveCompactorModel(%q) = %q, want %q", tt.override, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewSandboxToolConfigWrapsCustomRunnerWithHooks(t *testing.T) {
 	runner := &countingSandboxRunner{}
 	cfg, err := newSandboxToolConfig(AgentRuntimeConfig{
