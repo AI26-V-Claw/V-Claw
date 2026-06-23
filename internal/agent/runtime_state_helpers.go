@@ -28,6 +28,12 @@ func (r *Runtime) startRunState(ctx context.Context, message contracts.UserMessa
 	runID := runIDForMessage(message)
 	state, err := r.stateStore.GetRun(ctx, runID)
 	if err == nil {
+		// Do not resume a cancelled run - treat it as a fresh start.
+		if state.Status == RuntimeRunStatusCancelled {
+			err = ErrRuntimeStateNotFound
+		}
+	}
+	if err == nil {
 		state.SessionID = message.SessionID
 		state.RequestID = message.RequestID
 		if strings.TrimSpace(state.OriginalGoal) == "" {
