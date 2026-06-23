@@ -1,4 +1,4 @@
-# V-Claw Runbook
+﻿# V-Claw Runbook
 
 Practical steps for starting, checking, and debugging V-Claw with monitoring enabled.
 
@@ -55,7 +55,7 @@ Useful flag overrides:
 --token <telegram-bot-token>
 --allowed-user <telegram-user-id>
 --data-dir ./data
---max-iterations 8
+--iteration-budget 8
 --credentials configs/google/credentials.json
 --google-token configs/google/token.json
 --google-tools auto|required|off
@@ -593,3 +593,4 @@ Useful targeted test commands:
 go test ./cmd/vclaw ./internal/monitoring
 go test ./internal/agent ./internal/app
 ```
+

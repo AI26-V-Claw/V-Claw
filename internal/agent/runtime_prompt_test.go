@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"vclaw/internal/agent/reference"
-	drivetool "vclaw/internal/tools/office/drive"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
+	drivetool "vclaw/internal/tools/office/drive"
 )
 
 func TestRuntimePromptOrdersSystemMemoryReferenceAndTranscript(t *testing.T) {
@@ -176,5 +176,18 @@ func TestRuntimePromptRoutesDriveFolderCreationToCreateFolder(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("drive.createFolder not found in RegistryEntries")
+	}
+}
+
+func TestRuntimePromptRequiresReadableEmailParagraphBreaks(t *testing.T) {
+	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
+	for _, want := range []string{
+		"paragraph breaks",
+		"greeting, main content, and closing/signature",
+		"Do not collapse the whole email into one paragraph",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("runtime prompt missing email formatting guidance %q", want)
+		}
 	}
 }

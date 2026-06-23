@@ -265,26 +265,17 @@ func legacyHasCalendarTitleEvidence(lowerText string, title string) bool {
 }
 
 func legacyHasCalendarStartEvidence(lowerText string) bool {
-	return hasTimeExpression(lowerText) ||
-		containsAnyText(lowerText,
-			"hôm nay", "hom nay", "ngày mai", "ngay mai",
-			"tuần này", "tuan nay", "tuần sau", "tuan sau",
-			"tháng này", "thang nay", "tháng tới", "thang toi", "tháng sau", "thang sau",
-			"today", "tomorrow", "this week", "next week", "this month", "next month",
-		)
+	return hasCalendarTimeOfDayEvidence(lowerText)
 }
 
 func legacyHasCalendarEndEvidence(lowerText string) bool {
-	if containsAnyText(lowerText,
-		"đến", "den", "tới", "toi", "kết thúc", "ket thuc",
-		"thời lượng", "thoi luong", "trong vòng", "trong vong",
-		"tiếng", "tieng", "giờ", "gio", "phút", "phut",
-		"hour", "hours", "minute", "minutes",
-	) {
+	if countCalendarTimeOfDayExpressions(lowerText) >= 2 {
 		return true
 	}
-	return countTimeExpressions(lowerText) >= 2 ||
-		(strings.Contains(lowerText, "-") && hasTimeExpression(lowerText))
+	if hasDurationExpression(lowerText) {
+		return true
+	}
+	return hasEndTimeCue(lowerText) && hasCalendarTimeOfDayEvidence(lowerText)
 }
 
 func legacyHasTimeExpression(text string) bool {
@@ -308,16 +299,25 @@ func legacyMissingToolArgumentQuestion(toolName string, missing []string) string
 		return "Bạn muốn thao tác với Google Chat space nào? Hãy gửi resource name dạng spaces/AAAA, hoặc nói rõ tên nhóm/người trong chat để tôi tìm space trước."
 	}
 	if toolName == "calendar.createEvent" {
-		if containsString(missing, "title") && containsString(missing, "start") {
-			return "Bạn muốn tạo lịch với tiêu đề gì, vào ngày giờ nào, và kết thúc lúc mấy giờ?"
+		missingTitle := containsString(missing, "title")
+		missingStart := containsString(missing, "start")
+		missingEnd := containsString(missing, "end")
+		if missingTitle && missingStart && missingEnd {
+			return "Bạn muốn tạo lịch với tiêu đề gì, bắt đầu vào ngày giờ nào, và kết thúc lúc mấy giờ hoặc kéo dài bao lâu?"
 		}
-		if containsString(missing, "start") {
-			return "Bạn muốn tạo lịch vào ngày và giờ nào?"
+		if missingStart && missingEnd {
+			return "Bạn muốn sự kiện bắt đầu lúc nào và kết thúc lúc nào, hoặc kéo dài bao lâu?"
 		}
-		if containsString(missing, "end") {
+		if missingTitle && missingStart {
+			return "Bạn muốn tạo lịch với tiêu đề gì, và bắt đầu vào ngày giờ nào?"
+		}
+		if missingStart {
+			return "Bạn muốn tạo lịch bắt đầu vào ngày giờ nào?"
+		}
+		if missingEnd {
 			return "Bạn có thể cung cấp giờ kết thúc hoặc thời lượng của cuộc họp không?"
 		}
-		if containsString(missing, "title") {
+		if missingTitle {
 			return "Bạn muốn đặt tiêu đề cuộc họp là gì?"
 		}
 	}

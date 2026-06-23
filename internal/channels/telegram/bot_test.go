@@ -1506,6 +1506,46 @@ func TestTelegramApprovalTextShowsCalendarEventDetails(t *testing.T) {
 	}
 }
 
+func TestTelegramApprovalTextFormatsCalendarRespondEvent(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_calendar_rsvp",
+			Summary:    "Tôi cần bạn xác nhận trước khi phản hồi lời mời Calendar.",
+			ToolCall: contracts.ToolCall{
+				ToolName: "calendar.respondEvent",
+				Input: map[string]any{
+					"eventId":        "event_001",
+					"eventTitle":     "N1 Long-term Test",
+					"email":          "quanghtd@vclaw.site",
+					"responseStatus": "accepted",
+					"attendees": []any{
+						map[string]any{"email": "quanghtd@vclaw.site", "displayName": "Quang", "responseStatus": "accepted"},
+					},
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Tiêu đề:", "N1 Long-term Test",
+		"Email:", "quanghtd@vclaw.site",
+		"Trạng thái tham dự:", "accepted",
+		"Người tham gia:", "- email: quanghtd@vclaw.site",
+		"tên: Quang", "trạng thái: accepted",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected calendar RSVP approval text to contain %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "map[") {
+		t.Fatalf("approval text should format maps readably, got %q", text)
+	}
+	if strings.Contains(text, "Event ID:") || strings.Contains(text, "event_001") {
+		t.Fatalf("approval text should hide raw event ID when title is available, got %q", text)
+	}
+}
+
 func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
 	text := telegramTextFromResponse(contracts.AgentResponse{
 		Status: contracts.AgentStatusApprovalRequired,
@@ -1529,6 +1569,30 @@ func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
 	}
 	if strings.Contains(text, "Nội dung:") || strings.Contains(text, "Space:") || strings.Contains(text, "spaces/87bFdyAAAAE") {
 		t.Fatalf("expected chat approval text to omit raw space identifier, got %q", text)
+	}
+}
+
+func TestTelegramApprovalTextForChatListMessagesHidesSpaceID(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_chat_list",
+			Summary:    "Cho phép tôi đọc tin nhắn trong Google Chat nhé?",
+			ToolCall: contracts.ToolCall{
+				ToolName: "chat.listMessages",
+				Input: map[string]any{
+					"space":      "spaces/AAQAEUb3OG4",
+					"maxResults": 50,
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(text, "Cuộc trò chuyện: Google Chat đã chọn") {
+		t.Fatalf("expected chat list approval to show neutral conversation context, got %q", text)
+	}
+	if strings.Contains(text, "Space:") || strings.Contains(text, "spaces/AAQAEUb3OG4") {
+		t.Fatalf("expected chat list approval to omit raw space identifier, got %q", text)
 	}
 }
 

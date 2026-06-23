@@ -273,7 +273,7 @@ waiting_clarification
 completed
 failed
 blocked
-max_iterations
+iteration_budget
 ```
 
 ### File-Backed Session Store
