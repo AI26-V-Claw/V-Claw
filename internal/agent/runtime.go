@@ -362,6 +362,13 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	}
 	ctx = withParentRunID(ctx, runState.RunID)
 	ctx = WithPlanScope(ctx, message.SessionID, runState.RunID)
+	defer func() {
+		currentState := runState
+		if loaded, loadErr := r.stateStore.GetRun(context.WithoutCancel(ctx), runState.RunID); loadErr == nil {
+			currentState = loaded
+		}
+		r.finishPlanLifecycle(context.WithoutCancel(ctx), currentState)
+	}()
 	ctx = providers.WithUsageRecorder(ctx, func(usage *providers.Usage) {
 		r.recordLLMUsageCost(ctx, &runState, usage)
 	})
@@ -399,7 +406,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	if err != nil {
 		return failStartedRun(internalError("load session transcript: "+err.Error(), contracts.ErrorSourceSession))
 	}
-	r.hydratePlanFromTranscript(message.SessionID, transcript)
+	r.hydratePlanFromTranscript(message.SessionID, runState.RunID, transcript)
 	if errShape := r.refreshSessionSummary(ctx, message.SessionID, transcript); errShape != nil {
 		return failStartedRun(errShape)
 	}
@@ -590,7 +597,7 @@ agentLoop:
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
 		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
-		if prompt := r.activePlanPrompt(message.SessionID); prompt != "" {
+		if prompt := r.activePlanPrompt(message.SessionID, runState.RunID); prompt != "" {
 			providerMessages = append([]providers.Message{{Role: providers.MessageRoleSystem, Content: prompt}}, providerMessages...)
 		}
 		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
@@ -693,7 +700,7 @@ If required information is missing, ask one concise clarification question inste
 				Message:     assistantMessage.Content,
 				Data:        r.traceData(referenceResolution),
 				ToolResults: toolResults,
-				Plan:        r.responsePlan(message.SessionID),
+				Plan:        r.responsePlan(message.SessionID, runState.RunID),
 			}, nil
 		}
 

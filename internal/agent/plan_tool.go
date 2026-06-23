@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
@@ -13,6 +14,8 @@ import (
 )
 
 const PlanToolName = "plan"
+
+const planRetentionTTL = 2 * time.Hour
 
 type planScopeKey struct{}
 
@@ -30,43 +33,126 @@ func planScopeFromContext(ctx context.Context) planScope {
 	return scope
 }
 
+// PlanStore keeps active plans scoped to a single session/run pair. The store
+// is in-memory, synchronized, and returns cloned plan snapshots so continuations
+// never mutate stored state by accident.
 type PlanStore struct {
 	mu    sync.RWMutex
-	plans map[string]contracts.Plan
+	plans map[string]planRecord
+}
+
+type planRecord struct {
+	Plan      contracts.Plan
+	Revision  int64
+	UpdatedAt time.Time
+}
+
+type PlanMetadata struct {
+	Revision  int64
+	UpdatedAt time.Time
 }
 
 func NewPlanStore() *PlanStore {
-	return &PlanStore{plans: make(map[string]contracts.Plan)}
+	return &PlanStore{plans: make(map[string]planRecord)}
 }
 
-func (s *PlanStore) Get(sessionID string) (contracts.Plan, bool) {
-	if s == nil || strings.TrimSpace(sessionID) == "" {
-		return contracts.Plan{}, false
+func planStoreKey(sessionID string, runID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	runID = strings.TrimSpace(runID)
+	if sessionID == "" || runID == "" {
+		return ""
+	}
+	return sessionID + "\x00" + runID
+}
+
+func (s *PlanStore) Get(sessionID string, runID string) (contracts.Plan, PlanMetadata, bool) {
+	key := planStoreKey(sessionID, runID)
+	if s == nil || key == "" {
+		return contracts.Plan{}, PlanMetadata{}, false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	plan, ok := s.plans[sessionID]
-	if !ok || len(plan.Steps) == 0 {
-		return contracts.Plan{}, false
+	record, ok := s.plans[key]
+	if !ok || len(record.Plan.Steps) == 0 {
+		return contracts.Plan{}, PlanMetadata{}, false
 	}
-	return clonePlan(plan), true
+	return clonePlan(record.Plan), PlanMetadata{Revision: record.Revision, UpdatedAt: record.UpdatedAt}, true
 }
 
-func (s *PlanStore) Set(sessionID string, plan contracts.Plan) contracts.Plan {
-	if s == nil || strings.TrimSpace(sessionID) == "" {
-		return contracts.Plan{}
+func (s *PlanStore) Set(sessionID string, runID string, plan contracts.Plan) (contracts.Plan, PlanMetadata) {
+	key := planStoreKey(sessionID, runID)
+	if s == nil || key == "" {
+		return contracts.Plan{}, PlanMetadata{}
 	}
 	plan = clonePlan(plan)
+	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(plan.Steps) == 0 {
-		delete(s.plans, sessionID)
-		return contracts.Plan{}
+		delete(s.plans, key)
+		return contracts.Plan{}, PlanMetadata{}
 	}
-	s.plans[sessionID] = plan
-	return clonePlan(plan)
+	revision := s.plans[key].Revision + 1
+	s.plans[key] = planRecord{Plan: plan, Revision: revision, UpdatedAt: now}
+	return clonePlan(plan), PlanMetadata{Revision: revision, UpdatedAt: now}
 }
 
+func (s *PlanStore) Clear(sessionID string, runID string) {
+	key := planStoreKey(sessionID, runID)
+	if s == nil || key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.plans, key)
+}
+
+func (s *PlanStore) PruneExpired(now time.Time) int {
+	if s == nil {
+		return 0
+	}
+	cutoff := now.Add(-planRetentionTTL)
+	removed := 0
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, record := range s.plans {
+		if record.UpdatedAt.Before(cutoff) {
+			delete(s.plans, key)
+			removed++
+		}
+	}
+	return removed
+}
+
+func shouldRetainPlanForRun(state RunState) bool {
+	hasPending := strings.TrimSpace(state.PendingActionID) != "" || strings.TrimSpace(state.PendingClarificationID) != ""
+	if !hasPending {
+		return false
+	}
+	switch state.Status {
+	case RuntimeRunStatusBlocked, RuntimeRunStatusIterationBudget:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Runtime) finishPlanLifecycle(ctx context.Context, state RunState) {
+	if r == nil || r.planStore == nil {
+		return
+	}
+	r.planStore.PruneExpired(r.now())
+	plan, meta, ok := r.planStore.Get(state.SessionID, state.RunID)
+	if !ok {
+		return
+	}
+	if shouldRetainPlanForRun(state) {
+		r.logger.Info("plan retained", "session_id", state.SessionID, "run_id", state.RunID, "step_count", len(plan.Steps), "revision", meta.Revision, "reason", string(state.Status))
+		return
+	}
+	r.planStore.Clear(state.SessionID, state.RunID)
+	r.logger.Info("plan cleared", "session_id", state.SessionID, "run_id", state.RunID, "step_count", len(plan.Steps), "revision", meta.Revision, "reason", string(state.Status))
+}
 func clonePlan(plan contracts.Plan) contracts.Plan {
 	if len(plan.Steps) == 0 {
 		return contracts.Plan{}
@@ -81,9 +167,10 @@ type PlanTool struct {
 }
 
 type planToolResponse struct {
-	Plan    contracts.Plan `json:"plan"`
-	Summary string         `json:"summary"`
-	RunID   string         `json:"runId,omitempty"`
+	Plan     contracts.Plan `json:"plan"`
+	Summary  string         `json:"summary"`
+	RunID    string         `json:"runId,omitempty"`
+	Revision int64          `json:"revision,omitempty"`
 }
 
 func NewPlanTool(store *PlanStore) *PlanTool {
@@ -131,18 +218,22 @@ func (t *PlanTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	if strings.TrimSpace(scope.SessionID) == "" {
 		return planToolError(call, tools.ErrorInvalidArgument, "plan scope session id is required")
 	}
+	if strings.TrimSpace(scope.RunID) == "" {
+		return planToolError(call, tools.ErrorInvalidArgument, "plan scope run id is required")
+	}
 
 	plan, ok, err := planFromArguments(call.Arguments)
 	if err != nil {
 		return planToolError(call, tools.ErrorInvalidArgument, err.Error())
 	}
+	var meta PlanMetadata
 	if ok {
-		plan = t.store.Set(scope.SessionID, plan)
+		plan, meta = t.store.Set(scope.SessionID, scope.RunID, plan)
 	} else {
-		plan, _ = t.store.Get(scope.SessionID)
+		plan, meta, _ = t.store.Get(scope.SessionID, scope.RunID)
 	}
 
-	response := planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: scope.RunID}
+	response := planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: scope.RunID, Revision: meta.Revision}
 	content, err := json.Marshal(response)
 	if err != nil {
 		return planToolError(call, tools.ErrorExecutionFailed, err.Error())
@@ -153,7 +244,7 @@ func (t *PlanTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		Success:        true,
 		ContentForLLM:  string(content),
 		ContentForUser: response.Summary,
-		Metadata:       map[string]any{"summary": response.Summary, "step_count": len(plan.Steps)},
+		Metadata:       map[string]any{"summary": response.Summary, "step_count": len(plan.Steps), "revision": meta.Revision},
 	}
 }
 
@@ -230,37 +321,42 @@ func planToolError(call tools.ToolCall, code string, message string) tools.ToolR
 	}
 }
 
-func (r *Runtime) responsePlan(sessionID string) *contracts.Plan {
+func (r *Runtime) responsePlan(sessionID string, runID string) *contracts.Plan {
 	if r == nil || r.planStore == nil {
 		return nil
 	}
-	plan, ok := r.planStore.Get(sessionID)
+	plan, _, ok := r.planStore.Get(sessionID, runID)
 	if !ok {
 		return nil
 	}
 	return &plan
 }
 
-func (r *Runtime) activePlanPrompt(sessionID string) string {
+func (r *Runtime) activePlanPrompt(sessionID string, runID string) string {
 	if r == nil || r.planStore == nil {
 		return ""
 	}
-	plan, ok := r.planStore.Get(sessionID)
+	plan, meta, ok := r.planStore.Get(sessionID, runID)
 	if !ok {
 		return ""
 	}
-	data, err := json.Marshal(planToolResponse{Plan: plan, Summary: summarizePlan(plan)})
+	data, err := json.Marshal(planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: strings.TrimSpace(runID), Revision: meta.Revision})
 	if err != nil {
 		return ""
 	}
+	r.logger.Debug("plan prompt injected", "session_id", sessionID, "run_id", runID, "step_count", len(plan.Steps), "revision", meta.Revision, "reason", "active_plan")
 	return "<active-plan>\n" + string(data) + "\n</active-plan>"
 }
 
-func (r *Runtime) hydratePlanFromTranscript(sessionID string, transcript []providers.Message) {
+func (r *Runtime) hydratePlanFromTranscript(sessionID string, runID string, transcript []providers.Message) {
 	if r == nil || r.planStore == nil {
 		return
 	}
-	if _, ok := r.planStore.Get(sessionID); ok {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return
+	}
+	if _, _, ok := r.planStore.Get(sessionID, runID); ok {
 		return
 	}
 	for index := len(transcript) - 1; index >= 0; index-- {
@@ -269,10 +365,26 @@ func (r *Runtime) hydratePlanFromTranscript(sessionID string, transcript []provi
 			continue
 		}
 		var payload planToolResponse
-		if err := json.Unmarshal([]byte(message.Content), &payload); err != nil || len(payload.Plan.Steps) == 0 {
+		if err := json.Unmarshal([]byte(message.Content), &payload); err != nil || !validHydratedPlan(payload, runID) {
 			continue
 		}
-		r.planStore.Set(sessionID, payload.Plan)
+		plan, meta := r.planStore.Set(sessionID, runID, payload.Plan)
+		r.logger.Info("plan hydrated", "session_id", sessionID, "run_id", runID, "step_count", len(plan.Steps), "revision", meta.Revision, "reason", "transcript")
 		return
 	}
+}
+
+func validHydratedPlan(payload planToolResponse, runID string) bool {
+	if strings.TrimSpace(payload.RunID) == "" || strings.TrimSpace(payload.RunID) != strings.TrimSpace(runID) {
+		return false
+	}
+	if len(payload.Plan.Steps) == 0 || len(payload.Plan.Steps) > 50 {
+		return false
+	}
+	for _, step := range payload.Plan.Steps {
+		if strings.TrimSpace(step.Description) == "" || !validPlanStatus(strings.TrimSpace(step.Status)) {
+			return false
+		}
+	}
+	return true
 }
