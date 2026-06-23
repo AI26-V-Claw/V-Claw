@@ -1,0 +1,54 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Gửi email cho vmkqa2@gmail.com với nội dung: Chào buổi sáng, chúc bạn một ngày làm việc hiệu quả."
+    },
+    "agent": {
+      "expectation": "Agent cần tạo yêu cầu xác nhận trước khi tạo Gmail draft, hiển thị người nhận, tiêu đề và nội dung email nháp.",
+      "requires_approval": true,
+      "expected_tools": ["gmail.createDraft"],
+      "expected_approval_tool": "gmail.createDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "Viết lại email thân mật hơn rồi gửi đi"
+    },
+    "agent": {
+      "expectation": "Agent cần chỉnh sửa nội dung email theo hướng thân mật hơn, sau đó tạo lại yêu cầu xác nhận trước khi tạo Gmail draft, hiển thị người nhận, tiêu đề và nội dung email nháp đã chỉnh sửa.",
+      "requires_approval": true,
+      "expected_tools": ["gmail.createDraft"],
+      "expected_approval_tool": "gmail.createDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent cần tạo draft thành công, sau đó yêu cầu xác nhận lần nữa trước khi gửi email.",
+      "requires_approval": true,
+      "expected_tools": ["gmail.sendDraft"],
+      "expected_approval_tool": "gmail.sendDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent cần xác nhận email đã được chuyển cho Gmail để gửi tới vmkqa2@gmail.com.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

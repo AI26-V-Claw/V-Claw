@@ -4,7 +4,7 @@
 
 | Actor | Loại | Mô tả |
 |---|---|---|
-| **Người dùng** | Human | Tương tác qua Telegram / Slack. Không giao tiếp trực tiếp với Google Workspace hay Sandbox. |
+| **Người dùng** | Human | Tương tác qua Telegram. Không giao tiếp trực tiếp với Google Workspace hay Sandbox. |
 | **V-Claw Agent** | AI System | Thực thi tác vụ: định tuyến lượt chat, gọi tool khi cần, gọi Google Workspace API, chạy Sandbox, điều phối HITL. |
 
 ---
@@ -19,7 +19,7 @@ flowchart LR
  
     subgraph INPUT ["Nhận & Định tuyến lượt chat"]
         direction TB
-        UC_SEND["Gửi tin nhắn\n(Telegram / Slack)"]
+        UC_SEND["Gửi tin nhắn\n(Telegram)"]
         UC_RECV["Nhận phản hồi"]
         UC_CANCEL["Hủy yêu cầu đang chạy"]
  

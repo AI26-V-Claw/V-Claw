@@ -40,7 +40,7 @@ Khi gặp hành động nguy hiểm, AI sẽ:
 | **G1** | Kết nối xong API cơ bản của Gmail, Calendar và Chat (bộ Google Workspace). |
 | **G2** | Thiết lập môi trường (Sandbox/Docker) để chuẩn bị cho việc chạy code Python. |
 | **G3** | Ổn định luồng agent routing theo kiểu GoClaw: chat an toàn đi no-tool, tác vụ cần dữ liệu/công cụ đi tool-enabled agent loop, prompt injection bị chặn. Clarify chỉ xảy ra khi agent/tool schema thật sự thiếu thông tin bắt buộc; risk/approval do tool policy quyết định. |
-| **G4** | Kết nối các phương thức Telegram/Slack để giao tiếp với Agent. |
+| **G4** | Kết nối các phương thức Telegram để giao tiếp với Agent. |
 | **G5** | Agent loop, tool call, multi-step planning. |
 
 ---

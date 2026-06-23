@@ -13,7 +13,7 @@ Channel -> Agent Core -> Agent Loop -> Tool Policy -> Tool Layer -> Tool Executi
 - Agent Loop receives the runtime-filtered tool set and lets the provider decide whether to answer directly, call a tool, or call `clarify`.
 - Agent Loop may return `need_clarification` by calling the internal `clarify` tool when required information is missing.
 - `Plan` is optional/advisory only; it must not authorize tool execution.
-- Channel approval UI, such as Telegram/Slack buttons or modal comments, must resolve to `ApprovalDecision`.
+- Channel approval UI, such as Telegram buttons or modal comments, must resolve to `ApprovalDecision`.
 
 - Channel chuẩn hóa input thành `UserMessage`.
 - Agent Core chỉ gọi tool qua `ToolCall`.
@@ -53,7 +53,9 @@ Ví dụ:
 gmail.listEmails
 gmail.sendEmail
 calendar.listEvents
+calendar.getEvent
 calendar.createEvent
+calendar.respondEvent
 chat.sendMessage
 sandbox.runPython
 sandbox.runShell
@@ -131,10 +133,10 @@ approval_required
 need_clarification
 failed
 blocked
-max_iterations_reached
+iteration_budget_exhausted
 ```
 
-`max_iterations_reached` is reserved for an agent runtime that exhausts its loop budget before producing a final answer. It must not be used as a `RiskLevel`.
+`iteration_budget_exhausted` is reserved for an agent runtime that exhausts its loop budget before producing a final answer. It must not be used as a `RiskLevel`.
 
 `output` is an optional user-facing rendering for channels/CLI. When present, integrations should prefer `output` over raw `message`.
 
@@ -171,7 +173,7 @@ Known artifact kinds in Sprint 1: `gmail.message`, `chat.message`, `calendar.eve
 | `` (empty) | Status is `completed` - happy path |
 | `timeout` | Context deadline exceeded |
 | `canceled` | Request was cancelled |
-| `max_iteration` | Agent exhausted iteration budget |
+| `iteration_budget` | Agent exhausted iteration budget |
 | `provider_error` | LLM provider returned an error |
 | `provider_unavailable` | LLM provider returned retryable error |
 | `tool_error` | Tool execution failed |
@@ -180,7 +182,7 @@ Known artifact kinds in Sprint 1: `gmail.message`, `chat.message`, `calendar.eve
 | `policy_blocked` | Action blocked by safety policy |
 | `aborted` | Internal setup failure or unclassified error |
 
-`failureReason` contains only typed constant values - never raw error messages or internal paths. Safe to expose to channel adapters (Telegram/Slack).
+`failureReason` contains only typed constant values - never raw error messages or internal paths. Safe to expose to channel adapters (Telegram).
 
 ---
 
@@ -384,7 +386,7 @@ Safety / Agent Core -> Channel / User
 }
 ```
 
-`governance` makes the approval record self-contained for audit/trace — see §3.11. Channel UIs that render approvals (Telegram/Slack) MUST NOT display these fields to the end user; they are for backend consumers (logs, dashboards, N4 trace) only.
+`governance` makes the approval record self-contained for audit/trace — see §3.11. Channel UIs that render approvals (Telegram) MUST NOT display these fields to the end user; they are for backend consumers (logs, dashboards, N4 trace) only.
 
 Status:
 
@@ -463,12 +465,12 @@ SANDBOX_TIMEOUT
 COMMAND_NOT_ALLOWED
 FILE_ACCESS_DENIED
 INTERNAL_ERROR
-MAX_ITERATIONS_EXCEEDED
+ITERATION_BUDGET_EXHAUSTED
 ```
 
 `PROVIDER_ERROR` is used for non-retryable LLM/provider failures. `PROVIDER_UNAVAILABLE` is used for retryable provider outages.
 
-`MAX_ITERATIONS_EXCEEDED` is used when the agent runtime reaches its configured iteration limit before completing the request.
+`ITERATION_BUDGET_EXHAUSTED` is used when the agent runtime reaches its configured iteration limit before completing the request.
 
 ---
 
@@ -573,7 +575,7 @@ Rules:
 
 - The runtime computes governance values once per construction (`promptVersion`) or once per call (`toolSchemaVersion`, `policyDecisionRef`) — they are not provided by the channel adapter or LLM.
 - All fields are optional strings. Empty values mean "unknown" and round-trip cleanly; existing producers that do not yet stamp governance keep working.
-- Channel UIs (Telegram, Slack, web) MUST NOT display governance to end users — these are backend trace identifiers, not human-facing context.
+- Channel UIs (Telegram, web) MUST NOT display governance to end users — these are backend trace identifiers, not human-facing context.
 - Governance values are stable identifiers, not secrets. They may be logged, indexed, and shipped to monitoring without redaction.
 - A change in any input that contributes to a hash (system prompt body, SOUL.md, tool parameter schema) automatically shifts the corresponding version. There is no manual version-bump step.
 
@@ -681,9 +683,14 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
 | `calendar.listEvents` | Integration | `safe_read` | No |
+| `calendar.getEvent` | Integration | `safe_read` | No |
 | `calendar.createEvent` | Integration | `external_write` | Yes |
 | `calendar.updateEvent` | Integration | `external_write` | Yes |
+| `calendar.respondEvent` | Integration | `external_write` | Yes |
 | `calendar.deleteEvent` | Integration | `destructive` | Yes |
+
+> `calendar.createEvent` requires an explicit start date+time and an explicit end date+time or duration before approval. Date-only phrases such as `tomorrow` / `ngay mai` are not enough to infer a start time. If the user also asks to send an email about the event, Calendar attendees/invitations do not satisfy that separate Gmail action.
+> `calendar.updateEvent` preserves existing Calendar attendee RSVP state when adding attendees. Tool input `attendees` is treated as attendees to add, not a blind replacement list; RSVP changes must use `calendar.respondEvent`.
 
 ### Chat
 
@@ -743,6 +750,18 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 
 > `calculator` thực hiện phép toán số học đơn giản trong memory/local runtime và không truy cập dữ liệu ngoài hệ thống.
 > `get_current_time` trả về thời gian local hiện tại theo ISO-8601, không cần approval.
+
+### Memory
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `memory.getUserMemory` | Agent Core | `safe_read` | No |
+| `memory.editUserMemory` | Agent Core | `local_write` | Yes |
+| `memory.resetMemory` | Agent Core | `destructive` | Yes |
+
+> `memory.getUserMemory` đọc bộ nhớ dài hạn hiện tại (`USER.md` + `NOTES.md`), không cần approval.
+> `memory.editUserMemory` thêm/xóa một fact trong bộ nhớ dài hạn (`local_write`, cần approval). Ngoài approval, tool còn enforce data contract §9.1: nội dung có dấu hiệu chứa credential/token/password/secret bị từ chối với `INVALID_INPUT` trước khi ghi — approval không thay thế ràng buộc này.
+> `memory.resetMemory` xóa toàn bộ bộ nhớ dài hạn và tạo lại skeleton mặc định (`destructive`, cần approval).
 
 ---
 
@@ -1001,7 +1020,36 @@ Rules:
 
 ---
 
-### 9.3. Loading rules (Sprint 3)
+### 9.3. Provenance sidecar
+
+Current implementation stores provenance in `cache/memory/memory_sources.json`.
+Markdown bullets in `USER.md` and `NOTES.md` may include an internal marker comment:
+
+```markdown
+- <fact text> <!-- mem:<memoryFactId> -->
+```
+
+Rules:
+
+- `memory_sources.json` is machine-readable provenance for each long-term fact.
+- Each source entry records `id`, `kind`, `file`, `section`, `text`, timestamps, and observations.
+- Observations record `sourceType` such as `session_compaction`, `session_compaction_fallback`, `repeated_habit`, or `manual_migration`.
+- Session compaction observations should include `sessionId`, optional `runId`/`requestId`, classifier model, and summary hash when available.
+- Repeated habit counting is global across sessions in `cache/memory/habit_patterns.json`.
+- Habit detection uses an LLM classifier to normalize natural-language variants into canonical patterns (for example `list/read/check/view` -> `inspect`) and falls back to deterministic heuristics if the classifier fails.
+- A repeated habit is promoted only when the same normalized pattern has `eligibleCount >= 3` and either appears in at least 2 distinct sessions or spans at least 72 hours from `firstSeen` to `lastSeen`.
+- Safe-read habits may become eligible from repeated user messages. Side-effect habits only become eligible after the user approves the action and the tool succeeds.
+- Habit dedup happens in 3 layers: normalized pattern (`promoted=true` prevents re-promotion), normalized fact text in `USER.md`, and exact observation dedup in `memory_sources.json`.
+- Repeated-habit observations in `memory_sources.json` must include the promoted aggregate `count`.
+- Loader must strip `<!-- mem:... -->` markers before injecting memory into the runtime prompt.
+- Long-term memory is context only. It must never override Tool Policy, approval decisions, HITL state, system prompt, or tool contracts.
+- Long-term memory loader must wrap memory as `authority="context_only"` and filter existing memory lines that attempt to bypass/ignore/override system instructions, tool policy, approvals, HITL, or tool contracts.
+- Long-term memory writers must reject new facts that attempt to bypass/ignore/override system instructions, tool policy, approvals, HITL, or tool contracts.
+- `USER.md` work rules are user preferences only. They are not a security, approval, or tool-policy authority.
+
+---
+
+### 9.4. Loading rules (Sprint 3)
 
 Thứ tự load và token budget khi inject vào system prompt:
 
@@ -1017,7 +1065,7 @@ Thứ tự load và token budget khi inject vào system prompt:
 
 ---
 
-### 9.4. Pending Approval — In-memory Limitation
+### 9.5. Pending Approval — In-memory Limitation
 
 **Đây là giới hạn thiết kế được chấp nhận trong MVP:**
 
@@ -1025,7 +1073,7 @@ Thứ tự load và token budget khi inject vào system prompt:
 - Pending approvals **không persist** vào session store hoặc file.
 - Nếu process restart xảy ra trong khi có approval đang chờ, approval đó bị mất.
 - Approval có TTL `10 phút` (`approvalTTL = 10 * time.Minute`); sau TTL tự expire và không thể execute.
-- Compaction **bắt buộc skip** khi session đang có pending approval (xem Section 9.5).
+- Compaction **bắt buộc skip** khi session đang có pending approval (xem Section 9.6).
 
 Implication cho user:
 
@@ -1039,7 +1087,7 @@ User cần gửi lại yêu cầu từ đầu.
 
 ---
 
-### 9.5. Compaction Guard — Pending Approval Protection
+### 9.6. Compaction Guard — Pending Approval Protection
 
 Compaction (transcript truncation) chỉ được chạy khi **không** có pending approval trên session hiện tại.
 

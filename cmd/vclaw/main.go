@@ -56,8 +56,6 @@ func run(ctx context.Context, args []string) error {
 		return runTools(ctx, args[1:])
 	case "google":
 		return runGoogle(ctx, args[1:])
-	case "slack":
-		return runSlack(ctx, args[1:])
 	case "telegram":
 		return runTelegram(ctx, args[1:])
 	case "help", "-h", "--help":
@@ -359,7 +357,6 @@ func printUsage() {
   vclaw logs [-limit 50] [-since 1h] [-level error|info] [-tool gmail.createDraft]
   vclaw approvals [-status pending|approved|rejected|expired|revised] [-limit 20]
   vclaw tools list [-group <group>]
-  vclaw slack run
   vclaw telegram run
   vclaw google auth
   vclaw google smoke [-chat-space spaces/AAAA...]

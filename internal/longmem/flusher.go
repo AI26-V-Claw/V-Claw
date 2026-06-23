@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"vclaw/internal/providers"
 )
@@ -15,6 +17,7 @@ type Flusher struct {
 	dir      string
 	provider providers.Provider
 	model    string
+	mu       sync.Mutex
 }
 
 // NewFlusher creates a Flusher that writes to dir using provider for LLM classification.
@@ -26,23 +29,40 @@ func NewFlusher(dir string, provider providers.Provider, model string) *Flusher 
 // and NOTES.md. If the LLM call fails, extractive regex is used as fallback
 // (results go to NOTES.md only). Returns nil if summary is empty.
 func (f *Flusher) Flush(ctx context.Context, summary string) error {
-	if strings.TrimSpace(summary) == "" {
+	return f.FlushWithSource(ctx, FlushInput{Summary: summary})
+}
+
+// FlushWithSource extracts facts from a compaction summary while preserving
+// source metadata for auditability.
+func (f *Flusher) FlushWithSource(ctx context.Context, input FlushInput) error {
+	summary := strings.TrimSpace(input.Summary)
+	if summary == "" {
 		return nil
+	}
+	if input.ObservedAt.IsZero() {
+		input.ObservedAt = time.Now().UTC()
+	}
+	if strings.TrimSpace(input.ClassifierModel) == "" {
+		input.ClassifierModel = f.model
 	}
 
 	existingUserMD := f.readFile("USER.md")
 	existingNotesMD := f.readFile("NOTES.md")
 
 	result, err := f.classifyWithLLM(ctx, summary, existingUserMD, existingNotesMD)
+	result = filterClassifyResult(result)
 	if err != nil || (len(result.UserFacts) == 0 && len(result.NotesFacts) == 0) {
 		// Fallback: regex extraction, all facts go to NOTES.md.
-		fallbackFacts := extractiveFallback(summary)
+		fallbackFacts := filterFactStrings(extractiveFallback(summary))
 		if len(fallbackFacts) == 0 {
 			return nil
 		}
-		return f.updateFile("NOTES.md", func(existing string) string {
+		if err := f.updateFile("NOTES.md", func(existing string) string {
 			return appendNotesFacts(existing, fallbackFacts)
-		})
+		}); err != nil {
+			return err
+		}
+		return f.recordSources(notesSourceFacts(fallbackFacts, "session_compaction_fallback", input, summary))
 	}
 
 	if len(result.UserFacts) > 0 {
@@ -59,13 +79,29 @@ func (f *Flusher) Flush(ctx context.Context, summary string) error {
 			return err
 		}
 	}
-	return nil
+	return f.recordSources(classifiedSourceFacts(result, input, summary))
+}
+
+// RecordRepeatedHabits promotes stable repeated user requests into USER.md
+// without waiting for transcript compaction. It uses the configured LLM to
+// normalize natural-language variants into a canonical habit pattern, with a
+// conservative heuristic fallback when classification is unavailable.
+func (f *Flusher) RecordRepeatedHabits(ctx context.Context, input HabitInput) error {
+	if input.ObservedAt.IsZero() {
+		input.ObservedAt = time.Now().UTC()
+	}
+	candidate, rawText, ok := f.latestHabitCandidate(ctx, input.Transcript)
+	if !ok {
+		return nil
+	}
+	_, err := f.recordHabitPattern(input, candidate, rawText)
+	return err
 }
 
 func (f *Flusher) classifyWithLLM(ctx context.Context, summary, existingUserMD, existingNotesMD string) (ClassifyResult, error) {
 	resp, err := f.provider.Generate(ctx, &providers.GenerateRequest{
 		SystemPrompt: classifySystemPrompt(),
-		UserPrompt:   classifyUserPrompt(summary, existingUserMD, existingNotesMD),
+		UserPrompt:   classifyUserPrompt(summary, stripMemoryMarkers(existingUserMD), stripMemoryMarkers(existingNotesMD)),
 		Temperature:  0.2,
 		MaxTokens:    512,
 		Model:        f.model,
@@ -88,6 +124,9 @@ func (f *Flusher) readFile(name string) string {
 // updateFile reads the current content of name, applies transform, and atomically
 // writes the result back. Creates the file if it does not exist.
 func (f *Flusher) updateFile(name string, transform func(string) string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	path := filepath.Join(f.dir, name)
 	existing := ""
 	if data, err := os.ReadFile(path); err == nil {

@@ -379,3 +379,25 @@ func TestRuntimeParallelBatchRecoversPanicAndContinuesPartialSuccess(t *testing.
 		t.Fatalf("expected both results to reach provider, got %#v", response.ToolResults)
 	}
 }
+
+func TestPrepareParallelBatchRejectsPlanTool(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	store := NewPlanStore()
+	if err := registry.Register(NewPlanTool(store)); err != nil {
+		t.Fatalf("register plan tool: %v", err)
+	}
+	parallelTool := parallelRuntimeTool{name: "test.parallel"}
+	if err := registry.Register(parallelTool); err != nil {
+		t.Fatalf("register parallel tool: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Registry: registry, ParallelExecutionEnabled: true})
+
+	batch, ok := runtime.prepareParallelBatch(context.Background(), []providers.ToolCall{
+		{ID: "call-plan", Name: PlanToolName, Arguments: map[string]any{}},
+		{ID: "call-tool", Name: parallelTool.Name(), Arguments: map[string]any{}},
+	}, true, "do work", "do work", false)
+
+	if ok || len(batch) != 0 {
+		t.Fatalf("expected plan tool to force serial execution, got ok=%v batch=%d", ok, len(batch))
+	}
+}

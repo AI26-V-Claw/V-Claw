@@ -103,7 +103,7 @@ func (r *Runtime) finishRunState(ctx context.Context, state RunState, status Run
 	state.FailureReason = reason
 	state.UpdatedAt = now
 	switch status {
-	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusMaxIterations, RuntimeRunStatusCancelled:
+	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusIterationBudget, RuntimeRunStatusCancelled:
 		state.PendingActionID = ""
 		state.PendingClarificationID = ""
 		state.CompletedAt = &now
@@ -119,7 +119,7 @@ func (r *Runtime) finishRunState(ctx context.Context, state RunState, status Run
 		return state, internalError("finish run state: "+err.Error(), contracts.ErrorSourceAgent)
 	}
 	switch status {
-	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusMaxIterations, RuntimeRunStatusCancelled:
+	case RuntimeRunStatusCompleted, RuntimeRunStatusFailed, RuntimeRunStatusBlocked, RuntimeRunStatusIterationBudget, RuntimeRunStatusCancelled:
 		if r.subtasks != nil {
 			r.subtasks.complete(state.RunID)
 		}

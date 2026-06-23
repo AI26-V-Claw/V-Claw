@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"vclaw/internal/agent/reference"
-	drivetool "vclaw/internal/tools/office/drive"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
+	drivetool "vclaw/internal/tools/office/drive"
 )
 
 func TestRuntimePromptOrdersSystemMemoryReferenceAndTranscript(t *testing.T) {
@@ -135,6 +135,25 @@ func TestLongTermMemoryNotInjectedWhenLoaderNil(t *testing.T) {
 	}
 }
 
+func TestLongTermMemoryCanBeSuppressedForFreshWorkspaceRead(t *testing.T) {
+	r := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}})
+	r.ltMemLoader = &fakeLTMemLoader{content: "## Memory\n- Deleted Event should not appear"}
+
+	messages := r.withRuntimeSystemPromptOptions(
+		[]providers.Message{{Role: providers.MessageRoleUser, Content: "lich tuan nay co gi"}},
+		sessions.SessionMemory{Summary: "session context remains available"},
+		nil,
+		runtimePromptOptions{IncludeLongTermMemory: false},
+	)
+	joined := providerMessagesContent(messages)
+	if strings.Contains(joined, "Deleted Event should not appear") {
+		t.Fatalf("long-term memory should be suppressed, got: %s", joined)
+	}
+	if !strings.Contains(joined, "session context remains available") {
+		t.Fatalf("session memory should still be included by this prompt option, got: %s", joined)
+	}
+}
+
 func TestRuntimePromptRoutesDriveMoveToMoveFile(t *testing.T) {
 	// Move rules live in the drive.moveFile tool description, not the system prompt.
 	found := false
@@ -176,5 +195,18 @@ func TestRuntimePromptRoutesDriveFolderCreationToCreateFolder(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("drive.createFolder not found in RegistryEntries")
+	}
+}
+
+func TestRuntimePromptRequiresReadableEmailParagraphBreaks(t *testing.T) {
+	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
+	for _, want := range []string{
+		"paragraph breaks",
+		"greeting, main content, and closing/signature",
+		"Do not collapse the whole email into one paragraph",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("runtime prompt missing email formatting guidance %q", want)
+		}
 	}
 }

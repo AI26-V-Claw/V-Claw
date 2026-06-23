@@ -26,7 +26,7 @@ func runAgent(ctx context.Context, args []string) error {
 	sessionID := fs.String("session", "dev", "session id")
 	channel := fs.String("channel", "dev-cli", "channel name")
 	dataDir := fs.String("data-dir", envOrDefault("DATA_DIR", "./data"), "runtime data directory")
-	maxIterations := fs.Int("max-iterations", agent.DefaultMaxIterations, "maximum agent iterations")
+	iterationBudget := fs.Int("iteration-budget", agent.DefaultIterationBudget, "maximum agent iteration budget")
 	googleToolsMode := fs.String("google-tools", envOrDefault("VCLAW_GOOGLE_TOOLS_MODE", app.ToolModeAuto), "Google Workspace tool mode: auto, required, or off")
 	webToolsMode := fs.String("web-tools", envOrDefault("VCLAW_WEB_TOOLS_MODE", app.ToolModeAuto), "Web search/fetch tool mode: auto, required, or off")
 	credentialsPath := fs.String("credentials", envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", defaultCredentialsPath), "Google OAuth desktop client credentials JSON")
@@ -47,7 +47,7 @@ func runAgent(ctx context.Context, args []string) error {
 		OpenAIBaseURL:              envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
 		CompactorModel:             envFirst("VCLAW_COMPACTOR_MODEL"),
 		DatabaseURL:                envFirst("DATABASE_URL"),
-		MaxIterations:              *maxIterations,
+		IterationBudget:            *iterationBudget,
 		GoogleToolsMode:            *googleToolsMode,
 		WebToolsMode:               *webToolsMode,
 		GoogleCredentialsPath:      *credentialsPath,
@@ -94,7 +94,7 @@ func runAgentChat(ctx context.Context, args []string) error {
 	sessionID := fs.String("session", "dev", "session id")
 	channel := fs.String("channel", "dev-cli", "channel name")
 	dataDir := fs.String("data-dir", envOrDefault("DATA_DIR", "./data"), "runtime data directory")
-	maxIterations := fs.Int("max-iterations", agent.DefaultMaxIterations, "maximum agent iterations")
+	iterationBudget := fs.Int("iteration-budget", agent.DefaultIterationBudget, "maximum agent iteration budget")
 	googleToolsMode := fs.String("google-tools", envOrDefault("VCLAW_GOOGLE_TOOLS_MODE", app.ToolModeAuto), "Google Workspace tool mode: auto, required, or off")
 	webToolsMode := fs.String("web-tools", envOrDefault("VCLAW_WEB_TOOLS_MODE", app.ToolModeAuto), "Web search/fetch tool mode: auto, required, or off")
 	credentialsPath := fs.String("credentials", envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", defaultCredentialsPath), "Google OAuth desktop client credentials JSON")
@@ -112,7 +112,7 @@ func runAgentChat(ctx context.Context, args []string) error {
 		OpenAIBaseURL:              envFirst("OPENAI_BASE_URL", "LLM_BASE_URL"),
 		CompactorModel:             envFirst("VCLAW_COMPACTOR_MODEL"),
 		DatabaseURL:                envFirst("DATABASE_URL"),
-		MaxIterations:              *maxIterations,
+		IterationBudget:            *iterationBudget,
 		GoogleToolsMode:            *googleToolsMode,
 		WebToolsMode:               *webToolsMode,
 		GoogleCredentialsPath:      *credentialsPath,

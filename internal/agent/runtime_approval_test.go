@@ -10,6 +10,16 @@ import (
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
+	calendartool "vclaw/internal/tools/office/calendar"
+	chattool "vclaw/internal/tools/office/chat"
+	docstool "vclaw/internal/tools/office/docs"
+	drivetool "vclaw/internal/tools/office/drive"
+	gmailtool "vclaw/internal/tools/office/gmail"
+	peopletool "vclaw/internal/tools/office/people"
+	sheetstool "vclaw/internal/tools/office/sheets"
+	fstool "vclaw/internal/tools/os/filesystem"
+	sandboxtool "vclaw/internal/tools/system/sandbox"
+	webtool "vclaw/internal/tools/web"
 )
 
 // TestContinuationMessageFullTextReachesProvider verifies that when r.Run() is called
@@ -81,6 +91,59 @@ func TestContinuationMessageFullTextReachesProvider(t *testing.T) {
 	}
 }
 
+func TestApprovalSummariesCoverProductionTools(t *testing.T) {
+	fallback := approvalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
+	legacyFallback := legacyApprovalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
+
+	for _, toolName := range productionToolNames() {
+		if got := approvalSummary(toolName, contracts.RiskLevelExternalWrite); got == fallback {
+			t.Errorf("approvalSummary(%q) returned fallback summary", toolName)
+		}
+		if got := legacyApprovalSummary(toolName, contracts.RiskLevelExternalWrite); got == legacyFallback {
+			t.Errorf("legacyApprovalSummary(%q) returned fallback summary", toolName)
+		}
+	}
+}
+
+func productionToolNames() []string {
+	names := []string{
+		"get_current_time",
+		"calculator",
+		SubtaskToolName,
+		fstool.ToolNameListDir,
+		fstool.ToolNameReadFile,
+		fstool.ToolNameFileInfo,
+		fstool.ToolNameWriteFile,
+		sandboxtool.ToolNameRunPython,
+		sandboxtool.ToolNameRunShell,
+	}
+	for _, entry := range gmailtool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	for _, entry := range drivetool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	for _, entry := range docstool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	for _, entry := range sheetstool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	for _, entry := range calendartool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	for _, entry := range chattool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	for _, entry := range peopletool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	for _, entry := range webtool.RegistryEntries {
+		names = append(names, entry.Name)
+	}
+	return names
+}
+
 func TestEnrichDriveMoveApprovalInputUsesRecentListFilesResults(t *testing.T) {
 	input := map[string]any{
 		"fileId":         "file_1",
@@ -123,6 +186,25 @@ func TestEnrichDriveMoveFilesApprovalInputShowsEverySource(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(sources, "\n"), "A") || !strings.Contains(strings.Join(sources, "\n"), "B") {
 		t.Fatalf("unexpected sources: %#v", sources)
+	}
+}
+
+func TestEnrichCalendarRespondApprovalInputUsesEventTitle(t *testing.T) {
+	input := map[string]any{
+		"eventId":        "event_1",
+		"responseStatus": "accepted",
+	}
+	transcript := []providers.Message{{
+		Role:    providers.MessageRoleTool,
+		Content: `[{"id":"event_1","title":"N1 Long-term Test"},{"id":"event_2","title":"Other Event"}]`,
+	}}
+
+	got := enrichApprovalInput("calendar.respondEvent", input, transcript)
+	if got["eventTitle"] != "N1 Long-term Test" {
+		t.Fatalf("eventTitle = %#v, want N1 Long-term Test", got["eventTitle"])
+	}
+	if got["eventId"] != "event_1" {
+		t.Fatalf("eventId changed unexpectedly: %#v", got["eventId"])
 	}
 }
 

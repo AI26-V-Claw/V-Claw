@@ -190,7 +190,7 @@ func statusTextForRun(run *agent.RunState) string {
 	switch strings.ToLower(strings.TrimSpace(string(run.Status))) {
 	case "completed":
 		return "✅ Hoàn thành"
-	case "failed", "blocked", "max_iterations":
+	case "failed", "blocked", "iteration_budget":
 		return "❌ Thất bại"
 	case "cancelled":
 		return "🚫 Đã hủy"
@@ -218,7 +218,7 @@ func historyStatusIcon(status string) string {
 
 func isFailedRunStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "failed", "blocked", "max_iterations":
+	case "failed", "blocked", "iteration_budget":
 		return true
 	default:
 		return false
