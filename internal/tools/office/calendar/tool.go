@@ -12,6 +12,7 @@ import (
 	googleconnector "vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	"vclaw/internal/connectors/google/common"
+	"vclaw/internal/tools/office"
 
 	"google.golang.org/api/googleapi"
 )
@@ -516,46 +517,46 @@ func mapConnectorError(err error) *ErrorShape {
 		message := googleAPIErrorMessage(gerr)
 		switch {
 		case gerr.Code == http.StatusUnauthorized:
-			return &ErrorShape{Code: "AUTH_EXPIRED", Message: message, Retryable: true}
+			return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Calendar", message), Retryable: true}
 		case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
-			return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: message, Retryable: false}
+			return &ErrorShape{Code: office.ErrorAuthMissingScope, Message: office.FriendlyGoogleToolError(office.ErrorAuthMissingScope, "Google Calendar", message), Retryable: false}
 		case gerr.Code == http.StatusForbidden:
-			return &ErrorShape{Code: "ACTION_BLOCKED_BY_POLICY", Message: message, Retryable: false}
+			return &ErrorShape{Code: office.ErrorActionBlockedByPolicy, Message: office.FriendlyGoogleToolError(office.ErrorActionBlockedByPolicy, "Google Calendar", message), Retryable: false}
 		case gerr.Code == http.StatusNotFound:
-			return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: message, Retryable: false}
+			return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Calendar", message), Retryable: false}
 		case gerr.Code == http.StatusTooManyRequests:
-			return &ErrorShape{Code: "RATE_LIMITED", Message: message, Retryable: true}
+			return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Calendar", message), Retryable: true}
 		case gerr.Code >= 500:
-			return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: message, Retryable: true}
+			return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Calendar", message), Retryable: true}
 		default:
 			return &ErrorShape{Code: "INTERNAL_ERROR", Message: message, Retryable: false}
 		}
 	}
 	if errors.Is(err, common.ErrAuth) {
 		return &ErrorShape{
-			Code:      "AUTH_EXPIRED",
-			Message:   err.Error(),
+			Code:      office.ErrorAuthExpired,
+			Message:   office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Calendar", err.Error()),
 			Retryable: true,
 		}
 	}
 	if errors.Is(err, common.ErrNotFound) {
 		return &ErrorShape{
-			Code:      "RESOURCE_NOT_FOUND",
-			Message:   err.Error(),
+			Code:      office.ErrorResourceNotFound,
+			Message:   office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Calendar", err.Error()),
 			Retryable: false,
 		}
 	}
 	if errors.Is(err, common.ErrRateLimit) {
 		return &ErrorShape{
-			Code:      "RATE_LIMITED",
-			Message:   err.Error(),
+			Code:      office.ErrorRateLimited,
+			Message:   office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Calendar", err.Error()),
 			Retryable: true,
 		}
 	}
 	if errors.Is(err, common.ErrAPI) {
 		return &ErrorShape{
-			Code:      "PROVIDER_UNAVAILABLE",
-			Message:   err.Error(),
+			Code:      office.ErrorProviderUnavailable,
+			Message:   office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Calendar", err.Error()),
 			Retryable: true,
 		}
 	}

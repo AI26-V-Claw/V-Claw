@@ -15,6 +15,7 @@ import (
 	"vclaw/internal/connectors/google/common"
 	gdrive "vclaw/internal/connectors/google/drive"
 	"vclaw/internal/tools"
+	"vclaw/internal/tools/office"
 
 	"google.golang.org/api/googleapi"
 )
@@ -1127,30 +1128,30 @@ func mapError(err error) *ErrorShape {
 		message := googleAPIErrorMessage(gerr)
 		switch {
 		case gerr.Code == http.StatusUnauthorized:
-			return &ErrorShape{Code: "AUTH_EXPIRED", Message: message, Retryable: true}
+			return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Drive", message), Retryable: true}
 		case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
-			return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: message, Retryable: false}
+			return &ErrorShape{Code: office.ErrorAuthMissingScope, Message: office.FriendlyGoogleToolError(office.ErrorAuthMissingScope, "Google Drive", message), Retryable: false}
 		case gerr.Code == http.StatusForbidden:
-			return &ErrorShape{Code: "ACTION_BLOCKED_BY_POLICY", Message: message, Retryable: false}
+			return &ErrorShape{Code: office.ErrorActionBlockedByPolicy, Message: office.FriendlyGoogleToolError(office.ErrorActionBlockedByPolicy, "Google Drive", message), Retryable: false}
 		case gerr.Code == http.StatusNotFound:
-			return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: message, Retryable: false}
+			return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Drive", message), Retryable: false}
 		case gerr.Code == http.StatusTooManyRequests:
-			return &ErrorShape{Code: "RATE_LIMITED", Message: message, Retryable: true}
+			return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Drive", message), Retryable: true}
 		case gerr.Code >= 500:
-			return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: message, Retryable: true}
+			return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Drive", message), Retryable: true}
 		default:
 			return &ErrorShape{Code: "INTERNAL_ERROR", Message: message, Retryable: false}
 		}
 	}
 	switch {
 	case errors.Is(err, common.ErrAuth):
-		return &ErrorShape{Code: "AUTH_EXPIRED", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Drive", err.Error()), Retryable: true}
 	case errors.Is(err, common.ErrNotFound):
-		return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: err.Error(), Retryable: false}
+		return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Drive", err.Error()), Retryable: false}
 	case errors.Is(err, common.ErrRateLimit):
-		return &ErrorShape{Code: "RATE_LIMITED", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Drive", err.Error()), Retryable: true}
 	case errors.Is(err, common.ErrAPI):
-		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Drive", err.Error()), Retryable: true}
 	default:
 		return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error(), Retryable: false}
 	}

@@ -10,6 +10,7 @@ import (
 	googleconnector "vclaw/internal/connectors/google"
 	peopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/tools"
+	"vclaw/internal/tools/office"
 
 	"google.golang.org/api/googleapi"
 )
@@ -216,17 +217,17 @@ func MapError(err error) *ErrorShape {
 
 	switch {
 	case gerr.Code == http.StatusUnauthorized:
-		return &ErrorShape{Code: "AUTH_EXPIRED", Message: message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google People", message), Retryable: true}
 	case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
-		return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: message}
+		return &ErrorShape{Code: office.ErrorAuthMissingScope, Message: office.FriendlyGoogleToolError(office.ErrorAuthMissingScope, "Google People", message)}
 	case gerr.Code == http.StatusForbidden:
-		return &ErrorShape{Code: "ACTION_BLOCKED_BY_POLICY", Message: message}
+		return &ErrorShape{Code: office.ErrorActionBlockedByPolicy, Message: office.FriendlyGoogleToolError(office.ErrorActionBlockedByPolicy, "Google People", message)}
 	case gerr.Code == http.StatusNotFound:
-		return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: message}
+		return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google People", message)}
 	case gerr.Code == http.StatusTooManyRequests:
-		return &ErrorShape{Code: "RATE_LIMITED", Message: message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google People", message), Retryable: true}
 	case gerr.Code >= 500:
-		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google People", message), Retryable: true}
 	default:
 		return &ErrorShape{Code: "INTERNAL_ERROR", Message: message}
 	}

@@ -613,7 +613,7 @@ func TestMapConnectorErrorWrappedGoogleError(t *testing.T) {
 	if errShape.Code != "AUTH_MISSING_SCOPE" {
 		t.Fatalf("expected AUTH_MISSING_SCOPE, got %#v", errShape)
 	}
-	if errShape.Message != "Request had insufficient authentication scopes." {
+	if !strings.Contains(errShape.Message, "chưa được cấp đủ quyền") || !strings.Contains(errShape.Message, "vclaw google auth") {
 		t.Fatalf("unexpected message: %q", errShape.Message)
 	}
 }

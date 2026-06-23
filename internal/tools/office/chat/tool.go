@@ -15,6 +15,7 @@ import (
 	chatconnector "vclaw/internal/connectors/google/chat"
 	peopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/tools"
+	"vclaw/internal/tools/office"
 
 	"google.golang.org/api/googleapi"
 )
@@ -1546,15 +1547,15 @@ func MapError(err error) *ErrorShape {
 
 	switch {
 	case gerr.Code == http.StatusUnauthorized:
-		return &ErrorShape{Code: "AUTH_EXPIRED", Message: message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Chat", message), Retryable: true}
 	case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
-		return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: message}
+		return &ErrorShape{Code: office.ErrorAuthMissingScope, Message: office.FriendlyGoogleToolError(office.ErrorAuthMissingScope, "Google Chat", message)}
 	case gerr.Code == http.StatusBadRequest || gerr.Code == http.StatusNotFound:
-		return &ErrorShape{Code: "INVALID_INPUT", Message: message}
+		return &ErrorShape{Code: "INVALID_INPUT", Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Chat", message)}
 	case gerr.Code == http.StatusTooManyRequests:
-		return &ErrorShape{Code: "RATE_LIMITED", Message: message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Chat", message), Retryable: true}
 	case gerr.Code >= 500:
-		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Chat", message), Retryable: true}
 	default:
 		return &ErrorShape{Code: "INTERNAL_ERROR", Message: message}
 	}

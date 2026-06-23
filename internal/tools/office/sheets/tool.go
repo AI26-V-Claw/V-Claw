@@ -10,6 +10,7 @@ import (
 	"vclaw/internal/connectors/google/common"
 	gsheets "vclaw/internal/connectors/google/sheets"
 	"vclaw/internal/tools"
+	"vclaw/internal/tools/office"
 )
 
 const (
@@ -647,13 +648,13 @@ func firstNonEmpty(values ...string) string {
 func mapError(err error) *ErrorShape {
 	switch {
 	case errors.Is(err, common.ErrAuth):
-		return &ErrorShape{Code: "AUTH_EXPIRED", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Sheets", err.Error()), Retryable: true}
 	case errors.Is(err, common.ErrNotFound):
-		return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: err.Error(), Retryable: false}
+		return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Sheets", err.Error()), Retryable: false}
 	case errors.Is(err, common.ErrRateLimit):
-		return &ErrorShape{Code: "RATE_LIMITED", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Sheets", err.Error()), Retryable: true}
 	case errors.Is(err, common.ErrAPI):
-		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Sheets", err.Error()), Retryable: true}
 	default:
 		return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error(), Retryable: false}
 	}
@@ -689,15 +690,15 @@ func valuesSchema() tools.ToolSchema {
 
 func batchValuesSchema() tools.ToolSchema {
 	return tools.ToolSchema{"type": "object", "properties": map[string]any{
-		"spreadsheetId":    map[string]any{"type": "string"},
+		"spreadsheetId": map[string]any{"type": "string"},
 		"ranges": map[string]any{
-				"type":                 "object",
-				"description":          "Map of A1 notation range to a 2D array of cell values. Each key is a range string (e.g. \"Sheet1!A1:B2\"), each value is an array of rows where each row is an array of cell values. Example: {\"Sheet1!A1:B2\": [[\"Name\", \"Score\"], [\"Alice\", 90]]}. Do NOT pass a flat array as the value — it must be a 2D array (array of rows).",
-				"additionalProperties": map[string]any{
-					"type":  "array",
-					"items": map[string]any{"type": "array", "items": map[string]any{}},
-				},
+			"type":        "object",
+			"description": "Map of A1 notation range to a 2D array of cell values. Each key is a range string (e.g. \"Sheet1!A1:B2\"), each value is an array of rows where each row is an array of cell values. Example: {\"Sheet1!A1:B2\": [[\"Name\", \"Score\"], [\"Alice\", 90]]}. Do NOT pass a flat array as the value — it must be a 2D array (array of rows).",
+			"additionalProperties": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "array", "items": map[string]any{}},
 			},
+		},
 		"valueInputOption": map[string]any{"type": "string", "enum": []string{"USER_ENTERED", "RAW"}, "description": "Omit to use USER_ENTERED."},
 	}, "required": []string{"spreadsheetId", "ranges"}, "additionalProperties": false}
 }
