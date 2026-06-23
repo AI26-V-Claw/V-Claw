@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vclaw/internal/agent/reference"
@@ -35,6 +36,7 @@ var (
 	emailAnswerPattern  = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
 	timeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
 	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giờ)(\s*\d{1,2})?\b`)
+	runtimeRunCancelToken uint64
 )
 
 type RuntimeConfig struct {
@@ -105,6 +107,13 @@ type Runtime struct {
 	subtasks      *subtaskCoordinator
 	ltMemLoader   longTermMemoryLoader  // nil = disabled
 	ltMemFlusher  longTermMemoryFlusher // nil = disabled
+	cancelMu      sync.Mutex
+	activeCancels map[string]activeRunCancel // sessionID → active run cancel state
+}
+
+type activeRunCancel struct {
+	token  uint64
+	cancel context.CancelFunc
 }
 
 type longTermMemoryLoader interface {
@@ -273,6 +282,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		subtasks:                   subtasks,
 		ltMemLoader:                ltLoader,
 		ltMemFlusher:               ltFlusher,
+		activeCancels:              make(map[string]activeRunCancel),
 	}
 }
 
@@ -309,6 +319,26 @@ func (r *Runtime) chatWithProviderTimeout(ctx context.Context, request providers
 
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (response contracts.AgentResponse, err error) {
 	ctx = toolhooks.WithRequestContext(ctx, message.RequestID, message.SessionID)
+
+	// Register a cancel function so that CancelSession can interrupt this run.
+	runCtx, runCancel := context.WithCancel(ctx)
+	runToken := atomic.AddUint64(&runtimeRunCancelToken, 1)
+	defer func() {
+		runCancel()
+		r.cancelMu.Lock()
+		if current, ok := r.activeCancels[message.SessionID]; ok && current.token == runToken {
+			delete(r.activeCancels, message.SessionID)
+		}
+		r.cancelMu.Unlock()
+	}()
+	r.cancelMu.Lock()
+	if existing, ok := r.activeCancels[message.SessionID]; ok {
+		existing.cancel() // cancel any previous run for this session
+	}
+	r.activeCancels[message.SessionID] = activeRunCancel{token: runToken, cancel: runCancel}
+	r.cancelMu.Unlock()
+	ctx = runCtx
+
 	if r.compactor != nil {
 		sessionID := message.SessionID
 		defer func() { go r.maybeCompactAsync(sessionID) }()
@@ -612,6 +642,29 @@ agentLoop:
 			return *resp, nil
 		}
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				code := contracts.ErrorProviderUnavailable
+				messageText := "provider chat canceled: " + err.Error()
+				base.Error = &contracts.ErrorShape{
+					Code:      code,
+					Message:   messageText,
+					Source:    contracts.ErrorSourceProvider,
+					Retryable: true,
+				}
+				r.appendRunEvent(ctx, runState.RunID, "provider.failed", map[string]any{
+					"iteration": iteration,
+					"code":      string(code),
+					"retryable": true,
+					"timeout":   false,
+				})
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCancelled, string(orchestration.FailureReasonAborted))
+				if errShape != nil {
+					base.Error = errShape
+				}
+				base.FailureReason = updatedState.FailureReason
+				base.Message = base.Error.Message
+				return base, nil
+			}
 			code := contracts.ErrorProviderError
 			retryable := providers.IsRetryableError(err)
 			messageText := "provider chat failed: " + err.Error()
@@ -619,10 +672,6 @@ agentLoop:
 				code = contracts.ErrorProviderUnavailable
 				retryable = true
 				messageText = fmt.Sprintf("provider chat timed out after %s", r.providerTimeout)
-			} else if errors.Is(err, context.Canceled) {
-				code = contracts.ErrorProviderUnavailable
-				retryable = true
-				messageText = "provider chat canceled: " + err.Error()
 			}
 			if retryable {
 				code = contracts.ErrorProviderUnavailable
@@ -1291,4 +1340,17 @@ func (r *Runtime) handleContextError(ctx context.Context, runState RunState, too
 		},
 		Message: messageText,
 	}
+}
+
+// CancelSession cancels the active run for the given sessionID, if any.
+// Returns true if a run was found and cancelled, false if no run was active.
+func (r *Runtime) CancelSession(sessionID string) bool {
+	r.cancelMu.Lock()
+	entry, ok := r.activeCancels[sessionID]
+	r.cancelMu.Unlock()
+	if !ok {
+		return false
+	}
+	entry.cancel()
+	return true
 }
