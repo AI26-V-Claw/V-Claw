@@ -1,31 +1,41 @@
-# V-Claw N2 E2E harness
+# Testing E2E Use Cases
 
-Thư mục này chứa harness/scripts/scenarios/artifacts cho real E2E N2. Thư mục được gitignore vì có thể chứa dữ liệu tài khoản test, transcript, run artifacts và selector môi trường.
-
-## Trạng thái hiện tại
-
-Skeleton ban đầu. Chưa claim pass cho scenario nào nếu chưa chạy thật.
-
-## Cấu trúc
+## 1. Use Case Template
 
 ```text
-testing-e2e/
-  README.md
-  scenarios/
-  scripts/
-  artifacts/
+[
+  {
+    "step": int - số thứ tự của step trong use case
+    "user": {
+      "message": string - nội dung user gửi vào agent ở step hiện tại, có thể là yêu cầu tự nhiên hoặc "/approve", "/reject"
+    },
+    "agent": {
+      "expectation": string - mô tả ngắn kỳ vọng agent sẽ làm ở step này
+      "requires_approval": boolean - true nếu step phải tạo yêu cầu approve, false nếu không được yêu cầu approve
+      "expected_tools": list[string] - danh sách tool agent phải dùng trong step này
+      "expected_approval_tool": string | null - tool chờ approve trong step hiện tại, dùng null nếu không có
+      "response_contains": list[string] - danh sách chuỗi phải xuất hiện trong câu trả lời agent của step, list rỗng thì bỏ qua
+    }
+  }
+]
 ```
 
-## Nguyên tắc
+## 2. Sample
 
-- Chỉ status hợp lệ: `pass`, `fail`, `blocked_env`, `pending_verification`.
-- Chỉ `pass` được tính readiness.
-- Real E2E dùng fixtures `[VCLAW-E2E]` và env selectors rõ ràng.
-- Mọi write object phải có `run_id`.
-- Hard assertions là chính; LLM judge chỉ phụ.
-
-## Chạy skeleton
-
-```powershell
-./testing-e2e/scripts/run_n2_e2e.ps1 -Scenario n2.1-golden-workspace-flow -DryRun
+```json
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Tính chính xác cho mình: 9382472 * 83240 - 23948293"
+    },
+    "agent": {
+      "expectation": "Agent cần sử dụng tool calculator để tính toán và trả về kết quả chính xác là 780973020987.",
+      "requires_approval": false,
+      "expected_tools": ["calculator"],
+      "expected_approval_tool": null,
+      "response_contains": ["780973020987"]
+    }
+  }
+]
 ```

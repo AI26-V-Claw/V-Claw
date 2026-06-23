@@ -101,6 +101,9 @@ func (r *Runtime) prepareParallelBatch(ctx context.Context, toolCalls []provider
 	for _, originalCall := range toolCalls {
 		toolCall := originalCall
 		toolCall.Arguments = cloneArguments(originalCall.Arguments)
+		if toolCall.Name == PlanToolName {
+			return nil, false
+		}
 		toolCall = sanitizeUnsupportedOptionalArguments(toolCall, evidenceText)
 		if isClarifyToolCall(toolCall) {
 			return nil, false

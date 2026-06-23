@@ -9,6 +9,7 @@ package contracts_test
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,7 +28,58 @@ import (
 	"vclaw/internal/tools/os/filesystem"
 	sandbox "vclaw/internal/tools/system/sandbox"
 	"vclaw/internal/tools/web"
+	"vclaw/internal/tools/memory"
 )
+
+const docsToolRegistryPath = "../../docs/03-contracts.md"
+
+// ─── Memory Tool Metadata in Docs anti-drift ───────────────────────────────────
+// Verifies that all memory tools declared in internal/tools/memory/RegistryEntries
+// are present in the Tool Registry table within docs/03-contracts.md. This prevents
+// self-referential drift where tests only compare against the Go source and not
+// the canonical docs.
+func TestMemoryToolMetadataDocsMatchesRegistry(t *testing.T) {
+	registryPath := docsToolRegistryPath
+	docs, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Skipf("cannot read docs file for drift test: %v", err)
+	}
+
+	// Parse the Memory section table in docs.
+	docsContent := string(docs)
+	startIdx := strings.Index(docsContent, "### Memory")
+	if startIdx < 0 {
+		t.Fatalf("docs missing '### Memory' section")
+	}
+	section := docsContent[startIdx:]
+
+	// Extract tool names from the markdown table lines (| `tool.name` |).
+	var docsTools = map[string]bool{}
+	lines := strings.Split(section, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		// Format: | `tool.name` | Owner | Risk | Approval |
+		parts := strings.Split(line, "|")
+		if len(parts) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "`"))
+		if name != "" {
+			docsTools[name] = true
+		}
+	}
+
+	// Compare with memory.RegistryEntries.
+	for _, entry := range memory.RegistryEntries {
+		name := entry.Name
+		if !docsTools[name] {
+			t.Errorf("contract drift: tool %q missing in docs/03-contracts.md Tool Registry (Memory section)", name)
+		}
+	}
+}
 
 // ─── RiskLevel enum drift ─────────────────────────────────────────────────────
 
@@ -574,6 +626,43 @@ func addGoogleWorkspaceFixtures(dest map[string]toolMetaFixture, entries any) {
 	}
 }
 
+// ─── Memory tool metadata drift ──────────────────────────────────────────────
+
+func TestMemoryToolMetadataNoDrift(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	if err := memory.RegisterTools(registry, t.TempDir(), nil); err != nil {
+		t.Fatalf("RegisterTools: %v", err)
+	}
+
+	for _, entry := range memory.RegistryEntries {
+		entry := entry
+		t.Run(entry.Name, func(t *testing.T) {
+			def, ok := registry.GetDefinition(entry.Name)
+			if !ok {
+				t.Fatalf("contract drift detected: tool %q not found in registry", entry.Name)
+			}
+			if def.Capability != entry.Capability {
+				t.Errorf("contract drift detected: %s.Capability = %q, want %q", entry.Name, def.Capability, entry.Capability)
+			}
+			if def.RiskLevel != entry.RiskLevel {
+				t.Errorf("contract drift detected: %s.RiskLevel = %q, want %q", entry.Name, def.RiskLevel, entry.RiskLevel)
+			}
+			if def.RequiresApproval != entry.RequiresApproval {
+				t.Errorf("contract drift detected: %s.RequiresApproval = %v, want %v", entry.Name, def.RequiresApproval, entry.RequiresApproval)
+			}
+			if def.Group != "memory" {
+				t.Errorf("contract drift detected: %s.Group = %q, want memory", entry.Name, def.Group)
+			}
+			if def.Capability == tools.CapabilityMutating && !def.RequiresApproval {
+				t.Errorf("contract drift detected: mutating tool %s must require approval", entry.Name)
+			}
+			if def.RiskLevel == tools.RiskLevelDestructive && !def.RequiresApproval {
+				t.Errorf("contract drift detected: destructive tool %s must require approval", entry.Name)
+			}
+		})
+	}
+}
+
 // ─── ToolResult shape contract ────────────────────────────────────────────────
 
 // TestToolResultShapeContract verifies that the fields required by the shared
@@ -641,3 +730,4 @@ func TestToolResultErrorShapeContract(t *testing.T) {
 		t.Error("ToolResult.ContentForLLM must not be empty even for error results")
 	}
 }
+

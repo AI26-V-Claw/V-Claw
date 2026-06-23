@@ -17,6 +17,7 @@ type fakeProvider struct {
 	responses []providers.ChatResponse
 	err       error
 	calls     []providers.ChatRequest
+	hook      func()
 }
 
 type blockingProvider struct {
@@ -42,6 +43,11 @@ type parallelRuntimeTool struct {
 
 type calendarCreateRuntimeTool struct {
 	executions *int
+}
+
+type calendarListRuntimeTool struct {
+	executions *int
+	content    string
 }
 
 type gmailListEmailsRuntimeTool struct {
@@ -171,6 +177,32 @@ func (t calendarCreateRuntimeTool) Execute(_ context.Context, call tools.ToolCal
 		Success:        true,
 		ContentForLLM:  "created",
 		ContentForUser: "created",
+	}
+}
+
+func (calendarListRuntimeTool) Name() string { return "calendar.listEvents" }
+func (calendarListRuntimeTool) Description() string {
+	return "List Google Calendar events."
+}
+func (calendarListRuntimeTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{"type": "object", "properties": map[string]any{}}
+}
+func (calendarListRuntimeTool) Capability() tools.Capability { return tools.CapabilityReadOnly }
+func (calendarListRuntimeTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelSafeRead }
+func (t calendarListRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	if t.executions != nil {
+		(*t.executions)++
+	}
+	content := strings.TrimSpace(t.content)
+	if content == "" {
+		content = "- Fresh Event | 2026-06-23T09:00:00+07:00 | https://calendar.google.com/event?eid=fresh"
+	}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  content,
+		ContentForUser: content,
 	}
 }
 
@@ -368,6 +400,9 @@ func (s failingAssistantAppendSessionStore) AppendMessage(ctx context.Context, s
 
 func (p *fakeProvider) Chat(_ context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
 	p.calls = append(p.calls, request)
+	if p.hook != nil {
+		p.hook()
+	}
 	if p.err != nil {
 		return providers.ChatResponse{}, p.err
 	}

@@ -1,6 +1,7 @@
 package longmem
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -26,6 +27,9 @@ type habitPattern struct {
 	Fact           string                    `json:"fact"`
 	Category       string                    `json:"category"`
 	Count          int                       `json:"count"`
+	TotalCount     int                       `json:"totalCount,omitempty"`
+	EligibleCount  int                       `json:"eligibleCount,omitempty"`
+	RejectedCount  int                       `json:"rejectedCount,omitempty"`
 	FirstSeen      time.Time                 `json:"firstSeen"`
 	LastSeen       time.Time                 `json:"lastSeen"`
 	Sessions       []string                  `json:"sessions"`
@@ -36,20 +40,26 @@ type habitPattern struct {
 }
 
 type habitPatternObservation struct {
-	SessionID  string    `json:"sessionId,omitempty"`
-	RunID      string    `json:"runId,omitempty"`
-	RequestID  string    `json:"requestId,omitempty"`
-	RawText    string    `json:"rawText,omitempty"`
-	ObservedAt time.Time `json:"observedAt"`
+	SessionID          string    `json:"sessionId,omitempty"`
+	RunID              string    `json:"runId,omitempty"`
+	RequestID          string    `json:"requestId,omitempty"`
+	Source             string    `json:"source,omitempty"`
+	ToolName           string    `json:"toolName,omitempty"`
+	Status             string    `json:"status,omitempty"`
+	NormalizedIntent   string    `json:"normalizedIntent,omitempty"`
+	RawText            string    `json:"rawText,omitempty"`
+	SourceUserText     string    `json:"sourceUserText,omitempty"`
+	CompletionUserText string    `json:"completionUserText,omitempty"`
+	ObservedAt         time.Time `json:"observedAt"`
 }
 
-func latestHabitCandidate(transcript []providers.Message) (habitCandidate, string, bool) {
+func (f *Flusher) latestHabitCandidate(ctx context.Context, transcript []providers.Message) (habitCandidate, string, bool) {
 	for i := len(transcript) - 1; i >= 0; i-- {
 		message := transcript[i]
 		if message.Role != providers.MessageRoleUser {
 			continue
 		}
-		candidate, ok := habitCandidateFromMessage(message.Content)
+		candidate, ok := f.habitCandidateFromMessage(ctx, message.Content)
 		return candidate, strings.TrimSpace(message.Content), ok
 	}
 	return habitCandidate{}, "", false
@@ -79,6 +89,12 @@ func (f *Flusher) recordHabitPattern(input HabitInput, candidate habitCandidate,
 	}
 	pattern.Fact = candidate.fact
 	pattern.Category = userCategories[1]
+	if pattern.EligibleCount == 0 && pattern.Count > 0 {
+		pattern.EligibleCount = pattern.Count
+	}
+	if pattern.TotalCount == 0 && pattern.Count > 0 {
+		pattern.TotalCount = pattern.Count
+	}
 	if pattern.FirstSeen.IsZero() || input.ObservedAt.Before(pattern.FirstSeen) {
 		pattern.FirstSeen = input.ObservedAt
 	}
@@ -86,15 +102,28 @@ func (f *Flusher) recordHabitPattern(input HabitInput, candidate habitCandidate,
 		pattern.LastSeen = input.ObservedAt
 	}
 	observation := habitPatternObservation{
-		SessionID:  strings.TrimSpace(input.SessionID),
-		RunID:      strings.TrimSpace(input.RunID),
-		RequestID:  strings.TrimSpace(input.RequestID),
-		RawText:    truncateHabitRawText(rawText),
-		ObservedAt: input.ObservedAt,
+		SessionID:          strings.TrimSpace(input.SessionID),
+		RunID:              strings.TrimSpace(input.RunID),
+		RequestID:          strings.TrimSpace(input.RequestID),
+		Source:             strings.TrimSpace(candidate.source),
+		ToolName:           strings.TrimSpace(candidate.toolName),
+		Status:             strings.TrimSpace(candidate.status),
+		NormalizedIntent:   strings.TrimSpace(candidate.key),
+		RawText:            truncateHabitRawText(rawText),
+		SourceUserText:     truncateHabitRawText(candidate.sourceUserText),
+		CompletionUserText: truncateHabitRawText(candidate.completionUserText),
+		ObservedAt:         input.ObservedAt,
 	}
 	if !hasHabitObservation(pattern.Observations, observation) {
-		pattern.Count++
-		pattern.Sessions = appendUniqueString(pattern.Sessions, observation.SessionID)
+		pattern.TotalCount++
+		if candidate.eligible {
+			pattern.EligibleCount++
+			pattern.Sessions = appendUniqueString(pattern.Sessions, observation.SessionID)
+		}
+		if observation.Status == "rejected" || observation.Status == "cancelled" || observation.Status == "expired" {
+			pattern.RejectedCount++
+		}
+		pattern.Count = pattern.EligibleCount
 		pattern.Observations = append(pattern.Observations, observation)
 		if len(pattern.Observations) > habitObservationLimit {
 			pattern.Observations = pattern.Observations[len(pattern.Observations)-habitObservationLimit:]
@@ -106,6 +135,10 @@ func (f *Flusher) recordHabitPattern(input HabitInput, candidate habitCandidate,
 		return nil, f.writeHabitPatternsLocked(store)
 	}
 	if !habitEligibleForPromotion(pattern) {
+		store.Patterns[candidate.key] = pattern
+		return nil, f.writeHabitPatternsLocked(store)
+	}
+	if !memoryFactAllowed(pattern.Fact) {
 		store.Patterns[candidate.key] = pattern
 		return nil, f.writeHabitPatternsLocked(store)
 	}
@@ -134,7 +167,8 @@ func (f *Flusher) recordHabitPattern(input HabitInput, candidate habitCandidate,
 		SessionID:  input.SessionID,
 		RunID:      input.RunID,
 		RequestID:  input.RequestID,
-		Count:      pattern.Count,
+		Model:      f.model,
+		Count:      pattern.EligibleCount,
 		ObservedAt: input.ObservedAt,
 	}}); err != nil {
 		return nil, err
@@ -146,12 +180,16 @@ func (f *Flusher) recordHabitPattern(input HabitInput, candidate habitCandidate,
 	}
 	return &HabitFact{
 		CategorizedFact: categorized,
-		Count:           pattern.Count,
+		Count:           pattern.EligibleCount,
 	}, nil
 }
 
 func habitEligibleForPromotion(pattern habitPattern) bool {
-	if pattern.Count < repeatedHabitThreshold {
+	eligibleCount := pattern.EligibleCount
+	if eligibleCount == 0 && pattern.Count > 0 {
+		eligibleCount = pattern.Count
+	}
+	if eligibleCount < repeatedHabitThreshold {
 		return false
 	}
 	return distinctNonEmptyStrings(pattern.Sessions) >= 2 || pattern.LastSeen.Sub(pattern.FirstSeen) >= habitStabilityWindow
@@ -182,12 +220,17 @@ func (f *Flusher) writeHabitPatternsLocked(store habitPatternStore) error {
 
 func hasHabitObservation(observations []habitPatternObservation, candidate habitPatternObservation) bool {
 	for _, existing := range observations {
-		if candidate.RequestID != "" && existing.RequestID == candidate.RequestID {
+		if candidate.RequestID != "" &&
+			existing.RequestID == candidate.RequestID &&
+			existing.ToolName == candidate.ToolName &&
+			existing.Status == candidate.Status {
 			return true
 		}
 		if existing.SessionID == candidate.SessionID &&
 			existing.RunID == candidate.RunID &&
 			existing.RequestID == candidate.RequestID &&
+			existing.ToolName == candidate.ToolName &&
+			existing.Status == candidate.Status &&
 			existing.RawText == candidate.RawText &&
 			existing.ObservedAt.Equal(candidate.ObservedAt) {
 			return true

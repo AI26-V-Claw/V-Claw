@@ -208,6 +208,9 @@ func classifiedSourceFacts(result ClassifyResult, input FlushInput, summary stri
 	hash := memorySummaryHash(summary)
 	model := strings.TrimSpace(input.ClassifierModel)
 	for _, fact := range result.UserFacts {
+		if !memoryFactAllowed(fact.Fact) {
+			continue
+		}
 		facts = append(facts, sourceFact{
 			File:        "USER.md",
 			Section:     fact.Category,
@@ -231,6 +234,9 @@ func notesSourceFacts(notes []string, sourceType string, input FlushInput, summa
 	hash := memorySummaryHash(summary)
 	model := strings.TrimSpace(input.ClassifierModel)
 	for _, fact := range notes {
+		if !memoryFactAllowed(fact) {
+			continue
+		}
 		facts = append(facts, sourceFact{
 			File:        "NOTES.md",
 			Section:     "Ghi chú phiên",

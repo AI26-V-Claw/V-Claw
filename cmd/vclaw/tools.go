@@ -12,6 +12,7 @@ import (
 	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
+	memtool "vclaw/internal/tools/memory"
 )
 
 func runTools(_ context.Context, args []string) error {
@@ -44,6 +45,7 @@ func runToolsList(args []string) error {
 	_ = sandboxtool.RegisterToolsWithConfig(registry, sandboxtool.Config{})
 	_ = webtool.RegisterTools(registry, webtool.NewService(nil))
 	_ = fstool.RegisterTools(registry, fstool.Config{})
+	_ = memtool.RegisterTools(registry, cacheMemoryDir(), nil)
 	// Note: Google Workspace tools require OAuth and are not listed here.
 	// Run with a live agent to see all registered tools.
 
@@ -94,6 +96,13 @@ func runToolsList(args []string) error {
 	return nil
 }
 
+func cacheMemoryDir() string {
+	if dir := strings.TrimSpace(os.Getenv("VCLAW_LONG_MEM_DIR")); dir != "" {
+		return dir
+	}
+	return "./cache/memory"
+}
+
 func printToolsUsage() {
 	fmt.Println(`Usage:
   vclaw tools list [-group <group>]
@@ -102,5 +111,5 @@ func printToolsUsage() {
   vclaw tools list -group sandbox
       List only tools in the sandbox group.
 
-Available groups: builtin, web, sandbox, google_workspace`)
+Available groups: builtin, web, sandbox, memory, google_workspace`)
 }

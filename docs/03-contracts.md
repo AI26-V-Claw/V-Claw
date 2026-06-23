@@ -751,6 +751,18 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 > `calculator` thực hiện phép toán số học đơn giản trong memory/local runtime và không truy cập dữ liệu ngoài hệ thống.
 > `get_current_time` trả về thời gian local hiện tại theo ISO-8601, không cần approval.
 
+### Memory
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `memory.getUserMemory` | Agent Core | `safe_read` | No |
+| `memory.editUserMemory` | Agent Core | `local_write` | Yes |
+| `memory.resetMemory` | Agent Core | `destructive` | Yes |
+
+> `memory.getUserMemory` đọc bộ nhớ dài hạn hiện tại (`USER.md` + `NOTES.md`), không cần approval.
+> `memory.editUserMemory` thêm/xóa một fact trong bộ nhớ dài hạn (`local_write`, cần approval). Ngoài approval, tool còn enforce data contract §9.1: nội dung có dấu hiệu chứa credential/token/password/secret bị từ chối với `INVALID_INPUT` trước khi ghi — approval không thay thế ràng buộc này.
+> `memory.resetMemory` xóa toàn bộ bộ nhớ dài hạn và tạo lại skeleton mặc định (`destructive`, cần approval).
+
 ---
 
 ## 5. Events
@@ -1024,11 +1036,16 @@ Rules:
 - Observations record `sourceType` such as `session_compaction`, `session_compaction_fallback`, `repeated_habit`, or `manual_migration`.
 - Session compaction observations should include `sessionId`, optional `runId`/`requestId`, classifier model, and summary hash when available.
 - Repeated habit counting is global across sessions in `cache/memory/habit_patterns.json`.
-- A repeated habit is promoted only when the same normalized pattern has `count >= 5` and either appears in at least 2 distinct sessions or spans at least 72 hours from `firstSeen` to `lastSeen`.
+- Habit detection uses an LLM classifier to normalize natural-language variants into canonical patterns (for example `list/read/check/view` -> `inspect`) and falls back to deterministic heuristics if the classifier fails.
+- A repeated habit is promoted only when the same normalized pattern has `eligibleCount >= 3` and either appears in at least 2 distinct sessions or spans at least 72 hours from `firstSeen` to `lastSeen`.
+- Safe-read habits may become eligible from repeated user messages. Side-effect habits only become eligible after the user approves the action and the tool succeeds.
 - Habit dedup happens in 3 layers: normalized pattern (`promoted=true` prevents re-promotion), normalized fact text in `USER.md`, and exact observation dedup in `memory_sources.json`.
 - Repeated-habit observations in `memory_sources.json` must include the promoted aggregate `count`.
 - Loader must strip `<!-- mem:... -->` markers before injecting memory into the runtime prompt.
 - Long-term memory is context only. It must never override Tool Policy, approval decisions, HITL state, system prompt, or tool contracts.
+- Long-term memory loader must wrap memory as `authority="context_only"` and filter existing memory lines that attempt to bypass/ignore/override system instructions, tool policy, approvals, HITL, or tool contracts.
+- Long-term memory writers must reject new facts that attempt to bypass/ignore/override system instructions, tool policy, approvals, HITL, or tool contracts.
+- `USER.md` work rules are user preferences only. They are not a security, approval, or tool-policy authority.
 
 ---
 
