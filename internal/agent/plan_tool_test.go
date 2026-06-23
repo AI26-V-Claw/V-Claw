@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"vclaw/internal/contracts"
 	"vclaw/internal/tools"
 )
 
@@ -48,6 +49,47 @@ func TestPlanToolWriteAndReadReturnsFullPlanAndSummary(t *testing.T) {
 	}
 	if payload.Summary != "1 completed, 1 in_progress, 1 pending" {
 		t.Fatalf("unexpected summary: %q", payload.Summary)
+	}
+}
+
+func TestPlanStoreScopesPlansByRun(t *testing.T) {
+	store := NewPlanStore()
+	tool := NewPlanTool(store)
+
+	write := tool.Execute(WithPlanScope(context.Background(), "session-1", "run-1"), tools.ToolCall{
+		ID:   "call-1",
+		Name: PlanToolName,
+		Arguments: map[string]any{
+			"steps": []any{
+				map[string]any{"id": "1", "description": "Finish old task", "status": "completed"},
+			},
+		},
+	})
+	if !write.Success {
+		t.Fatalf("write failed: %+v", write.Error)
+	}
+
+	read := tool.Execute(WithPlanScope(context.Background(), "session-1", "run-2"), tools.ToolCall{ID: "call-2", Name: PlanToolName, Arguments: map[string]any{}})
+	if !read.Success {
+		t.Fatalf("read failed: %+v", read.Error)
+	}
+
+	var payload planToolResponse
+	if err := json.Unmarshal([]byte(read.ContentForLLM), &payload); err != nil {
+		t.Fatalf("read content is not JSON: %v\n%s", err, read.ContentForLLM)
+	}
+	if len(payload.Plan.Steps) != 0 {
+		t.Fatalf("expected no plan for a new run, got %+v", payload.Plan.Steps)
+	}
+}
+
+func TestRuntimeActivePlanPromptUsesCurrentRunOnly(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Registry: tools.NewToolRegistry()})
+	oldPlan := contracts.Plan{Steps: []contracts.PlanStep{{ID: "1", Description: "Finish old task", Status: "completed"}}}
+	runtime.planStore.Set("session-1", "run-1", oldPlan)
+
+	if prompt := runtime.activePlanPrompt("session-1", "run-2"); prompt != "" {
+		t.Fatalf("expected no active plan prompt for a new run, got %q", prompt)
 	}
 }
 

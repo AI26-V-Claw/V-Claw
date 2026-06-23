@@ -39,32 +39,53 @@ func NewPlanStore() *PlanStore {
 	return &PlanStore{plans: make(map[string]contracts.Plan)}
 }
 
-func (s *PlanStore) Get(sessionID string) (contracts.Plan, bool) {
-	if s == nil || strings.TrimSpace(sessionID) == "" {
+func planStoreKey(sessionID string, runID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	runID = strings.TrimSpace(runID)
+	if sessionID == "" || runID == "" {
+		return ""
+	}
+	return sessionID + "\x00" + runID
+}
+
+func (s *PlanStore) Get(sessionID string, runID string) (contracts.Plan, bool) {
+	key := planStoreKey(sessionID, runID)
+	if s == nil || key == "" {
 		return contracts.Plan{}, false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	plan, ok := s.plans[sessionID]
+	plan, ok := s.plans[key]
 	if !ok || len(plan.Steps) == 0 {
 		return contracts.Plan{}, false
 	}
 	return clonePlan(plan), true
 }
 
-func (s *PlanStore) Set(sessionID string, plan contracts.Plan) contracts.Plan {
-	if s == nil || strings.TrimSpace(sessionID) == "" {
+func (s *PlanStore) Set(sessionID string, runID string, plan contracts.Plan) contracts.Plan {
+	key := planStoreKey(sessionID, runID)
+	if s == nil || key == "" {
 		return contracts.Plan{}
 	}
 	plan = clonePlan(plan)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(plan.Steps) == 0 {
-		delete(s.plans, sessionID)
+		delete(s.plans, key)
 		return contracts.Plan{}
 	}
-	s.plans[sessionID] = plan
+	s.plans[key] = plan
 	return clonePlan(plan)
+}
+
+func (s *PlanStore) Clear(sessionID string, runID string) {
+	key := planStoreKey(sessionID, runID)
+	if s == nil || key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.plans, key)
 }
 
 func clonePlan(plan contracts.Plan) contracts.Plan {
@@ -131,15 +152,18 @@ func (t *PlanTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	if strings.TrimSpace(scope.SessionID) == "" {
 		return planToolError(call, tools.ErrorInvalidArgument, "plan scope session id is required")
 	}
+	if strings.TrimSpace(scope.RunID) == "" {
+		return planToolError(call, tools.ErrorInvalidArgument, "plan scope run id is required")
+	}
 
 	plan, ok, err := planFromArguments(call.Arguments)
 	if err != nil {
 		return planToolError(call, tools.ErrorInvalidArgument, err.Error())
 	}
 	if ok {
-		plan = t.store.Set(scope.SessionID, plan)
+		plan = t.store.Set(scope.SessionID, scope.RunID, plan)
 	} else {
-		plan, _ = t.store.Get(scope.SessionID)
+		plan, _ = t.store.Get(scope.SessionID, scope.RunID)
 	}
 
 	response := planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: scope.RunID}
@@ -230,37 +254,41 @@ func planToolError(call tools.ToolCall, code string, message string) tools.ToolR
 	}
 }
 
-func (r *Runtime) responsePlan(sessionID string) *contracts.Plan {
+func (r *Runtime) responsePlan(sessionID string, runID string) *contracts.Plan {
 	if r == nil || r.planStore == nil {
 		return nil
 	}
-	plan, ok := r.planStore.Get(sessionID)
+	plan, ok := r.planStore.Get(sessionID, runID)
 	if !ok {
 		return nil
 	}
 	return &plan
 }
 
-func (r *Runtime) activePlanPrompt(sessionID string) string {
+func (r *Runtime) activePlanPrompt(sessionID string, runID string) string {
 	if r == nil || r.planStore == nil {
 		return ""
 	}
-	plan, ok := r.planStore.Get(sessionID)
+	plan, ok := r.planStore.Get(sessionID, runID)
 	if !ok {
 		return ""
 	}
-	data, err := json.Marshal(planToolResponse{Plan: plan, Summary: summarizePlan(plan)})
+	data, err := json.Marshal(planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: strings.TrimSpace(runID)})
 	if err != nil {
 		return ""
 	}
 	return "<active-plan>\n" + string(data) + "\n</active-plan>"
 }
 
-func (r *Runtime) hydratePlanFromTranscript(sessionID string, transcript []providers.Message) {
+func (r *Runtime) hydratePlanFromTranscript(sessionID string, runID string, transcript []providers.Message) {
 	if r == nil || r.planStore == nil {
 		return
 	}
-	if _, ok := r.planStore.Get(sessionID); ok {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return
+	}
+	if _, ok := r.planStore.Get(sessionID, runID); ok {
 		return
 	}
 	for index := len(transcript) - 1; index >= 0; index-- {
@@ -272,7 +300,10 @@ func (r *Runtime) hydratePlanFromTranscript(sessionID string, transcript []provi
 		if err := json.Unmarshal([]byte(message.Content), &payload); err != nil || len(payload.Plan.Steps) == 0 {
 			continue
 		}
-		r.planStore.Set(sessionID, payload.Plan)
+		if strings.TrimSpace(payload.RunID) != runID {
+			continue
+		}
+		r.planStore.Set(sessionID, runID, payload.Plan)
 		return
 	}
 }
