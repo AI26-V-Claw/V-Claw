@@ -3,6 +3,7 @@ package gmail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -919,12 +920,7 @@ func asGoogleError(err error, target **googleapi.Error) bool {
 	if err == nil {
 		return false
 	}
-	typed, ok := err.(*googleapi.Error)
-	if !ok {
-		return false
-	}
-	*target = typed
-	return true
+	return errors.As(err, target)
 }
 
 func hasMissingScopeReason(err *googleapi.Error) bool {

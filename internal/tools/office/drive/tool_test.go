@@ -3,6 +3,7 @@ package drive
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	gdrive "vclaw/internal/connectors/google/drive"
 	"vclaw/internal/tools"
 	fstool "vclaw/internal/tools/os/filesystem"
+
+	"google.golang.org/api/googleapi"
 )
 
 // fakeUploadGuard approves only paths under allowedPrefix, modelling the sandbox
@@ -331,8 +334,8 @@ func TestSaveFileRejectsPathOutsideWorkspace(t *testing.T) {
 	tool := NewTool(ToolNameSaveFile, NewService(binaryFileConnector{}), guard)
 
 	result := tool.Execute(context.Background(), tools.ToolCall{
-		ID:        "call_save_escape",
-		Name:      ToolNameSaveFile,
+		ID:   "call_save_escape",
+		Name: ToolNameSaveFile,
 		// Escape the workspace via the parent directory.
 		Arguments: map[string]any{"fileId": "bin_1", "outputDir": filepath.Join(workspace, "..", "outside-escape")},
 	})
@@ -433,6 +436,21 @@ func TestShareFileRejectsPublicWrite(t *testing.T) {
 	}
 	if _, errShape := service.ShareFile(context.Background(), ShareFileInput{FileID: "f1", Type: "anyone", Role: "reader"}); errShape != nil {
 		t.Fatalf("anyone+reader should be allowed, got %#v", errShape)
+	}
+}
+
+func TestMapErrorWrappedGooglePermissionError(t *testing.T) {
+	errShape := mapError(errors.New("wrap: " + (&googleapi.Error{Code: 403, Message: "The user does not have sufficient permissions for this file."}).Error()))
+	if errShape.Code == "AUTH_MISSING_SCOPE" {
+		t.Fatalf("string-only google error should not masquerade as a typed missing-scope error: %#v", errShape)
+	}
+
+	errShape = mapError(fmt.Errorf("drive upload failed: %w", &googleapi.Error{
+		Code:    403,
+		Message: "The user does not have sufficient permissions for this file.",
+	}))
+	if errShape == nil || errShape.Code != "ACTION_BLOCKED_BY_POLICY" {
+		t.Fatalf("expected typed wrapped Google permission to map clearly, got %#v", errShape)
 	}
 }
 

@@ -84,7 +84,7 @@ type ErrorShape struct {
 
 func (s *Service) Search(ctx context.Context, input SearchInput) (tavily.SearchOutput, *ErrorShape) {
 	if s == nil || s.connector == nil {
-		return tavily.SearchOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "web connector is not configured"}
+		return tavily.SearchOutput{}, webConnectorUnavailable()
 	}
 	input.Query = strings.TrimSpace(input.Query)
 	if input.Query == "" {
@@ -114,7 +114,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (tavily.SearchO
 
 func (s *Service) Fetch(ctx context.Context, input FetchInput) (tavily.ExtractOutput, *ErrorShape) {
 	if s == nil || s.connector == nil {
-		return tavily.ExtractOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "web connector is not configured"}
+		return tavily.ExtractOutput{}, webConnectorUnavailable()
 	}
 	normalizedURL, errShape := normalizeURL(input.URL)
 	if errShape != nil {
@@ -382,7 +382,22 @@ func mapError(err error) *ErrorShape {
 	if errors.As(err, &tavilyErr) {
 		return &ErrorShape{Code: tavilyErr.Code, Message: tavilyErr.Message, Retryable: tavilyErr.Retryable}
 	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "tavily api key") || strings.Contains(lower, "api key is required") {
+		return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: "Web Search is not configured: set TAVILY_API_KEY to enable web.search and web.fetch.", Retryable: false}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") {
+		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "Timed out contacting Web Search provider: " + err.Error(), Retryable: true}
+	}
 	return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error()}
+}
+
+func webConnectorUnavailable() *ErrorShape {
+	return &ErrorShape{
+		Code:      "AUTH_MISSING_SCOPE",
+		Message:   "Web Search is not configured: set TAVILY_API_KEY to enable web.search and web.fetch.",
+		Retryable: false,
+	}
 }
 
 func toolErrorResult(call tools.ToolCall, errShape *ErrorShape) tools.ToolResult {

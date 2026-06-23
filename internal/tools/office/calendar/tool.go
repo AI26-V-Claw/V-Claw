@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/mail"
 	"strings"
 	"time"
 
+	googleconnector "vclaw/internal/connectors/google"
 	gcal "vclaw/internal/connectors/google/calendar"
 	"vclaw/internal/connectors/google/common"
+
+	"google.golang.org/api/googleapi"
 )
 
 // Tool names following contract naming convention: <domain>.<action>
@@ -504,6 +508,29 @@ func normalizeResponseStatus(value string) (string, bool) {
 
 // mapConnectorError maps connector sentinel errors to contract ErrorShape.
 func mapConnectorError(err error) *ErrorShape {
+	if googleconnector.IsNetworkError(err) {
+		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "network error contacting Calendar API: " + err.Error(), Retryable: true}
+	}
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) {
+		message := googleAPIErrorMessage(gerr)
+		switch {
+		case gerr.Code == http.StatusUnauthorized:
+			return &ErrorShape{Code: "AUTH_EXPIRED", Message: message, Retryable: true}
+		case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
+			return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: message, Retryable: false}
+		case gerr.Code == http.StatusForbidden:
+			return &ErrorShape{Code: "ACTION_BLOCKED_BY_POLICY", Message: message, Retryable: false}
+		case gerr.Code == http.StatusNotFound:
+			return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: message, Retryable: false}
+		case gerr.Code == http.StatusTooManyRequests:
+			return &ErrorShape{Code: "RATE_LIMITED", Message: message, Retryable: true}
+		case gerr.Code >= 500:
+			return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: message, Retryable: true}
+		default:
+			return &ErrorShape{Code: "INTERNAL_ERROR", Message: message, Retryable: false}
+		}
+	}
 	if errors.Is(err, common.ErrAuth) {
 		return &ErrorShape{
 			Code:      "AUTH_EXPIRED",
@@ -537,6 +564,31 @@ func mapConnectorError(err error) *ErrorShape {
 		Message:   err.Error(),
 		Retryable: false,
 	}
+}
+
+func googleAPIErrorMessage(err *googleapi.Error) string {
+	if err == nil {
+		return "Google Calendar API error"
+	}
+	if strings.TrimSpace(err.Message) != "" {
+		return err.Message
+	}
+	if strings.TrimSpace(err.Body) != "" {
+		return err.Body
+	}
+	if strings.TrimSpace(err.Error()) != "" {
+		return err.Error()
+	}
+	return fmt.Sprintf("Google Calendar API error status %d", err.Code)
+}
+
+func hasMissingScopeReason(err *googleapi.Error) bool {
+	text := strings.ToLower(err.Message + " " + err.Body)
+	for _, item := range err.Errors {
+		text += " " + strings.ToLower(item.Reason+" "+item.Message)
+	}
+	return strings.Contains(text, "insufficient authentication scopes") ||
+		strings.Contains(text, "insufficient permissions")
 }
 
 func invalidInput(message string) *ErrorShape {

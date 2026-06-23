@@ -2,6 +2,7 @@ package people
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -207,29 +208,53 @@ func MapError(err error) *ErrorShape {
 	if googleconnector.IsNetworkError(err) {
 		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "network error contacting People API: " + err.Error(), Retryable: true}
 	}
-	gerr, ok := err.(*googleapi.Error)
-	if !ok {
+	var gerr *googleapi.Error
+	if !errors.As(err, &gerr) {
 		return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error()}
 	}
+	message := googleAPIErrorMessage(gerr)
 
 	switch {
 	case gerr.Code == http.StatusUnauthorized:
-		return &ErrorShape{Code: "AUTH_EXPIRED", Message: gerr.Message, Retryable: true}
+		return &ErrorShape{Code: "AUTH_EXPIRED", Message: message, Retryable: true}
 	case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
-		return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: gerr.Message}
+		return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: message}
+	case gerr.Code == http.StatusForbidden:
+		return &ErrorShape{Code: "ACTION_BLOCKED_BY_POLICY", Message: message}
+	case gerr.Code == http.StatusNotFound:
+		return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: message}
 	case gerr.Code == http.StatusTooManyRequests:
-		return &ErrorShape{Code: "RATE_LIMITED", Message: gerr.Message, Retryable: true}
+		return &ErrorShape{Code: "RATE_LIMITED", Message: message, Retryable: true}
 	case gerr.Code >= 500:
-		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: gerr.Message, Retryable: true}
+		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: message, Retryable: true}
 	default:
-		return &ErrorShape{Code: "INTERNAL_ERROR", Message: gerr.Message}
+		return &ErrorShape{Code: "INTERNAL_ERROR", Message: message}
 	}
 }
 
 func hasMissingScopeReason(err *googleapi.Error) bool {
-	text := strings.ToLower(err.Message)
+	text := strings.ToLower(err.Message + " " + err.Body)
+	for _, item := range err.Errors {
+		text += " " + strings.ToLower(item.Reason+" "+item.Message)
+	}
 	return strings.Contains(text, "insufficient authentication scopes") ||
 		strings.Contains(text, "insufficient permissions")
+}
+
+func googleAPIErrorMessage(err *googleapi.Error) string {
+	if err == nil {
+		return "Google People API error"
+	}
+	if strings.TrimSpace(err.Message) != "" {
+		return err.Message
+	}
+	if strings.TrimSpace(err.Body) != "" {
+		return err.Body
+	}
+	if strings.TrimSpace(err.Error()) != "" {
+		return err.Error()
+	}
+	return fmt.Sprintf("Google People API error status %d", err.Code)
 }
 
 func toolErrorResult(call tools.ToolCall, errShape *ErrorShape) tools.ToolResult {
