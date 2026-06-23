@@ -690,6 +690,7 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | `calendar.deleteEvent` | Integration | `destructive` | Yes |
 
 > `calendar.createEvent` requires an explicit start date+time and an explicit end date+time or duration before approval. Date-only phrases such as `tomorrow` / `ngay mai` are not enough to infer a start time. If the user also asks to send an email about the event, Calendar attendees/invitations do not satisfy that separate Gmail action.
+> `calendar.updateEvent` preserves existing Calendar attendee RSVP state when adding attendees. Tool input `attendees` is treated as attendees to add, not a blind replacement list; RSVP changes must use `calendar.respondEvent`.
 
 ### Chat
 

@@ -381,6 +381,89 @@ func TestUpdateEvent_Success(t *testing.T) {
 	}
 }
 
+func TestUpdateEvent_AddsAttendeesPreservingExistingResponseStatus(t *testing.T) {
+	getCalled := false
+	updateCalled := false
+	mock := &mockConnector{
+		getEventFunc: func(ctx context.Context, eventID string) (gcal.Event, error) {
+			getCalled = true
+			if eventID != "event_001" {
+				t.Fatalf("unexpected get eventID: %s", eventID)
+			}
+			return gcal.Event{
+				ID: "event_001",
+				Attendees: []gcal.Attendee{
+					{Email: "quanghtd@vclaw.site", DisplayName: "Quang", ResponseStatus: "accepted", Self: true},
+					{Email: "old@example.com", ResponseStatus: "needsAction"},
+				},
+			}, nil
+		},
+		updateEventFunc: func(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error) {
+			updateCalled = true
+			if len(e.Attendees) != 3 {
+				t.Fatalf("expected 3 merged attendees, got %+v", e.Attendees)
+			}
+			if e.Attendees[0].Email != "quanghtd@vclaw.site" || e.Attendees[0].ResponseStatus != "accepted" {
+				t.Fatalf("existing RSVP was not preserved: %+v", e.Attendees[0])
+			}
+			if e.Attendees[2].Email != "new@example.com" || e.Attendees[2].ResponseStatus != "" {
+				t.Fatalf("new attendee should be appended without overwriting RSVP state: %+v", e.Attendees[2])
+			}
+			return gcal.Event{
+				ID:        eventID,
+				Attendees: e.Attendees,
+			}, nil
+		},
+	}
+	svc := NewService(mock)
+
+	output, errShape := svc.UpdateEvent(context.Background(), UpdateEventInput{
+		EventID:   "event_001",
+		Attendees: []string{"new@example.com"},
+	})
+
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if !getCalled || !updateCalled {
+		t.Fatalf("expected get and update to be called, get=%t update=%t", getCalled, updateCalled)
+	}
+	if len(output.Event.Attendees) != 3 || output.Event.Attendees[0].ResponseStatus != "accepted" {
+		t.Fatalf("unexpected output attendees: %+v", output.Event.Attendees)
+	}
+}
+
+func TestUpdateEvent_AddAttendeesSkipsExistingEmailCaseInsensitive(t *testing.T) {
+	mock := &mockConnector{
+		getEventFunc: func(ctx context.Context, eventID string) (gcal.Event, error) {
+			return gcal.Event{
+				ID: "event_001",
+				Attendees: []gcal.Attendee{
+					{Email: "New@Example.com", ResponseStatus: "accepted"},
+				},
+			}, nil
+		},
+		updateEventFunc: func(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error) {
+			if len(e.Attendees) != 1 {
+				t.Fatalf("duplicate attendee should not be appended: %+v", e.Attendees)
+			}
+			if e.Attendees[0].ResponseStatus != "accepted" {
+				t.Fatalf("existing attendee state should be preserved: %+v", e.Attendees[0])
+			}
+			return gcal.Event{ID: eventID, Attendees: e.Attendees}, nil
+		},
+	}
+	svc := NewService(mock)
+
+	_, errShape := svc.UpdateEvent(context.Background(), UpdateEventInput{
+		EventID:   "event_001",
+		Attendees: []string{"new@example.com"},
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+}
+
 func TestUpdateEvent_MissingEventID(t *testing.T) {
 	svc := NewService(&mockConnector{})
 

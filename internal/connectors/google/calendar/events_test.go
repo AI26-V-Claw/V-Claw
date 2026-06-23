@@ -226,6 +226,43 @@ func TestUpdateEvent_Success(t *testing.T) {
 	}
 }
 
+func TestUpdateEvent_PreservesAttendeeResponseStatusInPatchPayload(t *testing.T) {
+	client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		var payload gcal.Event
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode patch payload: %v", err)
+		}
+		if len(payload.Attendees) != 2 {
+			t.Fatalf("expected 2 attendees in patch payload, got %+v", payload.Attendees)
+		}
+		if payload.Attendees[0].Email != "quanghtd@vclaw.site" || payload.Attendees[0].ResponseStatus != "accepted" {
+			t.Fatalf("existing attendee responseStatus was not preserved in payload: %+v", payload.Attendees[0])
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(gcal.Event{
+			Id:        "updated_id",
+			Attendees: payload.Attendees,
+		})
+	})
+	defer ts.Close()
+
+	event, err := client.UpdateEvent(context.Background(), "updated_id", Event{
+		Attendees: []Attendee{
+			{Email: "quanghtd@vclaw.site", DisplayName: "Quang", ResponseStatus: "accepted"},
+			{Email: "new@example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(event.Attendees) != 2 || event.Attendees[0].ResponseStatus != "accepted" {
+		t.Fatalf("unexpected updated event attendees: %+v", event.Attendees)
+	}
+}
+
 func TestRespondEvent_SuccessUsesSelfWhenEmailEmpty(t *testing.T) {
 	patchCalled := false
 	client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
