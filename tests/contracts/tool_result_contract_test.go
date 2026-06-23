@@ -25,6 +25,7 @@ import (
 	"vclaw/internal/tools/office/people"
 	"vclaw/internal/tools/office/sheets"
 	"vclaw/internal/tools/os/filesystem"
+	sandbox "vclaw/internal/tools/system/sandbox"
 	"vclaw/internal/tools/web"
 )
 
@@ -246,6 +247,52 @@ func TestBuiltinToolMetadataNoDrift(t *testing.T) {
 	}
 }
 
+// ─── Sandbox command metadata drift ──────────────────────────────────────────
+
+var sandboxToolFixtures = []toolMetaFixture{
+	{
+		name:             sandbox.ToolNameRunPython,
+		capability:       tools.CapabilityMutating,
+		riskLevel:        tools.RiskLevelCodeExecution,
+		requiresApproval: true,
+	},
+	{
+		name:             sandbox.ToolNameRunShell,
+		capability:       tools.CapabilityMutating,
+		riskLevel:        tools.RiskLevelCodeExecution,
+		requiresApproval: true,
+	},
+}
+
+func TestSandboxCommandToolMetadataNoDrift(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	if err := sandbox.RegisterTools(registry); err != nil {
+		t.Fatalf("RegisterTools: %v", err)
+	}
+
+	for _, fix := range sandboxToolFixtures {
+		fix := fix
+		t.Run(fix.name, func(t *testing.T) {
+			def, ok := registry.GetDefinition(fix.name)
+			if !ok {
+				t.Fatalf("contract drift detected: tool %q not found in registry", fix.name)
+			}
+			if def.Capability != fix.capability {
+				t.Errorf("contract drift detected: %s.Capability = %q, want %q", fix.name, def.Capability, fix.capability)
+			}
+			if def.RiskLevel != fix.riskLevel {
+				t.Errorf("contract drift detected: %s.RiskLevel = %q, want %q", fix.name, def.RiskLevel, fix.riskLevel)
+			}
+			if def.RequiresApproval != fix.requiresApproval {
+				t.Errorf("contract drift detected: %s.RequiresApproval = %v, want %v", fix.name, def.RequiresApproval, fix.requiresApproval)
+			}
+			if def.Group != "sandbox" {
+				t.Errorf("contract drift detected: %s.Group = %q, want sandbox", fix.name, def.Group)
+			}
+		})
+	}
+}
+
 // ─── Google Workspace tool metadata drift ─────────────────────────────────────
 
 func TestGoogleWorkspaceToolMetadataNoDrift(t *testing.T) {
@@ -409,6 +456,89 @@ func TestDriveDocsSheetsReadFirstAndWriteToolsRequireHITL(t *testing.T) {
 			}
 			if !decision.RequiresApproval {
 				t.Fatalf("%s policy decision must preserve RequiresApproval=true", name)
+			}
+		})
+	}
+}
+
+func TestActionRiskMetadataDrivesPolicyDecisions(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	registerers := []func(*tools.ToolRegistry) error{
+		func(r *tools.ToolRegistry) error { return web.RegisterTools(r, nil) },
+		func(r *tools.ToolRegistry) error { return filesystem.RegisterTools(r, filesystem.Config{}) },
+		func(r *tools.ToolRegistry) error { return sandbox.RegisterTools(r) },
+		func(r *tools.ToolRegistry) error { return calendar.RegisterTools(r, nil) },
+		func(r *tools.ToolRegistry) error { return chat.RegisterTools(r, nil) },
+		func(r *tools.ToolRegistry) error { return drive.RegisterTools(r, nil, nil) },
+		func(r *tools.ToolRegistry) error { return gmail.RegisterTools(r, nil) },
+	}
+	for _, registerer := range registerers {
+		if err := registerer(registry); err != nil {
+			t.Fatalf("register tools: %v", err)
+		}
+	}
+
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	defaultPolicy := policies.NewToolPolicy()
+	blockDestructivePolicy := policies.NewToolPolicyWithConfig(policies.UserPolicyConfig{
+		AlwaysBlock: []contracts.RiskLevel{contracts.RiskLevelDestructive},
+	})
+
+	type actionFixture struct {
+		action           string
+		toolName         string
+		capability       tools.Capability
+		riskLevel        tools.RiskLevel
+		requiresApproval bool
+		defaultDecision  contracts.RiskDecisionStatus
+		blockDecision    contracts.RiskDecisionStatus
+	}
+	fixtures := []actionFixture{
+		{action: "read public web", toolName: web.ToolNameSearch, capability: tools.CapabilityReadOnly, riskLevel: tools.RiskLevelSafeRead, defaultDecision: contracts.RiskDecisionAllow},
+		{action: "read metadata", toolName: drive.ToolNameGetFile, capability: tools.CapabilityReadOnly, riskLevel: tools.RiskLevelSafeRead, defaultDecision: contracts.RiskDecisionAllow},
+		{action: "read private content", toolName: gmail.ToolNameGetEmail, capability: tools.CapabilityReadOnly, riskLevel: tools.RiskLevelSensitiveRead, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+		{action: "send message", toolName: chat.ToolNameSendMessage, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelExternalWrite, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+		{action: "write local file", toolName: filesystem.ToolNameWriteFile, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelLocalWrite, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+		{action: "create calendar event", toolName: calendar.ToolNameCreateEvent, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelExternalWrite, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+		{action: "edit drive metadata", toolName: drive.ToolNameUpdateFileMetadata, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelExternalWrite, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+		{action: "delete chat message", toolName: chat.ToolNameDeleteMessage, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelDestructive, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval, blockDecision: contracts.RiskDecisionBlock},
+		{action: "share drive file", toolName: drive.ToolNameShareFile, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelExternalWrite, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+		{action: "download drive content", toolName: drive.ToolNameDownloadFile, capability: tools.CapabilityReadOnly, riskLevel: tools.RiskLevelSafeRead, defaultDecision: contracts.RiskDecisionAllow},
+		{action: "save downloaded file", toolName: drive.ToolNameSaveFile, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelLocalWrite, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+		{action: "upload drive file", toolName: drive.ToolNameUploadFile, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelExternalWrite, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+		{action: "run shell command", toolName: sandbox.ToolNameRunShell, capability: tools.CapabilityMutating, riskLevel: tools.RiskLevelCodeExecution, requiresApproval: true, defaultDecision: contracts.RiskDecisionRequiresApproval},
+	}
+
+	for _, fix := range fixtures {
+		fix := fix
+		t.Run(fix.action+"/"+fix.toolName, func(t *testing.T) {
+			def, ok := registry.GetDefinition(fix.toolName)
+			if !ok {
+				t.Fatalf("tool %q not registered", fix.toolName)
+			}
+			if def.Capability != fix.capability {
+				t.Fatalf("%s capability = %s, want %s", fix.toolName, def.Capability, fix.capability)
+			}
+			if def.RiskLevel != fix.riskLevel {
+				t.Fatalf("%s risk = %s, want %s", fix.toolName, def.RiskLevel, fix.riskLevel)
+			}
+			if def.RequiresApproval != fix.requiresApproval {
+				t.Fatalf("%s requires approval = %v, want %v", fix.toolName, def.RequiresApproval, fix.requiresApproval)
+			}
+
+			decision := defaultPolicy.DecideToolCall("call_"+safeTestName(fix.toolName), def, true, now)
+			if decision.Decision != fix.defaultDecision {
+				t.Fatalf("%s default policy decision = %s, want %s", fix.toolName, decision.Decision, fix.defaultDecision)
+			}
+			if decision.RequiresApproval != (fix.defaultDecision == contracts.RiskDecisionRequiresApproval) {
+				t.Fatalf("%s policy RequiresApproval = %v does not match decision %s", fix.toolName, decision.RequiresApproval, decision.Decision)
+			}
+
+			if fix.blockDecision != "" {
+				blockDecision := blockDestructivePolicy.DecideToolCall("call_block_"+safeTestName(fix.toolName), def, true, now)
+				if blockDecision.Decision != fix.blockDecision {
+					t.Fatalf("%s block policy decision = %s, want %s", fix.toolName, blockDecision.Decision, fix.blockDecision)
+				}
 			}
 		})
 	}
