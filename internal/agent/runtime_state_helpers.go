@@ -252,6 +252,7 @@ func (r *Runtime) createApprovalAction(ctx context.Context, runState RunState, m
 }
 
 func (r *Runtime) recordRuntimeRiskDecision(ctx context.Context, runState RunState, toolCall providers.ToolCall, decision contracts.RiskDecision) *contracts.ErrorShape {
+	ctx = context.WithoutCancel(ctx)
 	if r.stateStore == nil {
 		return nil
 	}
@@ -274,6 +275,7 @@ func (r *Runtime) recordRuntimeRiskDecision(ctx context.Context, runState RunSta
 }
 
 func (r *Runtime) recordRuntimeToolCallStatus(ctx context.Context, runState RunState, toolCall providers.ToolCall, status ToolCallStatus, reason string, approvalID string) *contracts.ErrorShape {
+	ctx = context.WithoutCancel(ctx)
 	if r.stateStore == nil {
 		return nil
 	}
@@ -310,6 +312,7 @@ func (r *Runtime) appendRunEvent(ctx context.Context, runID string, eventType st
 }
 
 func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runState *RunState, runID string, toolCall providers.ToolCall, result tools.ToolResult, latency time.Duration, approvalID string) *contracts.ErrorShape {
+	ctx = context.WithoutCancel(ctx)
 	r.recordToolCallObservation(toolCall.Name, result.Success)
 	if r != nil && r.telemetry != nil {
 		r.telemetry.RecordToolCall(ctx, toolCall, result, latency)
@@ -365,6 +368,7 @@ func (r *Runtime) recordRuntimeToolCall(ctx context.Context, runState *RunState,
 }
 
 func (r *Runtime) recordRunStep(ctx context.Context, runState *RunState, runID string, step RunStep) *contracts.ErrorShape {
+	ctx = context.WithoutCancel(ctx)
 	if r == nil || r.stateStore == nil || strings.TrimSpace(runID) == "" {
 		return nil
 	}
