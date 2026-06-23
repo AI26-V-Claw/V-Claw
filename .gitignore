@@ -30,6 +30,8 @@ AGENTS.md
 CLAUDE.md
 cache/memory/NOTES.md
 cache/memory/USER.md
+cache/memory/memory_sources.json
+cache/memory/habit_patterns.json
 v_claw_architect_claude.pdf
 
 # sandbox
@@ -59,3 +61,6 @@ docs/testing-e2e/
 testing-e2e/artifacts/
 testing-e2e/**/*.log
 .gomodcache/
+
+
+__pycache__/

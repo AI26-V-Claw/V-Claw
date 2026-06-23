@@ -21,7 +21,7 @@ const (
 	RuntimeRunStatusCompleted            RuntimeRunStatus = "completed"
 	RuntimeRunStatusFailed               RuntimeRunStatus = "failed"
 	RuntimeRunStatusBlocked              RuntimeRunStatus = "blocked"
-	RuntimeRunStatusMaxIterations        RuntimeRunStatus = "max_iterations"
+	RuntimeRunStatusIterationBudget      RuntimeRunStatus = "iteration_budget"
 	RuntimeRunStatusCancelled            RuntimeRunStatus = "cancelled"
 )
 

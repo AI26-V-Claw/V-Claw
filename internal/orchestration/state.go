@@ -55,8 +55,8 @@ func FailureReasonFromErrorCode(code string) FailureReason {
 		return FailureReasonTimeout
 	case "PROVIDER_UNAVAILABLE":
 		return FailureReasonProviderUnavailable
-	case "MAX_ITERATIONS_EXCEEDED":
-		return FailureReasonMaxIteration
+	case "ITERATION_BUDGET_EXHAUSTED":
+		return FailureReasonIterationBudget
 	case "APPROVAL_EXPIRED":
 		return FailureReasonApprovalExpired
 	case "ACTION_BLOCKED_BY_POLICY":
@@ -76,8 +76,8 @@ func mapAgentStatus(agentStatus string) RunStatus {
 		return RunStatusFailed
 	case "blocked":
 		return RunStatusBlocked
-	case "max_iterations":
-		return RunStatusMaxIteration
+	case "iteration_budget":
+		return RunStatusIterationBudget
 	case "waiting_approval":
 		return RunStatusWaitingApproval
 	case "waiting_clarification":

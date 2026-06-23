@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"time"
 
+	"vclaw/internal/longmem"
 	"vclaw/internal/sessions"
 )
 
@@ -83,7 +84,7 @@ func (r *Runtime) maybeCompactAsync(sessionID string) {
 	}
 
 	if r.ltMemFlusher != nil {
-		if err := r.ltMemFlusher.Flush(ctx, result.Summary); err != nil {
+		if err := r.flushLongTermMemory(ctx, sessionID, result.Summary); err != nil {
 			r.logger.Warn("compaction: long-term memory flush failed", "session_id", sessionID, "error", err)
 			// do not return — compaction itself succeeded
 		}
@@ -93,4 +94,18 @@ func (r *Runtime) maybeCompactAsync(sessionID string) {
 		"session_id", sessionID,
 		"messages_kept", len(result.KeptMessages),
 	)
+}
+
+func (r *Runtime) flushLongTermMemory(ctx context.Context, sessionID, summary string) error {
+	if sourceFlusher, ok := r.ltMemFlusher.(interface {
+		FlushWithSource(context.Context, longmem.FlushInput) error
+	}); ok {
+		return sourceFlusher.FlushWithSource(ctx, longmem.FlushInput{
+			Summary:         summary,
+			SessionID:       sessionID,
+			ObservedAt:      r.now().UTC(),
+			ClassifierModel: r.memoryClassifierModel,
+		})
+	}
+	return r.ltMemFlusher.Flush(ctx, summary)
 }

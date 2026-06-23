@@ -14,10 +14,12 @@ import (
 
 // Tool names following contract naming convention: <domain>.<action>
 const (
-	ToolNameListEvents  = "calendar.listEvents"
-	ToolNameCreateEvent = "calendar.createEvent"
-	ToolNameUpdateEvent = "calendar.updateEvent"
-	ToolNameDeleteEvent = "calendar.deleteEvent"
+	ToolNameListEvents   = "calendar.listEvents"
+	ToolNameGetEvent     = "calendar.getEvent"
+	ToolNameCreateEvent  = "calendar.createEvent"
+	ToolNameUpdateEvent  = "calendar.updateEvent"
+	ToolNameRespondEvent = "calendar.respondEvent"
+	ToolNameDeleteEvent  = "calendar.deleteEvent"
 )
 
 // ToolRegistryEntry describes a calendar tool for documentation and policy use.
@@ -39,6 +41,13 @@ var RegistryEntries = []ToolRegistryEntry{
 		RequiresApproval: false,
 	},
 	{
+		Name:             ToolNameGetEvent,
+		Owner:            "integration",
+		Description:      "Get details for one Google Calendar event by eventId, including organizer, creator, attendees, links, location, description, and recurrence flag.",
+		DefaultRiskLevel: "safe_read",
+		RequiresApproval: false,
+	},
+	{
 		Name:             ToolNameCreateEvent,
 		Owner:            "integration",
 		Description:      "Create a new event in Google Calendar. Attendees must be valid email addresses — resolve person names with people.searchDirectory before calling this tool.",
@@ -48,7 +57,14 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameUpdateEvent,
 		Owner:            "integration",
-		Description:      "Update an existing event in Google Calendar. Attendees must be valid email addresses — resolve person names with people.searchDirectory before calling this tool.",
+		Description:      "Update an existing event in Google Calendar. Attendees must be valid email addresses — resolve person names with people.searchDirectory before calling this tool. Provided attendees are added to the existing attendee list while preserving existing responseStatus values.",
+		DefaultRiskLevel: "external_write",
+		RequiresApproval: true,
+	},
+	{
+		Name:             ToolNameRespondEvent,
+		Owner:            "integration",
+		Description:      "Respond to a Google Calendar event invitation by setting an attendee responseStatus. Use accepted to confirm attendance, declined to reject, tentative if unsure, or needsAction to reset.",
 		DefaultRiskLevel: "external_write",
 		RequiresApproval: true,
 	},
@@ -78,6 +94,7 @@ type Connector interface {
 	GetEvent(ctx context.Context, eventID string) (gcal.Event, error)
 	CreateEvent(ctx context.Context, e gcal.Event) (gcal.Event, error)
 	UpdateEvent(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error)
+	RespondEvent(ctx context.Context, eventID string, email string, responseStatus string) (gcal.Event, error)
 	DeleteEvent(ctx context.Context, eventID string) error
 }
 
@@ -102,6 +119,8 @@ type EventSummary struct {
 	Start       string         `json:"start"`
 	End         string         `json:"end"`
 	Attendees   []AttendeeInfo `json:"attendees,omitempty"`
+	Organizer   PersonInfo     `json:"organizer,omitempty"`
+	Creator     PersonInfo     `json:"creator,omitempty"`
 	EventLink   string         `json:"eventLink,omitempty"`
 	MeetLink    string         `json:"meetLink,omitempty"`
 	IsRecurring bool           `json:"isRecurring,omitempty"`
@@ -110,7 +129,15 @@ type EventSummary struct {
 // AttendeeInfo represents a participant in a calendar event.
 type AttendeeInfo struct {
 	Email          string `json:"email"`
+	DisplayName    string `json:"displayName,omitempty"`
 	ResponseStatus string `json:"responseStatus,omitempty"`
+}
+
+// PersonInfo represents an event organizer or creator.
+type PersonInfo struct {
+	Email       string `json:"email,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	Self        bool   `json:"self,omitempty"`
 }
 
 // --- Input/Output types ---
@@ -125,6 +152,16 @@ type ListEventsInput struct {
 // ListEventsOutput is the output for calendar.listEvents.
 type ListEventsOutput struct {
 	Events []EventSummary
+}
+
+// GetEventInput is the input for calendar.getEvent.
+type GetEventInput struct {
+	EventID string // required
+}
+
+// GetEventOutput is the output for calendar.getEvent.
+type GetEventOutput struct {
+	Event EventSummary
 }
 
 // CreateEventInput is the input for calendar.createEvent.
@@ -156,6 +193,18 @@ type UpdateEventInput struct {
 
 // UpdateEventOutput is the output for calendar.updateEvent.
 type UpdateEventOutput struct {
+	Event EventSummary
+}
+
+// RespondEventInput is the input for calendar.respondEvent.
+type RespondEventInput struct {
+	EventID        string // required
+	Email          string // optional; if empty, use the attendee marked self
+	ResponseStatus string // required: accepted, declined, tentative, needsAction
+}
+
+// RespondEventOutput is the output for calendar.respondEvent.
+type RespondEventOutput struct {
 	Event EventSummary
 }
 
@@ -196,6 +245,24 @@ func (s *Service) ListEvents(ctx context.Context, input ListEventsInput) (ListEv
 	}
 
 	return ListEventsOutput{Events: summaries}, nil
+}
+
+// GetEvent retrieves one event by ID.
+func (s *Service) GetEvent(ctx context.Context, input GetEventInput) (GetEventOutput, *ErrorShape) {
+	if s == nil || s.connector == nil {
+		return GetEventOutput{}, internalError("calendar connector is not configured")
+	}
+
+	if strings.TrimSpace(input.EventID) == "" {
+		return GetEventOutput{}, invalidInput("eventId is required")
+	}
+
+	event, err := s.connector.GetEvent(ctx, input.EventID)
+	if err != nil {
+		return GetEventOutput{}, mapConnectorError(err)
+	}
+
+	return GetEventOutput{Event: toEventSummary(event)}, nil
 }
 
 // CreateEvent creates a new calendar event.
@@ -280,8 +347,16 @@ func (s *Service) UpdateEvent(ctx context.Context, input UpdateEventInput) (Upda
 		event.EndTime = endTime
 	}
 
-	for _, email := range input.Attendees {
-		event.Attendees = append(event.Attendees, gcal.Attendee{Email: email})
+	if len(input.Attendees) > 0 {
+		current, err := s.connector.GetEvent(ctx, input.EventID)
+		if err != nil {
+			return UpdateEventOutput{}, mapConnectorError(err)
+		}
+		merged, errShape := mergeAttendeesPreservingState(current.Attendees, input.Attendees)
+		if errShape != nil {
+			return UpdateEventOutput{}, errShape
+		}
+		event.Attendees = merged
 	}
 
 	updated, err := s.connector.UpdateEvent(ctx, input.EventID, event)
@@ -290,6 +365,68 @@ func (s *Service) UpdateEvent(ctx context.Context, input UpdateEventInput) (Upda
 	}
 
 	return UpdateEventOutput{Event: toEventSummary(updated)}, nil
+}
+
+func mergeAttendeesPreservingState(existing []gcal.Attendee, additions []string) ([]gcal.Attendee, *ErrorShape) {
+	merged := append([]gcal.Attendee(nil), existing...)
+	seen := make(map[string]struct{}, len(merged))
+	for _, attendee := range merged {
+		email := strings.ToLower(strings.TrimSpace(attendee.Email))
+		if email != "" {
+			seen[email] = struct{}{}
+		}
+	}
+
+	for _, rawEmail := range additions {
+		rawEmail = strings.TrimSpace(rawEmail)
+		if rawEmail == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(rawEmail)
+		if err != nil {
+			return nil, invalidInput("attendee must be a valid email address: " + rawEmail)
+		}
+		email := strings.TrimSpace(parsed.Address)
+		key := strings.ToLower(email)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, gcal.Attendee{Email: email})
+	}
+
+	return merged, nil
+}
+
+// RespondEvent updates one attendee's response status for an event.
+func (s *Service) RespondEvent(ctx context.Context, input RespondEventInput) (RespondEventOutput, *ErrorShape) {
+	if s == nil || s.connector == nil {
+		return RespondEventOutput{}, internalError("calendar connector is not configured")
+	}
+
+	if strings.TrimSpace(input.EventID) == "" {
+		return RespondEventOutput{}, invalidInput("eventId is required")
+	}
+	email := strings.TrimSpace(input.Email)
+	if email != "" {
+		if _, err := mail.ParseAddress(email); err != nil {
+			return RespondEventOutput{}, invalidInput("email must be a valid email address: " + email)
+		}
+	}
+	status, ok := normalizeResponseStatus(input.ResponseStatus)
+	if !ok {
+		return RespondEventOutput{}, invalidInput("responseStatus must be one of: accepted, declined, tentative, needsAction")
+	}
+
+	updated, err := s.connector.RespondEvent(ctx, input.EventID, email, status)
+	if err != nil {
+		return RespondEventOutput{}, mapConnectorError(err)
+	}
+
+	return RespondEventOutput{Event: toEventSummary(updated)}, nil
 }
 
 // DeleteEvent deletes a calendar event.
@@ -318,6 +455,7 @@ func toEventSummary(e gcal.Event) EventSummary {
 	for _, a := range e.Attendees {
 		attendees = append(attendees, AttendeeInfo{
 			Email:          a.Email,
+			DisplayName:    a.DisplayName,
 			ResponseStatus: a.ResponseStatus,
 		})
 	}
@@ -328,6 +466,8 @@ func toEventSummary(e gcal.Event) EventSummary {
 		Description: e.Description,
 		Location:    e.Location,
 		Attendees:   attendees,
+		Organizer:   toPersonInfo(e.Organizer),
+		Creator:     toPersonInfo(e.Creator),
 		EventLink:   e.EventLink,
 		MeetLink:    e.MeetLink,
 		IsRecurring: e.IsRecurring,
@@ -341,6 +481,25 @@ func toEventSummary(e gcal.Event) EventSummary {
 	}
 
 	return summary
+}
+
+func toPersonInfo(p gcal.Person) PersonInfo {
+	return PersonInfo{Email: p.Email, DisplayName: p.DisplayName, Self: p.Self}
+}
+
+func normalizeResponseStatus(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "accepted", "accept":
+		return "accepted", true
+	case "declined", "decline":
+		return "declined", true
+	case "tentative":
+		return "tentative", true
+	case "needsaction", "needs_action", "needs-action", "needs action":
+		return "needsAction", true
+	default:
+		return "", false
+	}
 }
 
 // mapConnectorError maps connector sentinel errors to contract ErrorShape.

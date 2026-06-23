@@ -343,26 +343,72 @@ func hasCalendarTitleEvidence(lowerText string, title string) bool {
 }
 
 func hasCalendarStartEvidence(lowerText string) bool {
-	return hasTimeExpression(lowerText) ||
-		containsAnyText(lowerText,
-			"hôm nay", "hom nay", "ngày mai", "ngay mai",
-			"tuần này", "tuan nay", "tuần sau", "tuan sau",
-			"tháng này", "thang nay", "tháng tới", "thang toi", "tháng sau", "thang sau",
-			"today", "tomorrow", "this week", "next week", "this month", "next month",
-		)
+	return hasCalendarTimeOfDayEvidence(lowerText)
 }
 
 func hasCalendarEndEvidence(lowerText string) bool {
-	if containsAnyText(lowerText,
-		"đến", "den", "tới", "toi", "kết thúc", "ket thuc",
-		"thời lượng", "thoi luong", "trong vòng", "trong vong",
-		"tiếng", "tieng", "giờ", "gio", "phút", "phut",
-		"hour", "hours", "minute", "minutes",
-	) {
+	if countCalendarTimeOfDayExpressions(lowerText) >= 2 {
 		return true
 	}
-	return countTimeExpressions(lowerText) >= 2 ||
-		(strings.Contains(lowerText, "-") && hasTimeExpression(lowerText))
+	if hasDurationExpression(lowerText) {
+		return true
+	}
+	return hasEndTimeCue(lowerText) && hasCalendarTimeOfDayEvidence(lowerText)
+}
+
+func hasCalendarTimeOfDayEvidence(lowerText string) bool {
+	if viTimeAnswerPattern.MatchString(lowerText) {
+		return true
+	}
+	for _, match := range timeAnswerPattern.FindAllString(lowerText, -1) {
+		clock := strings.ToLower(strings.TrimSpace(match))
+		if strings.Contains(clock, ":") || strings.Contains(clock, "am") || strings.Contains(clock, "pm") {
+			return true
+		}
+	}
+	return hasBareHourWithStartCue(lowerText)
+}
+
+func hasBareHourWithStartCue(lowerText string) bool {
+	if !timeAnswerPattern.MatchString(lowerText) {
+		return false
+	}
+	return containsAnyText(lowerText,
+		"luc ", "lúc ", "vao luc", "vào lúc",
+		"tu ", "từ ", "bat dau", "bắt đầu",
+		"at ", "from ", "start",
+	)
+}
+
+func hasDurationExpression(lowerText string) bool {
+	return containsAnyText(lowerText,
+		"thoi luong", "thời lượng",
+		"trong vong", "trong vòng",
+		"keo dai", "kéo dài",
+		"tieng", "tiếng",
+		"phut", "phút",
+		"duration",
+		"hour", "hours", "minute", "minutes",
+	)
+}
+
+func hasEndTimeCue(lowerText string) bool {
+	return containsAnyText(lowerText,
+		"den ", "đến ", "tới ",
+		"ket thuc", "kết thúc",
+		"end at", "ends at", "end time", "ending", "until",
+	)
+}
+
+func countCalendarTimeOfDayExpressions(lowerText string) int {
+	count := len(viTimeAnswerPattern.FindAllString(lowerText, -1))
+	for _, match := range timeAnswerPattern.FindAllString(lowerText, -1) {
+		clock := strings.ToLower(strings.TrimSpace(match))
+		if strings.Contains(clock, ":") || strings.Contains(clock, "am") || strings.Contains(clock, "pm") {
+			count++
+		}
+	}
+	return count
 }
 
 func hasTimeExpression(text string) bool {
@@ -386,16 +432,25 @@ func missingToolArgumentQuestion(toolName string, missing []string) string {
 		return "Bạn muốn thao tác với Google Chat space nào? Hãy gửi resource name dạng spaces/AAAA, hoặc nói rõ tên nhóm/người trong chat để tôi tìm space trước."
 	}
 	if toolName == "calendar.createEvent" {
-		if containsString(missing, "title") && containsString(missing, "start") {
-			return "Bạn muốn tạo lịch với tiêu đề gì, vào ngày giờ nào, và kết thúc lúc mấy giờ?"
+		missingTitle := containsString(missing, "title")
+		missingStart := containsString(missing, "start")
+		missingEnd := containsString(missing, "end")
+		if missingTitle && missingStart && missingEnd {
+			return "Bạn muốn tạo lịch với tiêu đề gì, bắt đầu vào ngày giờ nào, và kết thúc lúc mấy giờ hoặc kéo dài bao lâu?"
 		}
-		if containsString(missing, "start") {
-			return "Bạn muốn tạo lịch vào ngày và giờ nào?"
+		if missingStart && missingEnd {
+			return "Bạn muốn sự kiện bắt đầu lúc nào và kết thúc lúc nào, hoặc kéo dài bao lâu?"
 		}
-		if containsString(missing, "end") {
+		if missingTitle && missingStart {
+			return "Bạn muốn tạo lịch với tiêu đề gì, và bắt đầu vào ngày giờ nào?"
+		}
+		if missingStart {
+			return "Bạn muốn tạo lịch bắt đầu vào ngày giờ nào?"
+		}
+		if missingEnd {
 			return "Bạn có thể cung cấp giờ kết thúc hoặc thời lượng của cuộc họp không?"
 		}
-		if containsString(missing, "title") {
+		if missingTitle {
 			return "Bạn muốn đặt tiêu đề cuộc họp là gì?"
 		}
 	}
