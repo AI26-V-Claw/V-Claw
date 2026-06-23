@@ -751,6 +751,18 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 > `calculator` thực hiện phép toán số học đơn giản trong memory/local runtime và không truy cập dữ liệu ngoài hệ thống.
 > `get_current_time` trả về thời gian local hiện tại theo ISO-8601, không cần approval.
 
+### Memory
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `memory.getUserMemory` | Agent Core | `safe_read` | No |
+| `memory.editUserMemory` | Agent Core | `local_write` | Yes |
+| `memory.resetMemory` | Agent Core | `destructive` | Yes |
+
+> `memory.getUserMemory` đọc bộ nhớ dài hạn hiện tại (`USER.md` + `NOTES.md`), không cần approval.
+> `memory.editUserMemory` thêm/xóa một fact trong bộ nhớ dài hạn (`local_write`, cần approval). Ngoài approval, tool còn enforce data contract §9.1: nội dung có dấu hiệu chứa credential/token/password/secret bị từ chối với `INVALID_INPUT` trước khi ghi — approval không thay thế ràng buộc này.
+> `memory.resetMemory` xóa toàn bộ bộ nhớ dài hạn và tạo lại skeleton mặc định (`destructive`, cần approval).
+
 ---
 
 ## 5. Events
