@@ -496,11 +496,8 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		!resultFollowUp &&
 		!resolvedReference &&
 		turnMeta.IsContextualFollowUp
-	standaloneReadRequest := !isRevision &&
+	freshWorkspaceReadRequest := !isRevision &&
 		!activeClarification &&
-		!resultFollowUp &&
-		!contextualFollowUp &&
-		!resolvedReference &&
 		shouldIsolateMemoryForStandaloneReadRequest(message.Text)
 	isolatedNewWriteRequest := !isRevision &&
 		!resultFollowUp &&
@@ -562,7 +559,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	providerReference := referenceResolution
 	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
 		providerTranscript = transcriptWithLastUserContent(transcript, message.Text)
-	} else if isolatedNewWriteRequest || standaloneReadRequest {
+	} else if isolatedNewWriteRequest || freshWorkspaceReadRequest {
 		providerTranscript = []providers.Message{userMessage}
 		providerMemory = sessions.SessionMemory{}
 		providerReference = nil
@@ -596,7 +593,10 @@ agentLoop:
 			return *resp, nil
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
+		providerMessages := r.withRuntimeSystemPromptOptions(providerTranscript, providerMemory, providerReference, runtimePromptOptions{IncludeLongTermMemory: !freshWorkspaceReadRequest})
+		if freshWorkspaceReadRequest {
+			providerMessages = append([]providers.Message{freshWorkspaceReadSystemMessage()}, providerMessages...)
+		}
 		if prompt := r.activePlanPrompt(message.SessionID, runState.RunID); prompt != "" {
 			providerMessages = append([]providers.Message{{Role: providers.MessageRoleSystem, Content: prompt}}, providerMessages...)
 		}
@@ -656,6 +656,11 @@ agentLoop:
 		if assistantMessage.Role == "" {
 			assistantMessage.Role = providers.MessageRoleAssistant
 		}
+		if len(assistantMessage.ToolCalls) == 0 && freshWorkspaceReadRequest && len(toolResults) > 0 {
+			if rendered, ok := freshWorkspaceReadAnswerFromToolResults(toolResults); ok {
+				assistantMessage.Content = rendered
+			}
+		}
 		transcript = append(transcript, assistantMessage)
 		providerTranscript = append(providerTranscript, assistantMessage)
 		if errShape := r.appendTranscriptMessage(ctx, runState, assistantMessage); errShape != nil {
@@ -664,6 +669,24 @@ agentLoop:
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
+			if freshWorkspaceReadRequest && len(toolResults) == 0 {
+				r.logger.Info("assistant answered fresh workspace read without tool call; retrying for read tool",
+					"request_id", message.RequestID,
+					"session_id", message.SessionID,
+					"iteration", iteration,
+					"content_preview", logPreview(assistantMessage.Content, 180),
+				)
+				if len(providerTranscript) > 0 {
+					providerTranscript = providerTranscript[:len(providerTranscript)-1]
+				}
+				providerTranscript = append(providerTranscript, providers.Message{
+					Role: providers.MessageRoleSystem,
+					Content: strings.TrimSpace(`The previous assistant response answered a fresh Google Workspace read request without calling a read tool.
+Do not answer from memory, transcript, or older tool results.
+Call the appropriate read tool now, then answer only from this request's tool result.`),
+				})
+				continue
+			}
 			if shouldRetryTextualApprovalAsToolCall(assistantMessage.Content) {
 				r.logger.Info("assistant requested approval without tool call; retrying for tool call",
 					"request_id", message.RequestID,
