@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-Run a real V-Claw agent use case through the existing CLI.
-
-This runner does not mock the agent, provider, Google tools, or Telegram.
-It calls:
-
-    go run ./cmd/vclaw agent -prompt ... -session ... -channel ... -json
-
-Each step result is appended to one artifact JSON file.
-"""
 
 from __future__ import annotations
 
@@ -78,12 +68,6 @@ def step_separator(step_id: Any) -> str:
 def log_block(text: str) -> None:
     for line in str(text).splitlines() or [""]:
         log("    " + line)
-
-
-def safe_filename(value: str) -> str:
-    name = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
-    name = name.strip(".-")
-    return name or "agent-usecase"
 
 
 def expand_vars(text: str, variables: dict[str, str]) -> str:
@@ -215,21 +199,6 @@ def same_tool_call(item: dict[str, Any], ref: dict[str, str]) -> bool:
     item_name = str(item.get("toolName") or "").strip()
     ref_name = str(ref.get("toolName") or "").strip()
     return bool(item_name and ref_name and item_name == ref_name)
-
-
-def observed_tool_names(response: dict[str, Any] | None) -> set[str]:
-    names: set[str] = set()
-    if not response:
-        return names
-    if tool_name := approval_tool_name(response):
-        names.add(tool_name)
-    for result in response.get("toolResults") or []:
-        if not isinstance(result, dict):
-            continue
-        tool_name = str(result.get("toolName") or "").strip()
-        if tool_name:
-            names.add(tool_name)
-    return names
 
 
 def tool_trace_from_response(response: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -405,11 +374,6 @@ def build_agent_command(
         if value := str(flags.get("maxIterations") or "").strip():
             command.extend(["-max-iterations", value])
 
-    if timeout_seconds > 0:
-        # The subprocess timeout is enforced by Python. This is kept out of the
-        # CLI args because the production command has no timeout flag.
-        pass
-
     return command
 
 
@@ -472,23 +436,7 @@ def agent_expectations_for_step(step: Any) -> dict[str, Any]:
     agent = step.get("agent")
     if isinstance(agent, dict):
         return dict(agent)
-    expectations: dict[str, Any] = {}
-    for key in ("expectation", "agent_expectation", "expect", "expectedAgent", "agentExpectation"):
-        value = step.get(key)
-        if value:
-            expectations["expectation"] = str(value).strip()
-            break
-    for key in (
-        "requires_approval",
-        "expected_tools",
-        "tool",
-        "expected_approval_tool",
-        "expected_status",
-        "response_contains",
-    ):
-        if key in step:
-            expectations[key] = step[key]
-    return expectations
+    return {}
 
 
 def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) -> tuple[bool, str]:
@@ -503,10 +451,8 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
     status = response_status(response)
     supported = {
         "expectation",
-        "agent_expectation",
         "requires_approval",
         "expected_tools",
-        "tool",
         "expected_approval_tool",
         "expected_status",
         "response_contains",
@@ -527,8 +473,8 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
     if expected_status and status != expected_status:
         return False, f"expected status {expected_status!r}, got {status!r}"
 
-    if "expected_tools" in agent or "tool" in agent:
-        expected_tools = str_list(agent.get("expected_tools", agent.get("tool")))
+    if "expected_tools" in agent:
+        expected_tools = str_list(agent.get("expected_tools"))
         observed_tools = str_list(summary.get("tools"))
         if sorted(observed_tools) != sorted(expected_tools):
             return False, f"expected tools {expected_tools!r}, got {observed_tools!r}"
@@ -572,18 +518,10 @@ def step_passed(step: dict[str, Any], final_run: dict[str, Any]) -> tuple[bool, 
     return True, ""
 
 
-def normalize_step(step: dict[str, Any] | str, variables: dict[str, str]) -> dict[str, Any]:
+def normalize_step(step: dict[str, Any], variables: dict[str, str]) -> dict[str, Any]:
     step_number = variables.get("STEP_NUMBER", "0")
-    if isinstance(step, str):
-        return {
-            "id": f"step_{step_number}",
-            "name": f"Step {step_number}",
-            "prompt": step,
-            "kind": "send",
-        }
-
     if not isinstance(step, dict):
-        raise ValueError(f"step {step_number} must be a string or object")
+        raise ValueError(f"step {step_number} must be an object")
 
     normalized = dict(step)
     if "step" in normalized and "id" not in normalized:
@@ -592,86 +530,22 @@ def normalize_step(step: dict[str, Any] | str, variables: dict[str, str]) -> dic
     normalized.setdefault("name", f"Step {normalized['id']}")
 
     user = normalized.get("user")
-    if isinstance(user, dict):
-        message = str(user.get("message") or user.get("content") or "").strip()
-        if not message:
-            raise ValueError(f"step {normalized['id']!r} has empty user.message")
-        normalized["prompt"] = message
-        normalized["kind"] = "send"
-        return normalized
-    if "user" in normalized:
-        message = str(normalized["user"]).strip()
-        if not message:
-            raise ValueError(f"step {normalized['id']!r} has empty user")
-        normalized["prompt"] = message
-        normalized["kind"] = "send"
-        return normalized
-
-    if "send" in normalized:
-        normalized["prompt"] = str(normalized["send"])
-        normalized["kind"] = "send"
-        return normalized
-
-    step_type = str(normalized.get("type") or "").strip().lower()
-    if step_type == "user_message":
-        message = str(normalized.get("message") or normalized.get("content") or "").strip()
-        if not message:
-            raise ValueError(f"step {normalized['id']!r} has empty message")
-        normalized["prompt"] = message
-        normalized["kind"] = "send"
-        return normalized
-
-    if "content" in normalized:
-        normalized["prompt"] = str(normalized["content"])
-        normalized["kind"] = "send"
-        return normalized
-
-    if "reject" in normalized:
-        approval = variables.get("LAST_APPROVAL_ID", "").strip()
-        if not approval:
-            raise ValueError(f"step {normalized['id']!r} asked to reject but no previous approvalId was found")
-        normalized["prompt"] = f"reject {approval}"
-        normalized["kind"] = "reject"
-        normalized["approvalId"] = approval
-        return normalized
-
-    if "revise" in normalized:
-        comment = str(normalized["revise"]).strip()
-        if not comment:
-            raise ValueError(f"step {normalized['id']!r} has empty revise text")
-        normalized["prompt"] = "revise " + comment
-        normalized["kind"] = "revise"
-        return normalized
-
-    if "prompt" in normalized:
-        normalized.setdefault("kind", "send")
-        return normalized
-
-    raise ValueError(f"step {normalized['id']!r} must contain user, send, reject, revise, or prompt")
-
-
-def should_execute_step(step: Any) -> bool:
-    if isinstance(step, str):
-        return True
-    if not isinstance(step, dict):
-        return False
-    step_type = str(step.get("type") or "").strip().lower()
-    if step_type in {"agent_expectation", "expectation"}:
-        return False
-    if step_type in {"user_message", "user_approval", "user_rejection", "user_revision"}:
-        return True
-    role = str(step.get("role") or "user").strip().lower()
-    return role == "user"
+    if not isinstance(user, dict):
+        raise ValueError(f"step {normalized['id']!r} must contain user.message")
+    message = str(user.get("message") or "").strip()
+    if not message:
+        raise ValueError(f"step {normalized['id']!r} has empty user.message")
+    normalized["prompt"] = message
+    return normalized
 
 
 def run_step(
-    step: dict[str, Any] | str,
+    step: dict[str, Any],
     usecase: dict[str, Any],
     variables: dict[str, str],
     session_id: str,
     channel: str,
     timeout_seconds: int,
-    dry_run: bool,
 ) -> dict[str, Any]:
     step = normalize_step(step, variables)
 
@@ -694,26 +568,11 @@ def run_step(
     log(step_separator(result["id"]))
     log("USER >")
     log_block(prompt)
-    agent_expectation = str(
-        agent_expectations.get("expectation") or agent_expectations.get("agent_expectation") or ""
-    ).strip()
+    agent_expectation = str(agent_expectations.get("expectation") or "").strip()
     if agent_expectation:
         log("")
         log("EXPECTED AGENT >")
         log_block(agent_expectation)
-    if dry_run:
-        log("")
-        log("AGENT < dry_run")
-        log_block("(dry-run: agent was not called)")
-        result["messages"].append({
-            "user": prompt,
-            "agent": "(dry-run: agent was not called)",
-            "dryRun": True,
-            "status": "dry_run",
-        })
-        result["passed"] = True
-        return result
-
     first_run = run_agent_command(command, timeout_seconds)
     first_summary = summarize_run(
         first_run,
@@ -742,54 +601,7 @@ def run_step(
     if first_run.get("parseError"):
         log(f"[parse error] {first_run.get('parseError')}")
 
-    auto_approve = bool(step.get("autoApprove", usecase.get("autoApprove", False)))
-    max_auto_approvals = int(step.get("maxAutoApprovals", usecase.get("maxAutoApprovals", 0)) or 0)
-
     current = first_run
-    approvals_used = 0
-    while (
-        auto_approve
-        and response_status(current.get("response")) == "approval_required"
-        and approvals_used < max_auto_approvals
-    ):
-        appr_id = approval_id(current.get("response"))
-        if not appr_id:
-            break
-        approvals_used += 1
-        approve_prompt = f"approve {appr_id}"
-        log("")
-        log("USER >")
-        log_block(approve_prompt)
-        approve_command = build_agent_command(approve_prompt, session_id, channel, usecase, timeout_seconds)
-        pending_tool_ref = approval_tool_ref(current.get("response"))
-        approve_run = run_agent_command(approve_command, timeout_seconds)
-        approve_run["approvalFor"] = appr_id
-        approve_summary = summarize_run(
-            approve_run,
-            approve_prompt,
-            [pending_tool_ref] if pending_tool_ref else None,
-        )
-        approve_run["summary"] = approve_summary
-        result["messages"].append(approve_summary)
-        current = approve_run
-        approve_response = approve_run.get("response")
-        approve_status = response_status(approve_response)
-        approve_approval = approval_id(approve_response)
-        approve_tool = approval_tool_name(approve_response)
-        log("")
-        log(f"AGENT < {approve_status or '(none)'}")
-        if approve_tool:
-            log(f"    tool: {approve_tool}")
-        if approve_approval:
-            log(f"    approval: {approve_approval}")
-        approve_text = user_text_from_response(approve_response)
-        if approve_text:
-            log_block(approve_text)
-        if artifact := artifact_from_response(approve_response):
-            uri = artifact.get("uri") if isinstance(artifact, dict) else ""
-            label = artifact.get("label") if isinstance(artifact, dict) else ""
-            log(f"[artifact] {label or artifact.get('kind', 'artifact')}: {uri or artifact.get('id', '')}")
-
     passed, reason = step_passed(step, current)
     result["passed"] = passed
     final_approval = approval_id(current.get("response"))
@@ -842,15 +654,13 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
         "SESSION_ID": session_id,
         "CHANNEL": channel,
     }
-    if args.dry_run:
-        variables["LAST_APPROVAL_ID"] = "dry_run_approval"
     usecase_variables = usecase.get("variables")
     if isinstance(usecase_variables, dict):
         for key, value in usecase_variables.items():
             variables[str(key)] = str(value)
 
     required_env = usecase.get("requiredEnv", ["OPENAI_API_KEY"])
-    missing = [] if args.dry_run else require_env([str(x) for x in required_env])
+    missing = require_env([str(x) for x in required_env])
     artifact_path = args.artifact_dir.resolve() / usecase_path.name
     log("")
     log("=" * 72)
@@ -867,8 +677,6 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
         "conversation": [],
         "passed": False,
     }
-    if args.dry_run:
-        report["dryRun"] = True
     if missing:
         report["missingEnv"] = missing
 
@@ -889,8 +697,6 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
     try:
         executable_index = 0
         for step in steps:
-            if not should_execute_step(step):
-                continue
             executable_index += 1
             step_variables = dict(variables)
             step_variables["STEP_NUMBER"] = str(executable_index)
@@ -901,7 +707,6 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
                 session_id=session_id,
                 channel=channel,
                 timeout_seconds=args.timeout_seconds,
-                dry_run=args.dry_run,
             )
             for message in step_result.get("messages", []):
                 if not isinstance(message, dict):
@@ -992,10 +797,9 @@ def main() -> int:
     parser.add_argument("--session", default="")
     parser.add_argument("--channel", default="")
     parser.add_argument("--timeout-seconds", type=int, default=300)
-    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    loaded_env = load_default_env_files()
+    load_default_env_files()
     usecase_paths = resolve_usecase_paths(args.usecase)
     log(f"Found {len(usecase_paths)} use case(s)")
     if not usecase_paths:
@@ -1004,7 +808,6 @@ def main() -> int:
 
     runs_completed = 0
     for usecase_path in usecase_paths:
-        args.loaded_env = loaded_env
         code, _summary = run_one_usecase(args, usecase_path)
         runs_completed += 1
         if code != 0:
