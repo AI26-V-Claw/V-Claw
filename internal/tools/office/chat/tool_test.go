@@ -219,6 +219,22 @@ func TestListMessagesRequiresSpace(t *testing.T) {
 	}
 }
 
+func TestListMessagesRejectsPlaceholderSpace(t *testing.T) {
+	connector := &fakeConnector{}
+	service := NewService(connector)
+
+	_, errShape := service.ListMessages(context.Background(), ListMessagesInput{Space: "spaces/UNKNOWN"})
+	if errShape == nil {
+		t.Fatal("expected validation error")
+	}
+	if errShape.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %q", errShape.Code)
+	}
+	if connector.seenParent != "" {
+		t.Fatalf("connector should not be called for placeholder space, got %q", connector.seenParent)
+	}
+}
+
 func TestListMessagesUsesDefaultLimit(t *testing.T) {
 	connector := &fakeConnector{
 		listOutput: chatconnector.ListMessagesOutput{

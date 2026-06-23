@@ -67,6 +67,10 @@ type chatSendRuntimeTool struct {
 	executions *int
 }
 
+type chatListMessagesRuntimeTool struct {
+	executions *int
+}
+
 type gatedDangerousRuntimeTool struct {
 	started    chan struct{}
 	release    chan struct{}
@@ -309,6 +313,35 @@ func (t chatSendRuntimeTool) Execute(_ context.Context, call tools.ToolCall) too
 		Success:        true,
 		ContentForLLM:  "sent",
 		ContentForUser: "sent",
+	}
+}
+
+func (chatListMessagesRuntimeTool) Name() string { return "chat.listMessages" }
+func (chatListMessagesRuntimeTool) Description() string {
+	return "List messages in a Google Chat space."
+}
+func (chatListMessagesRuntimeTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"space":      map[string]any{"type": "string"},
+			"maxResults": map[string]any{"type": "number"},
+		},
+		"required": []string{"space"},
+	}
+}
+func (chatListMessagesRuntimeTool) Capability() tools.Capability { return tools.CapabilityReadOnly }
+func (chatListMessagesRuntimeTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelSensitiveRead }
+func (t chatListMessagesRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	if t.executions != nil {
+		(*t.executions)++
+	}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  "messages",
+		ContentForUser: "messages",
 	}
 }
 
