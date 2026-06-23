@@ -83,6 +83,59 @@ func TestPlanStoreScopesPlansByRun(t *testing.T) {
 	}
 }
 
+func TestPlanStoreReturnsSnapshotAndIncrementsRevision(t *testing.T) {
+	store := NewPlanStore()
+	first := contracts.Plan{Steps: []contracts.PlanStep{{ID: "1", Description: "First", Status: "in_progress"}}}
+	stored, meta := store.Set("session-1", "run-1", first)
+	if meta.Revision != 1 {
+		t.Fatalf("expected first revision 1, got %d", meta.Revision)
+	}
+	stored.Steps[0].Description = "mutated"
+
+	loaded, loadedMeta, ok := store.Get("session-1", "run-1")
+	if !ok {
+		t.Fatal("expected stored plan")
+	}
+	if loadedMeta.Revision != 1 {
+		t.Fatalf("expected loaded revision 1, got %d", loadedMeta.Revision)
+	}
+	if loaded.Steps[0].Description != "First" {
+		t.Fatalf("expected immutable snapshot, got %+v", loaded.Steps[0])
+	}
+
+	store.Set("session-1", "run-1", contracts.Plan{Steps: []contracts.PlanStep{{ID: "2", Description: "Second", Status: "pending"}}})
+	_, secondMeta, ok := store.Get("session-1", "run-1")
+	if !ok {
+		t.Fatal("expected updated plan")
+	}
+	if secondMeta.Revision != 2 {
+		t.Fatalf("expected second revision 2, got %d", secondMeta.Revision)
+	}
+}
+
+func TestPlanStorePrunesExpiredPlans(t *testing.T) {
+	store := NewPlanStore()
+	store.Set("session-1", "run-old", contracts.Plan{Steps: []contracts.PlanStep{{Description: "Old", Status: "cancelled"}}})
+	store.Set("session-1", "run-new", contracts.Plan{Steps: []contracts.PlanStep{{Description: "New", Status: "pending"}}})
+
+	store.mu.Lock()
+	oldRecord := store.plans[planStoreKey("session-1", "run-old")]
+	oldRecord.UpdatedAt = time.Now().Add(-2 * planRetentionTTL)
+	store.plans[planStoreKey("session-1", "run-old")] = oldRecord
+	store.mu.Unlock()
+
+	removed := store.PruneExpired(time.Now())
+	if removed != 1 {
+		t.Fatalf("expected one pruned plan, got %d", removed)
+	}
+	if _, _, ok := store.Get("session-1", "run-old"); ok {
+		t.Fatal("expected old plan to be pruned")
+	}
+	if _, _, ok := store.Get("session-1", "run-new"); !ok {
+		t.Fatal("expected new plan to remain")
+	}
+}
+
 func TestRuntimeActivePlanPromptUsesCurrentRunOnly(t *testing.T) {
 	runtime := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Registry: tools.NewToolRegistry()})
 	oldPlan := contracts.Plan{Steps: []contracts.PlanStep{{ID: "1", Description: "Finish old task", Status: "completed"}}}

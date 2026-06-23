@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
@@ -13,6 +14,8 @@ import (
 )
 
 const PlanToolName = "plan"
+
+const planRetentionTTL = 2 * time.Hour
 
 type planScopeKey struct{}
 
@@ -30,13 +33,27 @@ func planScopeFromContext(ctx context.Context) planScope {
 	return scope
 }
 
+// PlanStore keeps active plans scoped to a single session/run pair. The store
+// is in-memory, synchronized, and returns cloned plan snapshots so continuations
+// never mutate stored state by accident.
 type PlanStore struct {
 	mu    sync.RWMutex
-	plans map[string]contracts.Plan
+	plans map[string]planRecord
+}
+
+type planRecord struct {
+	Plan      contracts.Plan
+	Revision  int64
+	UpdatedAt time.Time
+}
+
+type PlanMetadata struct {
+	Revision  int64
+	UpdatedAt time.Time
 }
 
 func NewPlanStore() *PlanStore {
-	return &PlanStore{plans: make(map[string]contracts.Plan)}
+	return &PlanStore{plans: make(map[string]planRecord)}
 }
 
 func planStoreKey(sessionID string, runID string) string {
@@ -48,34 +65,36 @@ func planStoreKey(sessionID string, runID string) string {
 	return sessionID + "\x00" + runID
 }
 
-func (s *PlanStore) Get(sessionID string, runID string) (contracts.Plan, bool) {
+func (s *PlanStore) Get(sessionID string, runID string) (contracts.Plan, PlanMetadata, bool) {
 	key := planStoreKey(sessionID, runID)
 	if s == nil || key == "" {
-		return contracts.Plan{}, false
+		return contracts.Plan{}, PlanMetadata{}, false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	plan, ok := s.plans[key]
-	if !ok || len(plan.Steps) == 0 {
-		return contracts.Plan{}, false
+	record, ok := s.plans[key]
+	if !ok || len(record.Plan.Steps) == 0 {
+		return contracts.Plan{}, PlanMetadata{}, false
 	}
-	return clonePlan(plan), true
+	return clonePlan(record.Plan), PlanMetadata{Revision: record.Revision, UpdatedAt: record.UpdatedAt}, true
 }
 
-func (s *PlanStore) Set(sessionID string, runID string, plan contracts.Plan) contracts.Plan {
+func (s *PlanStore) Set(sessionID string, runID string, plan contracts.Plan) (contracts.Plan, PlanMetadata) {
 	key := planStoreKey(sessionID, runID)
 	if s == nil || key == "" {
-		return contracts.Plan{}
+		return contracts.Plan{}, PlanMetadata{}
 	}
 	plan = clonePlan(plan)
+	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(plan.Steps) == 0 {
 		delete(s.plans, key)
-		return contracts.Plan{}
+		return contracts.Plan{}, PlanMetadata{}
 	}
-	s.plans[key] = plan
-	return clonePlan(plan)
+	revision := s.plans[key].Revision + 1
+	s.plans[key] = planRecord{Plan: plan, Revision: revision, UpdatedAt: now}
+	return clonePlan(plan), PlanMetadata{Revision: revision, UpdatedAt: now}
 }
 
 func (s *PlanStore) Clear(sessionID string, runID string) {
@@ -86,6 +105,23 @@ func (s *PlanStore) Clear(sessionID string, runID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.plans, key)
+}
+
+func (s *PlanStore) PruneExpired(now time.Time) int {
+	if s == nil {
+		return 0
+	}
+	cutoff := now.Add(-planRetentionTTL)
+	removed := 0
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, record := range s.plans {
+		if record.UpdatedAt.Before(cutoff) {
+			delete(s.plans, key)
+			removed++
+		}
+	}
+	return removed
 }
 
 func clonePlan(plan contracts.Plan) contracts.Plan {
@@ -161,9 +197,9 @@ func (t *PlanTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		return planToolError(call, tools.ErrorInvalidArgument, err.Error())
 	}
 	if ok {
-		plan = t.store.Set(scope.SessionID, scope.RunID, plan)
+		plan, _ = t.store.Set(scope.SessionID, scope.RunID, plan)
 	} else {
-		plan, _ = t.store.Get(scope.SessionID, scope.RunID)
+		plan, _, _ = t.store.Get(scope.SessionID, scope.RunID)
 	}
 
 	response := planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: scope.RunID}
@@ -258,7 +294,7 @@ func (r *Runtime) responsePlan(sessionID string, runID string) *contracts.Plan {
 	if r == nil || r.planStore == nil {
 		return nil
 	}
-	plan, ok := r.planStore.Get(sessionID, runID)
+	plan, _, ok := r.planStore.Get(sessionID, runID)
 	if !ok {
 		return nil
 	}
@@ -269,7 +305,7 @@ func (r *Runtime) activePlanPrompt(sessionID string, runID string) string {
 	if r == nil || r.planStore == nil {
 		return ""
 	}
-	plan, ok := r.planStore.Get(sessionID, runID)
+	plan, _, ok := r.planStore.Get(sessionID, runID)
 	if !ok {
 		return ""
 	}
@@ -288,7 +324,7 @@ func (r *Runtime) hydratePlanFromTranscript(sessionID string, runID string, tran
 	if runID == "" {
 		return
 	}
-	if _, ok := r.planStore.Get(sessionID, runID); ok {
+	if _, _, ok := r.planStore.Get(sessionID, runID); ok {
 		return
 	}
 	for index := len(transcript) - 1; index >= 0; index-- {
