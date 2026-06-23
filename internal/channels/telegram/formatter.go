@@ -192,6 +192,14 @@ func statusTextForRun(run *agent.RunState) string {
 		return "✅ Hoàn thành"
 	case "failed", "blocked", "max_iterations":
 		return "❌ Thất bại"
+	case "cancelled":
+		return "🚫 Đã hủy"
+	case "running":
+		return "⏳ Đang xử lý"
+	case "waiting_approval":
+		return "⏳ Chờ xác nhận"
+	case "waiting_clarification":
+		return "⏳ Chờ thông tin"
 	default:
 		return "⏳ Đang xử lý"
 	}
