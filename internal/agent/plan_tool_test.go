@@ -146,6 +146,22 @@ func TestRuntimeActivePlanPromptUsesCurrentRunOnly(t *testing.T) {
 	}
 }
 
+func TestShouldRetainPlanForResumableRun(t *testing.T) {
+	blockedWithApproval := RunState{Status: RuntimeRunStatusBlocked, PendingActionID: "approval-1"}
+	if !shouldRetainPlanForRun(blockedWithApproval) {
+		t.Fatal("expected blocked run with pending action to retain plan")
+	}
+
+	blockedWithoutPending := RunState{Status: RuntimeRunStatusBlocked}
+	if shouldRetainPlanForRun(blockedWithoutPending) {
+		t.Fatal("expected blocked run without pending state to clear plan")
+	}
+
+	iterationWithoutPending := RunState{Status: RuntimeRunStatusIterationBudget}
+	if shouldRetainPlanForRun(iterationWithoutPending) {
+		t.Fatal("expected terminal iteration budget to clear plan")
+	}
+}
 func TestPlanToolRejectsInvalidStatus(t *testing.T) {
 	tool := NewPlanTool(NewPlanStore())
 	result := tool.Execute(WithPlanScope(context.Background(), "session-1", "run-1"), tools.ToolCall{

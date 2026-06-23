@@ -362,7 +362,13 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	}
 	ctx = withParentRunID(ctx, runState.RunID)
 	ctx = WithPlanScope(ctx, message.SessionID, runState.RunID)
-	defer r.planStore.Clear(message.SessionID, runState.RunID)
+	defer func() {
+		currentState := runState
+		if loaded, loadErr := r.stateStore.GetRun(context.WithoutCancel(ctx), runState.RunID); loadErr == nil {
+			currentState = loaded
+		}
+		r.finishPlanLifecycle(context.WithoutCancel(ctx), currentState)
+	}()
 	ctx = providers.WithUsageRecorder(ctx, func(usage *providers.Usage) {
 		r.recordLLMUsageCost(ctx, &runState, usage)
 	})

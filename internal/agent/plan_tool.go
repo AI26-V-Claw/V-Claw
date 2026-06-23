@@ -124,6 +124,35 @@ func (s *PlanStore) PruneExpired(now time.Time) int {
 	return removed
 }
 
+func shouldRetainPlanForRun(state RunState) bool {
+	hasPending := strings.TrimSpace(state.PendingActionID) != "" || strings.TrimSpace(state.PendingClarificationID) != ""
+	if !hasPending {
+		return false
+	}
+	switch state.Status {
+	case RuntimeRunStatusBlocked, RuntimeRunStatusIterationBudget:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Runtime) finishPlanLifecycle(ctx context.Context, state RunState) {
+	if r == nil || r.planStore == nil {
+		return
+	}
+	r.planStore.PruneExpired(r.now())
+	plan, meta, ok := r.planStore.Get(state.SessionID, state.RunID)
+	if !ok {
+		return
+	}
+	if shouldRetainPlanForRun(state) {
+		r.logger.Info("plan retained", "session_id", state.SessionID, "run_id", state.RunID, "step_count", len(plan.Steps), "revision", meta.Revision, "reason", string(state.Status))
+		return
+	}
+	r.planStore.Clear(state.SessionID, state.RunID)
+	r.logger.Info("plan cleared", "session_id", state.SessionID, "run_id", state.RunID, "step_count", len(plan.Steps), "revision", meta.Revision, "reason", string(state.Status))
+}
 func clonePlan(plan contracts.Plan) contracts.Plan {
 	if len(plan.Steps) == 0 {
 		return contracts.Plan{}
