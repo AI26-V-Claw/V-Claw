@@ -206,7 +206,7 @@ type UpdateEventTool struct {
 func (t *UpdateEventTool) Name() string { return ToolNameUpdateEvent }
 
 func (t *UpdateEventTool) Description() string {
-	return "Update an existing event in Google Calendar. Do not use this to RSVP or change an attendee responseStatus; use calendar.respondEvent for accept, decline, tentative, or needsAction."
+	return "Update an existing event in Google Calendar. When attendees are provided, they are added to the existing attendee list while preserving existing attendee responseStatus values. Do not use this to RSVP or change an attendee responseStatus; use calendar.respondEvent for accept, decline, tentative, or needsAction."
 }
 
 func (t *UpdateEventTool) Parameters() tools.ToolSchema {
@@ -232,7 +232,7 @@ func (t *UpdateEventTool) Parameters() tools.ToolSchema {
 			"attendees": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "Updated list of attendee email addresses only. Do not pass attendee objects or responseStatus here; use calendar.respondEvent for RSVP.",
+				"description": "Attendee email addresses to add. Existing attendees are preserved, including responseStatus. Do not pass attendee objects or responseStatus here; use calendar.respondEvent for RSVP.",
 			},
 			"location": map[string]any{
 				"type":        "string",

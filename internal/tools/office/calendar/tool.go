@@ -57,7 +57,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{
 		Name:             ToolNameUpdateEvent,
 		Owner:            "integration",
-		Description:      "Update an existing event in Google Calendar. Attendees must be valid email addresses — resolve person names with people.searchDirectory before calling this tool.",
+		Description:      "Update an existing event in Google Calendar. Attendees must be valid email addresses — resolve person names with people.searchDirectory before calling this tool. Provided attendees are added to the existing attendee list while preserving existing responseStatus values.",
 		DefaultRiskLevel: "external_write",
 		RequiresApproval: true,
 	},
@@ -347,8 +347,16 @@ func (s *Service) UpdateEvent(ctx context.Context, input UpdateEventInput) (Upda
 		event.EndTime = endTime
 	}
 
-	for _, email := range input.Attendees {
-		event.Attendees = append(event.Attendees, gcal.Attendee{Email: email})
+	if len(input.Attendees) > 0 {
+		current, err := s.connector.GetEvent(ctx, input.EventID)
+		if err != nil {
+			return UpdateEventOutput{}, mapConnectorError(err)
+		}
+		merged, errShape := mergeAttendeesPreservingState(current.Attendees, input.Attendees)
+		if errShape != nil {
+			return UpdateEventOutput{}, errShape
+		}
+		event.Attendees = merged
 	}
 
 	updated, err := s.connector.UpdateEvent(ctx, input.EventID, event)
@@ -357,6 +365,40 @@ func (s *Service) UpdateEvent(ctx context.Context, input UpdateEventInput) (Upda
 	}
 
 	return UpdateEventOutput{Event: toEventSummary(updated)}, nil
+}
+
+func mergeAttendeesPreservingState(existing []gcal.Attendee, additions []string) ([]gcal.Attendee, *ErrorShape) {
+	merged := append([]gcal.Attendee(nil), existing...)
+	seen := make(map[string]struct{}, len(merged))
+	for _, attendee := range merged {
+		email := strings.ToLower(strings.TrimSpace(attendee.Email))
+		if email != "" {
+			seen[email] = struct{}{}
+		}
+	}
+
+	for _, rawEmail := range additions {
+		rawEmail = strings.TrimSpace(rawEmail)
+		if rawEmail == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(rawEmail)
+		if err != nil {
+			return nil, invalidInput("attendee must be a valid email address: " + rawEmail)
+		}
+		email := strings.TrimSpace(parsed.Address)
+		key := strings.ToLower(email)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, gcal.Attendee{Email: email})
+	}
+
+	return merged, nil
 }
 
 // RespondEvent updates one attendee's response status for an event.
