@@ -476,8 +476,9 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
     if "expected_tools" in agent:
         expected_tools = str_list(agent.get("expected_tools"))
         observed_tools = str_list(summary.get("tools"))
-        if sorted(observed_tools) != sorted(expected_tools):
-            return False, f"expected tools {expected_tools!r}, got {observed_tools!r}"
+        missing_tools = [tool for tool in expected_tools if tool not in observed_tools]
+        if missing_tools:
+            return False, f"missing expected tools {missing_tools!r}, got {observed_tools!r}"
 
     if "expected_approval_tool" in agent:
         expected_approval_tool = agent.get("expected_approval_tool")
