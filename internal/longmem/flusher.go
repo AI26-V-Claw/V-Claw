@@ -50,9 +50,10 @@ func (f *Flusher) FlushWithSource(ctx context.Context, input FlushInput) error {
 	existingNotesMD := f.readFile("NOTES.md")
 
 	result, err := f.classifyWithLLM(ctx, summary, existingUserMD, existingNotesMD)
+	result = filterClassifyResult(result)
 	if err != nil || (len(result.UserFacts) == 0 && len(result.NotesFacts) == 0) {
 		// Fallback: regex extraction, all facts go to NOTES.md.
-		fallbackFacts := extractiveFallback(summary)
+		fallbackFacts := filterFactStrings(extractiveFallback(summary))
 		if len(fallbackFacts) == 0 {
 			return nil
 		}
@@ -82,13 +83,14 @@ func (f *Flusher) FlushWithSource(ctx context.Context, input FlushInput) error {
 }
 
 // RecordRepeatedHabits promotes stable repeated user requests into USER.md
-// without waiting for transcript compaction. It uses conservative local
-// heuristics only; compaction remains the broad long-term memory path.
-func (f *Flusher) RecordRepeatedHabits(_ context.Context, input HabitInput) error {
+// without waiting for transcript compaction. It uses the configured LLM to
+// normalize natural-language variants into a canonical habit pattern, with a
+// conservative heuristic fallback when classification is unavailable.
+func (f *Flusher) RecordRepeatedHabits(ctx context.Context, input HabitInput) error {
 	if input.ObservedAt.IsZero() {
 		input.ObservedAt = time.Now().UTC()
 	}
-	candidate, rawText, ok := latestHabitCandidate(input.Transcript)
+	candidate, rawText, ok := f.latestHabitCandidate(ctx, input.Transcript)
 	if !ok {
 		return nil
 	}

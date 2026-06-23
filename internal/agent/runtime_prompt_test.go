@@ -135,6 +135,25 @@ func TestLongTermMemoryNotInjectedWhenLoaderNil(t *testing.T) {
 	}
 }
 
+func TestLongTermMemoryCanBeSuppressedForFreshWorkspaceRead(t *testing.T) {
+	r := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}})
+	r.ltMemLoader = &fakeLTMemLoader{content: "## Memory\n- Deleted Event should not appear"}
+
+	messages := r.withRuntimeSystemPromptOptions(
+		[]providers.Message{{Role: providers.MessageRoleUser, Content: "lich tuan nay co gi"}},
+		sessions.SessionMemory{Summary: "session context remains available"},
+		nil,
+		runtimePromptOptions{IncludeLongTermMemory: false},
+	)
+	joined := providerMessagesContent(messages)
+	if strings.Contains(joined, "Deleted Event should not appear") {
+		t.Fatalf("long-term memory should be suppressed, got: %s", joined)
+	}
+	if !strings.Contains(joined, "session context remains available") {
+		t.Fatalf("session memory should still be included by this prompt option, got: %s", joined)
+	}
+}
+
 func TestRuntimePromptRoutesDriveMoveToMoveFile(t *testing.T) {
 	// Move rules live in the drive.moveFile tool description, not the system prompt.
 	found := false

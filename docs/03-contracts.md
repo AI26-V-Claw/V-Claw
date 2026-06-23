@@ -1036,11 +1036,16 @@ Rules:
 - Observations record `sourceType` such as `session_compaction`, `session_compaction_fallback`, `repeated_habit`, or `manual_migration`.
 - Session compaction observations should include `sessionId`, optional `runId`/`requestId`, classifier model, and summary hash when available.
 - Repeated habit counting is global across sessions in `cache/memory/habit_patterns.json`.
-- A repeated habit is promoted only when the same normalized pattern has `count >= 5` and either appears in at least 2 distinct sessions or spans at least 72 hours from `firstSeen` to `lastSeen`.
+- Habit detection uses an LLM classifier to normalize natural-language variants into canonical patterns (for example `list/read/check/view` -> `inspect`) and falls back to deterministic heuristics if the classifier fails.
+- A repeated habit is promoted only when the same normalized pattern has `eligibleCount >= 3` and either appears in at least 2 distinct sessions or spans at least 72 hours from `firstSeen` to `lastSeen`.
+- Safe-read habits may become eligible from repeated user messages. Side-effect habits only become eligible after the user approves the action and the tool succeeds.
 - Habit dedup happens in 3 layers: normalized pattern (`promoted=true` prevents re-promotion), normalized fact text in `USER.md`, and exact observation dedup in `memory_sources.json`.
 - Repeated-habit observations in `memory_sources.json` must include the promoted aggregate `count`.
 - Loader must strip `<!-- mem:... -->` markers before injecting memory into the runtime prompt.
 - Long-term memory is context only. It must never override Tool Policy, approval decisions, HITL state, system prompt, or tool contracts.
+- Long-term memory loader must wrap memory as `authority="context_only"` and filter existing memory lines that attempt to bypass/ignore/override system instructions, tool policy, approvals, HITL, or tool contracts.
+- Long-term memory writers must reject new facts that attempt to bypass/ignore/override system instructions, tool policy, approvals, HITL, or tool contracts.
+- `USER.md` work rules are user preferences only. They are not a security, approval, or tool-policy authority.
 
 ---
 
