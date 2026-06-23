@@ -105,9 +105,21 @@ func TestRuntimeBypassesRedundantClarificationForSafeChat(t *testing.T) {
 	if provider.calls[0].ToolChoice != "auto" {
 		t.Fatalf("expected auto tool choice, got %q", provider.calls[0].ToolChoice)
 	}
-	if len(provider.calls[0].Tools) != 1 || provider.calls[0].Tools[0].Name != clarifyToolName {
+	if !providerToolNamesInclude(provider.calls[0].Tools, clarifyToolName) {
 		t.Fatalf("expected clarify tool to be exposed, got %#v", provider.calls[0].Tools)
 	}
+	if !providerToolNamesInclude(provider.calls[0].Tools, PlanToolName) {
+		t.Fatalf("expected plan tool to be exposed, got %#v", provider.calls[0].Tools)
+	}
+}
+
+func providerToolNamesInclude(definitions []providers.ToolDefinition, name string) bool {
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRuntimeIncludesAttachmentPathsInProviderUserMessage(t *testing.T) {
@@ -537,6 +549,55 @@ func TestRuntimeClarifiesCalendarCreateEventWhenCurrentRequestIsUnderspecified(t
 	}
 }
 
+func TestCalendarCreateEventEvidenceRequiresExplicitStartAndEndTime(t *testing.T) {
+	args := map[string]any{
+		"title": "meeting",
+		"start": "2026-06-23T10:00:00+07:00",
+		"end":   "2026-06-23T11:00:00+07:00",
+	}
+
+	missing := missingCalendarCreateEventEvidence("create meeting tomorrow", args)
+	if !containsString(missing, "start") || !containsString(missing, "end") {
+		t.Fatalf("date-only request must require both start and end, got %#v", missing)
+	}
+
+	missing = missingCalendarCreateEventEvidence("create meeting tomorrow at 10am", args)
+	if containsString(missing, "start") || !containsString(missing, "end") {
+		t.Fatalf("single start time should only require end/duration, got %#v", missing)
+	}
+
+	missing = missingCalendarCreateEventEvidence("create meeting tomorrow at 10am and send email to tungpt@vclaw.site", args)
+	if containsString(missing, "start") || !containsString(missing, "end") {
+		t.Fatalf("email recipient should not be mistaken for end time evidence, got %#v", missing)
+	}
+
+	missing = missingCalendarCreateEventEvidence("create meeting tomorrow from 10am to 11am", args)
+	if len(missing) != 0 {
+		t.Fatalf("explicit start and end should be complete, got %#v", missing)
+	}
+}
+
+func TestCalendarCreateEventClarificationAsksForStartAndEndTogether(t *testing.T) {
+	question := missingToolArgumentQuestion("calendar.createEvent", []string{"start", "end"})
+	if !strings.Contains(question, "bắt đầu") || !strings.Contains(question, "kết thúc") {
+		t.Fatalf("expected combined start/end clarification, got %q", question)
+	}
+}
+
+func TestRuntimePromptPreservesCalendarAndEmailAsSeparateActions(t *testing.T) {
+	prompt := runtimeSystemPrompt(runtimeTestMessage().Timestamp)
+	for _, expected := range []string{
+		"Adding Calendar attendees",
+		"does NOT satisfy a separate user request to send an email",
+		"calendar.createEvent plus the Gmail draft/send workflow",
+		"Attendees are only Calendar participants",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("runtime prompt missing %q", expected)
+		}
+	}
+}
+
 func TestRuntimeRemovesStaleAttendeesFromActiveFollowUpApproval(t *testing.T) {
 	executions := 0
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
@@ -665,6 +726,20 @@ Xin vui lòng xác nhận để tôi tiến hành tạo sự kiện này.`,
 	}
 	if executions != 0 {
 		t.Fatalf("calendar create must wait for approval, executions=%d", executions)
+	}
+}
+
+func TestTextualApprovalRetryDoesNotCatchConfirmationEmailCompletion(t *testing.T) {
+	text := `Email xác nhận tham gia sự kiện "N1 Long-term Test" đã được gửi đến Bao Le. Nếu bạn cần hỗ trợ thêm việc gì, hãy cho tôi biết nhé!`
+	if shouldRetryTextualApprovalAsToolCall(text) {
+		t.Fatalf("confirmation email completion must not be treated as an approval request")
+	}
+}
+
+func TestTextualApprovalRetryStillCatchesPlainApprovalRequest(t *testing.T) {
+	text := "Xin vui lòng xác nhận để tôi tiến hành gửi email này."
+	if !shouldRetryTextualApprovalAsToolCall(text) {
+		t.Fatalf("plain approval request without tool call should still be retried")
 	}
 }
 
@@ -1329,7 +1404,7 @@ func TestRuntimeDoesNotBatchWhenParallelDisabled(t *testing.T) {
 func TestRuntimePassesCompactGmailListResultWithoutTruncation(t *testing.T) {
 	gmailContent := `{"Query":"in:inbox ((after:2026/06/11 before:2026/06/12) OR (after:2026/06/09 before:2026/06/10))","Messages":[` +
 		`{"ID":"msg-1","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Mời tham dự sự kiện Test Sprint2","Date":"Wed, 10 Jun 2026 21:04:15 -0700"},` +
-		`{"ID":"msg-2","From":"Slack <no-reply@email.slackhq.com>","Subject":"How to start a conversation in Slack","Date":"Tue, 09 Jun 2026 10:53:25 -0600"},` +
+		`{"ID":"msg-2","From":"V-Claw <no-reply@vclaw.site>","Subject":"How to start a conversation","Date":"Tue, 09 Jun 2026 10:53:25 -0600"},` +
 		`{"ID":"msg-3","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Thông báo tham gia sự kiện Test memory for Sprint2","Date":"Mon, 8 Jun 2026 21:36:50 -0700"},` +
 		`{"ID":"msg-4","From":"Duy Quang Ho Trong <quanghtd@vclaw.site>","Subject":"Re: thông tin lịch trình hôm nay","Date":"Mon, 8 Jun 2026 20:37:29 -0700"}` +
 		`]}`
@@ -3571,7 +3646,7 @@ func TestRuntimeToolTimeoutReturnsFailedErrorShape(t *testing.T) {
 	}
 }
 
-func TestRuntimeStopsAtMaxIterations(t *testing.T) {
+func TestRuntimeStopsAtIterationBudget(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_1", Name: "calculator", Arguments: map[string]any{"operation": "add", "a": 1, "b": 1}}}}},
 		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_2", Name: "calculator", Arguments: map[string]any{"operation": "add", "a": 2, "b": 2}}}}},
@@ -3581,19 +3656,45 @@ func TestRuntimeStopsAtMaxIterations(t *testing.T) {
 		t.Fatalf("register calculator: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:      provider,
-		Registry:      registry,
-		MaxIterations: 2,
+		Provider:        provider,
+		Registry:        registry,
+		IterationBudget: 2,
 	})
 
 	response, err := runtime.Run(context.Background(), runtimeTestMessage())
 	if err != nil {
 		t.Fatalf("run runtime: %v", err)
 	}
-	if response.Status != contracts.AgentStatusMaxIterationsReached {
-		t.Fatalf("expected max iterations reached, got %#v", response)
+	if response.Status != contracts.AgentStatusIterationBudgetExhausted {
+		t.Fatalf("expected iteration budget exhausted, got %#v", response)
 	}
-	if response.Error == nil || response.Error.Code != contracts.ErrorMaxIterationsExceeded {
-		t.Fatalf("expected max iteration error, got %#v", response.Error)
+	if response.Error == nil || response.Error.Code != contracts.ErrorIterationBudgetExhausted {
+		t.Fatalf("expected iteration budget error, got %#v", response.Error)
+	}
+}
+
+func TestRuntimeRefundsPlanOnlyIterationBudget(t *testing.T) {
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{{ID: "call_plan", Name: PlanToolName, Arguments: map[string]any{"steps": []any{map[string]any{"id": "1", "description": "Plan", "status": "in_progress"}}}}}}},
+		{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "final result"}},
+	}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:        provider,
+		Registry:        tools.NewToolRegistry(),
+		IterationBudget: 1,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed after refunded plan iteration, got %#v", response)
+	}
+	if response.Message != "final result" {
+		t.Fatalf("unexpected message: %q", response.Message)
+	}
+	if len(provider.calls) != 2 {
+		t.Fatalf("expected plan turn plus final turn, got %d", len(provider.calls))
 	}
 }

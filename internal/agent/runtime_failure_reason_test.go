@@ -24,9 +24,9 @@ func TestOrchestration_StatusAlignment(t *testing.T) {
 		t.Errorf("canceled mismatch: orchestration=%q runtime=%q",
 			orchestration.RunStatusCanceled, RuntimeRunStatusCancelled)
 	}
-	if string(orchestration.RunStatusMaxIteration) != string(RuntimeRunStatusMaxIterations) {
-		t.Errorf("max_iteration mismatch: orchestration=%q runtime=%q",
-			orchestration.RunStatusMaxIteration, RuntimeRunStatusMaxIterations)
+	if string(orchestration.RunStatusIterationBudget) != string(RuntimeRunStatusIterationBudget) {
+		t.Errorf("iteration_budget mismatch: orchestration=%q runtime=%q",
+			orchestration.RunStatusIterationBudget, RuntimeRunStatusIterationBudget)
 	}
 }
 

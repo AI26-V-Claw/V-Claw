@@ -3,6 +3,7 @@ package calendar
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"vclaw/internal/connectors/google/common"
@@ -78,6 +79,34 @@ func (c *Client) UpdateEvent(ctx context.Context, eventID string, e Event) (Even
 		return Event{}, fmt.Errorf("calendar: update event: %w", common.MapError(err))
 	}
 	return toDomainEvent(res), nil
+}
+
+// RespondEvent updates the response status for an attendee on an event.
+// If email is empty, it tries to update the attendee marked as self.
+func (c *Client) RespondEvent(ctx context.Context, eventID string, email string, responseStatus string) (Event, error) {
+	current, err := c.GetEvent(ctx, eventID)
+	if err != nil {
+		return Event{}, err
+	}
+
+	email = strings.ToLower(strings.TrimSpace(email))
+	target := -1
+	for i, attendee := range current.Attendees {
+		if email != "" && strings.EqualFold(strings.TrimSpace(attendee.Email), email) {
+			target = i
+			break
+		}
+		if email == "" && attendee.Self {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		return Event{}, fmt.Errorf("calendar: respond event: %w", common.ErrNotFound)
+	}
+
+	current.Attendees[target].ResponseStatus = responseStatus
+	return c.UpdateEvent(ctx, eventID, Event{Attendees: current.Attendees})
 }
 
 // DeleteEvent removes an event from the primary calendar.

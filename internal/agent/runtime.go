@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	DefaultMaxIterations    = 8
+	DefaultIterationBudget  = 8
 	DefaultToolTimeout      = 30 * time.Second
 	DefaultProviderTimeout  = 60 * time.Second
 	approvalTTL             = 10 * time.Minute
@@ -48,7 +48,7 @@ type RuntimeConfig struct {
 	StateStore                 RuntimeStateStore
 	Logger                     *slog.Logger
 	ToolHooks                  toolhooks.Hooks
-	MaxIterations              int
+	IterationBudget            int
 	ProviderTimeout            time.Duration
 	ToolTimeout                time.Duration
 	ParallelExecutionEnabled   bool
@@ -82,7 +82,7 @@ type Runtime struct {
 	approvalMu                 sync.Mutex
 	pendingApprovals           map[string]pendingApproval
 	pendingBySession           map[string]string
-	maxIterations              int
+	iterationBudgetLimit       int
 	providerTimeout            time.Duration
 	toolTimeout                time.Duration
 	parallelExecutionEnabled   bool
@@ -101,6 +101,7 @@ type Runtime struct {
 	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
 	promptVersion string
+	planStore     *PlanStore
 	subtasks      *subtaskCoordinator
 	ltMemLoader   longTermMemoryLoader  // nil = disabled
 	ltMemFlusher  longTermMemoryFlusher // nil = disabled
@@ -112,6 +113,7 @@ type longTermMemoryLoader interface {
 
 type longTermMemoryFlusher interface {
 	Flush(context.Context, string) error
+	RecordRepeatedHabits(context.Context, longmem.HabitInput) error
 }
 
 type pendingApproval struct {
@@ -142,9 +144,9 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if config.Telemetry != nil && provider != nil {
 		provider = config.Telemetry.WrapProvider(provider)
 	}
-	maxIterations := config.MaxIterations
-	if maxIterations <= 0 {
-		maxIterations = DefaultMaxIterations
+	iterationBudgetLimit := config.IterationBudget
+	if iterationBudgetLimit <= 0 {
+		iterationBudgetLimit = DefaultIterationBudget
 	}
 	toolTimeout := config.ToolTimeout
 	if toolTimeout <= 0 {
@@ -226,6 +228,12 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
 	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
 	subtasks.now = now
+	planStore := NewPlanStore()
+	if config.Registry != nil {
+		if _, found := config.Registry.GetDefinition(PlanToolName); !found {
+			_ = config.Registry.RegisterWithEntry(NewPlanTool(planStore), tools.ToolRegistryEntry{Group: "builtin", Owner: "agent_core"})
+		}
+	}
 	var ltLoader longTermMemoryLoader
 	var ltFlusher longTermMemoryFlusher
 	if dir := strings.TrimSpace(config.LongMemDir); dir != "" && config.Provider != nil {
@@ -245,7 +253,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		toolHooks:                  hooks,
 		pendingApprovals:           make(map[string]pendingApproval),
 		pendingBySession:           make(map[string]string),
-		maxIterations:              maxIterations,
+		iterationBudgetLimit:       iterationBudgetLimit,
 		providerTimeout:            providerTimeout,
 		toolTimeout:                toolTimeout,
 		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
@@ -261,6 +269,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		contextWindow:              contextWindow,
 		memoryClassifierModel:      memoryClassifierModel(config),
 		promptVersion:              promptVersion,
+		planStore:                  planStore,
 		subtasks:                   subtasks,
 		ltMemLoader:                ltLoader,
 		ltMemFlusher:               ltFlusher,
@@ -352,6 +361,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		return base, nil
 	}
 	ctx = withParentRunID(ctx, runState.RunID)
+	ctx = WithPlanScope(ctx, message.SessionID, runState.RunID)
 	ctx = providers.WithUsageRecorder(ctx, func(usage *providers.Usage) {
 		r.recordLLMUsageCost(ctx, &runState, usage)
 	})
@@ -389,6 +399,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	if err != nil {
 		return failStartedRun(internalError("load session transcript: "+err.Error(), contracts.ErrorSourceSession))
 	}
+	r.hydratePlanFromTranscript(message.SessionID, transcript)
 	if errShape := r.refreshSessionSummary(ctx, message.SessionID, transcript); errShape != nil {
 		return failStartedRun(errShape)
 	}
@@ -506,6 +517,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		errShape.Message = strings.Replace(errShape.Message, "append message:", "append user message:", 1)
 		return failStartedRun(errShape)
 	}
+	r.recordRepeatedLongTermHabits(ctx, message.SessionID, runState.RunID, message.RequestID, transcript)
 	if clarification := r.referenceClarificationResponse(message, referenceResolution); clarification != nil {
 		if errShape := r.appendAssistantTranscriptForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, clarification.Message); errShape != nil {
 			clarification.Error = errShape
@@ -556,8 +568,14 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	}
 
 	toolResults := []contracts.ToolResult{}
+	iterationBudget := NewIterationBudget(r.iterationBudgetLimit)
+	housekeepingRefunds := 0
+	housekeepingRefundLimit := r.iterationBudgetLimit
 agentLoop:
-	for iteration := 1; iteration <= r.maxIterations; iteration++ {
+	for iteration := 1; ; iteration++ {
+		if !iterationBudget.Consume() {
+			break agentLoop
+		}
 		runState.IterationCount = iteration
 		if errShape := r.updateRunState(ctx, runState); errShape != nil {
 			base.Error = errShape
@@ -572,6 +590,9 @@ agentLoop:
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
 		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
+		if prompt := r.activePlanPrompt(message.SessionID); prompt != "" {
+			providerMessages = append([]providers.Message{{Role: providers.MessageRoleSystem, Content: prompt}}, providerMessages...)
+		}
 		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
 			Model:      r.model,
 			Messages:   providerMessages,
@@ -672,6 +693,7 @@ If required information is missing, ask one concise clarification question inste
 				Message:     assistantMessage.Content,
 				Data:        r.traceData(referenceResolution),
 				ToolResults: toolResults,
+				Plan:        r.responsePlan(message.SessionID),
 			}, nil
 		}
 
@@ -777,6 +799,10 @@ If required information is missing, ask one concise clarification question inste
 				base.Error = toolErrorShape(batchResults[0].result)
 				base.Message = base.Error.Message
 				return base, nil
+			}
+			if onlyPlanToolCalls(assistantMessage.ToolCalls) && housekeepingRefunds < housekeepingRefundLimit {
+				iterationBudget.Refund()
+				housekeepingRefunds++
 			}
 			continue agentLoop
 		}
@@ -1142,9 +1168,13 @@ If required information is missing, ask one concise clarification question inste
 				return base, nil
 			}
 		}
+		if onlyPlanToolCalls(assistantMessage.ToolCalls) && housekeepingRefunds < housekeepingRefundLimit {
+			iterationBudget.Refund()
+			housekeepingRefunds++
+		}
 	}
 
-	updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusMaxIterations, string(orchestration.FailureReasonMaxIteration))
+	updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusIterationBudget, string(orchestration.FailureReasonIterationBudget))
 	if errShape != nil {
 		base.Error = errShape
 		base.Message = errShape.Message
@@ -1154,14 +1184,14 @@ If required information is missing, ask one concise clarification question inste
 	return contracts.AgentResponse{
 		RequestID:     message.RequestID,
 		SessionID:     message.SessionID,
-		Status:        contracts.AgentStatusMaxIterationsReached,
+		Status:        contracts.AgentStatusIterationBudgetExhausted,
 		FailureReason: updatedState.FailureReason,
-		Message:       "agent exceeded max iterations",
+		Message:       "agent exhausted iteration budget",
 		Data:          r.traceData(referenceResolution),
 		ToolResults:   toolResults,
 		Error: &contracts.ErrorShape{
-			Code:      contracts.ErrorMaxIterationsExceeded,
-			Message:   "agent exceeded max iterations",
+			Code:      contracts.ErrorIterationBudgetExhausted,
+			Message:   "agent exhausted iteration budget",
 			Source:    contracts.ErrorSourceAgent,
 			Retryable: false,
 		},

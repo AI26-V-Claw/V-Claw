@@ -926,6 +926,24 @@ func TestCreateAndUpdateDraftSchemasRequireSubject(t *testing.T) {
 	}
 }
 
+func TestDraftSchemaDescribesReadableBodyFormatting(t *testing.T) {
+	schema := NewTool(ToolNameCreateDraft, nil).Parameters()
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("create draft schema missing properties: %#v", schema)
+	}
+	textBody, ok := properties["textBody"].(map[string]any)
+	if !ok {
+		t.Fatalf("textBody schema missing: %#v", properties["textBody"])
+	}
+	description := fmt.Sprint(textBody["description"])
+	for _, want := range []string{"paragraph breaks", "newline characters", "Do not collapse"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("textBody description missing %q: %q", want, description)
+		}
+	}
+}
+
 func TestGmailListSchemasBoundMaxResults(t *testing.T) {
 	for _, name := range []string{ToolNameListEmails, ToolNameListThreads, ToolNameListDrafts} {
 		schema := NewTool(name, nil).Parameters()

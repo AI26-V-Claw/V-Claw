@@ -174,7 +174,7 @@ func runStatusEventType(status agent.RuntimeRunStatus) (string, bool) {
 	switch status {
 	case agent.RuntimeRunStatusCompleted:
 		return "agent.run.completed", true
-	case agent.RuntimeRunStatusFailed, agent.RuntimeRunStatusMaxIterations:
+	case agent.RuntimeRunStatusFailed, agent.RuntimeRunStatusIterationBudget:
 		return "agent.run.failed", true
 	case agent.RuntimeRunStatusBlocked:
 		return "agent.run.cancelled", true
@@ -241,13 +241,13 @@ func (s *Store) FindOrCreateAction(ctx context.Context, record agent.ActionRecor
 			SessionID:         record.SessionID,
 			ToolCallID:        record.ToolCallID,
 			ApprovalID:        record.ApprovalID,
-			ToolName:           record.ToolName,
-			RiskLevel:          string(record.RiskLevel),
-			PolicyDecision:     string(contracts.RiskDecisionRequiresApproval),
-			Model:              record.Model,
-			PromptVersion:      record.PromptVersion,
-			ToolSchemaVersion:  record.ToolSchemaVersion,
-			PolicyDecisionRef:  record.PolicyDecisionRef,
+			ToolName:          record.ToolName,
+			RiskLevel:         string(record.RiskLevel),
+			PolicyDecision:    string(contracts.RiskDecisionRequiresApproval),
+			Model:             record.Model,
+			PromptVersion:     record.PromptVersion,
+			ToolSchemaVersion: record.ToolSchemaVersion,
+			PolicyDecisionRef: record.PolicyDecisionRef,
 			Details: map[string]any{
 				"actionId": record.ActionID,
 				"summary":  record.ApprovalSummary,
@@ -1082,15 +1082,13 @@ func coalesce(values ...string) string {
 }
 
 // channelFromSessionID derives the originating channel from the session id
-// prefix (telegram_chat_*, slack_channel_*). Returns "" when the prefix is
+// prefix (telegram_chat_*). Returns "" when the prefix is
 // unrecognized so the column stays NULL rather than holding a guess.
 func channelFromSessionID(sessionID string) string {
 	sessionID = strings.TrimSpace(sessionID)
 	switch {
 	case strings.HasPrefix(sessionID, "telegram_"):
 		return "telegram"
-	case strings.HasPrefix(sessionID, "slack_"):
-		return "slack"
 	default:
 		return ""
 	}

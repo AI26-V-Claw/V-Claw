@@ -7,7 +7,7 @@ flowchart LR
     vclaw(["V-Claw Assistant\n(GoClaw Gateway + Agent Loop)"])
 
     gws(["Google Workspace\n(Gmail / Calendar / Chat)"])
-    msg(["Message Channels\n(Telegram / Slack)"])
+    msg(["Message Channels\n(Telegram)"])
     sandbox(["Sandbox OS / File System"])
 
     user --> |"Gửi tin"| msg
@@ -39,7 +39,6 @@ flowchart LR
   subgraph CH["Channels"]
     direction TB
     TG["Telegram"]
-    SLACK["Slack"]
   end
 
   subgraph BE["Backend"]
@@ -111,7 +110,7 @@ flowchart LR
 
 | Khối | Trách nhiệm |
 |---|---|
-| Channels | Nhận/gửi tin qua Telegram, Slack hoặc chat app tương đương. |
+| Channels | Nhận/gửi tin qua Telegram hoặc chat app tương đương. |
 | Backend | Chuẩn hóa request từ channel, gọi Agent Core, trả response về channel. |
 | Agent Core | Điều phối agent loop, session/memory, model calls và tool calls. |
 | Tool Layer | Đăng ký tool, validate schema, gọi Workspace/Sandbox/Internal tools. |

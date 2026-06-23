@@ -78,6 +78,19 @@ func TestLoaderSafetyLabelAlwaysFirst(t *testing.T) {
 	}
 }
 
+func TestLoaderStripsMemoryMarkers(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "USER.md", "# User\n- Name: Quang <!-- mem:abc123 -->\n")
+
+	got := NewLoader(dir).Load()
+	if strings.Contains(got, "<!-- mem:") {
+		t.Fatalf("loader should strip memory markers, got: %q", got)
+	}
+	if !strings.Contains(got, "Name: Quang") {
+		t.Fatalf("loader removed fact text, got: %q", got)
+	}
+}
+
 func TestLoaderSkipsUnreadableFile(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "USER.md", "# Thông tin người dùng\n- tên: Quang\n")

@@ -1,4 +1,4 @@
-﻿{
+{
     "schema_version":  "n2-e2e-scenario/v2",
     "scenario_id":  "n2.2-resilience-continuation-mega-flow",
     "title":  "N2.2 resilience, memory/context chaining, local safety, and fallback mega-flow",
@@ -159,6 +159,6 @@
                         ],
     "readiness_points":  40,
     "agent":  {
-                  "max_iterations":  20
+                  "iteration_budget":  20
               }
 }

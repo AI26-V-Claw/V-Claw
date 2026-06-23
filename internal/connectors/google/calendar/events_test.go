@@ -71,6 +71,18 @@ func TestEvents_ErrorBranches(t *testing.T) {
 			}
 		})
 
+		t.Run("GetEvent_"+tt.name, func(t *testing.T) {
+			client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
+				googleErrorResponse(w, tt.handlerCode, "mock error")
+			})
+			defer ts.Close()
+
+			_, err := client.GetEvent(context.Background(), "id1")
+			if !errors.Is(err, tt.expectedErr) {
+				t.Errorf("expected error %v, got %v", tt.expectedErr, err)
+			}
+		})
+
 		t.Run("UpdateEvent_"+tt.name, func(t *testing.T) {
 			client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
 				googleErrorResponse(w, tt.handlerCode, "mock error")
@@ -94,6 +106,47 @@ func TestEvents_ErrorBranches(t *testing.T) {
 				t.Errorf("expected error %v, got %v", tt.expectedErr, err)
 			}
 		})
+	}
+}
+
+func TestGetEvent_Success(t *testing.T) {
+	client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(gcal.Event{
+			Id:       "event_detail",
+			Summary:  "Project review",
+			HtmlLink: "https://calendar.google.com/calendar/event?eid=event_detail",
+			Organizer: &gcal.EventOrganizer{
+				Email:       "organizer@example.com",
+				DisplayName: "Organizer Name",
+			},
+			Creator: &gcal.EventCreator{
+				Email:       "creator@example.com",
+				DisplayName: "Creator Name",
+			},
+			Attendees: []*gcal.EventAttendee{
+				{Email: "alice@example.com", DisplayName: "Alice", ResponseStatus: "accepted"},
+			},
+		})
+	})
+	defer ts.Close()
+
+	event, err := client.GetEvent(context.Background(), "event_detail")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if event.ID != "event_detail" || event.Title != "Project review" {
+		t.Fatalf("unexpected event returned: %+v", event)
+	}
+	if event.Organizer.Email != "organizer@example.com" || event.Organizer.DisplayName != "Organizer Name" {
+		t.Fatalf("organizer was not mapped: %+v", event.Organizer)
+	}
+	if event.Creator.Email != "creator@example.com" || event.Creator.DisplayName != "Creator Name" {
+		t.Fatalf("creator was not mapped: %+v", event.Creator)
+	}
+	if len(event.Attendees) != 1 || event.Attendees[0].DisplayName != "Alice" {
+		t.Fatalf("attendees were not mapped: %+v", event.Attendees)
 	}
 }
 
@@ -170,6 +223,92 @@ func TestUpdateEvent_Success(t *testing.T) {
 	}
 	if e.EventLink != "https://calendar.google.com/calendar/event?eid=updated_event" {
 		t.Errorf("unexpected event link: %q", e.EventLink)
+	}
+}
+
+func TestUpdateEvent_PreservesAttendeeResponseStatusInPatchPayload(t *testing.T) {
+	client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		var payload gcal.Event
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode patch payload: %v", err)
+		}
+		if len(payload.Attendees) != 2 {
+			t.Fatalf("expected 2 attendees in patch payload, got %+v", payload.Attendees)
+		}
+		if payload.Attendees[0].Email != "quanghtd@vclaw.site" || payload.Attendees[0].ResponseStatus != "accepted" {
+			t.Fatalf("existing attendee responseStatus was not preserved in payload: %+v", payload.Attendees[0])
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(gcal.Event{
+			Id:        "updated_id",
+			Attendees: payload.Attendees,
+		})
+	})
+	defer ts.Close()
+
+	event, err := client.UpdateEvent(context.Background(), "updated_id", Event{
+		Attendees: []Attendee{
+			{Email: "quanghtd@vclaw.site", DisplayName: "Quang", ResponseStatus: "accepted"},
+			{Email: "new@example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(event.Attendees) != 2 || event.Attendees[0].ResponseStatus != "accepted" {
+		t.Fatalf("unexpected updated event attendees: %+v", event.Attendees)
+	}
+}
+
+func TestRespondEvent_SuccessUsesSelfWhenEmailEmpty(t *testing.T) {
+	patchCalled := false
+	client, ts := mockServer(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(gcal.Event{
+				Id:      "respond_id",
+				Summary: "RSVP Event",
+				Attendees: []*gcal.EventAttendee{
+					{Email: "other@example.com", ResponseStatus: "needsAction"},
+					{Email: "quanghtd@vclaw.site", Self: true, ResponseStatus: "needsAction"},
+				},
+			})
+		case http.MethodPatch:
+			patchCalled = true
+			var payload gcal.Event
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			if len(payload.Attendees) != 2 || payload.Attendees[1].ResponseStatus != "accepted" {
+				t.Fatalf("unexpected patch attendees: %+v", payload.Attendees)
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(gcal.Event{
+				Id:      "respond_id",
+				Summary: "RSVP Event",
+				Attendees: []*gcal.EventAttendee{
+					{Email: "quanghtd@vclaw.site", Self: true, ResponseStatus: "accepted"},
+				},
+			})
+		default:
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+	})
+	defer ts.Close()
+
+	event, err := client.RespondEvent(context.Background(), "respond_id", "", "accepted")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !patchCalled {
+		t.Fatal("expected PATCH to be called")
+	}
+	if len(event.Attendees) != 1 || event.Attendees[0].ResponseStatus != "accepted" {
+		t.Fatalf("unexpected responded event: %+v", event)
 	}
 }
 

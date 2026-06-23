@@ -32,7 +32,7 @@ const (
 	// tool layer (e.g. "connector:tavily").
 	SourceConnectorPrefix = "connector:"
 	// SourceUserChannel marks records that originate from a user-facing channel
-	// (telegram/slack/cli) rather than a tool execution.
+	// (telegram/cli) rather than a tool execution.
 	SourceUserChannel = "channel"
 )
 

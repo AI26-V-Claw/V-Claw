@@ -11,10 +11,10 @@ import (
 )
 
 type LogQuery struct {
-	Limit int
-	Since time.Time
-	Level string
-	Tool  string
+	Limit     int
+	Since     time.Time
+	Level     string
+	Tool      string
 	RequestID string
 	SessionID string
 }
@@ -82,7 +82,7 @@ func QueryLogs(ctx context.Context, databaseURL string, query LogQuery) ([]LogEv
 
 	if tables["agent_runs"] {
 		parts = append(parts, fmt.Sprintf(`SELECT ar.started_at AS ts,
-CASE WHEN ar.status IN ('failed', 'blocked', 'max_iterations') THEN 'error' ELSE 'info' END AS level,
+CASE WHEN ar.status IN ('failed', 'blocked', 'iteration_budget') THEN 'error' ELSE 'info' END AS level,
 'run' AS event_type,
 COALESCE(ar.status, '') AS status,
 COALESCE(ar.data->>'trace_id', '') AS trace_id,
@@ -94,7 +94,7 @@ COALESCE(ar.original_goal, '') AS message,
 '' AS error_text
 FROM agent_runs ar
 WHERE ($1::timestamptz IS NULL OR ar.started_at >= $1)
-  AND ($%d::text IS NULL OR CASE WHEN ar.status IN ('failed', 'blocked', 'max_iterations') THEN 'error' ELSE 'info' END = $%d)
+  AND ($%d::text IS NULL OR CASE WHEN ar.status IN ('failed', 'blocked', 'iteration_budget') THEN 'error' ELSE 'info' END = $%d)
   AND ($%d::text IS NULL OR ar.request_id = $%d)
   AND ($%d::text IS NULL OR ar.session_id = $%d)
 `, argLevel, argLevel, argRequestID, argRequestID, argSessionID, argSessionID))
@@ -212,15 +212,15 @@ WHERE ae.error_message IS NOT NULL AND ae.error_message <> ''
 }
 
 type LatestRun struct {
-	RunID     string
-	RequestID string
-	SessionID string
+	RunID        string
+	RequestID    string
+	SessionID    string
 	OriginalGoal string
-	Status    string
-	TraceID   string
-	TraceURL  string
-	StartedAt time.Time
-	CompletedAt *time.Time
+	Status       string
+	TraceID      string
+	TraceURL     string
+	StartedAt    time.Time
+	CompletedAt  *time.Time
 }
 
 func QueryLatestRun(ctx context.Context, databaseURL string) (LatestRun, error) {
@@ -266,7 +266,7 @@ func QueryRecentRunsForSession(ctx context.Context, databaseURL string, sessionI
 	runs := []LatestRun{}
 	for rows.Next() {
 		var (
-			run LatestRun
+			run         LatestRun
 			completedAt sql.NullTime
 		)
 		if err := rows.Scan(&run.RunID, &run.RequestID, &run.SessionID, &run.OriginalGoal, &run.Status, &run.TraceID, &run.StartedAt, &completedAt); err != nil {

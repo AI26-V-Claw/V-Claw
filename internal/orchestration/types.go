@@ -13,7 +13,7 @@ const (
 	RunStatusBlocked              RunStatus = "blocked"
 	RunStatusTimeout              RunStatus = "timeout"
 	RunStatusCanceled             RunStatus = "cancelled"
-	RunStatusMaxIteration         RunStatus = "max_iterations"
+	RunStatusIterationBudget      RunStatus = "iteration_budget"
 )
 
 type RunResult struct {
@@ -41,7 +41,7 @@ type ChildResult struct {
 
 func (r RunResult) IsTerminal() bool {
 	switch r.Status {
-	case RunStatusCompleted, RunStatusFailed, RunStatusBlocked, RunStatusTimeout, RunStatusCanceled, RunStatusMaxIteration:
+	case RunStatusCompleted, RunStatusFailed, RunStatusBlocked, RunStatusTimeout, RunStatusCanceled, RunStatusIterationBudget:
 		return true
 	default:
 		return false

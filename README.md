@@ -35,7 +35,7 @@ Start with these documents:
 Additional setup guides:
 
 - [Google Workspace Setup](configs/google/README.md) - Google Cloud OAuth, credentials, auth, and Google API smoke tests.
-- [Telegram/Slack Channel Setup](internal/channels/README.md) - Telegram bot, Slack Socket Mode, HITL approval, and channel runtime commands.
+- [Telegram Channel Setup](internal/channels/README.md) - Telegram bot setup, HITL approval, and channel runtime commands.
 
 When documents and code differ, treat `docs/03-contracts.md` and `ACTIVE_MODULES.md` as the intended design baseline for new work, then update code or docs explicitly as part of the task.
 
@@ -67,7 +67,7 @@ Copy-Item .env.example .env
 
 Repo `.env` values for runtime provider config such as `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_BASE_URL` take precedence over inherited shell exports.
 
-Google Workspace setup lives in [configs/google/README.md](configs/google/README.md). Telegram and Slack setup lives in [internal/channels/README.md](internal/channels/README.md).
+Google Workspace setup lives in [configs/google/README.md](configs/google/README.md). Telegram setup lives in [internal/channels/README.md](internal/channels/README.md).
 
 ## Development note
 

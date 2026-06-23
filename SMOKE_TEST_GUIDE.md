@@ -31,17 +31,17 @@ go build -o vclaw.exe ./cmd/vclaw
 
 ---
 
-## Scenario 2 — Max Iteration (failureReason = max_iteration)
+## Scenario 2 — Iteration Budget (failureReason = iteration_budget)
 
-**Mục tiêu:** `status = max_iterations_reached`, `failureReason = "max_iteration"`
+**Mục tiêu:** `status = iteration_budget_exhausted`, `failureReason = "iteration_budget"`
 
 ```powershell
-.\vclaw.exe agent -prompt "Hãy đếm từ 1 đến 1000, mỗi số trên một dòng, không bỏ qua số nào" -session "smoke-maxiter" -max-iterations 2 -json
+.\vclaw.exe agent -prompt "Hãy đếm từ 1 đến 1000, mỗi số trên một dòng, không bỏ qua số nào" -session "smoke-iteration-budget" -iteration-budget 2 -json
 ```
 
 **Verify trong JSON output:**
-- `"status": "max_iterations_reached"` ✓
-- `"failureReason": "max_iteration"` ✓
+- `"status": "iteration_budget_exhausted"` ✓
+- `"failureReason": "iteration_budget"` ✓
 
 ---
 
@@ -198,7 +198,7 @@ Sau mỗi scenario, kiểm tra JSON output:
 | Scenario | Expected status | Expected failureReason |
 |---|---|---|
 | 1. Happy path | `completed` | *(không xuất hiện)* |
-| 2. Max iteration | `max_iterations_reached` | `max_iteration` |
+| 2. Max iteration | `iteration_budget_exhausted` | `iteration_budget` |
 | 3. Provider error | `failed` | `provider_error` |
 | 4. Cancellation | `failed` | `canceled` |
 | 5. Approve + complete | `completed` | *(không xuất hiện)* |
