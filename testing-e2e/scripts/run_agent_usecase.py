@@ -713,7 +713,7 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
                 if not isinstance(message, dict):
                     continue
                 turn_entry: dict[str, Any] = {
-                    "step": step_result.get("id"),
+                    "step": int(step_result.get("id")),
                     "passed": bool(step_result.get("passed")),
                 }
                 if failure_reason := str(step_result.get("failureReason") or "").strip():
