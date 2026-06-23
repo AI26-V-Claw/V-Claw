@@ -1434,7 +1434,32 @@ func normalizeSpaceName(value string) string {
 			break
 		}
 	}
-	return strings.TrimSpace(value[:end])
+	space := strings.TrimSpace(value[:end])
+	if !isUsableSpaceName(space) {
+		return ""
+	}
+	return space
+}
+
+func isUsableSpaceName(space string) bool {
+	space = strings.TrimSpace(space)
+	resourceID, ok := strings.CutPrefix(space, "spaces/")
+	if !ok {
+		return false
+	}
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
+		return false
+	}
+	if strings.ContainsAny(resourceID, "{}<>") {
+		return false
+	}
+	switch strings.ToUpper(resourceID) {
+	case "UNKNOWN", "PLACEHOLDER", "REPLACE_ME", "SPACE", "SPACE_ID", "SPACEID":
+		return false
+	default:
+		return true
+	}
 }
 
 func normalizeMemberUserNames(values []string) []string {

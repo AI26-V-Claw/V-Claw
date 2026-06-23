@@ -33,9 +33,9 @@ const (
 )
 
 var (
-	emailAnswerPattern  = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
-	timeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
-	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giờ)(\s*\d{1,2})?\b`)
+	emailAnswerPattern    = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
+	timeAnswerPattern     = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
+	viTimeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giờ)(\s*\d{1,2})?\b`)
 	runtimeRunCancelToken uint64
 )
 
@@ -942,23 +942,7 @@ If required information is missing, ask one concise clarification question inste
 				definition.Name = providerToolCall.Name
 			}
 
-			decision := r.stampPolicyRef(runState.RunID, providerToolCall.ID, r.decideToolCall(ctx, providerToolCall, definition, found))
-			r.logger.Info("agent tool call proposed",
-				"request_id", message.RequestID,
-				"session_id", message.SessionID,
-				"iteration", iteration,
-				"tool_call_id", providerToolCall.ID,
-				"tool_name", providerToolCall.Name,
-				"decision", decision.Decision,
-				"risk_level", decision.RiskLevel,
-				"arguments", logToolArguments(providerToolCall.Name, providerToolCall.Arguments),
-			)
 			toolCallMissingFields := pendingMissingFieldsForToolCall(providerToolCall, definition, found, activeClarification, currentRequestText)
-			if errShape := r.recordRuntimeRiskDecision(ctx, runState, providerToolCall, decision); errShape != nil {
-				base.Error = errShape
-				base.Message = errShape.Message
-				return base, nil
-			}
 			if clarification := r.toolCallClarificationResponse(message, providerToolCall, definition, found, activeClarification, currentRequestText); clarification != nil {
 				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusWaitingClarification, clarification.Message, ""); errShape != nil {
 					base.Error = errShape
@@ -1046,6 +1030,22 @@ If required information is missing, ask one concise clarification question inste
 					clarification.Status = contracts.AgentStatusFailed
 				}
 				return *clarification, nil
+			}
+			decision := r.stampPolicyRef(runState.RunID, providerToolCall.ID, r.decideToolCall(ctx, providerToolCall, definition, found))
+			r.logger.Info("agent tool call proposed",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"iteration", iteration,
+				"tool_call_id", providerToolCall.ID,
+				"tool_name", providerToolCall.Name,
+				"decision", decision.Decision,
+				"risk_level", decision.RiskLevel,
+				"arguments", logToolArguments(providerToolCall.Name, providerToolCall.Arguments),
+			)
+			if errShape := r.recordRuntimeRiskDecision(ctx, runState, providerToolCall, decision); errShape != nil {
+				base.Error = errShape
+				base.Message = errShape.Message
+				return base, nil
 			}
 			switch decision.Decision {
 			case contracts.RiskDecisionAllow:
