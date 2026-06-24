@@ -216,7 +216,6 @@ def evaluate_agent_expectations(
             step["llmEvaluation"] = result
             if result.get("passed") is False:
                 reason = str(result.get("reason") or "LLM evaluation failed").strip()
-                step["passed"] = False
                 step["failureReason"] = reason
                 if summary.get("status") == "passed":
                     step_id = str(step.get("step", "")).strip()
@@ -251,7 +250,6 @@ def step_summaries_from_report(
         user = turn.get("user") if isinstance(turn.get("user"), dict) else {}
         step: dict[str, Any] = {
             "step": turn.get("step"),
-            "passed": turn.get("passed") is True,
         }
         if message := str(user.get("message") or "").strip():
             step["userMessage"] = message
