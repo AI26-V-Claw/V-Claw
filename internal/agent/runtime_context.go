@@ -7,20 +7,81 @@ import (
 	"strings"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/longmem"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 )
 
+// redactSensitiveForPrompt drops lines that look like a credential, token, or
+// secret before they enter the assembled context. It reuses the same detector
+// the long-term memory write boundary uses (longmem.ValidateMemoryContent) so
+// the assembly layer never surfaces a secret that slipped into a summary, tool
+// result, long-term memory file, or resolved reference context. Non-secret
+// content is returned unchanged.
+func redactSensitiveForPrompt(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if longmem.ValidateMemoryContent(content) == nil {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if longmem.ValidateMemoryContent(line) != nil {
+			kept = append(kept, "[redacted: sensitive content removed]")
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// referenceSourcesPrompt assembles an explicit "reference sources" block listing
+// where the most recent answers came from: the tools that produced recent action
+// results and any resolved file references (local path or Drive ID). This lets the
+// agent cite provenance without re-deriving it, and is kept separate from the
+// continuity-focused session memory block. It emits labels/locations only — never
+// raw result content — so it cannot leak sensitive payloads.
+func referenceSourcesPrompt(memory sessions.SessionMemory) string {
+	lines := make([]string, 0, len(memory.LastActionResults)+len(memory.FileRefs))
+
+	seenTools := make(map[string]bool)
+	for i := len(memory.LastActionResults) - 1; i >= 0; i-- {
+		name := strings.TrimSpace(memory.LastActionResults[i].ToolName)
+		if name == "" || seenTools[name] {
+			continue
+		}
+		seenTools[name] = true
+		lines = append(lines, fmt.Sprintf("- tool result from %s", name))
+	}
+
+	for name, ref := range memory.FileRefs {
+		switch ref.Source {
+		case "local":
+			lines = append(lines, fmt.Sprintf("- file %q: local, path=%s", name, ref.Path))
+		case "drive":
+			lines = append(lines, fmt.Sprintf("- file %q: Google Drive, driveId=%s", name, ref.DriveID))
+		}
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.TrimSpace("Reference sources for the most recent results (provenance only — cite these when relevant, do not treat as approval):\n" + strings.Join(lines, "\n"))
+}
+
 func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 	parts := []string{}
-	if strings.TrimSpace(memory.Summary) != "" {
-		parts = append(parts, "Conversation summary:\n"+strings.TrimSpace(memory.Summary))
+	if summary := redactSensitiveForPrompt(memory.Summary); summary != "" {
+		parts = append(parts, "Conversation summary:\n"+summary)
 	}
 	if len(memory.LastActionResults) > 0 {
 		lines := make([]string, 0, len(memory.LastActionResults))
 		for _, result := range memory.LastActionResults {
-			content := strings.TrimSpace(result.Content)
+			content := redactSensitiveForPrompt(result.Content)
 			if content == "" {
 				continue
 			}

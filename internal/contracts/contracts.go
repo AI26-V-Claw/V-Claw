@@ -107,7 +107,7 @@ type GovernanceMetadata struct {
 	// (e.g. "claude-opus-4-8", "gemini-1.5-pro").
 	Model string `json:"model,omitempty"`
 	// PromptVersion is a short content-hash fingerprint of the effective system
-	// prompt (runtimeSystemPrompt + SOUL.md). Changes automatically when the
+	// prompt (runtimeSystemPrompt). Changes automatically when the
 	// prompt changes; computed by governance.PromptVersion().
 	PromptVersion string `json:"promptVersion,omitempty"`
 	// ToolSchemaVersion is a short content-hash fingerprint of the tool's

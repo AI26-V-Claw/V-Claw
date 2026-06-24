@@ -64,7 +64,7 @@ type ToolCall struct {
 
 // GenerateRequest contains all parameters for an LLM generation request.
 type GenerateRequest struct {
-	// SystemPrompt is the system-level instruction (e.g., from SOUL.md)
+	// SystemPrompt is the system-level instruction (e.g., the runtime system prompt)
 	SystemPrompt string
 
 	// UserPrompt is the user's input or the agent's query

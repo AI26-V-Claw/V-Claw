@@ -64,7 +64,6 @@ type RuntimeConfig struct {
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
 	MemoryClassifierModel      string
-	SoulPrompt                 string
 	LongMemDir                 string
 }
 
@@ -98,7 +97,7 @@ type Runtime struct {
 	contextWindow              int
 	memoryClassifierModel      string
 	// promptVersion is the content-hash fingerprint of the effective system
-	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
+	// prompt (runtimeSystemPrompt). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
 	promptVersion string
 	planStore     *PlanStore
@@ -223,9 +222,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	}
 	// Compute the prompt version once at construction. We pass a zero time so
 	// the dynamic "current time" segment of runtimeSystemPrompt doesn't shift
-	// the hash on every Runtime creation. SOUL.md is hashed alongside so any
-	// edit there bumps the version automatically.
-	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
+	// the hash on every Runtime creation. runtimeSystemPrompt() is the single
+	// source of truth for the effective system prompt; configs/SOUL.md is
+	// reference documentation only and is not injected at runtime.
+	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}))
 	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
 	subtasks.now = now
 	planStore := NewPlanStore()
