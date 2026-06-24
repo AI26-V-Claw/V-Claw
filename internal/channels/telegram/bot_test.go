@@ -227,6 +227,76 @@ func (f *fakeHandler) RecordIgnored(_ contracts.UserMessage, _ string) {
 	f.ignored++
 }
 
+func TestTelegramProcessWorkerDrainsPendingMessagesForBusyChat(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "ok",
+		},
+	}
+	bot := New("token", 123, t.TempDir(), handler, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":90}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	bot.busySessions.Store(int64(55), struct{}{})
+	if queued := bot.enqueuePendingUpdate(telegramUpdate{
+		UpdateID: 2,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "second",
+		},
+	}); !queued {
+		t.Fatal("expected pending update to be queued")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		bot.processWorker(ctx)
+		close(done)
+	}()
+
+	bot.workCh <- telegramUpdate{
+		UpdateID: 1,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "first",
+		},
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if len(handler.receivedAll) == 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("expected two handler messages, got %#v", handler.receivedAll)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+
+	if handler.receivedAll[0].Text != "first" || handler.receivedAll[1].Text != "second" {
+		t.Fatalf("expected FIFO handling, got %#v", handler.receivedAll)
+	}
+	if _, busy := bot.busySessions.Load(int64(55)); busy {
+		t.Fatal("expected busy session to be released after pending drain")
+	}
+}
+
 func TestProcessUpdateRoutesTelegramMessageToAgentRuntime(t *testing.T) {
 	handler := &fakeHandler{
 		outbound: contracts.AgentResponse{
