@@ -18,6 +18,7 @@ const (
 	defaultMaxSummaryTokens         = 2048
 	defaultMaxMergedSummaryBytes    = 8192
 	defaultMessageCountThreshold    = 150
+	defaultMessageCountKeepMessages = 100
 )
 
 // CompactorConfig holds tunable parameters for the compactor.
@@ -57,6 +58,11 @@ type CompactorConfig struct {
 	// fires for sessions with many short messages that never exceed the token
 	// threshold. Default: 150. Set to a very large number to disable.
 	MessageCountThreshold int
+
+	// MessageCountKeepMessages is the number of recent messages to preserve
+	// verbatim when compaction is triggered by message count rather than token
+	// pressure. Default: 100. Token-triggered compaction still uses KeepTokenRatio.
+	MessageCountKeepMessages int
 }
 
 // CompactorGuard carries runtime callbacks that the compactor checks before
@@ -145,6 +151,9 @@ func NewCompactor(provider providers.Provider, config CompactorConfig, logger *s
 	if config.MessageCountThreshold <= 0 {
 		config.MessageCountThreshold = defaultMessageCountThreshold
 	}
+	if config.MessageCountKeepMessages <= 0 {
+		config.MessageCountKeepMessages = defaultMessageCountKeepMessages
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -193,6 +202,10 @@ func (c *Compactor) MaybeCompact(
 	if !tokenExceeds && !countExceeds {
 		return CompactionResult{SkipReason: "below_threshold"}, nil
 	}
+	triggerReason := "token"
+	if !tokenExceeds {
+		triggerReason = "message_count"
+	}
 
 	// --- Per-session lock: skip if already compacting ---
 	mu := c.sessionMutex(sessionID)
@@ -203,7 +216,7 @@ func (c *Compactor) MaybeCompact(
 	defer mu.Unlock()
 
 	// --- Split transcript into toSummarize and kept ---
-	splitIdx, strategy := c.splitTranscript(transcript)
+	splitIdx, strategy := c.splitTranscript(transcript, triggerReason)
 	if splitIdx <= 0 {
 		return CompactionResult{SkipReason: "too_few_messages"}, nil
 	}
@@ -264,10 +277,6 @@ func (c *Compactor) MaybeCompact(
 		KeptMessageCount:   len(kept),
 	}
 
-	triggerReason := "token"
-	if !tokenExceeds {
-		triggerReason = "message_count"
-	}
 	c.logger.Info("session compacted",
 		"session_id", sessionID,
 		"trigger", triggerReason,
@@ -290,13 +299,28 @@ func (c *Compactor) MaybeCompact(
 // splitTranscript returns the index that divides transcript into
 // [toSummarize : kept] and the strategy name used.
 //
-// When KeepTokenRatio > 0, it walks backwards from the end accumulating
+// When compaction is triggered by message count, it keeps a bounded number of
+// recent messages so the transcript moves far enough below the count threshold.
+//
+// When compaction is triggered by token pressure and KeepTokenRatio > 0, it
+// walks backwards from the end accumulating
 // tokens until the budget (ContextWindow * KeepTokenRatio) is exhausted —
 // this is the "token" strategy.
 //
 // When KeepTokenRatio == 0, it falls back to keeping the last
 // KeepLastMessages messages — this is the "message" strategy.
-func (c *Compactor) splitTranscript(transcript []providers.Message) (splitIdx int, strategy string) {
+func (c *Compactor) splitTranscript(transcript []providers.Message, triggerReason string) (splitIdx int, strategy string) {
+	if triggerReason == "message_count" {
+		keepLast := c.config.MessageCountKeepMessages
+		if keepLast >= len(transcript) {
+			keepLast = len(transcript) * 2 / 3
+		}
+		if keepLast <= 0 {
+			return 0, "message"
+		}
+		return len(transcript) - keepLast, "message"
+	}
+
 	if c.config.KeepTokenRatio > 0 {
 		budget := int(float64(c.config.ContextWindow) * c.config.KeepTokenRatio)
 		idx := keepByTokenBudget(transcript, budget)

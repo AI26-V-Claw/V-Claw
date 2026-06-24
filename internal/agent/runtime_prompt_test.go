@@ -236,3 +236,17 @@ func TestRuntimePromptRequiresReadableEmailParagraphBreaks(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimePromptBoundsSandboxPDFExtractionOutput(t *testing.T) {
+	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
+	for _, want := range []string{
+		"NEVER print the entire extracted document text",
+		"under 4000 characters",
+		"For PDF summarization specifically",
+		"Do not do text += page_text for every page followed by print(text)",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("runtime prompt missing sandbox output guidance %q", want)
+		}
+	}
+}
