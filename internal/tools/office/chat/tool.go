@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -74,8 +75,8 @@ var RegistryEntries = []ToolRegistryEntry{
 		Name:             ToolNameListMessages,
 		Owner:            "integration",
 		Description:      "List messages in a Google Chat space. space must be a resource name like spaces/AAAA — resolve a group name with chat.listSpaces first.",
-		DefaultRiskLevel: "sensitive_read",
-		RequiresApproval: true,
+		DefaultRiskLevel: "safe_read",
+		RequiresApproval: false,
 	},
 	{
 		Name:             ToolNameSendMessage,
@@ -491,9 +492,16 @@ func (s *Service) SendMessage(ctx context.Context, input SendMessageInput) (Send
 	if s == nil || s.connector == nil {
 		return SendMessageOutput{}, &ErrorShape{Code: "INTERNAL_ERROR", Message: "chat connector is not configured"}
 	}
-	space := normalizeSpaceName(input.Space)
+	rawSpace := strings.TrimSpace(input.Space)
+	recipientEmail := strings.TrimSpace(input.RecipientEmail)
+	space := normalizeSpaceName(rawSpace)
+	if rawSpace != "" && space == "" {
+		return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "space must contain a valid resource name like spaces/AAAA"}
+	}
+	if space != "" && recipientEmail != "" {
+		return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "space and recipientEmail are mutually exclusive"}
+	}
 	if space == "" {
-		recipientEmail := strings.TrimSpace(input.RecipientEmail)
 		if recipientEmail == "" {
 			return SendMessageOutput{}, &ErrorShape{Code: "INVALID_INPUT", Message: "space or recipientEmail is required"}
 		}
@@ -917,7 +925,7 @@ func (ListMessagesTool) Capability() tools.Capability {
 }
 
 func (ListMessagesTool) RiskLevel() tools.RiskLevel {
-	return tools.RiskLevelSensitiveRead
+	return tools.RiskLevelSafeRead
 }
 
 func (t ListMessagesTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
@@ -1539,8 +1547,8 @@ func MapError(err error) *ErrorShape {
 	if googleconnector.IsNetworkError(err) {
 		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "network error contacting Chat API: " + err.Error(), Retryable: true}
 	}
-	gerr, ok := err.(*googleapi.Error)
-	if !ok {
+	var gerr *googleapi.Error
+	if !errors.As(err, &gerr) {
 		return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error()}
 	}
 	message := googleAPIErrorMessage(gerr)
@@ -1550,8 +1558,10 @@ func MapError(err error) *ErrorShape {
 		return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Chat", message), Retryable: true}
 	case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
 		return &ErrorShape{Code: office.ErrorAuthMissingScope, Message: office.FriendlyGoogleToolError(office.ErrorAuthMissingScope, "Google Chat", message)}
-	case gerr.Code == http.StatusBadRequest || gerr.Code == http.StatusNotFound:
-		return &ErrorShape{Code: "INVALID_INPUT", Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Chat", message)}
+	case gerr.Code == http.StatusBadRequest:
+		return &ErrorShape{Code: "INVALID_INPUT", Message: office.FriendlyGoogleToolError("INVALID_INPUT", "Google Chat", message)}
+	case gerr.Code == http.StatusNotFound:
+		return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Chat", message)}
 	case gerr.Code == http.StatusTooManyRequests:
 		return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Chat", message), Retryable: true}
 	case gerr.Code >= 500:

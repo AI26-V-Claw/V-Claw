@@ -18,6 +18,7 @@ import (
 	"vclaw/internal/contracts"
 	"vclaw/internal/policies"
 	"vclaw/internal/tools"
+	"vclaw/internal/tools/memory"
 	"vclaw/internal/tools/office/calendar"
 	"vclaw/internal/tools/office/chat"
 	"vclaw/internal/tools/office/docs"
@@ -28,7 +29,6 @@ import (
 	"vclaw/internal/tools/os/filesystem"
 	sandbox "vclaw/internal/tools/system/sandbox"
 	"vclaw/internal/tools/web"
-	"vclaw/internal/tools/memory"
 )
 
 const docsToolRegistryPath = "../../docs/03-contracts.md"
@@ -405,6 +405,32 @@ func TestGoogleWorkspaceToolMetadataNoDrift(t *testing.T) {
 	}
 }
 
+func TestChatListMessagesMatchesContract(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	if err := chat.RegisterTools(registry, nil); err != nil {
+		t.Fatalf("register chat tools: %v", err)
+	}
+
+	def, ok := registry.GetDefinition(chat.ToolNameListMessages)
+	if !ok {
+		t.Fatalf("tool %q not registered", chat.ToolNameListMessages)
+	}
+	if def.Capability != tools.CapabilityReadOnly {
+		t.Fatalf("%s capability = %s, want read_only", chat.ToolNameListMessages, def.Capability)
+	}
+	if def.RiskLevel != tools.RiskLevelSafeRead {
+		t.Fatalf("%s risk = %s, want safe_read", chat.ToolNameListMessages, def.RiskLevel)
+	}
+	if def.RequiresApproval {
+		t.Fatalf("%s requires approval = true, want false", chat.ToolNameListMessages)
+	}
+
+	decision := policies.NewToolPolicy().DecideToolCall("call_chat_list_messages", def, true, time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC))
+	if decision.Decision != contracts.RiskDecisionAllow {
+		t.Fatalf("%s policy decision = %s, want allow", chat.ToolNameListMessages, decision.Decision)
+	}
+}
+
 func TestDriveDocsSheetsReadFirstAndWriteToolsRequireHITL(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	for _, registerer := range []func(*tools.ToolRegistry) error{
@@ -730,4 +756,3 @@ func TestToolResultErrorShapeContract(t *testing.T) {
 		t.Error("ToolResult.ContentForLLM must not be empty even for error results")
 	}
 }
-

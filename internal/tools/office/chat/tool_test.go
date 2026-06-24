@@ -3,7 +3,9 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,8 @@ import (
 
 	chatconnector "vclaw/internal/connectors/google/chat"
 	"vclaw/internal/tools"
+
+	"google.golang.org/api/googleapi"
 )
 
 type fakeConnector struct {
@@ -24,6 +28,8 @@ type fakeConnector struct {
 	addedMember     chatconnector.Membership
 	err             error
 	seenParent      string
+	sentSpace       string
+	createdInput    chatconnector.CreateSpaceInput
 	uploadRefs      []string
 	uploadedFiles   []string
 }
@@ -60,10 +66,11 @@ func (f *fakeConnector) ListMessages(_ context.Context, parent string, _ int64, 
 	return f.listOutput, nil
 }
 
-func (f *fakeConnector) CreateTextMessage(_ context.Context, _ string, _ string, options chatconnector.MessageCreateOptions) (chatconnector.Message, error) {
+func (f *fakeConnector) CreateTextMessage(_ context.Context, space string, _ string, options chatconnector.MessageCreateOptions) (chatconnector.Message, error) {
 	if f.err != nil {
 		return chatconnector.Message{}, f.err
 	}
+	f.sentSpace = space
 	f.uploadRefs = append([]string(nil), options.AttachmentUploadRefs...)
 	return f.sent, nil
 }
@@ -79,10 +86,11 @@ func (f *fakeConnector) DeleteMessage(context.Context, string, bool) error {
 	return f.err
 }
 
-func (f *fakeConnector) CreateSpace(context.Context, chatconnector.CreateSpaceInput) (chatconnector.Space, error) {
+func (f *fakeConnector) CreateSpace(_ context.Context, input chatconnector.CreateSpaceInput) (chatconnector.Space, error) {
 	if f.err != nil {
 		return chatconnector.Space{}, f.err
 	}
+	f.createdInput = input
 	return f.createdSpace, nil
 }
 
@@ -281,6 +289,76 @@ func TestSendMessageRequiresSpace(t *testing.T) {
 	}
 }
 
+func TestSendMessageAllowsRecipientEmailDM(t *testing.T) {
+	connector := &fakeConnector{
+		spacesOutput: chatconnector.ListSpacesOutput{
+			Spaces: []chatconnector.Space{{Name: "spaces/DM", SpaceType: "DIRECT_MESSAGE"}},
+		},
+		membersByParent: map[string]chatconnector.ListMembersOutput{
+			"spaces/DM": {Members: []chatconnector.Membership{{MemberName: "users/bao@vclaw.site"}}},
+		},
+		sent: chatconnector.Message{Name: "spaces/DM/messages/msg"},
+	}
+	service := NewService(connector)
+
+	output, errShape := service.SendMessage(context.Background(), SendMessageInput{
+		RecipientEmail: "bao@vclaw.site",
+		Text:           "hello",
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Message)
+	}
+	if output.Message.Name != "spaces/DM/messages/msg" {
+		t.Fatalf("unexpected message: %#v", output.Message)
+	}
+	if connector.sentSpace != "spaces/DM" {
+		t.Fatalf("expected message sent to resolved DM space, got %q", connector.sentSpace)
+	}
+	if connector.createdInput.SpaceType != "" {
+		t.Fatalf("existing DM should not create a new space, got %#v", connector.createdInput)
+	}
+}
+
+func TestSendMessageRejectsInvalidSpaceBeforeDMFallback(t *testing.T) {
+	connector := &fakeConnector{}
+	service := NewService(connector)
+
+	_, errShape := service.SendMessage(context.Background(), SendMessageInput{
+		Space:          "spaces/UNKNOWN",
+		RecipientEmail: "bao@vclaw.site",
+		Text:           "hello",
+	})
+	if errShape == nil {
+		t.Fatal("expected validation error")
+	}
+	if errShape.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %q", errShape.Code)
+	}
+	if connector.seenParent != "" || connector.sentSpace != "" {
+		t.Fatalf("connector should not be called for invalid space, seenParent=%q sentSpace=%q", connector.seenParent, connector.sentSpace)
+	}
+}
+
+func TestSendMessageRejectsSpaceAndRecipientEmail(t *testing.T) {
+	connector := &fakeConnector{}
+	service := NewService(connector)
+
+	_, errShape := service.SendMessage(context.Background(), SendMessageInput{
+		Space:          "spaces/A",
+		RecipientEmail: "bao@vclaw.site",
+		Text:           "hello",
+	})
+	if errShape == nil {
+		t.Fatal("expected validation error")
+	}
+	if errShape.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %q", errShape.Code)
+	}
+	if connector.sentSpace != "" {
+		t.Fatalf("connector should not send when target inputs are ambiguous, got %q", connector.sentSpace)
+	}
+}
+
 func TestSendMessageRequiresTextOrAttachment(t *testing.T) {
 	service := NewService(&fakeConnector{})
 
@@ -341,6 +419,26 @@ func TestSendMessageMapsConnectorError(t *testing.T) {
 	}
 	if errShape.Code != "INTERNAL_ERROR" {
 		t.Fatalf("expected INTERNAL_ERROR, got %q", errShape.Code)
+	}
+}
+
+func TestMapErrorUnwrapsGoogleAPIError(t *testing.T) {
+	errShape := MapError(fmt.Errorf("wrapped: %w", &googleapi.Error{Code: http.StatusNotFound, Message: "not found"}))
+	if errShape == nil {
+		t.Fatal("expected error shape")
+	}
+	if errShape.Code != "RESOURCE_NOT_FOUND" {
+		t.Fatalf("expected RESOURCE_NOT_FOUND, got %q", errShape.Code)
+	}
+}
+
+func TestMapErrorBadRequestIsInvalidInput(t *testing.T) {
+	errShape := MapError(&googleapi.Error{Code: http.StatusBadRequest, Message: "bad request"})
+	if errShape == nil {
+		t.Fatal("expected error shape")
+	}
+	if errShape.Code != "INVALID_INPUT" {
+		t.Fatalf("expected INVALID_INPUT, got %q", errShape.Code)
 	}
 }
 
@@ -442,8 +540,8 @@ func TestToolRiskMetadata(t *testing.T) {
 	if findTool.Capability() != tools.CapabilityReadOnly || findTool.RiskLevel() != tools.RiskLevelSafeRead {
 		t.Fatalf("find spaces by members tool should be safe read")
 	}
-	if listTool.Capability() != tools.CapabilityReadOnly || listTool.RiskLevel() != tools.RiskLevelSensitiveRead {
-		t.Fatalf("list tool should be sensitive read")
+	if listTool.Capability() != tools.CapabilityReadOnly || listTool.RiskLevel() != tools.RiskLevelSafeRead {
+		t.Fatalf("list tool should be safe read")
 	}
 	if sendTool.Capability() != tools.CapabilityMutating || sendTool.RiskLevel() != tools.RiskLevelExternalWrite {
 		t.Fatalf("send tool should be external write")
@@ -474,7 +572,7 @@ func TestRegisterToolsMetadata(t *testing.T) {
 	assertToolMetadata(t, registry, ToolNameListSpaces, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
 	assertToolMetadata(t, registry, ToolNameListMembers, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
 	assertToolMetadata(t, registry, ToolNameFindSpacesByMembers, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
-	assertToolMetadata(t, registry, ToolNameListMessages, tools.CapabilityReadOnly, tools.RiskLevelSensitiveRead, true)
+	assertToolMetadata(t, registry, ToolNameListMessages, tools.CapabilityReadOnly, tools.RiskLevelSafeRead, false)
 	assertToolMetadata(t, registry, ToolNameSendMessage, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameUpdateMessage, tools.CapabilityMutating, tools.RiskLevelExternalWrite, true)
 	assertToolMetadata(t, registry, ToolNameDeleteMessage, tools.CapabilityMutating, tools.RiskLevelDestructive, true)
