@@ -178,7 +178,6 @@ def evaluate_agent_expectations(
     usecase_name = str(report.get("usecase") or artifact_path.stem).strip()
     summary: dict[str, Any] = {
         "usecase": usecase_name,
-        "artifactPath": display_path(artifact_path),
         "sourcePassed": report.get("passed") is True,
         "status": "passed" if report.get("passed") is True else "failed",
         "steps": step_summaries_from_report(report, {}),
@@ -213,6 +212,7 @@ def evaluate_agent_expectations(
             result = future.result()
             step = steps[index]
             step.pop("agentTextForJudge", None)
+            result["model"] = model
             step["llmEvaluation"] = result
             if result.get("passed") is False:
                 reason = str(result.get("reason") or "LLM evaluation failed").strip()
@@ -279,7 +279,6 @@ def build_evaluation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "total": len(items),
         "passed": passed_count,
         "failed": failed_count,
-        "overallStatus": "passed" if failed_count == 0 else "failed",
         "usecases": items,
     }
 
