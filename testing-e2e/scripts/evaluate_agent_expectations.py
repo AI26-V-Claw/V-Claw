@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,8 @@ from openai import OpenAI
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_USECASE_DIR = REPO_ROOT / "testing-e2e" / "usecases"
+DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "usecases"
+DEFAULT_SUMMARY_PATH = DEFAULT_ARTIFACT_DIR / "agent-evaluation-report.json"
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_ENV_FILES = [
     REPO_ROOT / ".env",
@@ -26,9 +28,17 @@ def load_json(path: Path) -> Any:
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(value, f, ensure_ascii=False, indent=2)
         f.write("\n")
+
+
+def display_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def load_env_file(path: Path) -> None:
@@ -159,70 +169,153 @@ def evaluate_agent_expectations(
     model: str = DEFAULT_MODEL,
     max_workers: int = 4,
 ) -> dict[str, Any]:
+    _ = output_json_path
     artifact_path = Path(artifact_json_path)
     report = load_json(artifact_path)
     if not isinstance(report, dict):
         raise ValueError("artifact JSON must be an object")
 
-    if report.get("passed") is not True:
-        write_json(Path(output_json_path) if output_json_path else artifact_path, report)
-        return report
-
     usecase_name = str(report.get("usecase") or artifact_path.stem).strip()
+    summary: dict[str, Any] = {
+        "usecase": usecase_name,
+        "artifactPath": display_path(artifact_path),
+        "sourcePassed": report.get("passed") is True,
+        "status": "passed" if report.get("passed") is True else "failed",
+        "steps": step_summaries_from_report(report, {}),
+    }
+    if report.get("passed") is not True:
+        failed_step = failed_step_from_report(report)
+        if failed_step not in (None, ""):
+            summary["failedStep"] = failed_step
+        if reason := str(report.get("failureReason") or "").strip():
+            summary["failureReason"] = reason
+        summary["evaluationSkipped"] = "source artifact did not pass"
+        return summary
+
     usecase_path = Path(usecase_dir) / f"{usecase_name}.json"
     expected_by_step = expected_agents_by_step(usecase_path)
+    summary["steps"] = step_summaries_from_report(report, expected_by_step)
 
     load_default_env_files()
     model = os.getenv("OPENAI_EVAL_MODEL", model).strip() or DEFAULT_MODEL
     client = openai_client_from_env()
-    conversation = report.get("conversation") or []
+    steps = summary["steps"]
     jobs = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for index, turn in enumerate(conversation):
-            if not isinstance(turn, dict):
-                continue
-            step_id = str(turn.get("step", "")).strip()
-            agent = turn.get("agent")
-            if not isinstance(agent, dict):
-                continue
-            expected_agent = expected_by_step.get(step_id, "")
-            agent_text = agent_text_for_judge(agent)
+        for index, step in enumerate(steps):
+            expected_agent = str(step.get("expectedAgent") or "").strip()
+            agent_text = str(step.get("agentTextForJudge") or "").strip()
             future = executor.submit(judge_one_step, client, expected_agent, agent_text, model)
             jobs.append((index, future))
 
         for index, future in jobs:
             result = future.result()
-            turn = conversation[index]
-            turn.setdefault("agent", {})["llmEvaluation"] = result
-            if result.get("passed") is False and report.get("passed") is True:
-                step_id = str(turn.get("step", "")).strip()
+            step = steps[index]
+            step.pop("agentTextForJudge", None)
+            step["llmEvaluation"] = result
+            if result.get("passed") is False:
                 reason = str(result.get("reason") or "LLM evaluation failed").strip()
-                turn["passed"] = False
-                turn["failureReason"] = reason
-                report["passed"] = False
-                report["failedStep"] = step_id
-                report["failureReason"] = f"llm evaluation failed: step {step_id}: {reason}"
+                step["passed"] = False
+                step["failureReason"] = reason
+                if summary.get("status") == "passed":
+                    step_id = str(step.get("step", "")).strip()
+                    summary["status"] = "failed"
+                    summary["failedStep"] = step_id
+                    summary["failureReason"] = f"llm evaluation failed: step {step_id}: {reason}"
 
-    write_json(Path(output_json_path) if output_json_path else artifact_path, report)
-    return report
+    for step in steps:
+        step.pop("agentTextForJudge", None)
+    return summary
 
 
-def result_path_for(artifact_path: Path) -> Path:
-    return artifact_path.with_name(f"{artifact_path.stem}_result{artifact_path.suffix}")
+def failed_step_from_report(report: dict[str, Any]) -> Any:
+    if report.get("failedStep") not in (None, ""):
+        return report.get("failedStep")
+    for turn in report.get("conversation") or []:
+        if isinstance(turn, dict) and turn.get("passed") is False:
+            return turn.get("step")
+    return None
+
+
+def step_summaries_from_report(
+    report: dict[str, Any],
+    expected_by_step: dict[str, str],
+) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    for turn in report.get("conversation") or []:
+        if not isinstance(turn, dict):
+            continue
+        step_id = str(turn.get("step", "")).strip()
+        agent = turn.get("agent") if isinstance(turn.get("agent"), dict) else {}
+        user = turn.get("user") if isinstance(turn.get("user"), dict) else {}
+        step: dict[str, Any] = {
+            "step": turn.get("step"),
+            "passed": turn.get("passed") is True,
+        }
+        if message := str(user.get("message") or "").strip():
+            step["userMessage"] = message
+        if expected_agent := expected_by_step.get(step_id, ""):
+            step["expectedAgent"] = expected_agent
+        if message := str(agent.get("message") or "").strip():
+            step["agentMessage"] = message
+        if status := str(agent.get("status") or "").strip():
+            step["agentStatus"] = status
+        if approval_tool := str(agent.get("approvalTool") or "").strip():
+            step["approvalTool"] = approval_tool
+        if tools := agent.get("tools"):
+            step["tools"] = tools
+        if reason := str(turn.get("failureReason") or "").strip():
+            step["failureReason"] = reason
+        step["agentTextForJudge"] = agent_text_for_judge(agent)
+        steps.append(step)
+    return steps
+
+
+def build_evaluation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    passed_count = sum(1 for item in items if item.get("status") == "passed")
+    failed_count = len(items) - passed_count
+    return {
+        "total": len(items),
+        "passed": passed_count,
+        "failed": failed_count,
+        "overallStatus": "passed" if failed_count == 0 else "failed",
+        "usecases": items,
+    }
+
+
+def print_evaluation_summary(summary: dict[str, Any], summary_path: Path) -> None:
+    print("")
+    print("Evaluation summary")
+    print(f"Total: {summary.get('total', 0)} | Passed: {summary.get('passed', 0)} | Failed: {summary.get('failed', 0)}")
+    for item in summary.get("usecases") or []:
+        if not isinstance(item, dict):
+            continue
+        line = f"- {item.get('usecase', '(unknown)')}: {str(item.get('status') or 'failed').upper()}"
+        if item.get("failedStep") not in (None, ""):
+            line += f" at step {item.get('failedStep')}"
+        if reason := str(item.get("failureReason") or "").strip():
+            line += f" - {reason}"
+        print(line)
+    print(f"Summary: {display_path(summary_path)}")
 
 
 if __name__ == "__main__":
-    artifact_dir = REPO_ROOT / "testing-e2e" / "artifacts" / "usecases"
     artifact_paths = sorted(
         path
-        for path in artifact_dir.glob("*.json")
-        if path.is_file() and not path.stem.endswith("_result")
+        for path in DEFAULT_ARTIFACT_DIR.glob("*.json")
+        if path.is_file()
+        and not path.stem.endswith("_result")
+        and path.name not in {DEFAULT_SUMMARY_PATH.name, "evaluation-summary.json", "run-summary.json"}
     )
 
     print(f"Found {len(artifact_paths)} artifact file(s)")
+    summary_items: list[dict[str, Any]] = []
     for artifact_path in artifact_paths:
-        output_path = result_path_for(artifact_path)
-        print(f"Evaluating {artifact_path.name} -> {output_path.name}")
-        evaluate_agent_expectations(artifact_path, output_json_path=output_path)
+        print(f"Evaluating {artifact_path.name}")
+        summary_items.append(evaluate_agent_expectations(artifact_path))
+    summary_path = DEFAULT_SUMMARY_PATH
+    summary = build_evaluation_summary(summary_items)
+    write_json(summary_path, summary)
+    print_evaluation_summary(summary, summary_path)
     print("Done")
