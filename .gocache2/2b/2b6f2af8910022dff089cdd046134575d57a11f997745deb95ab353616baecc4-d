@@ -1,0 +1,14 @@
+./agent.go
+./approvals.go
+./google_chat.go
+./google_gmail.go
+./google_people.go
+./google_workspace.go
+./logs.go
+./main.go
+./metrics_server.go
+./monitoring_cli.go
+./policy_reload.go
+./status.go
+./telegram.go
+./tools.go

@@ -1,0 +1,4 @@
+./compactor.go
+./file_store.go
+./store.go
+./tokens.go

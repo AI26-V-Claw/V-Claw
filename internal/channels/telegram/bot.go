@@ -24,6 +24,7 @@ import (
 	"vclaw/internal/contracts"
 	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
+	"vclaw/internal/tools"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 )
 
@@ -49,6 +50,7 @@ type Bot struct {
 	policyDrafts  map[int64]map[contracts.RiskLevel]policies.PolicyGroup
 	sessionIndex  *telegramSessionIndexStore
 	state         *telegramChannelState
+	registry      *tools.ToolRegistry
 	workCh        chan telegramUpdate
 	busySessions  sync.Map // chat ID (int64) → struct{} while a message is being processed
 }
@@ -103,6 +105,7 @@ func New(token string, allowedUserID int64, dataDir string, args ...any) *Bot {
 		policyDrafts: make(map[int64]map[contracts.RiskLevel]policies.PolicyGroup),
 		sessionIndex: newTelegramSessionIndexStore(dataDir),
 		state:        newTelegramChannelState(),
+		registry:     nil,
 	}
 }
 
@@ -317,6 +320,15 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		} else {
 			if _, err := b.sendMessage(ctx, update.Message.Chat.ID, "Không có lệnh nào đang chạy."); err != nil {
 				return false, err
+			}
+		}
+		return true, nil
+	}
+	if isTelegramSkillsCommand(messageText) {
+		if err := b.sendSkillsMenu(ctx, update.Message.Chat.ID); err != nil {
+			b.logger.Error("telegram skills menu failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Khong the hien thi danh sach skill luc nay. Vui long thu lai sau."); sendErr != nil {
+				return false, sendErr
 			}
 		}
 		return true, nil
@@ -992,6 +1004,7 @@ func (b *Bot) setMyCommands(ctx context.Context) error {
 			{"command": "history", "description": "Xem lịch sử gần đây"},
 			{"command": "cancel", "description": "Hủy lệnh đang chạy"},
 			{"command": "policy", "description": "Mở menu chính sách"},
+			{"command": "skills", "description": "Xem danh sách skill đang hoạt động"},
 		},
 	}
 	var response struct {
@@ -2092,4 +2105,56 @@ func cloneTelegramPolicyAssignments(assignments map[contracts.RiskLevel]policies
 		clone[level] = group
 	}
 	return clone
+}
+
+func (b *Bot) SetRegistry(registry *tools.ToolRegistry) {
+	b.registry = registry
+}
+
+func isTelegramSkillsCommand(text string) bool {
+	if !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "skills")
+}
+
+func (b *Bot) sendSkillsMenu(ctx context.Context, chatID int64) error {
+	if b.registry == nil {
+		_, err := b.sendMessage(ctx, chatID, "Khong co skill nao duoc dang ky.")
+		return err
+	}
+	skillDefs := b.registry.ListToolsByGroup("skill")
+	if len(skillDefs) == 0 {
+		_, err := b.sendMessage(ctx, chatID, "Khong co skill nao duoc dang ky.")
+		return err
+	}
+	var sb strings.Builder
+	sb.WriteString("<b>Skills dang ky:</b>\n\n")
+	for _, def := range skillDefs {
+		status := "✅ ON"
+		if !def.Enabled {
+			status = "❌ OFF"
+		}
+		sb.WriteString(fmt.Sprintf("<b>%s</b> [%s]\n", html.EscapeString(def.Name), status))
+		if def.Description != "" {
+			desc := def.Description
+			if len(desc) > 80 {
+				desc = desc[:80] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("  %s\n", html.EscapeString(desc)))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf("<i>Tong cong: %d skill</i>", len(skillDefs)))
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"text":       sb.String(),
+		"parse_mode": "HTML",
+	}
+	_, err := b.sendMessagePayload(ctx, payload)
+	return err
 }

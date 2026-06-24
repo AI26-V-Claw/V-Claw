@@ -1,0 +1,13 @@
+{
+  "skills": [
+    {
+      "name": "skill.translate",
+      "description": "Dịch văn bản sang ngôn ngữ khác. Dùng khi người dùng yêu cầu dịch.",
+      "scope": ["text", "document"],
+      "permissions": [],
+      "fallback": "Tính năng dịch thuật chưa được triển khai.",
+      "risk_level": "safe_compute",
+      "enabled": false
+    }
+  ]
+}

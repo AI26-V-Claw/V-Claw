@@ -25,6 +25,8 @@ import (
 	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
+	"vclaw/internal/skills"
+	skillbuiltin "vclaw/internal/skills/builtin"
 	"vclaw/internal/safety"
 	sandboxgate "vclaw/internal/sandbox/gate"
 	sandboxruntime "vclaw/internal/sandbox/runtime"
@@ -323,6 +325,9 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	if err := memtool.RegisterTools(registry, longMemDir, config.AuditLogger); err != nil {
 		return nil, fmt.Errorf("register memory tools: %w", err)
 	}
+	if err := registerSkills(registry, config.Logger); err != nil {
+		return nil, fmt.Errorf("register skills: %w", err)
+	}
 	return registry, nil
 }
 
@@ -585,4 +590,25 @@ func fileExists(path string) bool {
 	}
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// registerSkills đăng ký tất cả skill/plugin vào registry.
+// Thứ tự: builtin skills trước, sau đó load từ manifest file nếu có.
+func registerSkills(registry *tools.ToolRegistry, logger *slog.Logger) error {
+	// 1. Builtin skills — luôn có mặt
+	builtinSkills := []skills.SkillPlugin{
+		skillbuiltin.NewSummarizeSkill(),
+		skillbuiltin.NewFormatEmailSkill(),
+		skillbuiltin.NewExtractDatesSkill(),
+		skillbuiltin.NewBulletPointsSkill(),
+	}
+	if err := skills.RegisterSkills(registry, builtinSkills); err != nil {
+		return fmt.Errorf("register builtin skills: %w", err)
+	}
+	// 2. Manifest skills — load từ file nếu tồn tại
+	manifestPath := envOrDefault("VCLAW_SKILLS_MANIFEST", "./configs/skills.json")
+	if err := skills.RegisterSkillsFromFile(registry, manifestPath, logger); err != nil {
+		return fmt.Errorf("register skills from manifest: %w", err)
+	}
+	return nil
 }
