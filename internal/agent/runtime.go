@@ -66,6 +66,7 @@ type RuntimeConfig struct {
 	LocalLocation              *time.Location // timezone for date calculations; nil falls back to time.Local
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
+	ContextBudget              ContextBudget // zero value = scaled defaults from ContextWindow
 	MemoryClassifierModel      string
 	LongMemDir                 string
 	KnowledgeRetriever         knowledge.Retriever
@@ -99,6 +100,7 @@ type Runtime struct {
 	localLocation              *time.Location
 	compactor                  *sessions.Compactor
 	contextWindow              int
+	contextBudget              ContextBudget
 	memoryClassifierModel      string
 	// promptVersion is the content-hash fingerprint of the effective system
 	// prompt (runtimeSystemPrompt). Computed once when the Runtime
@@ -232,6 +234,9 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
+	contextBudget := config.ContextBudget
+	contextBudget.ContextWindow = contextWindow
+	contextBudget = contextBudget.normalized()
 	// Compute the prompt version once at construction from the static prompt
 	// content only. runtimeSystemPromptStatic() substitutes a stable placeholder
 	// for the dynamic datetime segment, so two Runtimes created at different
@@ -281,6 +286,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		localLocation:              localLocation,
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
+		contextBudget:              contextBudget,
 		memoryClassifierModel:      memoryClassifierModel(config),
 		promptVersion:              promptVersion,
 		planStore:                  planStore,

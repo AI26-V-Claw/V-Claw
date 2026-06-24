@@ -24,29 +24,44 @@ func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory
 }
 
 func (r *Runtime) withRuntimeSystemPromptOptions(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution, options runtimePromptOptions) []providers.Message {
-	transcript = compactProviderTranscriptForPrompt(transcript)
-	messages := make([]providers.Message, 0, len(transcript)+5)
+	budget := r.contextBudget.normalized()
+
+	// Reserve room for the always-kept system prompt and current request before
+	// distributing what's left to the optional context sections. The transcript
+	// gets whatever remains after the capped sections.
 	now := r.now()
 	if r.localLocation != nil {
 		now = now.In(r.localLocation)
 	}
+	systemPrompt := runtimeSystemPrompt(now)
+	query := latestUserMessageText(transcript)
+
+	messages := make([]providers.Message, 0, len(transcript)+6)
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
-		Content: runtimeSystemPrompt(now),
+		Content: systemPrompt,
 	})
+
+	tokenLog := []any{"request_section", "context_budget"}
+	tokenLog = append(tokenLog, "system_prompt_tokens", sessions.EstimateTokens(systemPrompt))
+
 	if options.IncludeLongTermMemory && r.ltMemLoader != nil {
-		if ltm := redactSensitiveForPrompt(r.ltMemLoader.Load()); ltm != "" {
+		raw := redactSensitiveForPrompt(r.ltMemLoader.Load())
+		if ltm := truncateMemoryByTokens(raw, budget.LongTermMemory, query); ltm != "" {
 			messages = append(messages, providers.Message{
 				Role:    providers.MessageRoleSystem,
 				Content: ltm,
 			})
+			tokenLog = append(tokenLog, "long_term_memory_tokens", sessions.EstimateTokens(ltm))
 		}
 	}
 	if prompt := sessionMemoryPrompt(memory); prompt != "" {
+		prompt = truncateToTokenBudget(prompt, budget.Summary+budget.ActionResults)
 		messages = append(messages, providers.Message{
 			Role:    providers.MessageRoleSystem,
 			Content: prompt,
 		})
+		tokenLog = append(tokenLog, "session_memory_tokens", sessions.EstimateTokens(prompt))
 	}
 	if prompt := referenceSourcesPrompt(memory); prompt != "" {
 		messages = append(messages, providers.Message{
@@ -54,22 +69,64 @@ func (r *Runtime) withRuntimeSystemPromptOptions(transcript []providers.Message,
 			Content: prompt,
 		})
 	}
+	referenceBudget := budget.References
 	if prompt := redactSensitiveForPrompt(referenceContextPrompt(resolution)); prompt != "" {
+		prompt = truncateToTokenBudget(prompt, referenceBudget)
+		referenceBudget -= sessions.EstimateTokens(prompt)
 		messages = append(messages, providers.Message{
 			Role:    providers.MessageRoleSystem,
 			Content: prompt,
 		})
+		tokenLog = append(tokenLog, "reference_context_tokens", sessions.EstimateTokens(prompt))
 	}
 	if options.LinkedKnowledge != nil {
-		if prompt := knowledge.Prompt(*options.LinkedKnowledge); prompt != "" {
-			messages = append(messages, providers.Message{
-				Role:    providers.MessageRoleSystem,
-				Content: prompt,
-			})
+		if prompt := redactSensitiveForPrompt(knowledge.Prompt(*options.LinkedKnowledge)); prompt != "" {
+			if referenceBudget < 0 {
+				referenceBudget = 0
+			}
+			prompt = truncateToTokenBudget(prompt, referenceBudget)
+			if prompt != "" {
+				messages = append(messages, providers.Message{
+					Role:    providers.MessageRoleSystem,
+					Content: prompt,
+				})
+				tokenLog = append(tokenLog, "linked_knowledge_tokens", sessions.EstimateTokens(prompt))
+			}
 		}
 	}
-	messages = append(messages, sanitizeProviderTranscriptForToolProtocol(transcript)...)
+
+	// Whatever budget remains after the fixed system prompt and capped sections
+	// goes to the recent transcript, selected newest→oldest within budget.
+	usedSoFar := sessions.EstimateMessagesTokens(messages)
+	transcriptBudget := budget.Available() - usedSoFar
+	if transcriptBudget < 0 {
+		transcriptBudget = 0
+	}
+	selected := selectTranscriptWithinBudget(transcript, transcriptBudget)
+	selected = sanitizeProviderTranscriptForToolProtocol(selected)
+	messages = append(messages, selected...)
+
+	tokenLog = append(tokenLog,
+		"transcript_budget", transcriptBudget,
+		"transcript_tokens", sessions.EstimateMessagesTokens(selected),
+		"total_tokens", sessions.EstimateMessagesTokens(messages),
+		"available", budget.Available(),
+	)
+	if r.logger != nil {
+		r.logger.Debug("assembled provider context", tokenLog...)
+	}
 	return messages
+}
+
+// latestUserMessageText returns the content of the most recent user message in a
+// transcript, used to bias memory truncation toward query-relevant facts.
+func latestUserMessageText(transcript []providers.Message) string {
+	for i := len(transcript) - 1; i >= 0; i-- {
+		if transcript[i].Role == providers.MessageRoleUser {
+			return transcript[i].Content
+		}
+	}
+	return ""
 }
 
 // runtimeSystemPromptDatetimePlaceholder is the stable token substituted for the
