@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"vclaw/internal/skills"
@@ -143,6 +144,115 @@ func TestScopeAllowed(t *testing.T) {
 	defAll := skills.SkillDefinition{Name: "skill.all"}
 	if !skills.ScopeAllowed(defAll, "anything") {
 		t.Error("empty scope should allow all domains")
+	}
+}
+
+func TestScopeEnforcement_OutOfScope(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	manifest := map[string]any{
+		"skills": []map[string]any{
+			{
+				"name":        "skill.email_only",
+				"description": "Chi xu ly email",
+				"scope":       []string{"email"},
+				"fallback":    "Skill nay chi xu ly email.",
+				"risk_level":  "safe_compute",
+				"enabled":     true,
+			},
+		},
+	}
+	path := writeManifest(t, manifest)
+	plugins, err := skills.LoadSkillsFromFile(path, nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := skills.RegisterSkills(registry, plugins); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Goi skill voi _domain nam ngoai scope -> phai tra SKILL_OUT_OF_SCOPE
+	result := registry.Execute(context.Background(), tools.ToolCall{
+		ID:        "tc-scope-1",
+		Name:      "skill.email_only",
+		Arguments: map[string]any{"_domain": "calendar"},
+	})
+	if result.Success {
+		t.Errorf("expected failure for out-of-scope domain, got success")
+	}
+	if result.Error == nil || result.Error.Code != "SKILL_OUT_OF_SCOPE" {
+		t.Errorf("expected SKILL_OUT_OF_SCOPE, got %v", result.Error)
+	}
+	if !strings.Contains(result.ContentForLLM, "SKILL_OUT_OF_SCOPE") {
+		t.Errorf("ContentForLLM should contain SKILL_OUT_OF_SCOPE, got: %q", result.ContentForLLM)
+	}
+}
+
+func TestScopeEnforcement_InScope(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	manifest := map[string]any{
+		"skills": []map[string]any{
+			{
+				"name":        "skill.email_scoped",
+				"description": "Chi xu ly email",
+				"scope":       []string{"email"},
+				"fallback":    "Skill nay chi xu ly email.",
+				"risk_level":  "safe_compute",
+				"enabled":     true,
+			},
+		},
+	}
+	path := writeManifest(t, manifest)
+	plugins, err := skills.LoadSkillsFromFile(path, nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := skills.RegisterSkills(registry, plugins); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Goi skill voi _domain nam trong scope -> khong bi chan (tra fallback vi manifestPlugin)
+	result := registry.Execute(context.Background(), tools.ToolCall{
+		ID:        "tc-scope-2",
+		Name:      "skill.email_scoped",
+		Arguments: map[string]any{"_domain": "email"},
+	})
+	// manifestPlugin tra SKILL_FALLBACK, khong phai SKILL_OUT_OF_SCOPE
+	if result.Error != nil && result.Error.Code == "SKILL_OUT_OF_SCOPE" {
+		t.Errorf("in-scope call should not be blocked, got SKILL_OUT_OF_SCOPE")
+	}
+}
+
+func TestScopeEnforcement_NoDomainSkipsCheck(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	manifest := map[string]any{
+		"skills": []map[string]any{
+			{
+				"name":        "skill.strict_scope",
+				"description": "Strict scope skill",
+				"scope":       []string{"email"},
+				"fallback":    "Out of scope.",
+				"risk_level":  "safe_compute",
+				"enabled":     true,
+			},
+		},
+	}
+	path := writeManifest(t, manifest)
+	plugins, err := skills.LoadSkillsFromFile(path, nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := skills.RegisterSkills(registry, plugins); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Khong truyen _domain -> scope check bi bo qua -> khong bi chan
+	result := registry.Execute(context.Background(), tools.ToolCall{
+		ID:        "tc-scope-3",
+		Name:      "skill.strict_scope",
+		Arguments: map[string]any{"content": "test"},
+	})
+	if result.Error != nil && result.Error.Code == "SKILL_OUT_OF_SCOPE" {
+		t.Errorf("missing _domain should skip scope check, got SKILL_OUT_OF_SCOPE")
 	}
 }
 

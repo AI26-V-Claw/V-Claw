@@ -14,8 +14,8 @@ type skillAdapter struct {
 	def    SkillDefinition
 }
 
-func (a *skillAdapter) Name() string        { return a.def.Name }
-func (a *skillAdapter) Description() string { return a.def.Description }
+func (a *skillAdapter) Name() string                 { return a.def.Name }
+func (a *skillAdapter) Description() string          { return a.def.Description }
 func (a *skillAdapter) Parameters() tools.ToolSchema { return a.def.Parameters }
 func (a *skillAdapter) Capability() tools.Capability {
 	if a.def.RiskLevel == tools.RiskLevelSafeRead || a.def.RiskLevel == tools.RiskLevelSafeCompute {
@@ -28,7 +28,7 @@ func (a *skillAdapter) Execute(ctx context.Context, call tools.ToolCall) tools.T
 	if !a.def.Enabled {
 		fallback := a.def.Fallback
 		if strings.TrimSpace(fallback) == "" {
-			fallback = fmt.Sprintf("Skill %q hiện không khả dụng.", a.def.Name)
+			fallback = fmt.Sprintf("Skill %q hien khong kha dung.", a.def.Name)
 		}
 		return tools.ToolResult{
 			ToolCallID:     call.ID,
@@ -42,7 +42,48 @@ func (a *skillAdapter) Execute(ctx context.Context, call tools.ToolCall) tools.T
 			},
 		}
 	}
+
+	// Scope enforcement: neu skill co khai bao scope va caller truyen _domain,
+	// kiem tra domain co nam trong scope khong.
+	// _domain la optional — neu khong co, bo qua scope check.
+	if domain, ok := skillDomainFromCall(call); ok {
+		if !ScopeAllowed(a.def, domain) {
+			msg := fmt.Sprintf(
+				"Skill %q khong ho tro domain %q. Pham vi cho phep: %s.",
+				a.def.Name, domain, strings.Join(a.def.Scope, ", "),
+			)
+			if strings.TrimSpace(a.def.Fallback) != "" {
+				msg = a.def.Fallback
+			}
+			return tools.ToolResult{
+				ToolCallID:     call.ID,
+				ToolName:       call.Name,
+				Success:        false,
+				ContentForLLM:  "SKILL_OUT_OF_SCOPE: " + msg,
+				ContentForUser: msg,
+				Error: &tools.ToolError{
+					Code:    "SKILL_OUT_OF_SCOPE",
+					Message: msg,
+				},
+			}
+		}
+	}
+
 	return a.plugin.Execute(ctx, call)
+}
+
+// skillDomainFromCall trich domain tu arguments cua tool call.
+// Tra ve ("", false) neu khong co _domain argument.
+func skillDomainFromCall(call tools.ToolCall) (string, bool) {
+	v, ok := call.Arguments["_domain"]
+	if !ok {
+		return "", false
+	}
+	domain, ok := v.(string)
+	if !ok || strings.TrimSpace(domain) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(domain), true
 }
 
 // RegisterSkill đăng ký một SkillPlugin vào ToolRegistry với Group="skill".
