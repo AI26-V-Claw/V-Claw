@@ -36,6 +36,7 @@ type PreToolResult struct {
 }
 
 type PostToolInput struct {
+	RunID           string
 	RequestID       string
 	SessionID       string
 	ToolCallID      string
