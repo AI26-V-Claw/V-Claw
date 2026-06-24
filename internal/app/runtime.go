@@ -620,6 +620,7 @@ func registerSkills(registry *tools.ToolRegistry, logger *slog.Logger) error {
 		skillbuiltin.NewFormatEmailSkill(),
 		skillbuiltin.NewExtractDatesSkill(),
 		skillbuiltin.NewBulletPointsSkill(),
+		skillbuiltin.NewTranslateSkill(),
 	}
 	if err := skills.RegisterSkills(registry, builtinSkills); err != nil {
 		return fmt.Errorf("register builtin skills: %w", err)
