@@ -3,6 +3,7 @@ package gmail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	driveconnector "vclaw/internal/connectors/google/drive"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
 	"vclaw/internal/tools"
+	"vclaw/internal/tools/office"
 
 	"google.golang.org/api/googleapi"
 )
@@ -901,15 +903,15 @@ func MapError(err error) *ErrorShape {
 	}
 	switch {
 	case gerr.Code == http.StatusUnauthorized:
-		return &ErrorShape{Code: "AUTH_EXPIRED", Message: gerr.Message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Gmail", gerr.Message), Retryable: true}
 	case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
-		return &ErrorShape{Code: "AUTH_MISSING_SCOPE", Message: gerr.Message, Retryable: false}
+		return &ErrorShape{Code: office.ErrorAuthMissingScope, Message: office.FriendlyGoogleToolError(office.ErrorAuthMissingScope, "Gmail", gerr.Message), Retryable: false}
 	case gerr.Code == http.StatusNotFound:
-		return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: gerr.Message, Retryable: false}
+		return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Gmail", gerr.Message), Retryable: false}
 	case gerr.Code == http.StatusTooManyRequests:
-		return &ErrorShape{Code: "RATE_LIMITED", Message: gerr.Message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Gmail", gerr.Message), Retryable: true}
 	case gerr.Code >= 500:
-		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: gerr.Message, Retryable: true}
+		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Gmail", gerr.Message), Retryable: true}
 	default:
 		return internalError(gerr.Message)
 	}
@@ -919,12 +921,7 @@ func asGoogleError(err error, target **googleapi.Error) bool {
 	if err == nil {
 		return false
 	}
-	typed, ok := err.(*googleapi.Error)
-	if !ok {
-		return false
-	}
-	*target = typed
-	return true
+	return errors.As(err, target)
 }
 
 func hasMissingScopeReason(err *googleapi.Error) bool {

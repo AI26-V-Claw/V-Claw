@@ -568,6 +568,16 @@ func TestMapErrorFallback(t *testing.T) {
 	}
 }
 
+func TestMapErrorWrappedGoogleError(t *testing.T) {
+	errShape := MapError(fmt.Errorf("gmail list failed: %w", &googleapi.Error{
+		Code:    401,
+		Message: "expired",
+	}))
+	if errShape.Code != "AUTH_EXPIRED" || !errShape.Retryable {
+		t.Fatalf("MapError() = %#v, want retryable AUTH_EXPIRED", errShape)
+	}
+}
+
 func TestListThreadsBuildsQuery(t *testing.T) {
 	var capturedQuery string
 	service := NewService(&mockConnector{

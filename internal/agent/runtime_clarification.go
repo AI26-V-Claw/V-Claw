@@ -265,7 +265,23 @@ func containsSpaceResourceName(value any) bool {
 			break
 		}
 	}
-	return strings.TrimSpace(resource[:end]) != ""
+	return isUsableChatSpaceResourceID(resource[:end])
+}
+
+func isUsableChatSpaceResourceID(resourceID string) bool {
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
+		return false
+	}
+	if strings.ContainsAny(resourceID, "{}<>") {
+		return false
+	}
+	switch strings.ToUpper(resourceID) {
+	case "UNKNOWN", "PLACEHOLDER", "REPLACE_ME", "SPACE", "SPACE_ID", "SPACEID":
+		return false
+	default:
+		return true
+	}
 }
 
 func requiredFieldsFromToolSchema(schema tools.ToolSchema) []string {

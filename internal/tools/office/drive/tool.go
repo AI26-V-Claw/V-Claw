@@ -5,14 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	googleconnector "vclaw/internal/connectors/google"
 	"vclaw/internal/connectors/google/common"
 	gdrive "vclaw/internal/connectors/google/drive"
 	"vclaw/internal/tools"
+	"vclaw/internal/tools/office"
+
+	"google.golang.org/api/googleapi"
 )
 
 const (
@@ -1115,18 +1120,66 @@ func firstNonEmpty(values ...string) string {
 }
 
 func mapError(err error) *ErrorShape {
+	if googleconnector.IsNetworkError(err) {
+		return &ErrorShape{Code: "PROVIDER_TIMEOUT", Message: "network error contacting Drive API: " + err.Error(), Retryable: true}
+	}
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) {
+		message := googleAPIErrorMessage(gerr)
+		switch {
+		case gerr.Code == http.StatusUnauthorized:
+			return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Drive", message), Retryable: true}
+		case gerr.Code == http.StatusForbidden && hasMissingScopeReason(gerr):
+			return &ErrorShape{Code: office.ErrorAuthMissingScope, Message: office.FriendlyGoogleToolError(office.ErrorAuthMissingScope, "Google Drive", message), Retryable: false}
+		case gerr.Code == http.StatusForbidden:
+			return &ErrorShape{Code: office.ErrorActionBlockedByPolicy, Message: office.FriendlyGoogleToolError(office.ErrorActionBlockedByPolicy, "Google Drive", message), Retryable: false}
+		case gerr.Code == http.StatusNotFound:
+			return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Drive", message), Retryable: false}
+		case gerr.Code == http.StatusTooManyRequests:
+			return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Drive", message), Retryable: true}
+		case gerr.Code >= 500:
+			return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Drive", message), Retryable: true}
+		default:
+			return &ErrorShape{Code: "INTERNAL_ERROR", Message: message, Retryable: false}
+		}
+	}
 	switch {
 	case errors.Is(err, common.ErrAuth):
-		return &ErrorShape{Code: "AUTH_EXPIRED", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Drive", err.Error()), Retryable: true}
 	case errors.Is(err, common.ErrNotFound):
-		return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: err.Error(), Retryable: false}
+		return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Drive", err.Error()), Retryable: false}
 	case errors.Is(err, common.ErrRateLimit):
-		return &ErrorShape{Code: "RATE_LIMITED", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Drive", err.Error()), Retryable: true}
 	case errors.Is(err, common.ErrAPI):
-		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Drive", err.Error()), Retryable: true}
 	default:
 		return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error(), Retryable: false}
 	}
+}
+
+func googleAPIErrorMessage(err *googleapi.Error) string {
+	if err == nil {
+		return "Google Drive API error"
+	}
+	if strings.TrimSpace(err.Message) != "" {
+		return err.Message
+	}
+	if strings.TrimSpace(err.Body) != "" {
+		return err.Body
+	}
+	if strings.TrimSpace(err.Error()) != "" {
+		return err.Error()
+	}
+	return fmt.Sprintf("Google Drive API error status %d", err.Code)
+}
+
+func hasMissingScopeReason(err *googleapi.Error) bool {
+	text := strings.ToLower(err.Message + " " + err.Body)
+	for _, item := range err.Errors {
+		text += " " + strings.ToLower(item.Reason+" "+item.Message)
+	}
+	return strings.Contains(text, "insufficient authentication scopes") ||
+		strings.Contains(text, "insufficient permissions")
 }
 
 func invalidInput(message string) *ErrorShape {

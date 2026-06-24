@@ -835,6 +835,105 @@ func TestMalformedToolArgumentsRejectsChatDisplayNameAsSpace(t *testing.T) {
 	}
 }
 
+func TestMalformedToolArgumentsRejectsChatSpacePlaceholders(t *testing.T) {
+	cases := []string{
+		"spaces/UNKNOWN",
+		"spaces/{space}",
+		"spaces/",
+		"spaces/PLACEHOLDER",
+		"spaces/REPLACE_ME",
+	}
+	for _, space := range cases {
+		t.Run(space, func(t *testing.T) {
+			missing := malformedToolArguments(providers.ToolCall{
+				Name:      "chat.listMessages",
+				Arguments: map[string]any{"space": space, "maxResults": 10},
+			})
+			if len(missing) != 1 || missing[0] != "space" {
+				t.Fatalf("expected malformed space for %q, got %#v", space, missing)
+			}
+		})
+	}
+}
+
+func TestRuntimeRejectsChatListMessagesPlaceholderBeforeApproval(t *testing.T) {
+	listMessagesExecutions := 0
+	listSpacesExecutions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:   "call_bad_list_messages",
+					Name: "chat.listMessages",
+					Arguments: map[string]any{
+						"space":      "spaces/UNKNOWN",
+						"maxResults": 10,
+					},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:        "call_list_spaces",
+					Name:      "chat.listSpaces",
+					Arguments: map[string]any{},
+				}},
+			},
+		},
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:   "call_clarify",
+					Name: clarifyToolName,
+					Arguments: map[string]any{
+						"question":       "Bạn muốn xem tin nhắn trong Google Chat space nào?",
+						"missing_fields": []any{"space"},
+					},
+				}},
+			},
+		},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(chatListMessagesRuntimeTool{executions: &listMessagesExecutions}); err != nil {
+		t.Fatalf("register chat list messages: %v", err)
+	}
+	if err := registry.Register(chatListSpacesRuntimeTool{executions: &listSpacesExecutions}); err != nil {
+		t.Fatalf("register chat list spaces: %v", err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider: provider,
+		Registry: registry,
+		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusNeedClarification {
+		t.Fatalf("expected need_clarification instead of approval, got %#v", response)
+	}
+	if response.ApprovalRequest != nil || response.ApprovalID != "" {
+		t.Fatalf("placeholder space must not create approval, got %#v", response.ApprovalRequest)
+	}
+	if listMessagesExecutions != 0 {
+		t.Fatalf("placeholder listMessages must not execute, executions=%d", listMessagesExecutions)
+	}
+	if listSpacesExecutions != 1 {
+		t.Fatalf("expected runtime to resolve space with chat.listSpaces, got %d executions", listSpacesExecutions)
+	}
+	if !strings.Contains(providerMessagesContent(provider.calls[1].Messages), "NEEDS_SPACE_RESOLUTION") {
+		t.Fatalf("expected provider to receive space resolution guidance, got %#v", provider.calls[1].Messages)
+	}
+	if !strings.Contains(response.Message, "Google Chat space") {
+		t.Fatalf("expected chat space clarification, got %q", response.Message)
+	}
+}
+
 func TestRuntimeResolvesNamedChatSpaceBeforeApproval(t *testing.T) {
 	listExecutions := 0
 	sendExecutions := 0
