@@ -475,6 +475,7 @@ func TestGetEmailLocalizesSendTimeAndOmitsRawDate(t *testing.T) {
 
 func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 	longSnippet := strings.Repeat("long snippet should stay out of llm content ", 80)
+	ict := time.FixedZone("ICT", 7*60*60)
 	messages := make([]gmailconnector.MessageSummary, 0, 12)
 	for i := 0; i < 12; i++ {
 		subject := fmt.Sprintf("Message %02d", i+1)
@@ -508,7 +509,7 @@ func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 			}
 			return nil, "", nil
 		},
-	})
+	}).WithLocation(ict)
 
 	result := NewTool(ToolNameListEmails, service).Execute(context.Background(), tools.ToolCall{
 		ID:   "call-list",
