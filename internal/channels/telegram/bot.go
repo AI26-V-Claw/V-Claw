@@ -153,17 +153,42 @@ func (b *Bot) Run(ctx context.Context) error {
 				b.logger.Error("failed to persist offset", "offset", offset, "error", err)
 			}
 
+			// /cancel is dispatched immediately in the polling loop (not via
+			// workCh) so it can interrupt a run blocking the worker goroutine.
+			if update.Message != nil &&
+				update.Message.From != nil &&
+				update.Message.From.ID == b.allowedUserID {
+				msgText := strings.TrimSpace(update.Message.Text)
+				if msgText == "" {
+					msgText = strings.TrimSpace(update.Message.Caption)
+				}
+				if isTelegramCancelCommand(msgText) {
+					go func(u telegramUpdate) {
+						if _, err := b.processUpdate(ctx, u); err != nil {
+							b.logger.Error("telegram cancel update failed", "update_id", u.UpdateID, "error", err)
+						}
+					}(update)
+					continue
+				}
+			}
+
 			// Callback queries (approval buttons) always go through.
 			// For regular messages, drop and reply if the session is already busy.
 			if update.Message != nil {
 				chatID := update.Message.Chat.ID
-				if _, alreadyBusy := b.busySessions.LoadOrStore(chatID, struct{}{}); alreadyBusy {
-					go func(cid int64) {
-						if _, err := b.sendMessage(ctx, cid, "Mình đang xử lý tin nhắn trước của bạn, vui lòng đợi một chút."); err != nil {
-							b.logger.Error("telegram busy reply failed", "chat_id", cid, "error", err)
-						}
-					}(chatID)
-					continue
+				msgText := strings.TrimSpace(update.Message.Text)
+				if msgText == "" {
+					msgText = strings.TrimSpace(update.Message.Caption)
+				}
+				if !isTelegramCancelCommand(msgText) {
+					if _, alreadyBusy := b.busySessions.LoadOrStore(chatID, struct{}{}); alreadyBusy {
+						go func(cid int64) {
+							if _, err := b.sendMessage(ctx, cid, "Mình đang xử lý tin nhắn trước của bạn, vui lòng đợi một chút."); err != nil {
+								b.logger.Error("telegram busy reply failed", "chat_id", cid, "error", err)
+							}
+						}(chatID)
+						continue
+					}
 				}
 			}
 
@@ -276,6 +301,22 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 			b.logger.Error("telegram history summary failed", "error", err)
 			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Không kiểm tra được trạng thái lúc này. Vui lòng thử lại sau."); sendErr != nil {
 				return false, sendErr
+			}
+		}
+		return true, nil
+	}
+	if isTelegramCancelCommand(messageText) {
+		sessionID, err := b.activeTelegramSessionID(ctx, update.Message.Chat.ID)
+		if err != nil {
+			sessionID = fmt.Sprintf("telegram_chat_%d", update.Message.Chat.ID)
+		}
+		if canceller, ok := b.handler.(interface{ CancelSession(string) bool }); ok && canceller.CancelSession(sessionID) {
+			if _, err := b.sendMessage(ctx, update.Message.Chat.ID, "Đã hủy lệnh đang chạy."); err != nil {
+				return false, err
+			}
+		} else {
+			if _, err := b.sendMessage(ctx, update.Message.Chat.ID, "Không có lệnh nào đang chạy."); err != nil {
+				return false, err
 			}
 		}
 		return true, nil
@@ -498,6 +539,18 @@ func isTelegramHistoryCommand(text string) bool {
 		command = command[:index]
 	}
 	return strings.EqualFold(command, "history")
+}
+
+func isTelegramCancelCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "cancel")
 }
 
 func isTelegramNewCommand(text string) bool {
@@ -937,6 +990,7 @@ func (b *Bot) setMyCommands(ctx context.Context) error {
 			{"command": "sessions", "description": "Chọn hoặc xóa phiên"},
 			{"command": "status", "description": "Xem trạng thái lệnh gần nhất"},
 			{"command": "history", "description": "Xem lịch sử gần đây"},
+			{"command": "cancel", "description": "Hủy lệnh đang chạy"},
 			{"command": "policy", "description": "Mở menu chính sách"},
 		},
 	}

@@ -135,6 +135,7 @@ func (r *Runtime) legacyPeekPendingApproval(sessionID string, approvalID string)
 
 func legacyBuildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
+	resultContent := truncateToolContentForLLM(result.ContentForLLM)
 	if len(pending.remainingToolCalls) > 0 {
 		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
 		for _, tc := range pending.remainingToolCalls {
@@ -154,7 +155,7 @@ Continue by calling the remaining tools in the original plan: %s
 Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.`,
 			pending.message.Text,
 			pending.toolCall.Name,
-			result.ContentForLLM,
+			resultContent,
 			strings.Join(remainingNames, ", "),
 		))
 	} else {
@@ -173,7 +174,7 @@ If all tasks are already complete, respond with a short Vietnamese summary of wh
 Do not repeat the tool that was just executed.`,
 			pending.message.Text,
 			pending.toolCall.Name,
-			result.ContentForLLM,
+			resultContent,
 		))
 	}
 	msg := pending.message

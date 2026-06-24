@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent/reference"
+	"vclaw/internal/knowledge"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	drivetool "vclaw/internal/tools/office/drive"
@@ -132,6 +133,50 @@ func TestLongTermMemoryNotInjectedWhenLoaderNil(t *testing.T) {
 		if strings.Contains(m.Content, "Bộ nhớ dài hạn") {
 			t.Errorf("LT memory should not be injected when loader is nil, found in: %q", m.Content)
 		}
+	}
+}
+
+func TestLongTermMemoryCanBeSuppressedForFreshWorkspaceRead(t *testing.T) {
+	r := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}})
+	r.ltMemLoader = &fakeLTMemLoader{content: "## Memory\n- Deleted Event should not appear"}
+
+	messages := r.withRuntimeSystemPromptOptions(
+		[]providers.Message{{Role: providers.MessageRoleUser, Content: "lich tuan nay co gi"}},
+		sessions.SessionMemory{Summary: "session context remains available"},
+		nil,
+		runtimePromptOptions{IncludeLongTermMemory: false},
+	)
+	joined := providerMessagesContent(messages)
+	if strings.Contains(joined, "Deleted Event should not appear") {
+		t.Fatalf("long-term memory should be suppressed, got: %s", joined)
+	}
+	if !strings.Contains(joined, "session context remains available") {
+		t.Fatalf("session memory should still be included by this prompt option, got: %s", joined)
+	}
+}
+
+func TestLinkedKnowledgePromptInjectedAsContextOnly(t *testing.T) {
+	r := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}})
+	linked := knowledge.LinkedContext{Items: []knowledge.ContextItem{{
+		Type:       knowledge.NodeTypeMeeting,
+		Title:      "Design review",
+		Confidence: 0.9,
+		Metadata:   map[string]any{"start": "2026-06-23T09:00:00+07:00"},
+	}}}
+
+	messages := r.withRuntimeSystemPromptOptions(
+		[]providers.Message{{Role: providers.MessageRoleUser, Content: "project nay lien quan gi"}},
+		sessions.SessionMemory{},
+		nil,
+		runtimePromptOptions{IncludeLongTermMemory: true, LinkedKnowledge: &linked},
+	)
+
+	joined := providerMessagesContent(messages)
+	if !strings.Contains(joined, "Linked knowledge context") || !strings.Contains(joined, "context_only") {
+		t.Fatalf("linked knowledge guard missing from prompt: %s", joined)
+	}
+	if !strings.Contains(joined, "Design review") {
+		t.Fatalf("linked knowledge item missing from prompt: %s", joined)
 	}
 }
 
@@ -347,6 +392,20 @@ func TestReferenceContextRedactsSecrets(t *testing.T) {
 	for _, m := range messages {
 		if strings.Contains(m.Content, "sk-abcdefghijklmnop1234") {
 			t.Errorf("reference context leaked secret into context: %q", m.Content)
+		}
+	}
+}
+
+func TestRuntimePromptBoundsSandboxPDFExtractionOutput(t *testing.T) {
+	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
+	for _, want := range []string{
+		"NEVER print the entire extracted document text",
+		"under 4000 characters",
+		"For PDF summarization specifically",
+		"Do not do text += page_text for every page followed by print(text)",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("runtime prompt missing sandbox output guidance %q", want)
 		}
 	}
 }

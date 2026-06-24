@@ -17,6 +17,7 @@ type fakeProvider struct {
 	responses []providers.ChatResponse
 	err       error
 	calls     []providers.ChatRequest
+	hook      func()
 }
 
 type blockingProvider struct {
@@ -44,6 +45,11 @@ type calendarCreateRuntimeTool struct {
 	executions *int
 }
 
+type calendarListRuntimeTool struct {
+	executions *int
+	content    string
+}
+
 type gmailListEmailsRuntimeTool struct {
 	executions *int
 	content    string
@@ -58,6 +64,10 @@ type chatListSpacesRuntimeTool struct {
 }
 
 type chatSendRuntimeTool struct {
+	executions *int
+}
+
+type chatListMessagesRuntimeTool struct {
 	executions *int
 }
 
@@ -174,6 +184,32 @@ func (t calendarCreateRuntimeTool) Execute(_ context.Context, call tools.ToolCal
 	}
 }
 
+func (calendarListRuntimeTool) Name() string { return "calendar.listEvents" }
+func (calendarListRuntimeTool) Description() string {
+	return "List Google Calendar events."
+}
+func (calendarListRuntimeTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{"type": "object", "properties": map[string]any{}}
+}
+func (calendarListRuntimeTool) Capability() tools.Capability { return tools.CapabilityReadOnly }
+func (calendarListRuntimeTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelSafeRead }
+func (t calendarListRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	if t.executions != nil {
+		(*t.executions)++
+	}
+	content := strings.TrimSpace(t.content)
+	if content == "" {
+		content = "- Fresh Event | 2026-06-23T09:00:00+07:00 | https://calendar.google.com/event?eid=fresh"
+	}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  content,
+		ContentForUser: content,
+	}
+}
+
 func (gmailListEmailsRuntimeTool) Name() string        { return "gmail.listEmails" }
 func (gmailListEmailsRuntimeTool) Description() string { return "List Gmail emails." }
 func (gmailListEmailsRuntimeTool) Parameters() tools.ToolSchema {
@@ -280,6 +316,35 @@ func (t chatSendRuntimeTool) Execute(_ context.Context, call tools.ToolCall) too
 	}
 }
 
+func (chatListMessagesRuntimeTool) Name() string { return "chat.listMessages" }
+func (chatListMessagesRuntimeTool) Description() string {
+	return "List messages in a Google Chat space."
+}
+func (chatListMessagesRuntimeTool) Parameters() tools.ToolSchema {
+	return tools.ToolSchema{
+		"type": "object",
+		"properties": map[string]any{
+			"space":      map[string]any{"type": "string"},
+			"maxResults": map[string]any{"type": "number"},
+		},
+		"required": []string{"space"},
+	}
+}
+func (chatListMessagesRuntimeTool) Capability() tools.Capability { return tools.CapabilityReadOnly }
+func (chatListMessagesRuntimeTool) RiskLevel() tools.RiskLevel   { return tools.RiskLevelSensitiveRead }
+func (t chatListMessagesRuntimeTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
+	if t.executions != nil {
+		(*t.executions)++
+	}
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  "messages",
+		ContentForUser: "messages",
+	}
+}
+
 func (gatedDangerousRuntimeTool) Name() string        { return "danger.gated" }
 func (gatedDangerousRuntimeTool) Description() string { return "Dangerous gated tool." }
 func (gatedDangerousRuntimeTool) Parameters() tools.ToolSchema {
@@ -368,6 +433,9 @@ func (s failingAssistantAppendSessionStore) AppendMessage(ctx context.Context, s
 
 func (p *fakeProvider) Chat(_ context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
 	p.calls = append(p.calls, request)
+	if p.hook != nil {
+		p.hook()
+	}
 	if p.err != nil {
 		return providers.ChatResponse{}, p.err
 	}

@@ -10,6 +10,8 @@ import (
 	gcal "vclaw/internal/connectors/google/calendar"
 	"vclaw/internal/connectors/google/common"
 	"vclaw/internal/tools"
+
+	"google.golang.org/api/googleapi"
 )
 
 // --- Mock connector ---
@@ -597,6 +599,22 @@ func TestMapConnectorError(t *testing.T) {
 				t.Errorf("expected retryable %v, got %v", tt.retryable, result.Retryable)
 			}
 		})
+	}
+}
+
+func TestMapConnectorErrorWrappedGoogleError(t *testing.T) {
+	errShape := mapConnectorError(fmt.Errorf("calendar list failed: %w", &googleapi.Error{
+		Code:    403,
+		Message: "Request had insufficient authentication scopes.",
+	}))
+	if errShape == nil {
+		t.Fatal("expected error shape")
+	}
+	if errShape.Code != "AUTH_MISSING_SCOPE" {
+		t.Fatalf("expected AUTH_MISSING_SCOPE, got %#v", errShape)
+	}
+	if !strings.Contains(errShape.Message, "chưa được cấp đủ quyền") || !strings.Contains(errShape.Message, "vclaw google auth") {
+		t.Fatalf("unexpected message: %q", errShape.Message)
 	}
 }
 

@@ -348,6 +348,7 @@ func applyMigrations(t *testing.T, ctx context.Context, db *sql.DB) {
 		"001_init_vclaw_schema.sql",
 		"002_persistence_runtime_state.sql",
 		"003_governance_metadata.sql",
+		"004_knowledge_graph.sql",
 	} {
 		path := filepath.Join("migrations", name)
 		data, err := os.ReadFile(path)
@@ -365,6 +366,7 @@ func applyEmbeddedMigrationsForTest(ctx context.Context, db *sql.DB) error {
 		filepath.Join("migrations", "001_init_vclaw_schema.sql"),
 		filepath.Join("migrations", "002_persistence_runtime_state.sql"),
 		filepath.Join("migrations", "003_governance_metadata.sql"),
+		filepath.Join("migrations", "004_knowledge_graph.sql"),
 	} {
 		data, err := os.ReadFile(filepath.Join(".", name))
 		if err != nil {

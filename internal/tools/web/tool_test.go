@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -114,6 +115,31 @@ func TestSearchToolExecuteValidatesAndClampsInput(t *testing.T) {
 	}
 	if !strings.Contains(result.ContentForLLM, "URL: https://example.com") {
 		t.Fatalf("expected citation-ready URL in content: %s", result.ContentForLLM)
+	}
+}
+
+func TestSearchToolReportsMissingWebConnectorClearly(t *testing.T) {
+	tool := NewSearchTool(NewService(nil))
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		Name:      ToolNameSearch,
+		Arguments: map[string]any{"query": "latest release"},
+	})
+	if result.Success {
+		t.Fatal("expected missing connector to fail")
+	}
+	if result.Error == nil || result.Error.Code != "AUTH_MISSING_SCOPE" {
+		t.Fatalf("expected AUTH_MISSING_SCOPE, got %#v", result.Error)
+	}
+	if !strings.Contains(result.ContentForUser, "TAVILY_API_KEY") {
+		t.Fatalf("expected actionable setup message, got %q", result.ContentForUser)
+	}
+}
+
+func TestMapErrorReportsTavilyAPIKeySetup(t *testing.T) {
+	errShape := mapError(errors.New("tavily api key is required"))
+	if errShape == nil || errShape.Code != "AUTH_MISSING_SCOPE" {
+		t.Fatalf("expected AUTH_MISSING_SCOPE, got %#v", errShape)
 	}
 }
 

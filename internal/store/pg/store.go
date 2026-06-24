@@ -62,6 +62,7 @@ func applyEmbeddedMigrations(ctx context.Context, db *sql.DB) error {
 		"001_init_vclaw_schema.sql",
 		"002_persistence_runtime_state.sql",
 		"003_governance_metadata.sql",
+		"004_knowledge_graph.sql",
 	} {
 		data, err := os.ReadFile(filepath.Join("migrations", name))
 		if err != nil {

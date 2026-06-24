@@ -22,6 +22,7 @@ import (
 	gpeople "vclaw/internal/connectors/google/people"
 	gsheets "vclaw/internal/connectors/google/sheets"
 	"vclaw/internal/connectors/tavily"
+	"vclaw/internal/knowledge"
 	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
 	"vclaw/internal/providers"
@@ -32,6 +33,7 @@ import (
 	pgstore "vclaw/internal/store/pg"
 	"vclaw/internal/toolhooks"
 	"vclaw/internal/tools"
+	memtool "vclaw/internal/tools/memory"
 	calendartool "vclaw/internal/tools/office/calendar"
 	chattool "vclaw/internal/tools/office/chat"
 	docstool "vclaw/internal/tools/office/docs"
@@ -42,7 +44,6 @@ import (
 	fstool "vclaw/internal/tools/os/filesystem"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 	webtool "vclaw/internal/tools/web"
-	memtool "vclaw/internal/tools/memory"
 )
 
 const (
@@ -158,11 +159,13 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	}
 
 	databaseURL := strings.TrimSpace(config.DatabaseURL)
-	if databaseURL != "" && (config.StateStore == nil || config.AuditLogger == nil) {
+	var postgresStore *pgstore.Store
+	if databaseURL != "" {
 		store, err := pgstore.New(ctx, databaseURL)
 		if err != nil {
 			return RuntimeBundle{}, fmt.Errorf("connect database store: %w", err)
 		}
+		postgresStore = store
 		if config.StateStore == nil {
 			config.StateStore = store
 		}
@@ -223,8 +226,23 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	}
 
 	var runtimeHooks toolhooks.Hooks = auditHooks
+	var knowledgeService *knowledge.Service
+	if databaseURL != "" {
+		if postgresStore == nil {
+			if store, ok := config.StateStore.(*pgstore.Store); ok {
+				postgresStore = store
+			}
+		}
+		if postgresStore != nil {
+			knowledgeService = knowledge.NewService(postgresStore, longMemDir, config.Logger)
+			runtimeHooks = toolhooks.ChainHooks{runtimeHooks, knowledge.Hook{Service: knowledgeService}}
+		}
+	}
 	if config.ToolHooks != nil {
 		runtimeHooks = toolhooks.ChainHooks{config.ToolHooks, auditHooks}
+		if knowledgeService != nil {
+			runtimeHooks = toolhooks.ChainHooks{runtimeHooks, knowledge.Hook{Service: knowledgeService}}
+		}
 	}
 
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
@@ -247,6 +265,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		Compactor:                  compactor,
 		MemoryClassifierModel:      compactorModel,
 		LongMemDir:                 longMemDir,
+		KnowledgeRetriever:         knowledgeService,
 		ParallelExecutionEnabled:   config.ParallelExecutionEnabled,
 		ParallelMaxWorkers:         config.ParallelMaxWorkers,
 		ParallelToolTimeoutDefault: config.ParallelToolTimeoutDefault,
