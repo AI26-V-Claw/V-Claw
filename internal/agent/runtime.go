@@ -232,12 +232,14 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
-	// Compute the prompt version once at construction. We pass a zero time so
-	// the dynamic "current time" segment of runtimeSystemPrompt doesn't shift
-	// the hash on every Runtime creation. runtimeSystemPrompt() is the single
-	// source of truth for the effective system prompt; configs/SOUL.md is
-	// reference documentation only and is not injected at runtime.
-	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}))
+	// Compute the prompt version once at construction from the static prompt
+	// content only. runtimeSystemPromptStatic() substitutes a stable placeholder
+	// for the dynamic datetime segment, so two Runtimes created at different
+	// times produce the same promptVersion as long as the static prompt is
+	// unchanged. runtimeSystemPrompt() is the single source of truth for the
+	// effective system prompt; configs/SOUL.md is reference documentation only
+	// and is not injected at runtime.
+	promptVersion := governance.PromptVersion(runtimeSystemPromptStatic())
 	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
 	subtasks.now = now
 	planStore := NewPlanStore()

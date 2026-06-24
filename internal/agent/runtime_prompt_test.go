@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent/reference"
+	"vclaw/internal/governance"
 	"vclaw/internal/knowledge"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
@@ -57,6 +58,36 @@ func TestRuntimePromptOrdersSystemMemoryReferenceAndTranscript(t *testing.T) {
 type fakeLTMemLoader struct{ content string }
 
 func (f *fakeLTMemLoader) Load() string { return f.content }
+
+func TestPromptVersionStableAcrossConstructionTimes(t *testing.T) {
+	early := time.Date(2026, time.January, 1, 8, 0, 0, 0, time.UTC)
+	late := time.Date(2026, time.December, 31, 23, 59, 0, 0, time.UTC)
+	r1 := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Now: func() time.Time { return early }})
+	r2 := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Now: func() time.Time { return late }})
+	if r1.promptVersion == "" {
+		t.Fatalf("promptVersion should not be empty")
+	}
+	if r1.promptVersion != r2.promptVersion {
+		t.Fatalf("promptVersion must be stable across construction times: %q vs %q", r1.promptVersion, r2.promptVersion)
+	}
+}
+
+func TestPromptVersionChangesWhenStaticPromptChanges(t *testing.T) {
+	base := runtimeSystemPromptStatic()
+	mutated := base + "\nextra static rule"
+	if governance.PromptVersion(mutated) == governance.PromptVersion(base) {
+		t.Fatalf("promptVersion must change when static prompt content changes")
+	}
+}
+
+func TestRuntimeSystemPromptStaticHasNoWallClock(t *testing.T) {
+	// The static prompt used for versioning must not embed a real timestamp.
+	static := runtimeSystemPromptStatic()
+	if !strings.Contains(static, runtimeSystemPromptDatetimePlaceholder) {
+		t.Fatalf("static prompt should carry the datetime placeholder, not a real time")
+	}
+}
+
 
 func TestLongTermMemoryInjectedAfterBasePrompt(t *testing.T) {
 	now := time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
