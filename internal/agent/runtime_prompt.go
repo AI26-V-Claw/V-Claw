@@ -104,6 +104,7 @@ func (r *Runtime) withRuntimeSystemPromptOptions(transcript []providers.Message,
 	}
 	selected := selectTranscriptWithinBudget(transcript, transcriptBudget)
 	selected = sanitizeProviderTranscriptForToolProtocol(selected)
+	selected = redactSensitiveMessages(selected)
 	messages = append(messages, selected...)
 
 	tokenLog = append(tokenLog,

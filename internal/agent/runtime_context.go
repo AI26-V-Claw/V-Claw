@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
@@ -29,7 +30,23 @@ func redactSensitiveForPrompt(content string) string {
 	}
 	lines := strings.Split(content, "\n")
 	kept := make([]string, 0, len(lines))
+	inPEM := false
 	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Redact an entire PEM block from BEGIN to END as a single unit. Line-by-line
+		// redaction would drop the BEGIN marker but leak the base64 key body, so track
+		// block state explicitly.
+		if !inPEM && pemBeginPattern.MatchString(trimmed) {
+			inPEM = true
+			kept = append(kept, "[redacted: sensitive content removed]")
+			continue
+		}
+		if inPEM {
+			if pemEndPattern.MatchString(trimmed) {
+				inPEM = false
+			}
+			continue
+		}
 		if longmem.ValidateMemoryContent(line) != nil {
 			kept = append(kept, "[redacted: sensitive content removed]")
 			continue
@@ -37,6 +54,29 @@ func redactSensitiveForPrompt(content string) string {
 		kept = append(kept, line)
 	}
 	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+var (
+	pemBeginPattern = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*-----`)
+	pemEndPattern   = regexp.MustCompile(`-----END [A-Z0-9 ]*-----`)
+)
+
+// redactSensitiveMessages applies redactSensitiveForPrompt to the content of
+// every message so no transcript entry leaks a secret into the provider request.
+// Tool-call arguments are left intact; secrets there would be a tool-input bug,
+// not a context-assembly leak, and rewriting structured arguments is unsafe.
+func redactSensitiveMessages(messages []providers.Message) []providers.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]providers.Message, len(messages))
+	for i, m := range messages {
+		if strings.TrimSpace(m.Content) != "" {
+			m.Content = redactSensitiveForPrompt(m.Content)
+		}
+		out[i] = m
+	}
+	return out
 }
 
 // referenceSourcesPrompt assembles an explicit "reference sources" block listing
@@ -61,9 +101,12 @@ func referenceSourcesPrompt(memory sessions.SessionMemory) string {
 	for name, ref := range memory.FileRefs {
 		switch ref.Source {
 		case "local":
-			lines = append(lines, fmt.Sprintf("- file %q: local, path=%s", name, ref.Path))
+			// Provenance only — emit the source and filename, not the absolute host
+			// path. The full path is available in the session-memory "Resolved file
+			// references" block when the agent actually needs it to attach the file.
+			lines = append(lines, fmt.Sprintf("- file %q: local", name))
 		case "drive":
-			lines = append(lines, fmt.Sprintf("- file %q: Google Drive, driveId=%s", name, ref.DriveID))
+			lines = append(lines, fmt.Sprintf("- file %q: Google Drive", name))
 		}
 	}
 

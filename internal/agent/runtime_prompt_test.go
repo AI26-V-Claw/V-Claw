@@ -88,7 +88,6 @@ func TestRuntimeSystemPromptStaticHasNoWallClock(t *testing.T) {
 	}
 }
 
-
 func TestLongTermMemoryInjectedAfterBasePrompt(t *testing.T) {
 	now := time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
 	r := NewRuntime(RuntimeConfig{
@@ -306,9 +305,13 @@ func TestReferenceSourcesBlockListsProvenance(t *testing.T) {
 		nil,
 	)
 	var refBlock string
+	var memBlock string
 	for _, m := range messages {
 		if strings.Contains(m.Content, "Reference sources") {
 			refBlock = m.Content
+		}
+		if strings.Contains(m.Content, "Resolved file references") {
+			memBlock = m.Content
 		}
 	}
 	if refBlock == "" {
@@ -317,8 +320,17 @@ func TestReferenceSourcesBlockListsProvenance(t *testing.T) {
 	if !strings.Contains(refBlock, "gmail.listEmails") {
 		t.Errorf("reference sources block missing tool provenance, got: %q", refBlock)
 	}
-	if !strings.Contains(refBlock, "report.pdf") || !strings.Contains(refBlock, "/workspace/report.pdf") {
-		t.Errorf("reference sources block missing file provenance, got: %q", refBlock)
+	// The provenance block lists the file by name and source but must NOT inject
+	// the absolute host path — that stays in the session-memory block where it is
+	// actually needed to attach the file.
+	if !strings.Contains(refBlock, "report.pdf") {
+		t.Errorf("reference sources block missing file name, got: %q", refBlock)
+	}
+	if strings.Contains(refBlock, "/workspace/report.pdf") {
+		t.Errorf("reference sources block should not leak the absolute path, got: %q", refBlock)
+	}
+	if !strings.Contains(memBlock, "/workspace/report.pdf") {
+		t.Errorf("session memory block should retain the resolvable path, got: %q", memBlock)
 	}
 }
 
@@ -335,6 +347,73 @@ func TestSessionMemoryPromptRedactsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "[redacted") {
 		t.Errorf("session memory prompt should mark redaction: %q", prompt)
+	}
+}
+
+func TestRedactSensitiveForPromptRemovesWholePEMBlock(t *testing.T) {
+	content := strings.Join([]string{
+		"Here is the deploy key for reference:",
+		"-----BEGIN RSA PRIVATE KEY-----",
+		"MIIEowIBAAKCAQEAabc123base64bodyLine1",
+		"morebase64bodyLine2morebase64bodyLine3",
+		"-----END RSA PRIVATE KEY-----",
+		"Contact: mai@example.com",
+	}, "\n")
+	out := redactSensitiveForPrompt(content)
+	for _, leak := range []string{"MIIEowIBAAKCAQEAabc123base64bodyLine1", "morebase64bodyLine2", "BEGIN RSA PRIVATE KEY"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("PEM block leaked %q in output: %q", leak, out)
+		}
+	}
+	if !strings.Contains(out, "Contact: mai@example.com") {
+		t.Errorf("non-secret content after PEM block should survive: %q", out)
+	}
+}
+
+// TestAssembledContextRedactsSecretsAcrossAllSections is an end-to-end check over
+// the full ChatRequest.Messages: secrets injected into the transcript, long-term
+// memory, and linked knowledge must not survive into any assembled message.
+func TestAssembledContextRedactsSecretsAcrossAllSections(t *testing.T) {
+	now := time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
+	r := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}, Now: func() time.Time { return now }})
+	r.ltMemLoader = &fakeLTMemLoader{content: "Profile notes\nGITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123\nworks on Helios"}
+
+	pem := strings.Join([]string{
+		"-----BEGIN PRIVATE KEY-----",
+		"MIIBVgIBADANBgkqhkiG9w0BAQEFAASCATSECRETKEYBODY",
+		"-----END PRIVATE KEY-----",
+	}, "\n")
+	transcript := []providers.Message{
+		{Role: providers.MessageRoleUser, Content: "here is my key\n" + pem},
+		{Role: providers.MessageRoleAssistant, Content: "noted"},
+		{Role: providers.MessageRoleUser, Content: "my api key is sk-zyxwvu9876543210abcdef please remember"},
+	}
+	linked := knowledge.LinkedContext{Items: []knowledge.ContextItem{
+		{Type: "note", Title: "creds: AWS_SECRET_ACCESS_KEY=abcd1234secretvalue0000", Confidence: 0.9},
+	}}
+	memory := sessions.SessionMemory{
+		Summary: "earlier the user pasted CLIENT_SECRET=supersecretvalue12345",
+	}
+
+	messages := r.withRuntimeSystemPromptOptions(transcript, memory, nil, runtimePromptOptions{
+		IncludeLongTermMemory: true,
+		LinkedKnowledge:       &linked,
+	})
+
+	secrets := []string{
+		"ghp_abcdefghijklmnopqrstuvwxyz0123",
+		"SECRETKEYBODY",
+		"BEGIN PRIVATE KEY",
+		"sk-zyxwvu9876543210abcdef",
+		"abcd1234secretvalue0000",
+		"supersecretvalue12345",
+	}
+	for _, m := range messages {
+		for _, s := range secrets {
+			if strings.Contains(m.Content, s) {
+				t.Errorf("assembled context leaked secret %q in role %s: %q", s, m.Role, m.Content)
+			}
+		}
 	}
 }
 
