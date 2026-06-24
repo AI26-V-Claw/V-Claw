@@ -29,6 +29,15 @@ func (m *RuntimeMessenger) ResetSession(ctx context.Context, sessionID string) e
 	return m.runtime.sessionStore.ClearSession(ctx, sessionID)
 }
 
+// CancelSession cancels the active run for the given sessionID, if any.
+// Returns true if a run was found and cancelled.
+func (m *RuntimeMessenger) CancelSession(sessionID string) bool {
+	if m == nil || m.runtime == nil {
+		return false
+	}
+	return m.runtime.CancelSession(sessionID)
+}
+
 func (m *RuntimeMessenger) HandleMessage(ctx context.Context, msg contracts.UserMessage) (response contracts.AgentResponse, err error) {
 	if m == nil || m.runtime == nil {
 		return contracts.AgentResponse{}, fmt.Errorf("runtime is required")

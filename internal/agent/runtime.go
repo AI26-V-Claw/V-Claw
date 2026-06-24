@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vclaw/internal/agent/reference"
@@ -35,6 +36,7 @@ var (
 	emailAnswerPattern  = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
 	timeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
 	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giờ)(\s*\d{1,2})?\b`)
+	runtimeRunCancelToken uint64
 )
 
 type RuntimeConfig struct {
@@ -105,6 +107,13 @@ type Runtime struct {
 	subtasks      *subtaskCoordinator
 	ltMemLoader   longTermMemoryLoader  // nil = disabled
 	ltMemFlusher  longTermMemoryFlusher // nil = disabled
+	cancelMu      sync.Mutex
+	activeCancels map[string]activeRunCancel // sessionID → active run cancel state
+}
+
+type activeRunCancel struct {
+	token  uint64
+	cancel context.CancelFunc
 }
 
 type longTermMemoryLoader interface {
@@ -273,6 +282,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		subtasks:                   subtasks,
 		ltMemLoader:                ltLoader,
 		ltMemFlusher:               ltFlusher,
+		activeCancels:              make(map[string]activeRunCancel),
 	}
 }
 
@@ -309,6 +319,26 @@ func (r *Runtime) chatWithProviderTimeout(ctx context.Context, request providers
 
 func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (response contracts.AgentResponse, err error) {
 	ctx = toolhooks.WithRequestContext(ctx, message.RequestID, message.SessionID)
+
+	// Register a cancel function so that CancelSession can interrupt this run.
+	runCtx, runCancel := context.WithCancel(ctx)
+	runToken := atomic.AddUint64(&runtimeRunCancelToken, 1)
+	defer func() {
+		runCancel()
+		r.cancelMu.Lock()
+		if current, ok := r.activeCancels[message.SessionID]; ok && current.token == runToken {
+			delete(r.activeCancels, message.SessionID)
+		}
+		r.cancelMu.Unlock()
+	}()
+	r.cancelMu.Lock()
+	if existing, ok := r.activeCancels[message.SessionID]; ok {
+		existing.cancel() // cancel any previous run for this session
+	}
+	r.activeCancels[message.SessionID] = activeRunCancel{token: runToken, cancel: runCancel}
+	r.cancelMu.Unlock()
+	ctx = runCtx
+
 	if r.compactor != nil {
 		sessionID := message.SessionID
 		defer func() { go r.maybeCompactAsync(sessionID) }()
@@ -362,6 +392,13 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	}
 	ctx = withParentRunID(ctx, runState.RunID)
 	ctx = WithPlanScope(ctx, message.SessionID, runState.RunID)
+	defer func() {
+		currentState := runState
+		if loaded, loadErr := r.stateStore.GetRun(context.WithoutCancel(ctx), runState.RunID); loadErr == nil {
+			currentState = loaded
+		}
+		r.finishPlanLifecycle(context.WithoutCancel(ctx), currentState)
+	}()
 	ctx = providers.WithUsageRecorder(ctx, func(usage *providers.Usage) {
 		r.recordLLMUsageCost(ctx, &runState, usage)
 	})
@@ -399,7 +436,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	if err != nil {
 		return failStartedRun(internalError("load session transcript: "+err.Error(), contracts.ErrorSourceSession))
 	}
-	r.hydratePlanFromTranscript(message.SessionID, transcript)
+	r.hydratePlanFromTranscript(message.SessionID, runState.RunID, transcript)
 	if errShape := r.refreshSessionSummary(ctx, message.SessionID, transcript); errShape != nil {
 		return failStartedRun(errShape)
 	}
@@ -489,11 +526,8 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		!resultFollowUp &&
 		!resolvedReference &&
 		turnMeta.IsContextualFollowUp
-	standaloneReadRequest := !isRevision &&
+	freshWorkspaceReadRequest := !isRevision &&
 		!activeClarification &&
-		!resultFollowUp &&
-		!contextualFollowUp &&
-		!resolvedReference &&
 		shouldIsolateMemoryForStandaloneReadRequest(message.Text)
 	isolatedNewWriteRequest := !isRevision &&
 		!resultFollowUp &&
@@ -555,7 +589,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	providerReference := referenceResolution
 	if _, isContinuation := message.Metadata["continuationOf"]; isContinuation {
 		providerTranscript = transcriptWithLastUserContent(transcript, message.Text)
-	} else if isolatedNewWriteRequest || standaloneReadRequest {
+	} else if isolatedNewWriteRequest || freshWorkspaceReadRequest {
 		providerTranscript = []providers.Message{userMessage}
 		providerMemory = sessions.SessionMemory{}
 		providerReference = nil
@@ -589,8 +623,11 @@ agentLoop:
 			return *resp, nil
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPrompt(providerTranscript, providerMemory, providerReference)
-		if prompt := r.activePlanPrompt(message.SessionID); prompt != "" {
+		providerMessages := r.withRuntimeSystemPromptOptions(providerTranscript, providerMemory, providerReference, runtimePromptOptions{IncludeLongTermMemory: !freshWorkspaceReadRequest})
+		if freshWorkspaceReadRequest {
+			providerMessages = append([]providers.Message{freshWorkspaceReadSystemMessage()}, providerMessages...)
+		}
+		if prompt := r.activePlanPrompt(message.SessionID, runState.RunID); prompt != "" {
 			providerMessages = append([]providers.Message{{Role: providers.MessageRoleSystem, Content: prompt}}, providerMessages...)
 		}
 		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
@@ -605,6 +642,29 @@ agentLoop:
 			return *resp, nil
 		}
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				code := contracts.ErrorProviderUnavailable
+				messageText := "provider chat canceled: " + err.Error()
+				base.Error = &contracts.ErrorShape{
+					Code:      code,
+					Message:   messageText,
+					Source:    contracts.ErrorSourceProvider,
+					Retryable: true,
+				}
+				r.appendRunEvent(ctx, runState.RunID, "provider.failed", map[string]any{
+					"iteration": iteration,
+					"code":      string(code),
+					"retryable": true,
+					"timeout":   false,
+				})
+				updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusCancelled, string(orchestration.FailureReasonAborted))
+				if errShape != nil {
+					base.Error = errShape
+				}
+				base.FailureReason = updatedState.FailureReason
+				base.Message = base.Error.Message
+				return base, nil
+			}
 			code := contracts.ErrorProviderError
 			retryable := providers.IsRetryableError(err)
 			messageText := "provider chat failed: " + err.Error()
@@ -612,10 +672,6 @@ agentLoop:
 				code = contracts.ErrorProviderUnavailable
 				retryable = true
 				messageText = fmt.Sprintf("provider chat timed out after %s", r.providerTimeout)
-			} else if errors.Is(err, context.Canceled) {
-				code = contracts.ErrorProviderUnavailable
-				retryable = true
-				messageText = "provider chat canceled: " + err.Error()
 			}
 			if retryable {
 				code = contracts.ErrorProviderUnavailable
@@ -649,6 +705,11 @@ agentLoop:
 		if assistantMessage.Role == "" {
 			assistantMessage.Role = providers.MessageRoleAssistant
 		}
+		if len(assistantMessage.ToolCalls) == 0 && freshWorkspaceReadRequest && len(toolResults) > 0 {
+			if rendered, ok := freshWorkspaceReadAnswerFromToolResults(toolResults); ok {
+				assistantMessage.Content = rendered
+			}
+		}
 		transcript = append(transcript, assistantMessage)
 		providerTranscript = append(providerTranscript, assistantMessage)
 		if errShape := r.appendTranscriptMessage(ctx, runState, assistantMessage); errShape != nil {
@@ -657,6 +718,24 @@ agentLoop:
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
+			if freshWorkspaceReadRequest && len(toolResults) == 0 {
+				r.logger.Info("assistant answered fresh workspace read without tool call; retrying for read tool",
+					"request_id", message.RequestID,
+					"session_id", message.SessionID,
+					"iteration", iteration,
+					"content_preview", logPreview(assistantMessage.Content, 180),
+				)
+				if len(providerTranscript) > 0 {
+					providerTranscript = providerTranscript[:len(providerTranscript)-1]
+				}
+				providerTranscript = append(providerTranscript, providers.Message{
+					Role: providers.MessageRoleSystem,
+					Content: strings.TrimSpace(`The previous assistant response answered a fresh Google Workspace read request without calling a read tool.
+Do not answer from memory, transcript, or older tool results.
+Call the appropriate read tool now, then answer only from this request's tool result.`),
+				})
+				continue
+			}
 			if shouldRetryTextualApprovalAsToolCall(assistantMessage.Content) {
 				r.logger.Info("assistant requested approval without tool call; retrying for tool call",
 					"request_id", message.RequestID,
@@ -693,7 +772,7 @@ If required information is missing, ask one concise clarification question inste
 				Message:     assistantMessage.Content,
 				Data:        r.traceData(referenceResolution),
 				ToolResults: toolResults,
-				Plan:        r.responsePlan(message.SessionID),
+				Plan:        r.responsePlan(message.SessionID, runState.RunID),
 			}, nil
 		}
 
@@ -1261,4 +1340,17 @@ func (r *Runtime) handleContextError(ctx context.Context, runState RunState, too
 		},
 		Message: messageText,
 	}
+}
+
+// CancelSession cancels the active run for the given sessionID, if any.
+// Returns true if a run was found and cancelled, false if no run was active.
+func (r *Runtime) CancelSession(sessionID string) bool {
+	r.cancelMu.Lock()
+	entry, ok := r.activeCancels[sessionID]
+	r.cancelMu.Unlock()
+	if !ok {
+		return false
+	}
+	entry.cancel()
+	return true
 }
