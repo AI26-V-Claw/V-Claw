@@ -9,12 +9,14 @@ import (
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/knowledge"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 )
 
 type runtimePromptOptions struct {
 	IncludeLongTermMemory bool
+	LinkedKnowledge       *knowledge.LinkedContext
 }
 
 func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution) []providers.Message {
@@ -51,6 +53,14 @@ func (r *Runtime) withRuntimeSystemPromptOptions(transcript []providers.Message,
 			Role:    providers.MessageRoleSystem,
 			Content: prompt,
 		})
+	}
+	if options.LinkedKnowledge != nil {
+		if prompt := knowledge.Prompt(*options.LinkedKnowledge); prompt != "" {
+			messages = append(messages, providers.Message{
+				Role:    providers.MessageRoleSystem,
+				Content: prompt,
+			})
+		}
 	}
 	messages = append(messages, sanitizeProviderTranscriptForToolProtocol(transcript)...)
 	return messages
@@ -125,6 +135,8 @@ sandbox.runPython — file paths inside Python code:
 - The sandbox mounts the workspace at /workspace. Always reference files by filename only (e.g. "sprint_report.pdf") or as "/workspace/sprint_report.pdf". NEVER use the Windows absolute path (D:\...) inside Python code — that path does not exist inside the container and will cause FileNotFoundError.
 - workspace_files in tool results show Windows host paths for reference only. Strip the directory part before using in code: use os.path.basename() or just the filename directly.
 - ALWAYS use print() to output results. Code runs as a .py script, not a REPL — bare expressions like "result" or "text" at the end of the script produce NO output. Use print(result) or print(text) to capture output in stdout.
+- For PDF, Word, Excel, logs, or any long document: NEVER print the entire extracted document text. Keep stdout bounded, ideally under 4000 characters. Print concise structured output instead: page/sheet count, total extracted character count, and short per-page/per-section snippets or chunks. If full extraction is needed for later tools, write it to a workspace file and print only that file path plus a short preview.
+- For PDF summarization specifically: extract text page-by-page with fitz/PyMuPDF or pdfplumber, split it into small chunks/snippets, and print only the chunks needed for the next summarization step. Do not do text += page_text for every page followed by print(text).
 
 sandbox.runPython — available packages only:
 - PDF reading: fitz/PyMuPDF (import fitz) — preferred for speed and accuracy. pdfplumber also available for table extraction.

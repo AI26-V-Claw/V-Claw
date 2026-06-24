@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -18,6 +20,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_USECASE = REPO_ROOT / "testing-e2e" / "usecases"
 DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "usecases"
+DEFAULT_SESSION_SEEDS = REPO_ROOT / "testing-e2e" / "sessions"
 ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 DEFAULT_ENV_FILES = [
     REPO_ROOT / ".env",
@@ -59,6 +62,31 @@ def display_path(path: Path) -> str:
         return str(path.resolve().relative_to(REPO_ROOT))
     except ValueError:
         return str(path)
+
+
+def resolve_repo_path(path_text: str) -> Path:
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path
+
+
+def sanitize_session_id(session_id: str) -> str:
+    changed = False
+    parts: list[str] = []
+    for char in session_id:
+        if char.isascii() and (char.isalnum() or char in ("-", "_")):
+            parts.append(char)
+        else:
+            parts.append("_")
+            changed = True
+    result = "".join(parts)
+    if not result:
+        return "_empty"
+    if changed:
+        digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
+        return f"{result}-{digest}"
+    return result
 
 
 def step_separator(step_id: Any) -> str:
@@ -377,6 +405,39 @@ def build_agent_command(
     return command
 
 
+def agent_data_dir(usecase: dict[str, Any]) -> Path:
+    data_dir = ""
+    flags = usecase.get("agentFlags")
+    if isinstance(flags, dict):
+        data_dir = str(flags.get("dataDir") or "").strip()
+    if not data_dir:
+        data_dir = os.environ.get("DATA_DIR", "./data").strip() or "./data"
+    return resolve_repo_path(data_dir)
+
+
+def prepare_seed_session(
+    usecase_path: Path,
+    usecase: dict[str, Any],
+    session_id: str,
+) -> dict[str, str] | None:
+    source_dir = DEFAULT_SESSION_SEEDS / usecase_path.stem
+    if not source_dir.is_dir():
+        return None
+
+    sessions_dir = agent_data_dir(usecase) / "sessions"
+    destination = sessions_dir / sanitize_session_id(session_id)
+    while destination.exists():
+        session_id = f"{session_id}_{uuid.uuid4().hex[:8]}"
+        destination = sessions_dir / sanitize_session_id(session_id)
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, destination)
+    return {
+        "sessionId": session_id,
+        "source": str(source_dir),
+        "destination": str(destination),
+    }
+
+
 def run_agent_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
     started = utc_now()
     start = time.monotonic()
@@ -650,6 +711,14 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
     session_id = args.session.strip() or f"{session_prefix}_{run_id}"
     channel = args.channel.strip() or str(usecase.get("channel") or "eval-cmd").strip()
 
+    required_env = usecase.get("requiredEnv", ["OPENAI_API_KEY"])
+    missing = require_env([str(x) for x in required_env])
+    seed_session: dict[str, str] | None = None
+    if not missing and not args.session.strip():
+        seed_session = prepare_seed_session(usecase_path, usecase, session_id)
+        if seed_session:
+            session_id = seed_session["sessionId"]
+
     variables = {
         "RUN_ID": run_id,
         "SESSION_ID": session_id,
@@ -660,14 +729,14 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
         for key, value in usecase_variables.items():
             variables[str(key)] = str(value)
 
-    required_env = usecase.get("requiredEnv", ["OPENAI_API_KEY"])
-    missing = require_env([str(x) for x in required_env])
     artifact_path = args.artifact_dir.resolve() / usecase_path.name
     log("")
     log("=" * 72)
     log(f"Use case : {usecase_name}")
     log(f"Source   : {display_path(usecase_path)}")
     log(f"Session  : {session_id}")
+    if seed_session:
+        log(f"Seed     : {display_path(Path(seed_session['source']))} -> {display_path(Path(seed_session['destination']))}")
     log("=" * 72)
     report: dict[str, Any] = {
         "runId": run_id,
@@ -678,6 +747,11 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
         "conversation": [],
         "passed": False,
     }
+    if seed_session:
+        report["seedSession"] = {
+            "source": display_path(Path(seed_session["source"])),
+            "destination": display_path(Path(seed_session["destination"])),
+        }
     if missing:
         report["missingEnv"] = missing
 

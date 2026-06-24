@@ -14,6 +14,7 @@ import (
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
 	"vclaw/internal/governance"
+	"vclaw/internal/knowledge"
 	"vclaw/internal/longmem"
 	"vclaw/internal/orchestration"
 	"vclaw/internal/policies"
@@ -33,9 +34,9 @@ const (
 )
 
 var (
-	emailAnswerPattern  = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
-	timeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
-	viTimeAnswerPattern = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giờ)(\s*\d{1,2})?\b`)
+	emailAnswerPattern    = regexp.MustCompile(`(?i)\b[[:alnum:]._%+\-]+@[[:alnum:].\-]+\.[[:alpha:]]{2,}\b`)
+	timeAnswerPattern     = regexp.MustCompile(`(?i)\b\d{1,2}(:\d{2})?\s*(am|pm)?\b`)
+	viTimeAnswerPattern   = regexp.MustCompile(`(?i)\b\d{1,2}\s*(h|g|gio|giờ)(\s*\d{1,2})?\b`)
 	runtimeRunCancelToken uint64
 )
 
@@ -68,6 +69,7 @@ type RuntimeConfig struct {
 	MemoryClassifierModel      string
 	SoulPrompt                 string
 	LongMemDir                 string
+	KnowledgeRetriever         knowledge.Retriever
 }
 
 type Runtime struct {
@@ -102,13 +104,14 @@ type Runtime struct {
 	// promptVersion is the content-hash fingerprint of the effective system
 	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
-	promptVersion string
-	planStore     *PlanStore
-	subtasks      *subtaskCoordinator
-	ltMemLoader   longTermMemoryLoader  // nil = disabled
-	ltMemFlusher  longTermMemoryFlusher // nil = disabled
-	cancelMu      sync.Mutex
-	activeCancels map[string]activeRunCancel // sessionID → active run cancel state
+	promptVersion      string
+	planStore          *PlanStore
+	subtasks           *subtaskCoordinator
+	ltMemLoader        longTermMemoryLoader  // nil = disabled
+	ltMemFlusher       longTermMemoryFlusher // nil = disabled
+	knowledgeRetriever knowledge.Retriever
+	cancelMu           sync.Mutex
+	activeCancels      map[string]activeRunCancel // sessionID → active run cancel state
 }
 
 type activeRunCancel struct {
@@ -283,6 +286,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltMemLoader:                ltLoader,
 		ltMemFlusher:               ltFlusher,
 		activeCancels:              make(map[string]activeRunCancel),
+		knowledgeRetriever:         config.KnowledgeRetriever,
 	}
 }
 
@@ -601,6 +605,27 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		providerTranscript = transcriptWithLastUserContent(transcript, understandingMessage.Text)
 	}
 
+	var providerKnowledge *knowledge.LinkedContext
+	if r.knowledgeRetriever != nil && !freshWorkspaceReadRequest {
+		linked, retrieveErr := r.knowledgeRetriever.Retrieve(ctx, knowledge.Query{
+			Text:      understandingMessage.Text,
+			SessionID: message.SessionID,
+			RunID:     runState.RunID,
+			RequestID: message.RequestID,
+			Limit:     15,
+			Now:       r.now().UTC(),
+		})
+		if retrieveErr != nil {
+			r.logger.Warn("linked knowledge retrieval failed",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"error", retrieveErr,
+			)
+		} else if len(linked.Items) > 0 {
+			providerKnowledge = &linked
+		}
+	}
+
 	toolResults := []contracts.ToolResult{}
 	iterationBudget := NewIterationBudget(r.iterationBudgetLimit)
 	housekeepingRefunds := 0
@@ -623,7 +648,7 @@ agentLoop:
 			return *resp, nil
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPromptOptions(providerTranscript, providerMemory, providerReference, runtimePromptOptions{IncludeLongTermMemory: !freshWorkspaceReadRequest})
+		providerMessages := r.withRuntimeSystemPromptOptions(providerTranscript, providerMemory, providerReference, runtimePromptOptions{IncludeLongTermMemory: !freshWorkspaceReadRequest, LinkedKnowledge: providerKnowledge})
 		if freshWorkspaceReadRequest {
 			providerMessages = append([]providers.Message{freshWorkspaceReadSystemMessage()}, providerMessages...)
 		}
@@ -942,23 +967,7 @@ If required information is missing, ask one concise clarification question inste
 				definition.Name = providerToolCall.Name
 			}
 
-			decision := r.stampPolicyRef(runState.RunID, providerToolCall.ID, r.decideToolCall(ctx, providerToolCall, definition, found))
-			r.logger.Info("agent tool call proposed",
-				"request_id", message.RequestID,
-				"session_id", message.SessionID,
-				"iteration", iteration,
-				"tool_call_id", providerToolCall.ID,
-				"tool_name", providerToolCall.Name,
-				"decision", decision.Decision,
-				"risk_level", decision.RiskLevel,
-				"arguments", logToolArguments(providerToolCall.Name, providerToolCall.Arguments),
-			)
 			toolCallMissingFields := pendingMissingFieldsForToolCall(providerToolCall, definition, found, activeClarification, currentRequestText)
-			if errShape := r.recordRuntimeRiskDecision(ctx, runState, providerToolCall, decision); errShape != nil {
-				base.Error = errShape
-				base.Message = errShape.Message
-				return base, nil
-			}
 			if clarification := r.toolCallClarificationResponse(message, providerToolCall, definition, found, activeClarification, currentRequestText); clarification != nil {
 				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusWaitingClarification, clarification.Message, ""); errShape != nil {
 					base.Error = errShape
@@ -1046,6 +1055,22 @@ If required information is missing, ask one concise clarification question inste
 					clarification.Status = contracts.AgentStatusFailed
 				}
 				return *clarification, nil
+			}
+			decision := r.stampPolicyRef(runState.RunID, providerToolCall.ID, r.decideToolCall(ctx, providerToolCall, definition, found))
+			r.logger.Info("agent tool call proposed",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"iteration", iteration,
+				"tool_call_id", providerToolCall.ID,
+				"tool_name", providerToolCall.Name,
+				"decision", decision.Decision,
+				"risk_level", decision.RiskLevel,
+				"arguments", logToolArguments(providerToolCall.Name, providerToolCall.Arguments),
+			)
+			if errShape := r.recordRuntimeRiskDecision(ctx, runState, providerToolCall, decision); errShape != nil {
+				base.Error = errShape
+				base.Message = errShape.Message
+				return base, nil
 			}
 			switch decision.Decision {
 			case contracts.RiskDecisionAllow:

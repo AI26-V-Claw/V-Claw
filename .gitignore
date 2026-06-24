@@ -65,3 +65,5 @@ docs/superpowers/
 
 .gocache2/
 .gocache/
+
+__pycache__

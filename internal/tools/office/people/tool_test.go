@@ -3,10 +3,13 @@ package people
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	peopleconnector "vclaw/internal/connectors/google/people"
 	"vclaw/internal/tools"
+
+	"google.golang.org/api/googleapi"
 )
 
 type fakeConnector struct {
@@ -68,6 +71,18 @@ func TestSearchDirectoryMapsConnectorError(t *testing.T) {
 	}
 	if errShape.Code != "INTERNAL_ERROR" {
 		t.Fatalf("expected INTERNAL_ERROR, got %q", errShape.Code)
+	}
+}
+
+func TestSearchDirectoryMapsWrappedGoogleMissingScope(t *testing.T) {
+	service := NewService(fakeConnector{err: fmt.Errorf("people search failed: %w", &googleapi.Error{
+		Code:    403,
+		Message: "Request had insufficient authentication scopes.",
+	})})
+
+	_, errShape := service.SearchDirectory(context.Background(), SearchDirectoryInput{Query: "Bao"})
+	if errShape == nil || errShape.Code != "AUTH_MISSING_SCOPE" {
+		t.Fatalf("expected AUTH_MISSING_SCOPE, got %#v", errShape)
 	}
 }
 

@@ -187,3 +187,35 @@ func TestMessageCountThresholdTriggersCompaction(t *testing.T) {
 	}
 }
 
+func TestMessageCountCompactionKeepsBoundedRecentMessages(t *testing.T) {
+	provider := &compactorTestProvider{}
+	compactor := NewCompactor(provider, CompactorConfig{
+		ContextWindow:            128_000,
+		ThresholdRatio:           0.80,
+		KeepTokenRatio:           0.20,
+		MessageCountThreshold:    150,
+		MessageCountKeepMessages: 100,
+	}, nil)
+
+	transcript := make([]providers.Message, 154)
+	for i := range transcript {
+		transcript[i] = providers.Message{Role: providers.MessageRoleUser, Content: "short message"}
+	}
+
+	result, err := compactor.MaybeCompact(context.Background(), "sess-count", transcript, SessionMemory{}, CompactorGuard{})
+	if err != nil {
+		t.Fatalf("MaybeCompact: %v", err)
+	}
+	if !result.Compacted {
+		t.Fatalf("expected message-count compaction, got skip reason: %s", result.SkipReason)
+	}
+	if result.Stats.Strategy != "message" {
+		t.Fatalf("message-count compaction should use message strategy, got %q", result.Stats.Strategy)
+	}
+	if got := len(result.KeptMessages); got != 100 {
+		t.Fatalf("kept messages = %d, want 100", got)
+	}
+	if result.Stats.SummarizedMessages != 54 {
+		t.Fatalf("summarized messages = %d, want 54", result.Stats.SummarizedMessages)
+	}
+}

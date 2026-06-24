@@ -10,6 +10,7 @@ import (
 	"vclaw/internal/connectors/google/common"
 	gdocs "vclaw/internal/connectors/google/docs"
 	"vclaw/internal/tools"
+	"vclaw/internal/tools/office"
 )
 
 const (
@@ -451,13 +452,13 @@ func firstNonEmpty(values ...string) string {
 func mapError(err error) *ErrorShape {
 	switch {
 	case errors.Is(err, common.ErrAuth):
-		return &ErrorShape{Code: "AUTH_EXPIRED", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorAuthExpired, Message: office.FriendlyGoogleToolError(office.ErrorAuthExpired, "Google Docs", err.Error()), Retryable: true}
 	case errors.Is(err, common.ErrNotFound):
-		return &ErrorShape{Code: "RESOURCE_NOT_FOUND", Message: err.Error(), Retryable: false}
+		return &ErrorShape{Code: office.ErrorResourceNotFound, Message: office.FriendlyGoogleToolError(office.ErrorResourceNotFound, "Google Docs", err.Error()), Retryable: false}
 	case errors.Is(err, common.ErrRateLimit):
-		return &ErrorShape{Code: "RATE_LIMITED", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorRateLimited, Message: office.FriendlyGoogleToolError(office.ErrorRateLimited, "Google Docs", err.Error()), Retryable: true}
 	case errors.Is(err, common.ErrAPI):
-		return &ErrorShape{Code: "PROVIDER_UNAVAILABLE", Message: err.Error(), Retryable: true}
+		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Docs", err.Error()), Retryable: true}
 	default:
 		return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error(), Retryable: false}
 	}

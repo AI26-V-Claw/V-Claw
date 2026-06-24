@@ -882,6 +882,7 @@ func (r *Runtime) responseForUnclaimedApprovedAction(record ActionRecord, pendin
 func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
 	resultNote := approvalContinuationResultNote(pending.toolCall.Name)
+	resultContent := truncateToolContentForLLM(result.ContentForLLM)
 	if len(pending.remainingToolCalls) > 0 {
 		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
 		for _, tc := range pending.remainingToolCalls {
@@ -903,7 +904,7 @@ Use any resource IDs or names returned by the completed tool's result when they 
 Call each remaining tool exactly once. Do not call a tool that already appears in the conversation history.`,
 			pending.message.Text,
 			pending.toolCall.Name,
-			result.ContentForLLM,
+			resultContent,
 			resultNote,
 			strings.Join(remainingNames, ", "),
 		))
@@ -928,7 +929,7 @@ If all tasks are already complete, respond with a short Vietnamese summary of wh
 Do not repeat the tool that was just executed.`,
 			pending.message.Text,
 			pending.toolCall.Name,
-			result.ContentForLLM,
+			resultContent,
 			resultNote,
 			pipelineHint,
 		))

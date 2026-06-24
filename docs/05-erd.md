@@ -1,8 +1,9 @@
 # Persistence ERD
 
 > Scope: PostgreSQL persistence for run state, tool calls, approval, tool
-> execution, registry metadata, and audit. Session transcript and short-term
-> memory remain file-backed JSON under `data/sessions`.
+> execution, registry metadata, audit, and linked knowledge graph context.
+> Session transcript and short-term memory remain file-backed JSON under
+> `data/sessions`.
 
 ## Source Of Truth
 
@@ -57,6 +58,11 @@ top of the current baseline:
   `system_op_type`, `confidence`, `action_taken`, `output`, `error`) are dropped
   in `003_drop_legacy_columns.sql`; they had no PostgreSQL writer (the legacy
   `audit.Entry` shape is written to a file logger only).
+- Add linked knowledge graph tables for auxiliary context:
+  `knowledge_nodes`, `knowledge_edges`, and `knowledge_observations`.
+  These tables are not source of truth for live Google Workspace state. Deleted
+  external resources are soft-deleted/stale in graph rows while observations
+  remain for provenance.
 
 ## Target ERD
 
