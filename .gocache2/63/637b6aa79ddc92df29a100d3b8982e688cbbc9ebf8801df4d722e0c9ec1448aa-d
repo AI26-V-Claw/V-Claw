@@ -1,6 +1,0 @@
-./anthropic.go
-./client.go
-./openai.go
-./openai_compatible.go
-./provider.go
-./schema.go

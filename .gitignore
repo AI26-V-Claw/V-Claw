@@ -62,3 +62,6 @@ testing-e2e/artifacts/
 testing-e2e/**/*.log
 .gomodcache/
 docs/superpowers/
+
+.gocache2/
+.gocache/

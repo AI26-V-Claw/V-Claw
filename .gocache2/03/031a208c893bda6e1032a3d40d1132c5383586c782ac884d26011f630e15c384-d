@@ -1,8 +1,0 @@
-./checker.go
-./policy.go
-./python_rules.go
-./settings_ui.go
-./shell_rules.go
-./tool_policy.go
-./user_policy_config.go
-./user_policy_store.go
