@@ -93,6 +93,7 @@ func (r *Runtime) runPostToolHook(ctx context.Context, toolCall providers.ToolCa
 	}
 	requestID, sessionID := toolhooks.RequestContextFrom(ctx)
 	if err := r.toolHooks.AfterTool(ctx, toolhooks.PostToolInput{
+		RunID:      parentRunIDFromContext(ctx),
 		RequestID:  requestID,
 		SessionID:  sessionID,
 		ToolCallID: toolCall.ID,

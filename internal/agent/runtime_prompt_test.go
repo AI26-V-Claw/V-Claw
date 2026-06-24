@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent/reference"
+	"vclaw/internal/knowledge"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	drivetool "vclaw/internal/tools/office/drive"
@@ -151,6 +152,31 @@ func TestLongTermMemoryCanBeSuppressedForFreshWorkspaceRead(t *testing.T) {
 	}
 	if !strings.Contains(joined, "session context remains available") {
 		t.Fatalf("session memory should still be included by this prompt option, got: %s", joined)
+	}
+}
+
+func TestLinkedKnowledgePromptInjectedAsContextOnly(t *testing.T) {
+	r := NewRuntime(RuntimeConfig{Provider: &fakeProvider{}})
+	linked := knowledge.LinkedContext{Items: []knowledge.ContextItem{{
+		Type:       knowledge.NodeTypeMeeting,
+		Title:      "Design review",
+		Confidence: 0.9,
+		Metadata:   map[string]any{"start": "2026-06-23T09:00:00+07:00"},
+	}}}
+
+	messages := r.withRuntimeSystemPromptOptions(
+		[]providers.Message{{Role: providers.MessageRoleUser, Content: "project nay lien quan gi"}},
+		sessions.SessionMemory{},
+		nil,
+		runtimePromptOptions{IncludeLongTermMemory: true, LinkedKnowledge: &linked},
+	)
+
+	joined := providerMessagesContent(messages)
+	if !strings.Contains(joined, "Linked knowledge context") || !strings.Contains(joined, "context_only") {
+		t.Fatalf("linked knowledge guard missing from prompt: %s", joined)
+	}
+	if !strings.Contains(joined, "Design review") {
+		t.Fatalf("linked knowledge item missing from prompt: %s", joined)
 	}
 }
 

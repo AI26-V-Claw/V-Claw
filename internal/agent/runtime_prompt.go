@@ -9,12 +9,14 @@ import (
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/knowledge"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 )
 
 type runtimePromptOptions struct {
 	IncludeLongTermMemory bool
+	LinkedKnowledge       *knowledge.LinkedContext
 }
 
 func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution) []providers.Message {
@@ -51,6 +53,14 @@ func (r *Runtime) withRuntimeSystemPromptOptions(transcript []providers.Message,
 			Role:    providers.MessageRoleSystem,
 			Content: prompt,
 		})
+	}
+	if options.LinkedKnowledge != nil {
+		if prompt := knowledge.Prompt(*options.LinkedKnowledge); prompt != "" {
+			messages = append(messages, providers.Message{
+				Role:    providers.MessageRoleSystem,
+				Content: prompt,
+			})
+		}
 	}
 	messages = append(messages, sanitizeProviderTranscriptForToolProtocol(transcript)...)
 	return messages
