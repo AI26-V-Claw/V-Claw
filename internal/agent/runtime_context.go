@@ -88,14 +88,31 @@ func redactSensitiveMessages(messages []providers.Message) []providers.Message {
 func referenceSourcesPrompt(memory sessions.SessionMemory) string {
 	lines := make([]string, 0, len(memory.LastActionResults)+len(memory.FileRefs))
 
-	seenTools := make(map[string]bool)
+	// List recent results newest-first, one line per result rather than per tool,
+	// so repeated calls of the same tool stay distinguishable by their artifact.
+	// We attach a safe resource label (artifact kind/label) when present; opaque
+	// IDs and absolute paths are intentionally omitted — this block is provenance
+	// for the model, not user-facing output.
 	for i := len(memory.LastActionResults) - 1; i >= 0; i-- {
-		name := strings.TrimSpace(memory.LastActionResults[i].ToolName)
-		if name == "" || seenTools[name] {
+		ar := memory.LastActionResults[i]
+		name := strings.TrimSpace(ar.ToolName)
+		if name == "" {
 			continue
 		}
-		seenTools[name] = true
-		lines = append(lines, fmt.Sprintf("- tool result from %s", name))
+		line := "- tool result from " + name
+		if ar.Artifact != nil {
+			if label := strings.TrimSpace(ar.Artifact.Label); label != "" {
+				kind := strings.TrimSpace(ar.Artifact.Kind)
+				if kind != "" {
+					line += fmt.Sprintf(" (%s: %s)", kind, label)
+				} else {
+					line += fmt.Sprintf(" (%s)", label)
+				}
+			} else if kind := strings.TrimSpace(ar.Artifact.Kind); kind != "" {
+				line += fmt.Sprintf(" (%s)", kind)
+			}
+		}
+		lines = append(lines, line)
 	}
 
 	for name, ref := range memory.FileRefs {
@@ -301,6 +318,10 @@ func (r *Runtime) refreshSessionSummary(ctx context.Context, sessionID string, t
 }
 
 func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, result tools.ToolResult) *contracts.ErrorShape {
+	return r.recordActionResultForRun(ctx, sessionID, "", "", result)
+}
+
+func (r *Runtime) recordActionResultForRun(ctx context.Context, sessionID string, runID string, requestID string, result tools.ToolResult) *contracts.ErrorShape {
 	if !result.Success {
 		return nil
 	}
@@ -316,11 +337,24 @@ func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, resu
 		return errShape
 	}
 	memory.PendingClarification = nil
-	memory.LastActionResults = append(memory.LastActionResults, sessions.ActionResult{
-		ToolName:  result.ToolName,
-		Content:   truncateToolContentForLLM(content),
-		CreatedAt: r.now(),
-	})
+	action := sessions.ActionResult{
+		ToolName:   result.ToolName,
+		Content:    truncateToolContentForLLM(content),
+		CreatedAt:  r.now(),
+		ToolCallID: strings.TrimSpace(result.ToolCallID),
+		RequestID:  strings.TrimSpace(requestID),
+		RunID:      strings.TrimSpace(runID),
+		Source:     strings.TrimSpace(result.Source),
+	}
+	if art := result.ArtifactRef; art != nil {
+		action.Artifact = &sessions.ActionArtifact{
+			Kind:  strings.TrimSpace(art.Kind),
+			Label: strings.TrimSpace(art.Label),
+			URI:   strings.TrimSpace(art.URI),
+			ID:    strings.TrimSpace(art.ID),
+		}
+	}
+	memory.LastActionResults = append(memory.LastActionResults, action)
 	if len(memory.LastActionResults) > 10 {
 		memory.LastActionResults = memory.LastActionResults[len(memory.LastActionResults)-10:]
 	}

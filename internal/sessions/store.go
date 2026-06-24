@@ -55,6 +55,28 @@ type ActionResult struct {
 	ToolName  string    `json:"toolName"`
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"createdAt"`
+
+	// Provenance fields (all optional, backward-compatible). They let the agent
+	// distinguish which specific tool call produced a given fact when the same
+	// tool is invoked multiple times. These are for context/trace/audit only and
+	// must never be surfaced as opaque IDs to the end user.
+	ToolCallID string `json:"toolCallId,omitempty"`
+	RequestID  string `json:"requestId,omitempty"`
+	RunID      string `json:"runId,omitempty"`
+	// Source identifies the origin layer (e.g. "tool:google_workspace").
+	Source string `json:"source,omitempty"`
+	// Artifact records the primary resource this result touched, when one exists.
+	Artifact *ActionArtifact `json:"artifact,omitempty"`
+}
+
+// ActionArtifact captures a safe, resolvable reference to the resource an action
+// result produced or accessed. It mirrors the fields of tools.ToolArtifactRef
+// that are useful for provenance without depending on the tools package.
+type ActionArtifact struct {
+	Kind  string `json:"kind,omitempty"`
+	Label string `json:"label,omitempty"`
+	URI   string `json:"uri,omitempty"`
+	ID    string `json:"id,omitempty"`
 }
 
 type PendingClarification struct {

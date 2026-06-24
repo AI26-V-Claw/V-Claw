@@ -879,7 +879,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
+				if errShape := r.recordActionResultForRun(ctx, message.SessionID, runState.RunID, message.RequestID, result); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -1096,7 +1096,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
+				if errShape := r.recordActionResultForRun(ctx, message.SessionID, runState.RunID, message.RequestID, result); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil

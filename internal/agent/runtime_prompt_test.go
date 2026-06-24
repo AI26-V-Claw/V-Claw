@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"vclaw/internal/knowledge"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
+	"vclaw/internal/tools"
 	drivetool "vclaw/internal/tools/office/drive"
 )
 
@@ -331,6 +333,60 @@ func TestReferenceSourcesBlockListsProvenance(t *testing.T) {
 	}
 	if !strings.Contains(memBlock, "/workspace/report.pdf") {
 		t.Errorf("session memory block should retain the resolvable path, got: %q", memBlock)
+	}
+}
+
+func TestReferenceSourcesDistinguishesRepeatedToolCalls(t *testing.T) {
+	// Same tool called twice, each touching a different resource.
+	memory := sessions.SessionMemory{
+		LastActionResults: []sessions.ActionResult{
+			{ToolName: "drive.downloadFile", Content: "downloaded A", ToolCallID: "call_1", Artifact: &sessions.ActionArtifact{Kind: "file", Label: "alpha.pdf", ID: "drive-id-aaa"}},
+			{ToolName: "drive.downloadFile", Content: "downloaded B", ToolCallID: "call_2", Artifact: &sessions.ActionArtifact{Kind: "file", Label: "beta.pdf", ID: "drive-id-bbb"}},
+		},
+	}
+	block := referenceSourcesPrompt(memory)
+	if !strings.Contains(block, "alpha.pdf") || !strings.Contains(block, "beta.pdf") {
+		t.Fatalf("provenance should distinguish both resources, got: %q", block)
+	}
+	// Two distinct result lines for the same tool.
+	if got := strings.Count(block, "tool result from drive.downloadFile"); got != 2 {
+		t.Fatalf("expected 2 distinct provenance lines for repeated tool, got %d: %q", got, block)
+	}
+	// Opaque resource IDs must not be exposed in the provenance block.
+	if strings.Contains(block, "drive-id-aaa") || strings.Contains(block, "drive-id-bbb") {
+		t.Fatalf("opaque resource IDs must not appear in provenance block: %q", block)
+	}
+}
+
+func TestRecordActionResultCapturesProvenance(t *testing.T) {
+	now := time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
+	store := sessions.NewInMemoryStore()
+	r := NewRuntime(RuntimeConfig{
+		Provider:     &fakeProvider{},
+		SessionStore: store,
+		Now:          func() time.Time { return now },
+	})
+	result := tools.ToolResult{
+		ToolCallID:    "call_xyz",
+		ToolName:      "gmail.listEmails",
+		Success:       true,
+		ContentForLLM: "found 3 emails",
+		Source:        "tool:google_workspace",
+		ArtifactRef:   &tools.ToolArtifactRef{Kind: "email", Label: "Inbox", ID: "msg-123"},
+	}
+	if errShape := r.recordActionResultForRun(context.Background(), "sess-1", "run-1", "req-1", result); errShape != nil {
+		t.Fatalf("recordActionResultForRun failed: %v", errShape)
+	}
+	mem, _ := store.LoadMemory(context.Background(), "sess-1")
+	if len(mem.LastActionResults) != 1 {
+		t.Fatalf("expected 1 recorded action result, got %d", len(mem.LastActionResults))
+	}
+	ar := mem.LastActionResults[0]
+	if ar.ToolCallID != "call_xyz" || ar.RunID != "run-1" || ar.RequestID != "req-1" || ar.Source != "tool:google_workspace" {
+		t.Fatalf("provenance fields not captured: %+v", ar)
+	}
+	if ar.Artifact == nil || ar.Artifact.ID != "msg-123" || ar.Artifact.Label != "Inbox" {
+		t.Fatalf("artifact provenance not captured: %+v", ar.Artifact)
 	}
 }
 
