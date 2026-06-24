@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	sandboxruntime "vclaw/internal/sandbox/runtime"
@@ -92,6 +93,20 @@ func TestRunPythonToolParametersAreOpenAICompatible(t *testing.T) {
 	}
 	if len(required) != 1 || required[0] != "code" {
 		t.Fatalf("expected code to be the only required field, got %#v", required)
+	}
+}
+
+func TestRunPythonToolDescriptionBoundsPDFOutput(t *testing.T) {
+	description := NewRunPythonTool(Config{}).Description()
+	for _, want := range []string{
+		"do not print the full extracted text",
+		"under 4000 characters",
+		"short page/section snippets or chunks",
+		"write it to a workspace file",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("runPython description missing %q: %s", want, description)
+		}
 	}
 }
 

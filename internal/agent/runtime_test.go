@@ -2669,6 +2669,26 @@ func TestApprovalContinuationMessageMapsDraftIDToSendDraftArgument(t *testing.T)
 	}
 }
 
+func TestApprovalContinuationMessageTruncatesLargeToolOutput(t *testing.T) {
+	largeOutput := strings.Repeat("x", maxToolContentForLLM+512)
+	message := buildApprovalContinuationMessage(pendingApproval{
+		message:  runtimeTestMessage(),
+		toolCall: providers.ToolCall{Name: "sandbox.runPython"},
+	}, tools.ToolResult{
+		ToolCallID:    "call_python",
+		ToolName:      "sandbox.runPython",
+		Success:       true,
+		ContentForLLM: largeOutput,
+	}, runtimeTestMessage().Timestamp)
+
+	if strings.Contains(message.Text, largeOutput) {
+		t.Fatalf("continuation included full large tool output")
+	}
+	if !strings.Contains(message.Text, "...[truncated 512 bytes]") {
+		t.Fatalf("expected truncation marker in continuation, got %q", message.Text)
+	}
+}
+
 func TestRuntimeResultFollowUpUsesRecentApprovedActionContext(t *testing.T) {
 	provider := &fakeProvider{responses: []providers.ChatResponse{{
 		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Có. Calendar sẽ gửi email thông báo cho attendee nếu sự kiện được tạo với người tham gia."},
