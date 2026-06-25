@@ -2,7 +2,7 @@ package google
 
 import "testing"
 
-func TestG1ScopesIncludesDriveDocsSheets(t *testing.T) {
+func TestG1ScopesIncludesWorkspaceScopes(t *testing.T) {
 	for _, scope := range []string{
 		ScopeDriveReadonly,
 		ScopeDrive,
@@ -10,6 +10,7 @@ func TestG1ScopesIncludesDriveDocsSheets(t *testing.T) {
 		ScopeDocuments,
 		ScopeSpreadsheetsReadonly,
 		ScopeSpreadsheets,
+		ScopeMeetingsSpaceCreated,
 	} {
 		if !hasScope(G1Scopes, scope) {
 			t.Fatalf("G1Scopes missing %s", scope)
