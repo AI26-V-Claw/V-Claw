@@ -339,6 +339,38 @@ func TestCreateEvent_MissingTitle(t *testing.T) {
 	}
 }
 
+func TestCreateEvent_CreateConferencePassesFlagAndReturnsMeetLink(t *testing.T) {
+	var captured gcal.Event
+	mock := &mockConnector{
+		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {
+			captured = e
+			return gcal.Event{
+				ID:               "new_id",
+				Title:            e.Title,
+				MeetLink:         "https://meet.google.com/new-link",
+				ConferenceStatus: "success",
+			}, nil
+		},
+	}
+	svc := NewService(mock)
+
+	output, errShape := svc.CreateEvent(context.Background(), CreateEventInput{
+		Title:            "Meet test",
+		Start:            "2026-05-30T10:00:00+07:00",
+		End:              "2026-05-30T11:00:00+07:00",
+		CreateConference: true,
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if !captured.CreateConference {
+		t.Fatal("expected createConference to be passed to connector")
+	}
+	if output.Event.MeetLink != "https://meet.google.com/new-link" || output.Event.ConferenceStatus != "success" {
+		t.Fatalf("unexpected conference output: %+v", output.Event)
+	}
+}
+
 func TestCreateEvent_InvalidStart(t *testing.T) {
 	svc := NewService(&mockConnector{})
 
@@ -478,6 +510,64 @@ func TestUpdateEvent_MissingEventID(t *testing.T) {
 	}
 	if errShape.Code != "INVALID_INPUT" {
 		t.Errorf("expected INVALID_INPUT, got %s", errShape.Code)
+	}
+}
+
+func TestUpdateEvent_CreateConferenceExistingMeetLinkIsIdempotent(t *testing.T) {
+	updateCalled := false
+	mock := &mockConnector{
+		getEventFunc: func(ctx context.Context, eventID string) (gcal.Event, error) {
+			return gcal.Event{
+				ID:       eventID,
+				Title:    "Already has Meet",
+				MeetLink: "https://meet.google.com/existing-link",
+			}, nil
+		},
+		updateEventFunc: func(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error) {
+			updateCalled = true
+			return gcal.Event{}, nil
+		},
+	}
+	svc := NewService(mock)
+
+	output, errShape := svc.UpdateEvent(context.Background(), UpdateEventInput{
+		EventID:          "event_001",
+		CreateConference: true,
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if updateCalled {
+		t.Fatal("update should not be called when only adding Meet to an event that already has one")
+	}
+	if output.Event.MeetLink != "https://meet.google.com/existing-link" {
+		t.Fatalf("expected existing Meet link, got %q", output.Event.MeetLink)
+	}
+}
+
+func TestUpdateEvent_CreateConferencePassesFlag(t *testing.T) {
+	mock := &mockConnector{
+		getEventFunc: func(ctx context.Context, eventID string) (gcal.Event, error) {
+			return gcal.Event{ID: eventID}, nil
+		},
+		updateEventFunc: func(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error) {
+			if !e.CreateConference {
+				t.Fatal("expected createConference flag")
+			}
+			return gcal.Event{ID: eventID, MeetLink: "https://meet.google.com/created-link"}, nil
+		},
+	}
+	svc := NewService(mock)
+
+	output, errShape := svc.UpdateEvent(context.Background(), UpdateEventInput{
+		EventID:          "event_001",
+		CreateConference: true,
+	})
+	if errShape != nil {
+		t.Fatalf("unexpected error: %s", errShape.Error())
+	}
+	if output.Event.MeetLink != "https://meet.google.com/created-link" {
+		t.Fatalf("expected created Meet link, got %q", output.Event.MeetLink)
 	}
 }
 
@@ -776,6 +866,71 @@ func TestCreateEventToolRejectsInvalidAttendeeEmail(t *testing.T) {
 	}
 	if called {
 		t.Fatal("connector should not be called for invalid attendee email")
+	}
+}
+
+func TestCreateEventToolExecuteWithCreateConference(t *testing.T) {
+	mock := &mockConnector{
+		createEventFunc: func(ctx context.Context, e gcal.Event) (gcal.Event, error) {
+			if !e.CreateConference {
+				t.Fatal("expected createConference to be parsed from arguments")
+			}
+			return gcal.Event{
+				ID:        "new",
+				Title:     e.Title,
+				EventLink: "https://calendar.google.com/calendar/event?eid=create_event_new",
+				MeetLink:  "https://meet.google.com/new-link",
+			}, nil
+		},
+	}
+	tool := &CreateEventTool{service: NewService(mock)}
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "tc_create_meet",
+		Name: ToolNameCreateEvent,
+		Arguments: map[string]any{
+			"title":            "Team standup",
+			"start":            "2026-05-30T10:00:00+07:00",
+			"end":              "2026-05-30T10:30:00+07:00",
+			"createConference": true,
+		},
+	})
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.Meta["meetLink"] != "https://meet.google.com/new-link" {
+		t.Fatalf("expected meetLink artifact metadata, got %#v", result.ArtifactRef)
+	}
+}
+
+func TestUpdateEventToolSetsArtifactRefWithMeetLink(t *testing.T) {
+	mock := &mockConnector{
+		getEventFunc: func(ctx context.Context, eventID string) (gcal.Event, error) {
+			return gcal.Event{ID: eventID}, nil
+		},
+		updateEventFunc: func(ctx context.Context, eventID string, e gcal.Event) (gcal.Event, error) {
+			return gcal.Event{
+				ID:        eventID,
+				EventLink: "https://calendar.google.com/calendar/event?eid=updated",
+				MeetLink:  "https://meet.google.com/updated-link",
+			}, nil
+		},
+	}
+	tool := &UpdateEventTool{service: NewService(mock)}
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "tc_update_meet",
+		Name: ToolNameUpdateEvent,
+		Arguments: map[string]any{
+			"eventId":          "event_001",
+			"createConference": true,
+		},
+	})
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result.Error)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.Meta["meetLink"] != "https://meet.google.com/updated-link" {
+		t.Fatalf("expected meetLink artifact metadata, got %#v", result.ArtifactRef)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	gdocs "vclaw/internal/connectors/google/docs"
 	gdrive "vclaw/internal/connectors/google/drive"
 	ggmail "vclaw/internal/connectors/google/gmail"
+	gmeet "vclaw/internal/connectors/google/meet"
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeople "vclaw/internal/connectors/google/people"
 	gsheets "vclaw/internal/connectors/google/sheets"
@@ -39,6 +40,7 @@ import (
 	docstool "vclaw/internal/tools/office/docs"
 	drivetool "vclaw/internal/tools/office/drive"
 	gmailtool "vclaw/internal/tools/office/gmail"
+	meettool "vclaw/internal/tools/office/meet"
 	peopletool "vclaw/internal/tools/office/people"
 	sheetstool "vclaw/internal/tools/office/sheets"
 	fstool "vclaw/internal/tools/os/filesystem"
@@ -421,6 +423,9 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 		return fmt.Errorf("create calendar connector: %w", err)
 	}
 	if err := calendartool.RegisterTools(registry, calendartool.NewService(calendarClient)); err != nil {
+		return err
+	}
+	if err := meettool.RegisterTools(registry, meettool.NewService(gmeet.NewClient(httpClient))); err != nil {
 		return err
 	}
 	peopleClient := gpeople.NewClient(httpClient)

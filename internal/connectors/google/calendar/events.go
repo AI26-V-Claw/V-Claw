@@ -14,6 +14,8 @@ import (
 // than any normal time-range query returns.
 const maxListEventsPages = 20
 
+const conferenceWaitTimeout = 15 * time.Second
+
 // ListEvents retrieves events from the primary calendar within a time range.
 // It also applies a search query if one is provided. The Calendar API paginates
 // large result sets, so this follows NextPageToken across pages to avoid
@@ -63,22 +65,66 @@ func (c *Client) GetEvent(ctx context.Context, eventID string) (Event, error) {
 // CreateEvent inserts a new event into the primary calendar.
 func (c *Client) CreateEvent(ctx context.Context, e Event) (Event, error) {
 	gEvent := toGoogleEvent(e)
-	res, err := c.srv.Events.Insert("primary", gEvent).Context(ctx).Do()
+	req := c.srv.Events.Insert("primary", gEvent).Context(ctx)
+	if e.CreateConference {
+		req = req.ConferenceDataVersion(1)
+	}
+	res, err := req.Do()
 	if err != nil {
 		return Event{}, fmt.Errorf("calendar: create event: %w", common.MapError(err))
 	}
-	return toDomainEvent(res), nil
+	event := toDomainEvent(res)
+	if e.CreateConference {
+		return c.waitForConference(ctx, event)
+	}
+	return event, nil
 }
 
 // UpdateEvent updates an existing event using PATCH semantic.
 func (c *Client) UpdateEvent(ctx context.Context, eventID string, e Event) (Event, error) {
 	gEvent := toGoogleEvent(e)
-	// UpdateEvent dùng PATCH không phải PUT theo RULES
-	res, err := c.srv.Events.Patch("primary", eventID, gEvent).Context(ctx).Do()
+	req := c.srv.Events.Patch("primary", eventID, gEvent).Context(ctx)
+	if e.CreateConference {
+		req = req.ConferenceDataVersion(1)
+	}
+	res, err := req.Do()
 	if err != nil {
 		return Event{}, fmt.Errorf("calendar: update event: %w", common.MapError(err))
 	}
-	return toDomainEvent(res), nil
+	event := toDomainEvent(res)
+	if e.CreateConference {
+		return c.waitForConference(ctx, event)
+	}
+	return event, nil
+}
+
+func (c *Client) waitForConference(ctx context.Context, event Event) (Event, error) {
+	if strings.TrimSpace(event.ID) == "" || strings.TrimSpace(event.MeetLink) != "" {
+		return event, nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, conferenceWaitTimeout)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	latest := event
+	for {
+		select {
+		case <-waitCtx.Done():
+			return latest, nil
+		case <-ticker.C:
+			refreshed, err := c.GetEvent(waitCtx, event.ID)
+			if err != nil {
+				return latest, err
+			}
+			latest = refreshed
+			if strings.TrimSpace(refreshed.MeetLink) != "" {
+				return refreshed, nil
+			}
+			if strings.EqualFold(strings.TrimSpace(refreshed.ConferenceStatus), "failure") {
+				return refreshed, fmt.Errorf("calendar: create meet conference: %w", common.ErrAPI)
+			}
+		}
+	}
 }
 
 // RespondEvent updates the response status for an attendee on an event.

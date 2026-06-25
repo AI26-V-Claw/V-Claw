@@ -7,6 +7,7 @@ const (
 	ScopeGmailModify          = "https://www.googleapis.com/auth/gmail.modify"
 	ScopeCalendarReadonly     = "https://www.googleapis.com/auth/calendar.readonly"
 	ScopeCalendarEvents       = "https://www.googleapis.com/auth/calendar.events"
+	ScopeMeetingsSpaceCreated = "https://www.googleapis.com/auth/meetings.space.created"
 	ScopeChatMessages         = "https://www.googleapis.com/auth/chat.messages"
 	ScopeChatMemberships      = "https://www.googleapis.com/auth/chat.memberships"
 	ScopeChatSpaces           = "https://www.googleapis.com/auth/chat.spaces"
@@ -29,6 +30,7 @@ var G1Scopes = []string{
 	ScopeGmailModify,
 	ScopeCalendarReadonly,
 	ScopeCalendarEvents,
+	ScopeMeetingsSpaceCreated,
 	ScopeChatSpacesReadonly,
 	ScopeChatMessagesCreate,
 	ScopeChatMessagesReadonly,
