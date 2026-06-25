@@ -52,7 +52,11 @@ type Bot struct {
 	state         *telegramChannelState
 	workCh        chan telegramUpdate
 	busySessions  sync.Map // chat ID (int64) → struct{} while a message is being processed
+	pendingMu     sync.Mutex
+	pendingByChat map[int64][]telegramUpdate
 }
+
+const maxPendingTelegramUpdatesPerChat = 8
 
 type messageHandler interface {
 	HandleMessage(ctx context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error)
@@ -97,13 +101,14 @@ func New(token string, allowedUserID int64, dataDir string, args ...any) *Bot {
 				ExpectContinueTimeout: 1 * time.Second,
 			},
 		},
-		handler:      handler,
-		logger:       logger,
-		apiBase:      "https://api.telegram.org",
-		policyStore:  policyStore,
-		policyDrafts: make(map[int64]map[contracts.RiskLevel]policies.PolicyGroup),
-		sessionIndex: newTelegramSessionIndexStore(dataDir),
-		state:        newTelegramChannelState(),
+		handler:       handler,
+		logger:        logger,
+		apiBase:       "https://api.telegram.org",
+		policyStore:   policyStore,
+		policyDrafts:  make(map[int64]map[contracts.RiskLevel]policies.PolicyGroup),
+		sessionIndex:  newTelegramSessionIndexStore(dataDir),
+		state:         newTelegramChannelState(),
+		pendingByChat: make(map[int64][]telegramUpdate),
 	}
 }
 
@@ -174,7 +179,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			}
 
 			// Callback queries (approval buttons) always go through.
-			// For regular messages, drop and reply if the session is already busy.
+			// For regular messages, queue follow-ups if the session is already busy.
 			if update.Message != nil {
 				chatID := update.Message.Chat.ID
 				msgText := strings.TrimSpace(update.Message.Text)
@@ -183,11 +188,16 @@ func (b *Bot) Run(ctx context.Context) error {
 				}
 				if !isTelegramCancelCommand(msgText) {
 					if _, alreadyBusy := b.busySessions.LoadOrStore(chatID, struct{}{}); alreadyBusy {
-						go func(cid int64) {
-							if _, err := b.sendMessage(ctx, cid, "Mình đang xử lý tin nhắn trước của bạn, vui lòng đợi một chút."); err != nil {
+						queued := b.enqueuePendingUpdate(update)
+						go func(cid int64, queued bool) {
+							text := "Mình đã nhận tin nhắn này, sẽ xử lý ngay sau lượt hiện tại."
+							if !queued {
+								text = "Mình đang có quá nhiều tin nhắn đang chờ, vui lòng đợi phản hồi hiện tại trước."
+							}
+							if _, err := b.sendMessage(ctx, cid, text); err != nil {
 								b.logger.Error("telegram busy reply failed", "chat_id", cid, "error", err)
 							}
-						}(chatID)
+						}(chatID, queued)
 						continue
 					}
 				}
@@ -209,16 +219,68 @@ func (b *Bot) processWorker(ctx context.Context) {
 	for {
 		select {
 		case u := <-b.workCh:
-			if _, err := b.processUpdate(ctx, u); err != nil {
-				b.logger.Error("telegram update failed", "update_id", u.UpdateID, "error", err)
-			}
-			if u.Message != nil {
-				b.busySessions.Delete(u.Message.Chat.ID)
-			}
+			b.processUpdateWithPendingDrain(ctx, u)
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+func (b *Bot) processUpdateWithPendingDrain(ctx context.Context, update telegramUpdate) {
+	current := update
+	for {
+		if _, err := b.processUpdate(ctx, current); err != nil {
+			b.logger.Error("telegram update failed", "update_id", current.UpdateID, "error", err)
+		}
+		if current.Message == nil {
+			return
+		}
+		chatID := current.Message.Chat.ID
+		next, ok := b.dequeuePendingUpdate(chatID)
+		if !ok {
+			b.busySessions.Delete(chatID)
+			return
+		}
+		b.logger.Info("telegram draining pending update", "chat_id", chatID, "update_id", next.UpdateID)
+		current = next
+		if ctx.Err() != nil {
+			b.busySessions.Delete(chatID)
+			return
+		}
+	}
+}
+
+func (b *Bot) enqueuePendingUpdate(update telegramUpdate) bool {
+	if update.Message == nil {
+		return false
+	}
+	chatID := update.Message.Chat.ID
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	queue := b.pendingByChat[chatID]
+	if len(queue) >= maxPendingTelegramUpdatesPerChat {
+		b.logger.Warn("telegram pending queue full", "chat_id", chatID, "update_id", update.UpdateID, "pending_count", len(queue))
+		return false
+	}
+	b.pendingByChat[chatID] = append(queue, update)
+	b.logger.Info("telegram queued pending update", "chat_id", chatID, "update_id", update.UpdateID, "pending_count", len(queue)+1)
+	return true
+}
+
+func (b *Bot) dequeuePendingUpdate(chatID int64) (telegramUpdate, bool) {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	queue := b.pendingByChat[chatID]
+	if len(queue) == 0 {
+		return telegramUpdate{}, false
+	}
+	next := queue[0]
+	if len(queue) == 1 {
+		delete(b.pendingByChat, chatID)
+	} else {
+		b.pendingByChat[chatID] = queue[1:]
+	}
+	return next, true
 }
 
 func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, error) {
