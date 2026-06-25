@@ -390,9 +390,8 @@ func TestListEmailsLocalizesSendTimeAndOmitsRawDate(t *testing.T) {
 	if strings.Contains(result.ContentForLLM, "-0700") || strings.Contains(result.ContentForLLM, `"Date"`) {
 		t.Fatalf("ContentForLLM should not expose the raw Date header, got: %s", result.ContentForLLM)
 	}
-	// The full user-facing content may still keep the original header.
-	if !strings.Contains(result.ContentForUser, "21:24:29 -0700") {
-		t.Fatalf("ContentForUser should keep the raw Date header, got: %s", result.ContentForUser)
+	if !strings.Contains(result.ContentForUser, "11:24, ngày 17 tháng 6, 2026") {
+		t.Fatalf("ContentForUser should use localized time, got: %s", result.ContentForUser)
 	}
 }
 
@@ -476,6 +475,7 @@ func TestGetEmailLocalizesSendTimeAndOmitsRawDate(t *testing.T) {
 
 func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 	longSnippet := strings.Repeat("long snippet should stay out of llm content ", 80)
+	ict := time.FixedZone("ICT", 7*60*60)
 	messages := make([]gmailconnector.MessageSummary, 0, 12)
 	for i := 0; i < 12; i++ {
 		subject := fmt.Sprintf("Message %02d", i+1)
@@ -497,6 +497,7 @@ func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 			InternalDate:    int64(1780970400000 + i),
 			MessageIDHeader: fmt.Sprintf("<msg-%02d@example.com>", i+1),
 			References:      "<old@example.com>",
+			HasAttachment:   i == 10,
 		})
 	}
 	// Bare list call auto-paginates: first page returns all messages plus a
@@ -508,7 +509,7 @@ func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 			}
 			return nil, "", nil
 		},
-	})
+	}).WithLocation(ict)
 
 	result := NewTool(ToolNameListEmails, service).Execute(context.Background(), tools.ToolCall{
 		ID:   "call-list",
@@ -532,12 +533,67 @@ func TestGmailListEmailsUsesCompactContentForLLM(t *testing.T) {
 	if strings.Contains(result.ContentForLLM, "MessageIDHeader") || strings.Contains(result.ContentForLLM, "References") {
 		t.Fatalf("ContentForLLM should omit verbose message metadata: %s", result.ContentForLLM)
 	}
-	if result.ContentForUser != "Đã tìm thấy 12 email" {
-		t.Fatalf("unexpected user summary, got: %s", result.ContentForUser)
+	if !strings.Contains(result.ContentForLLM, "\"has_attachment\":true") {
+		t.Fatalf("ContentForLLM should include attachment flags, got: %s", result.ContentForLLM)
+	}
+	for _, want := range []string{
+		"Đây là danh sách email bạn nhận được:",
+		"1. Từ: Sender 01 (sender01@example.com)",
+		"• Tiêu đề: Message 01",
+		"11. Từ: Sender 11 (sender11@example.com)",
+		"• Tiêu đề: Thông báo tham gia sự kiện Test memory for Sprint2",
+		"• Tệp đính kèm: Có",
+		"• Thời gian: 09:00, ngày 9 tháng 6, 2026",
+	} {
+		if !strings.Contains(result.ContentForUser, want) {
+			t.Fatalf("ContentForUser missing %q, got: %s", want, result.ContentForUser)
+		}
 	}
 	// The listing was fully paginated, so no trailing page cursor should remain.
 	if strings.Contains(result.ContentForLLM, "NextPageToken") {
 		t.Fatalf("ContentForLLM should not expose a page token after full pagination, got: %s", result.ContentForLLM)
+	}
+}
+
+func TestListEmailsUserContentFormatsSentMailAndAttachments(t *testing.T) {
+	ict := time.FixedZone("ICT", 7*60*60)
+	service := NewService(&mockConnector{
+		listMessages: func(ctx context.Context, userID string, query string, labelIDs []string, maxResults int64, pageToken string) ([]gmailconnector.MessageSummary, string, error) {
+			return []gmailconnector.MessageSummary{
+				{
+					ID:            "m1",
+					From:          "Hai Nguyen <hainx@vclaw.site>",
+					To:            "26ai.quangtv@vinuni.edu.vn",
+					Subject:       "Tuất liên quân",
+					LabelIDs:      []string{"SENT"},
+					InternalDate:  time.Date(2026, 6, 22, 9, 45, 0, 0, time.UTC).UnixMilli(),
+					HasAttachment: true,
+				},
+			}, "", nil
+		},
+	}).WithLocation(ict)
+
+	result := NewTool(ToolNameListEmails, service).Execute(context.Background(), tools.ToolCall{
+		ID:   "call-sent",
+		Name: ToolNameListEmails,
+		Arguments: map[string]any{
+			"query": "in:sent",
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("Execute() failed: %#v", result.Error)
+	}
+	for _, want := range []string{
+		"Đây là danh sách email bạn đã gửi:",
+		"1. Từ: Bạn (hainx@vclaw.site) gửi tới 26ai.quangtv@vinuni.edu.vn",
+		"• Tiêu đề: Tuất liên quân",
+		"• Tệp đính kèm: Có",
+		"• Thời gian: 16:45, ngày 22 tháng 6, 2026",
+	} {
+		if !strings.Contains(result.ContentForUser, want) {
+			t.Fatalf("ContentForUser missing %q, got: %s", want, result.ContentForUser)
+		}
 	}
 }
 

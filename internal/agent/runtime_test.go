@@ -1118,8 +1118,8 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	if !strings.Contains(prompt, "YYYY-MM-DD") {
 		t.Fatalf("expected Gmail date-only guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "LocalDate") {
-		t.Fatalf("expected Gmail LocalDate grouping guidance in prompt, got: %s", prompt)
+	if !strings.Contains(prompt, "Tệp đính kèm: Có") {
+		t.Fatalf("expected Gmail attachment guidance in prompt, got: %s", prompt)
 	}
 }
 

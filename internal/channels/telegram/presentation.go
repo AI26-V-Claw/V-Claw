@@ -214,9 +214,6 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	if response.Error != nil && response.Error.Code == contracts.ErrorApprovalExpired {
 		return "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại."
 	}
-	if traceURL := telegramTraceURL(response); traceURL != "" {
-		return telegramGenericErrorText() + "\n\n🔍 Xem chi tiết: " + traceURL
-	}
 
 	switch response.Status {
 	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusIterationBudgetExhausted:
@@ -439,33 +436,16 @@ func telegramApprovalText(approval contracts.ApprovalRequest) string {
 	if summary := sanitizeTelegramResponseText(approval.Summary); summary != "" && !strings.EqualFold(summary, "Mình cần bạn xác nhận trước khi thực hiện hành động này.") {
 		lines = append(lines, summary)
 	}
-	if detail := telegramApprovalDetailText(approval); detail != "" {
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, detail)
-	}
-	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy. Nếu muốn thay đổi, cứ nhắn thêm cho mình.")
+	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy.")
 	return formatTelegramUserText(lines...)
 }
 
 func telegramRevisionPrompt(ctx telegramApprovalContext) string {
-	lines := []string{
+	return formatTelegramUserText(
 		"Bạn muốn chỉnh phần nào trước khi mình thực hiện?",
-	}
-	if strings.TrimSpace(ctx.PromptText) != "" {
-		lines = append(lines, "", "Nội dung đang chờ xác nhận:", "", ctx.PromptText)
-	}
-	lines = append(lines, "")
-	switch strings.TrimSpace(ctx.ToolName) {
-	case "sandbox.runPython":
-		lines = append(lines, "Ví dụ: đổi đoạn code, đổi file script, hoặc nói rõ bạn muốn code làm gì.")
-	case "sandbox.runShell":
-		lines = append(lines, "Ví dụ: đổi câu lệnh, đổi thư mục chạy, hoặc nói rõ kết quả bạn muốn.")
-	default:
-		lines = append(lines, "Ví dụ: đổi người nhận, đổi nội dung, đổi thời gian, hoặc nói rõ phần bạn muốn sửa.")
-	}
-	return formatTelegramUserText(lines...)
+		"",
+		"Nhắn ngắn gọn phần bạn muốn đổi, rồi mình làm lại.",
+	)
 }
 
 func telegramActionLabel(toolName string) string {
