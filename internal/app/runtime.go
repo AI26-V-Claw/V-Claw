@@ -333,7 +333,8 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	if err := registerWebTools(registry, config); err != nil {
 		return nil, err
 	}
-	if err := registerGoogleTools(ctx, registry, config); err != nil {
+	workspaceSvc, err := registerGoogleTools(ctx, registry, config)
+	if err != nil {
 		return nil, err
 	}
 	// Memory tools: always register (read-only is safe; mutations go through HITL).
@@ -345,7 +346,7 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 		return nil, fmt.Errorf("register memory tools: %w", err)
 	}
 	tavilyClient := buildTavilyClient(config)
-	if err := registerSkills(registry, config.Logger, tavilyClient); err != nil {
+	if err := registerSkills(registry, config.Logger, tavilyClient, workspaceSvc); err != nil {
 		return nil, fmt.Errorf("register skills: %w", err)
 	}
 	return registry, nil
@@ -376,18 +377,18 @@ func registerWebTools(registry *tools.ToolRegistry, config AgentRuntimeConfig) e
 	return webtool.RegisterTools(registry, webtool.NewService(client))
 }
 
-func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, config AgentRuntimeConfig) error {
+func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, config AgentRuntimeConfig) (skillbuiltin.WorkspaceServices, error) {
 	mode, err := normalizeToolMode(config.GoogleToolsMode)
 	if err != nil {
-		return fmt.Errorf("google tools mode: %w", err)
+		return skillbuiltin.WorkspaceServices{}, fmt.Errorf("google tools mode: %w", err)
 	}
 	if mode == ToolModeOff {
-		return nil
+		return skillbuiltin.WorkspaceServices{}, nil
 	}
 	credentialsPath := strings.TrimSpace(config.GoogleCredentialsPath)
 	tokenPath := strings.TrimSpace(config.GoogleTokenPath)
 	if mode == ToolModeAuto && (!fileExists(credentialsPath) || !fileExists(tokenPath)) {
-		return nil
+		return skillbuiltin.WorkspaceServices{}, nil
 	}
 
 	httpClient, err := googleoauth.Client(ctx, googleoauth.Config{
@@ -396,7 +397,7 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 		Scopes:          google.G1Scopes,
 	})
 	if err != nil {
-		return fmt.Errorf("configure Google tools: %w", err)
+		return skillbuiltin.WorkspaceServices{}, fmt.Errorf("configure Google tools: %w", err)
 	}
 
 	gmailLocation := resolveLocalLocation(config.Timezone)
@@ -404,30 +405,40 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	// are confined to the same sandbox workspace the filesystem tools use, never
 	// arbitrary host paths such as configs/google/token.json or .env.
 	workspaceGuard := fstool.NewPathGuard([]string{sandboxWorkspaceFSRoot(config)})
-	if err := gmailtool.RegisterTools(registry, gmailtool.NewService(ggmail.NewClient(httpClient)).WithDriveSource(gdrive.NewClient(httpClient)).WithLocation(gmailLocation).WithDownloadGuard(workspaceGuard)); err != nil {
-		return err
+	gmailSvc := gmailtool.NewService(ggmail.NewClient(httpClient)).WithDriveSource(gdrive.NewClient(httpClient)).WithLocation(gmailLocation).WithDownloadGuard(workspaceGuard)
+	if err := gmailtool.RegisterTools(registry, gmailSvc); err != nil {
+		return skillbuiltin.WorkspaceServices{}, err
 	}
 	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)).WithLocation(gmailLocation), workspaceGuard); err != nil {
-		return err
+		return skillbuiltin.WorkspaceServices{}, err
 	}
 	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
-		return err
+		return skillbuiltin.WorkspaceServices{}, err
 	}
 	if err := sheetstool.RegisterTools(registry, sheetstool.NewService(gsheets.NewClient(httpClient))); err != nil {
-		return err
+		return skillbuiltin.WorkspaceServices{}, err
 	}
 	calendarClient, err := gcal.NewClient(ctx, httpClient)
 	if err != nil {
-		return fmt.Errorf("create calendar connector: %w", err)
+		return skillbuiltin.WorkspaceServices{}, fmt.Errorf("create calendar connector: %w", err)
 	}
-	if err := calendartool.RegisterTools(registry, calendartool.NewService(calendarClient)); err != nil {
-		return err
+	calendarSvc := calendartool.NewService(calendarClient)
+	if err := calendartool.RegisterTools(registry, calendarSvc); err != nil {
+		return skillbuiltin.WorkspaceServices{}, err
 	}
 	peopleClient := gpeople.NewClient(httpClient)
-	if err := chattool.RegisterTools(registry, chattool.NewServiceWithPeople(gchat.NewClient(httpClient), peopleClient)); err != nil {
-		return err
+	chatSvc := chattool.NewServiceWithPeople(gchat.NewClient(httpClient), peopleClient)
+	if err := chattool.RegisterTools(registry, chatSvc); err != nil {
+		return skillbuiltin.WorkspaceServices{}, err
 	}
-	return peopletool.RegisterTools(registry, peopletool.NewService(peopleClient))
+	if err := peopletool.RegisterTools(registry, peopletool.NewService(peopleClient)); err != nil {
+		return skillbuiltin.WorkspaceServices{}, err
+	}
+	return skillbuiltin.WorkspaceServices{
+		Gmail:    gmailSvc,
+		Calendar: calendarSvc,
+		Chat:     chatSvc,
+	}, nil
 }
 
 // sandboxWorkspaceFSRoot returns the single workspace directory that both the
@@ -614,9 +625,10 @@ func fileExists(path string) bool {
 
 // registerSkills đăng ký tất cả skill/plugin vào registry.
 // Thứ tự: builtin skills trước, sau đó load từ manifest file nếu có.
-func registerSkills(registry *tools.ToolRegistry, logger *slog.Logger, tavilyClient *tavily.Client) error {
+func registerSkills(registry *tools.ToolRegistry, logger *slog.Logger, tavilyClient *tavily.Client, workspaceSvc skillbuiltin.WorkspaceServices) error {
 	builtinSkills := []skills.SkillPlugin{
 		skillbuiltin.NewDeepResearchSkill(tavilyClient),
+		skillbuiltin.NewWorkspaceReportSkill(workspaceSvc),
 	}
 	if err := skills.RegisterSkills(registry, builtinSkills); err != nil {
 		return fmt.Errorf("register builtin skills: %w", err)
