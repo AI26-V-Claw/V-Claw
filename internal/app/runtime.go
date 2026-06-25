@@ -344,7 +344,8 @@ func NewAgentToolRegistry(ctx context.Context, config AgentRuntimeConfig) (*tool
 	if err := memtool.RegisterTools(registry, longMemDir, config.AuditLogger); err != nil {
 		return nil, fmt.Errorf("register memory tools: %w", err)
 	}
-	if err := registerSkills(registry, config.Logger); err != nil {
+	tavilyClient := buildTavilyClient(config)
+	if err := registerSkills(registry, config.Logger, tavilyClient); err != nil {
 		return nil, fmt.Errorf("register skills: %w", err)
 	}
 	return registry, nil
@@ -613,22 +614,32 @@ func fileExists(path string) bool {
 
 // registerSkills đăng ký tất cả skill/plugin vào registry.
 // Thứ tự: builtin skills trước, sau đó load từ manifest file nếu có.
-func registerSkills(registry *tools.ToolRegistry, logger *slog.Logger) error {
-	// 1. Builtin skills — luôn có mặt
+func registerSkills(registry *tools.ToolRegistry, logger *slog.Logger, tavilyClient *tavily.Client) error {
 	builtinSkills := []skills.SkillPlugin{
-		skillbuiltin.NewSummarizeSkill(),
-		skillbuiltin.NewFormatEmailSkill(),
-		skillbuiltin.NewExtractDatesSkill(),
-		skillbuiltin.NewBulletPointsSkill(),
-		skillbuiltin.NewTranslateSkill(),
+		skillbuiltin.NewDeepResearchSkill(tavilyClient),
 	}
 	if err := skills.RegisterSkills(registry, builtinSkills); err != nil {
 		return fmt.Errorf("register builtin skills: %w", err)
 	}
-	// 2. Manifest skills — load từ file nếu tồn tại
 	manifestPath := envOrDefault("VCLAW_SKILLS_MANIFEST", "./configs/skills.json")
 	if err := skills.RegisterSkillsFromFile(registry, manifestPath, logger); err != nil {
 		return fmt.Errorf("register skills from manifest: %w", err)
 	}
 	return nil
 }
+
+func buildTavilyClient(config AgentRuntimeConfig) *tavily.Client {
+	apiKey := strings.TrimSpace(config.TavilyAPIKey)
+	if apiKey == "" {
+		return nil
+	}
+	client, err := tavily.NewClient(tavily.Config{
+		APIKey:  apiKey,
+		BaseURL: strings.TrimSpace(config.TavilyBaseURL),
+	})
+	if err != nil {
+		return nil
+	}
+	return client
+}
+

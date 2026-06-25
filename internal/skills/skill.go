@@ -1,34 +1,40 @@
-package skills
+﻿package skills
 
 import (
 	"context"
 	"vclaw/internal/tools"
 )
 
-// SkillDefinition mô tả metadata đầy đủ của một skill/plugin.
+// SkillDefinition describes the full metadata of a skill/plugin.
 type SkillDefinition struct {
-	// Name là định danh duy nhất của skill, dùng làm tool name (e.g. "skill.summarize")
+	// Name is the unique identifier used as the tool name (e.g. "skill.deep_research")
 	Name string `json:"name"`
-	// Description mô tả skill cho LLM biết khi nào dùng skill này
+	// Description tells the LLM when and how to use this skill
 	Description string `json:"description"`
-	// Scope giới hạn domain mà skill được phép hoạt động (e.g. ["email", "calendar"])
+	// Version follows semver (e.g. "1.0.0")
+	Version string `json:"version"`
+	// Tags are free-form labels for grouping/filtering (e.g. ["research", "web"])
+	Tags []string `json:"tags"`
+	// Scope limits the domains this skill may operate in (e.g. ["email", "calendar"])
 	Scope []string `json:"scope"`
-	// Permissions liệt kê các quyền cần thiết (e.g. ["gmail.read"])
+	// Permissions lists required tool permissions (e.g. ["gmail.read", "web.search"])
 	Permissions []string `json:"permissions"`
-	// Fallback là message trả về khi skill không xử lý được request
+	// RelatedSkills lists names of skills that complement this one
+	RelatedSkills []string `json:"related_skills"`
+	// Fallback is the message returned when the skill cannot handle the request
 	Fallback string `json:"fallback"`
-	// Parameters là JSON schema cho input của skill
+	// Parameters is the JSON schema for the skill input
 	Parameters tools.ToolSchema `json:"parameters"`
-	// RiskLevel khai báo mức độ rủi ro
+	// RiskLevel declares the risk level of this skill
 	RiskLevel tools.RiskLevel `json:"risk_level"`
-	// Enabled cho phép bật/tắt skill mà không cần xóa
+	// Enabled allows toggling the skill without deleting it
 	Enabled bool `json:"enabled"`
 }
 
-// SkillPlugin là interface mà mọi skill/plugin phải implement.
+// SkillPlugin is the interface every skill/plugin must implement.
 type SkillPlugin interface {
-	// Definition trả về metadata đầy đủ của skill
+	// Definition returns the full metadata of the skill
 	Definition() SkillDefinition
-	// Execute thực thi skill với input đã cho
+	// Execute runs the skill with the given tool call input
 	Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult
 }
