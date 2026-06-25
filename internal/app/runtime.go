@@ -47,9 +47,10 @@ import (
 )
 
 const (
-	ToolModeAuto     = "auto"
-	ToolModeRequired = "required"
-	ToolModeOff      = "off"
+	ToolModeAuto          = "auto"
+	ToolModeRequired      = "required"
+	ToolModeOff           = "off"
+	defaultCompactorModel = "gpt-4o-mini"
 )
 
 type AgentRuntimeConfig struct {
@@ -202,10 +203,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		return RuntimeBundle{}, fmt.Errorf("load user policy config: %w", err)
 	}
 
-	compactorModel := strings.TrimSpace(config.CompactorModel)
-	if compactorModel == "" {
-		compactorModel = model
-	}
+	compactorModel := resolveCompactorModel(config.CompactorModel)
 	compactor := sessions.NewCompactor(provider, sessions.CompactorConfig{
 		SummarizeModel: compactorModel,
 	}, config.Logger)
@@ -289,6 +287,14 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		GoogleOAuthConfigured: googleOAuthConfigured(config),
 		TavilyConfigured:      strings.TrimSpace(config.TavilyAPIKey) != "",
 	}, nil
+}
+
+func resolveCompactorModel(override string) string {
+	model := strings.TrimSpace(override)
+	if model != "" {
+		return model
+	}
+	return defaultCompactorModel
 }
 
 func persistToolRegistry(ctx context.Context, registry *tools.ToolRegistry, stores ...any) error {

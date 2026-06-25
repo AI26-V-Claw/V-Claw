@@ -481,6 +481,9 @@ func renderToolFallback(toolName string, content string) string {
 	if content == "" {
 		return ""
 	}
+	if strings.TrimSpace(toolName) == "gmail.listEmails" && !looksLikeMachinePayload(content) {
+		return formatOutboundText(content)
+	}
 	title := "Kết quả"
 	if strings.TrimSpace(toolName) != "" {
 		title = "Kết quả từ " + strings.TrimSpace(toolName)

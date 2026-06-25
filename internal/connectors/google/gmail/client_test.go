@@ -38,6 +38,9 @@ func TestListMessagesSuccessWithPaging(t *testing.T) {
 					"resultSizeEstimate":1
 				}`), nil
 			case "/gmail/v1/users/me/messages/m1":
+				if req.URL.Query().Get("format") != "full" {
+					t.Fatalf("expected full format for list summaries, got %q", req.URL.Query().Get("format"))
+				}
 				return jsonResponse(http.StatusOK, `{
 					"id":"m1",
 					"threadId":"t1",
@@ -80,6 +83,64 @@ func TestListMessagesSuccessWithPaging(t *testing.T) {
 	}
 	if msg.InternalDate != 1717228800000 {
 		t.Fatalf("unexpected internal date: %d", msg.InternalDate)
+	}
+	if msg.HasAttachment {
+		t.Fatalf("expected HasAttachment=false, got %#v", msg)
+	}
+}
+
+func TestListMessagesDetectsNestedAttachments(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "/gmail/v1/users/me/messages":
+				return jsonResponse(http.StatusOK, `{
+					"messages":[{"id":"m-nested","threadId":"t-nested"}],
+					"resultSizeEstimate":1
+				}`), nil
+			case "/gmail/v1/users/me/messages/m-nested":
+				if req.URL.Query().Get("format") != "full" {
+					t.Fatalf("expected full format for nested attachment detection, got %q", req.URL.Query().Get("format"))
+				}
+				return jsonResponse(http.StatusOK, `{
+					"id":"m-nested",
+					"threadId":"t-nested",
+					"labelIds":["SENT"],
+					"internalDate":"1717228800000",
+					"payload":{
+						"mimeType":"multipart/mixed",
+						"headers":[
+							{"name":"From","value":"me@example.com"},
+							{"name":"To","value":"you@example.com"},
+							{"name":"Subject","value":"Photo attached"}
+						],
+						"parts":[
+							{
+								"mimeType":"multipart/related",
+								"parts":[
+									{"mimeType":"text/plain","body":{"data":"aGVsbG8"}},
+									{"filename":"photo.jpg","mimeType":"image/jpeg","body":{"attachmentId":"att-1","size":1234}}
+								]
+							}
+						]
+					}
+				}`), nil
+			default:
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+				return nil, nil
+			}
+		}),
+	}
+
+	messages, _, err := ListMessages(context.Background(), client, "me", "in:sent", []string{"SENT"}, 10, "")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("ListMessages() length = %d, want 1", len(messages))
+	}
+	if !messages[0].HasAttachment {
+		t.Fatalf("expected nested attachment to be detected, got %#v", messages[0])
 	}
 }
 

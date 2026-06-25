@@ -65,3 +65,5 @@ docs/superpowers/
 
 # Runtime CSV logs
 logs/*.csv
+
+__pycache__

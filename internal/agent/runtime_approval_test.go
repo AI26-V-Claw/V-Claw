@@ -92,11 +92,11 @@ func TestContinuationMessageFullTextReachesProvider(t *testing.T) {
 }
 
 func TestApprovalSummariesCoverProductionTools(t *testing.T) {
-	fallback := approvalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
+fallback := approvalSummary("unknown.tool", contracts.RiskLevelExternalWrite, nil)
 	legacyFallback := legacyApprovalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
 
 	for _, toolName := range productionToolNames() {
-		if got := approvalSummary(toolName, contracts.RiskLevelExternalWrite); got == fallback {
+		if got := approvalSummary(toolName, contracts.RiskLevelExternalWrite, nil); got == fallback {
 			t.Errorf("approvalSummary(%q) returned fallback summary", toolName)
 		}
 		if got := legacyApprovalSummary(toolName, contracts.RiskLevelExternalWrite); got == legacyFallback {

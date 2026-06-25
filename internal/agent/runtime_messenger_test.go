@@ -159,6 +159,51 @@ func TestRenderAgentResponseFormatsToolFallback(t *testing.T) {
 	}
 }
 
+func TestRenderAgentResponsePrefersFormattedGmailListFallback(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "Đây là tất cả các email bạn đã nhận hôm qua:\n\n• Never miss an important message — Slack",
+		ToolResults: []contracts.ToolResult{
+			{
+				ToolName: "gmail.listEmails",
+				Success:  true,
+				Data: map[string]any{
+					"contentForUser": "Đây là danh sách email bạn nhận được:\n\n1. Từ: Slack (no-reply@email.slackhq.com)\n   • Tiêu đề: Never miss an important message\n   • Thời gian: 23:13, ngày 22 tháng 6, 2026",
+				},
+			},
+		},
+	}
+
+	got := renderAgentResponse(response)
+	if !strings.Contains(got, "1. Từ: Slack (no-reply@email.slackhq.com)") {
+		t.Fatalf("expected formatted gmail list fallback, got %q", got)
+	}
+	if strings.Contains(got, "Đây là tất cả các email bạn đã nhận hôm qua") {
+		t.Fatalf("expected raw assistant summary to be replaced, got %q", got)
+	}
+}
+
+func TestRenderAgentResponsePrefersGmailListToolResultEvenWhenAssistantFormatsList(t *testing.T) {
+	response := contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "Đây là danh sách email bạn nhận được:\n\n1. Từ: Hai Nguyen (hainx@vclaw.site)\n   • Tiêu đề: Ảnh gửi bạn\n   • Thời gian: 15:10, ngày 22 tháng 6, 2026",
+		ToolResults: []contracts.ToolResult{
+			{
+				ToolName: "gmail.listEmails",
+				Success:  true,
+				Data: map[string]any{
+					"contentForUser": "Đây là danh sách email bạn nhận được:\n\n1. Từ: Hai Nguyen (hainx@vclaw.site)\n   • Tiêu đề: Ảnh gửi bạn\n   • Tệp đính kèm: Có\n   • Thời gian: 15:10, ngày 22 tháng 6, 2026",
+				},
+			},
+		},
+	}
+
+	got := renderAgentResponse(response)
+	if !strings.Contains(got, "• Tệp đính kèm: Có") {
+		t.Fatalf("expected gmail.listEmails tool result to win so attachment notice is preserved, got %q", got)
+	}
+}
+
 func TestRenderAgentResponsePrefersFinalAssistantMessageOverDriveFallback(t *testing.T) {
 	response := contracts.AgentResponse{
 		Status:  contracts.AgentStatusCompleted,
