@@ -66,6 +66,7 @@ type RuntimeConfig struct {
 	LocalLocation              *time.Location // timezone for date calculations; nil falls back to time.Local
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
+	ContextBudget              ContextBudget // zero value = scaled defaults from ContextWindow
 	MemoryClassifierModel      string
 	LongMemDir                 string
 	KnowledgeRetriever         knowledge.Retriever
@@ -99,6 +100,7 @@ type Runtime struct {
 	localLocation              *time.Location
 	compactor                  *sessions.Compactor
 	contextWindow              int
+	contextBudget              ContextBudget
 	memoryClassifierModel      string
 	// promptVersion is the content-hash fingerprint of the effective system
 	// prompt (runtimeSystemPrompt). Computed once when the Runtime
@@ -232,12 +234,17 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
-	// Compute the prompt version once at construction. We pass a zero time so
-	// the dynamic "current time" segment of runtimeSystemPrompt doesn't shift
-	// the hash on every Runtime creation. runtimeSystemPrompt() is the single
-	// source of truth for the effective system prompt; configs/SOUL.md is
-	// reference documentation only and is not injected at runtime.
-	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}))
+	contextBudget := config.ContextBudget
+	contextBudget.ContextWindow = contextWindow
+	contextBudget = contextBudget.normalized()
+	// Compute the prompt version once at construction from the static prompt
+	// content only. runtimeSystemPromptStatic() substitutes a stable placeholder
+	// for the dynamic datetime segment, so two Runtimes created at different
+	// times produce the same promptVersion as long as the static prompt is
+	// unchanged. runtimeSystemPrompt() is the single source of truth for the
+	// effective system prompt; configs/SOUL.md is reference documentation only
+	// and is not injected at runtime.
+	promptVersion := governance.PromptVersion(runtimeSystemPromptStatic())
 	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
 	subtasks.now = now
 	planStore := NewPlanStore()
@@ -279,6 +286,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		localLocation:              localLocation,
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
+		contextBudget:              contextBudget,
 		memoryClassifierModel:      memoryClassifierModel(config),
 		promptVersion:              promptVersion,
 		planStore:                  planStore,
@@ -648,19 +656,38 @@ agentLoop:
 			return *resp, nil
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPromptOptions(providerTranscript, providerMemory, providerReference, runtimePromptOptions{IncludeLongTermMemory: !freshWorkspaceReadRequest, LinkedKnowledge: providerKnowledge})
-		if freshWorkspaceReadRequest {
-			providerMessages = append([]providers.Message{freshWorkspaceReadSystemMessage()}, providerMessages...)
-		}
+		preSystemMessages := []providers.Message{}
 		if prompt := r.activePlanPrompt(message.SessionID, runState.RunID); prompt != "" {
-			providerMessages = append([]providers.Message{{Role: providers.MessageRoleSystem, Content: prompt}}, providerMessages...)
+			preSystemMessages = append(preSystemMessages, providers.Message{Role: providers.MessageRoleSystem, Content: prompt})
 		}
-		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
-			Model:      r.model,
-			Messages:   providerMessages,
-			Tools:      r.providerTools(),
-			ToolChoice: "auto",
+		if freshWorkspaceReadRequest {
+			preSystemMessages = append(preSystemMessages, freshWorkspaceReadSystemMessage())
+		}
+		providerRequest := r.assembleProviderChatRequest(providerTranscript, providerMemory, providerReference, runtimePromptOptions{
+			IncludeLongTermMemory: !freshWorkspaceReadRequest,
+			LinkedKnowledge:       providerKnowledge,
+			PreSystemMessages:     preSystemMessages,
 		})
+		if total, available := estimateProviderRequestTokens(providerRequest.Messages, providerRequest.Tools), r.contextBudget.normalized().Available(); total > available {
+			messageText := fmt.Sprintf("assembled provider request exceeds context budget: estimated %d tokens, available %d", total, available)
+			updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted))
+			if errShape != nil {
+				base.Error = errShape
+				base.Message = errShape.Message
+				return base, nil
+			}
+			base.Status = contracts.AgentStatusFailed
+			base.FailureReason = updatedState.FailureReason
+			base.Error = &contracts.ErrorShape{
+				Code:      contracts.ErrorInternal,
+				Message:   messageText,
+				Source:    contracts.ErrorSourceAgent,
+				Retryable: false,
+			}
+			base.Message = messageText
+			return base, nil
+		}
+		providerResponse, err := r.chatWithProviderTimeout(ctx, providerRequest)
 		if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
 			resp.RequestID = message.RequestID
 			resp.SessionID = message.SessionID
@@ -871,7 +898,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
+				if errShape := r.recordActionResultForRun(ctx, message.SessionID, runState.RunID, message.RequestID, result); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -1088,7 +1115,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
+				if errShape := r.recordActionResultForRun(ctx, message.SessionID, runState.RunID, message.RequestID, result); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil

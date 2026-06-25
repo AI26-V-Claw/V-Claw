@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
@@ -29,7 +30,23 @@ func redactSensitiveForPrompt(content string) string {
 	}
 	lines := strings.Split(content, "\n")
 	kept := make([]string, 0, len(lines))
+	inPEM := false
 	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Redact an entire PEM block from BEGIN to END as a single unit. Line-by-line
+		// redaction would drop the BEGIN marker but leak the base64 key body, so track
+		// block state explicitly.
+		if !inPEM && pemBeginPattern.MatchString(trimmed) {
+			inPEM = true
+			kept = append(kept, "[redacted: sensitive content removed]")
+			continue
+		}
+		if inPEM {
+			if pemEndPattern.MatchString(trimmed) {
+				inPEM = false
+			}
+			continue
+		}
 		if longmem.ValidateMemoryContent(line) != nil {
 			kept = append(kept, "[redacted: sensitive content removed]")
 			continue
@@ -37,6 +54,29 @@ func redactSensitiveForPrompt(content string) string {
 		kept = append(kept, line)
 	}
 	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+var (
+	pemBeginPattern = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*-----`)
+	pemEndPattern   = regexp.MustCompile(`-----END [A-Z0-9 ]*-----`)
+)
+
+// redactSensitiveMessages applies redactSensitiveForPrompt to the content of
+// every message so no transcript entry leaks a secret into the provider request.
+// Tool-call arguments are left intact; secrets there would be a tool-input bug,
+// not a context-assembly leak, and rewriting structured arguments is unsafe.
+func redactSensitiveMessages(messages []providers.Message) []providers.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]providers.Message, len(messages))
+	for i, m := range messages {
+		if strings.TrimSpace(m.Content) != "" {
+			m.Content = redactSensitiveForPrompt(m.Content)
+		}
+		out[i] = m
+	}
+	return out
 }
 
 // referenceSourcesPrompt assembles an explicit "reference sources" block listing
@@ -48,22 +88,42 @@ func redactSensitiveForPrompt(content string) string {
 func referenceSourcesPrompt(memory sessions.SessionMemory) string {
 	lines := make([]string, 0, len(memory.LastActionResults)+len(memory.FileRefs))
 
-	seenTools := make(map[string]bool)
+	// List recent results newest-first, one line per result rather than per tool,
+	// so repeated calls of the same tool stay distinguishable by their artifact.
+	// We attach a safe resource label (artifact kind/label) when present; opaque
+	// IDs and absolute paths are intentionally omitted — this block is provenance
+	// for the model, not user-facing output.
 	for i := len(memory.LastActionResults) - 1; i >= 0; i-- {
-		name := strings.TrimSpace(memory.LastActionResults[i].ToolName)
-		if name == "" || seenTools[name] {
+		ar := memory.LastActionResults[i]
+		name := strings.TrimSpace(ar.ToolName)
+		if name == "" {
 			continue
 		}
-		seenTools[name] = true
-		lines = append(lines, fmt.Sprintf("- tool result from %s", name))
+		line := "- tool result from " + name
+		if ar.Artifact != nil {
+			if label := strings.TrimSpace(ar.Artifact.Label); label != "" {
+				kind := strings.TrimSpace(ar.Artifact.Kind)
+				if kind != "" {
+					line += fmt.Sprintf(" (%s: %s)", kind, label)
+				} else {
+					line += fmt.Sprintf(" (%s)", label)
+				}
+			} else if kind := strings.TrimSpace(ar.Artifact.Kind); kind != "" {
+				line += fmt.Sprintf(" (%s)", kind)
+			}
+		}
+		lines = append(lines, line)
 	}
 
 	for name, ref := range memory.FileRefs {
 		switch ref.Source {
 		case "local":
-			lines = append(lines, fmt.Sprintf("- file %q: local, path=%s", name, ref.Path))
+			// Provenance only — emit the source and filename, not the absolute host
+			// path. The full path is available in the session-memory "Resolved file
+			// references" block when the agent actually needs it to attach the file.
+			lines = append(lines, fmt.Sprintf("- file %q: local", name))
 		case "drive":
-			lines = append(lines, fmt.Sprintf("- file %q: Google Drive, driveId=%s", name, ref.DriveID))
+			lines = append(lines, fmt.Sprintf("- file %q: Google Drive", name))
 		}
 	}
 
@@ -258,6 +318,10 @@ func (r *Runtime) refreshSessionSummary(ctx context.Context, sessionID string, t
 }
 
 func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, result tools.ToolResult) *contracts.ErrorShape {
+	return r.recordActionResultForRun(ctx, sessionID, "", "", result)
+}
+
+func (r *Runtime) recordActionResultForRun(ctx context.Context, sessionID string, runID string, requestID string, result tools.ToolResult) *contracts.ErrorShape {
 	if !result.Success {
 		return nil
 	}
@@ -273,11 +337,24 @@ func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, resu
 		return errShape
 	}
 	memory.PendingClarification = nil
-	memory.LastActionResults = append(memory.LastActionResults, sessions.ActionResult{
-		ToolName:  result.ToolName,
-		Content:   truncateToolContentForLLM(content),
-		CreatedAt: r.now(),
-	})
+	action := sessions.ActionResult{
+		ToolName:   result.ToolName,
+		Content:    truncateToolContentForLLM(content),
+		CreatedAt:  r.now(),
+		ToolCallID: strings.TrimSpace(result.ToolCallID),
+		RequestID:  strings.TrimSpace(requestID),
+		RunID:      strings.TrimSpace(runID),
+		Source:     strings.TrimSpace(result.Source),
+	}
+	if art := result.ArtifactRef; art != nil {
+		action.Artifact = &sessions.ActionArtifact{
+			Kind:  strings.TrimSpace(art.Kind),
+			Label: strings.TrimSpace(art.Label),
+			URI:   strings.TrimSpace(art.URI),
+			ID:    strings.TrimSpace(art.ID),
+		}
+	}
+	memory.LastActionResults = append(memory.LastActionResults, action)
 	if len(memory.LastActionResults) > 10 {
 		memory.LastActionResults = memory.LastActionResults[len(memory.LastActionResults)-10:]
 	}

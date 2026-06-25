@@ -84,26 +84,6 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 	return cloned
 }
 
-func compactProviderTranscriptForPrompt(transcript []providers.Message) []providers.Message {
-	const maxMessages = 12
-	const maxToolContent = 1600
-
-	if len(transcript) == 0 {
-		return nil
-	}
-	start := 0
-	if len(transcript) > maxMessages {
-		start = len(transcript) - maxMessages
-	}
-	compacted := cloneProviderMessages(transcript[start:])
-	for i := range compacted {
-		if compacted[i].Role == providers.MessageRoleTool {
-			compacted[i].Content = truncateStringBytes(strings.TrimSpace(compacted[i].Content), maxToolContent)
-		}
-	}
-	return compacted
-}
-
 func sanitizeProviderTranscriptForToolProtocol(messages []providers.Message) []providers.Message {
 	if len(messages) == 0 {
 		return nil
