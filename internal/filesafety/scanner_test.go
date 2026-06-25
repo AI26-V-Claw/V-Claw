@@ -26,6 +26,30 @@ func TestScanBytesBlocksRenamedExecutable(t *testing.T) {
 	}
 }
 
+func TestScanBytesBlocksExecutableByDefault(t *testing.T) {
+	result := ScanBytes([]byte("MZ\x00\x00payload"), Input{Filename: "installer.exe"})
+	if result.Decision != DecisionBlock {
+		t.Fatalf("Decision = %s, want block", result.Decision)
+	}
+}
+
+func TestScanBytesAllowsExecutableAsInertArtifact(t *testing.T) {
+	result := ScanBytes([]byte("MZ\x00\x00payload"), Input{Filename: "installer.exe", AllowInertExecutable: true})
+	if result.Decision != DecisionAllow {
+		t.Fatalf("Decision = %s, want allow (%v)", result.Decision, result.Flags)
+	}
+	if !hasFlag(result.Flags, FlagDangerousType) {
+		t.Fatalf("flags = %v, want dangerous_type", result.Flags)
+	}
+}
+
+func TestScanBytesBlocksRenamedExecutableEvenAsInertArtifact(t *testing.T) {
+	result := ScanBytes([]byte("MZ\x00\x00payload"), Input{Filename: "invoice.pdf", AllowInertExecutable: true})
+	if result.Decision != DecisionBlock {
+		t.Fatalf("Decision = %s, want block", result.Decision)
+	}
+}
+
 func TestScanBytesBlocksPDFActiveContent(t *testing.T) {
 	result := ScanBytes([]byte("%PDF-1.7\n/JavaScript (app.alert('x'))"), Input{Filename: "active.pdf"})
 	if result.Decision != DecisionBlock {

@@ -633,11 +633,12 @@ func (t DriveTool) saveFile(ctx context.Context, call tools.ToolCall) tools.Tool
 		return outputToolResult(call, nil, internalError("create outputDir: "+err.Error()))
 	}
 	decision := filesafety.ScanBytes([]byte(content.Content), filesafety.Input{
-		Filename:     filename,
-		ClaimedMIME:  content.MimeType,
-		Origin:       "drive_file",
-		SourceTool:   ToolNameSaveFile,
-		MaxSizeBytes: maxSaveFileBytes,
+		Filename:             filename,
+		ClaimedMIME:          content.MimeType,
+		Origin:               "drive_file",
+		SourceTool:           ToolNameSaveFile,
+		MaxSizeBytes:         maxSaveFileBytes,
+		AllowInertExecutable: true,
 	})
 	if !decision.Allowed() {
 		return outputToolResult(call, nil, invalidInput("file blocked by file safety gate: "+decision.ReasonUser))
@@ -838,11 +839,12 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 			return outputToolResult(call, nil, errShape)
 		}
 		decision, err := filesafety.ScanPath(localPath, filesafety.Input{
-			Filename:     filepath.Base(localPath),
-			ClaimedMIME:  stringArg(call.Arguments, "mimeType"),
-			Origin:       "local_workspace",
-			SourceTool:   ToolNameUploadFile,
-			MaxSizeBytes: maxSaveFileBytes,
+			Filename:             filepath.Base(localPath),
+			ClaimedMIME:          stringArg(call.Arguments, "mimeType"),
+			Origin:               "local_workspace",
+			SourceTool:           ToolNameUploadFile,
+			MaxSizeBytes:         maxSaveFileBytes,
+			AllowInertExecutable: true,
 		})
 		if err != nil {
 			return outputToolResult(call, nil, internalError("scan localPath: "+err.Error()))

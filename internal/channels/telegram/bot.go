@@ -1551,11 +1551,12 @@ func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramM
 			return nil, err
 		}
 		decision, err := filesafety.ScanPath(quarantinePath, filesafety.Input{
-			Filename:     filename,
-			ClaimedMIME:  candidate.MimeType,
-			Origin:       "telegram_attachment",
-			SourceTool:   "telegram.downloadAttachment",
-			MaxSizeBytes: filesafety.DefaultMaxSizeBytes,
+			Filename:             filename,
+			ClaimedMIME:          candidate.MimeType,
+			Origin:               "telegram_attachment",
+			SourceTool:           "telegram.downloadAttachment",
+			MaxSizeBytes:         filesafety.DefaultMaxSizeBytes,
+			AllowInertExecutable: true,
 		})
 		if err != nil {
 			_ = os.Remove(quarantinePath)

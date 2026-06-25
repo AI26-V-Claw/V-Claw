@@ -48,11 +48,12 @@ const (
 )
 
 type Input struct {
-	Filename     string
-	ClaimedMIME  string
-	Origin       string
-	SourceTool   string
-	MaxSizeBytes int64
+	Filename             string
+	ClaimedMIME          string
+	Origin               string
+	SourceTool           string
+	MaxSizeBytes         int64
+	AllowInertExecutable bool
 }
 
 type Result struct {
@@ -151,6 +152,9 @@ func ScanBytes(data []byte, input Input) Result {
 	}
 	if size > maxSize {
 		return result(input, ext, detected, size, sum[:], DecisionBlock, append(flags, FlagTooLarge), "File is too large to process safely.", "size exceeds configured limit")
+	}
+	if input.AllowInertExecutable && isInertWindowsExecutable(ext, detected) {
+		return result(input, ext, detected, size, sum[:], DecisionAllow, append(flags, FlagDangerousType, FlagExecutableOrScriptShortcut, FlagTypeMatch), "Executable file accepted as an inert artifact. Do not execute automatically.", "windows executable accepted for storage/forwarding only")
 	}
 	if dangerousExtension(ext) || detected == "windows_executable" || detected == "ole_compound_document" {
 		return result(input, ext, detected, size, sum[:], DecisionBlock, append(flags, FlagDangerousType, FlagExecutableOrScriptShortcut), "File type can execute code or hide active content.", "dangerous executable, script, shortcut, or OLE type")
@@ -312,6 +316,10 @@ func dangerousExtension(ext string) bool {
 	default:
 		return false
 	}
+}
+
+func isInertWindowsExecutable(ext, detected string) bool {
+	return ext == ".exe" && detected == "windows_executable"
 }
 
 func hasTypeMismatch(ext, detected string) bool {

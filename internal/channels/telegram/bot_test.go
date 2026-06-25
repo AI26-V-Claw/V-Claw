@@ -1015,6 +1015,56 @@ func TestProcessUpdateBlocksUnsafeTelegramAttachment(t *testing.T) {
 	}
 }
 
+func TestProcessUpdateAcceptsExecutableAsInertTelegramAttachment(t *testing.T) {
+	handler := &fakeHandler{
+		outbound: contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "ok",
+		},
+	}
+	botTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getFile"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"file_path":"docs/codex_installer.exe"}}`), nil
+		case strings.Contains(r.URL.Path, "/file/bottoken/docs/codex_installer.exe"):
+			return jsonResponse(http.StatusOK, "MZ\x00\x00payload"), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":44}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})
+
+	dataDir := t.TempDir()
+	t.Setenv("VCLAW_SANDBOX_WORKSPACE_DIR", filepath.Join(dataDir, "sandbox-root"))
+	bot := New("token", 123, dataDir, nil, handler, nil)
+	bot.client = &http.Client{Transport: botTransport}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 11,
+		Message: &telegramMessage{
+			MessageID: 90,
+			From:      &telegramUser{ID: 123},
+			Chat:      telegramChat{ID: 55},
+			Caption:   "lưu file này",
+			Document:  &telegramDocument{FileID: "doc2", FileName: "Codex Installer.exe", MimeType: "application/x-msdownload"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed || handler.calls != 1 {
+		t.Fatalf("expected handler to receive executable artifact, processed=%v calls=%d", processed, handler.calls)
+	}
+	paths, ok := handler.received.Metadata["attachmentPaths"].([]string)
+	if !ok || len(paths) != 1 || filepath.Base(paths[0]) != "Codex Installer.exe" {
+		t.Fatalf("expected executable attachment path, got %#v", handler.received.Metadata)
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {

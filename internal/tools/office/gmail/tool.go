@@ -760,11 +760,12 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 			return DownloadAttachmentsOutput{}, internalError("quarantine attachment: " + err.Error())
 		}
 		decision, err := filesafety.ScanPath(quarantined.Path, filesafety.Input{
-			Filename:     filename,
-			ClaimedMIME:  attachment.MimeType,
-			Origin:       "gmail_attachment",
-			SourceTool:   ToolNameDownloadAttachments,
-			MaxSizeBytes: maxDraftAttachmentRaw,
+			Filename:             filename,
+			ClaimedMIME:          attachment.MimeType,
+			Origin:               "gmail_attachment",
+			SourceTool:           ToolNameDownloadAttachments,
+			MaxSizeBytes:         maxDraftAttachmentRaw,
+			AllowInertExecutable: true,
 		})
 		if err != nil {
 			_ = os.Remove(quarantined.Path)
@@ -1025,10 +1026,11 @@ func loadDraftAttachments(paths []string) ([]gmailconnector.DraftAttachmentInput
 			return nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
 		}
 		decision, err := filesafety.ScanPath(path, filesafety.Input{
-			Filename:     filepath.Base(path),
-			Origin:       "local_workspace",
-			SourceTool:   "gmail.draftAttachment",
-			MaxSizeBytes: maxDraftAttachmentRaw,
+			Filename:             filepath.Base(path),
+			Origin:               "local_workspace",
+			SourceTool:           "gmail.draftAttachment",
+			MaxSizeBytes:         maxDraftAttachmentRaw,
+			AllowInertExecutable: true,
 		})
 		if err != nil {
 			return nil, internalError("scan attachment: " + err.Error())
@@ -1096,11 +1098,12 @@ func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([
 			mimeType = "application/octet-stream"
 		}
 		decision := filesafety.ScanBytes([]byte(output.Content), filesafety.Input{
-			Filename:     output.File.Name,
-			ClaimedMIME:  mimeType,
-			Origin:       "drive_file",
-			SourceTool:   "gmail.driveAttachment",
-			MaxSizeBytes: maxDraftAttachmentRaw,
+			Filename:             output.File.Name,
+			ClaimedMIME:          mimeType,
+			Origin:               "drive_file",
+			SourceTool:           "gmail.driveAttachment",
+			MaxSizeBytes:         maxDraftAttachmentRaw,
+			AllowInertExecutable: true,
 		})
 		if !decision.Allowed() {
 			return nil, invalidInput("drive attachment blocked by file safety gate: " + decision.ReasonUser)

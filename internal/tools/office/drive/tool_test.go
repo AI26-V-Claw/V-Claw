@@ -453,7 +453,23 @@ func TestUploadFileAllowsPathInsideSandbox(t *testing.T) {
 	}
 }
 
-func TestUploadFileBlocksUnsafeLocalFile(t *testing.T) {
+func TestUploadFileAllowsExecutableAsInertArtifact(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "Codex Installer.exe")
+	if err := os.WriteFile(path, []byte("MZ\x00\x00payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewTool(ToolNameUploadFile, NewService(fakeDriveConnector{}), fstool.NewPathGuard([]string{workspace}))
+	result := tool.Execute(context.Background(), tools.ToolCall{ID: "c2exe", Name: ToolNameUploadFile, Arguments: map[string]any{"localPath": path}})
+	if !result.Success {
+		t.Fatalf("expected executable artifact upload to pass intake gate, got %#v", result.Error)
+	}
+	if result.Metadata == nil || result.Metadata["file_safety"] == nil {
+		t.Fatalf("expected file safety metadata, got %#v", result.Metadata)
+	}
+}
+
+func TestUploadFileBlocksRenamedExecutableLocalFile(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "invoice.pdf")
 	if err := os.WriteFile(path, []byte("MZ\x00\x00payload"), 0o644); err != nil {
