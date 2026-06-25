@@ -981,6 +981,8 @@ func TestProcessUpdateBlocksUnsafeTelegramAttachment(t *testing.T) {
 			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"file_path":"docs/invoice.pdf"}}`), nil
 		case strings.Contains(r.URL.Path, "/file/bottoken/docs/invoice.pdf"):
 			return jsonResponse(http.StatusOK, "MZ\x00\x00payload"), nil
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":43}}`), nil
 		default:
 			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
 			return nil, nil
@@ -1002,11 +1004,11 @@ func TestProcessUpdateBlocksUnsafeTelegramAttachment(t *testing.T) {
 			Document:  &telegramDocument{FileID: "doc1", FileName: "invoice.pdf", MimeType: "application/pdf"},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "file safety gate") {
-		t.Fatalf("expected file safety error, got processed=%v err=%v", processed, err)
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
 	}
-	if processed {
-		t.Fatal("blocked attachment should not be processed")
+	if !processed {
+		t.Fatal("blocked attachment update should be handled after notifying the user")
 	}
 	if handler.calls != 0 {
 		t.Fatalf("handler should not receive blocked attachment, calls=%d", handler.calls)

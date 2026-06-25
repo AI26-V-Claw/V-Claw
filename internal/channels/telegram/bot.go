@@ -398,6 +398,12 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		if b.handler != nil {
 			b.handler.FinalizeAudit(inbound, err)
 		}
+		if strings.Contains(err.Error(), "file safety gate") {
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Tệp đính kèm bị chặn bởi lớp kiểm tra an toàn file: "+strings.TrimPrefix(err.Error(), "telegram attachment blocked by file safety gate: ")); sendErr != nil {
+				return false, sendErr
+			}
+			return true, nil
+		}
 		return false, err
 	}
 	if len(attachments) > 0 {

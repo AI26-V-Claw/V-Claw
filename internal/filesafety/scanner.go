@@ -351,8 +351,9 @@ func hasTypeMismatch(ext, detected string) bool {
 func activeContentFlags(data []byte, detected, ext string) []string {
 	lower := strings.ToLower(string(firstBytes(data, 2*1024*1024)))
 	if detected == "pdf" {
-		for _, token := range []string{"/javascript", "/js", "/launch", "/openaction", "/embeddedfile"} {
-			if strings.Contains(lower, token) {
+		structural := stripPDFStreams(lower)
+		for _, token := range []string{"/javascript", "/launch", "/embeddedfile"} {
+			if strings.Contains(structural, token) {
 				return []string{FlagActiveContent}
 			}
 		}
@@ -368,6 +369,24 @@ func activeContentFlags(data []byte, detected, ext string) []string {
 		}
 	}
 	return nil
+}
+
+func stripPDFStreams(text string) string {
+	var builder strings.Builder
+	for {
+		start := strings.Index(text, "stream")
+		if start < 0 {
+			builder.WriteString(text)
+			return builder.String()
+		}
+		builder.WriteString(text[:start])
+		rest := text[start+len("stream"):]
+		end := strings.Index(rest, "endstream")
+		if end < 0 {
+			return builder.String()
+		}
+		text = rest[end+len("endstream"):]
+	}
 }
 
 func containsEventHandler(text string) bool {
