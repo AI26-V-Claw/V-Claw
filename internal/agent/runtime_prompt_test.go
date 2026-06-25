@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vclaw/internal/agent/reference"
+	"vclaw/internal/contracts"
 	"vclaw/internal/governance"
 	"vclaw/internal/knowledge"
 	"vclaw/internal/providers"
@@ -562,6 +563,74 @@ func TestReferenceContextRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestAssembleProviderChatRequestCountsToolSchemasInBudget(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(parallelRuntimeTool{
+		name:       "test.big_schema",
+		parameters: tools.ToolSchema{"type": "object", "properties": map[string]any{"blob": strings.Repeat("x", 12000)}},
+	}); err != nil {
+		t.Fatalf("register big schema tool: %v", err)
+	}
+	r := NewRuntime(RuntimeConfig{
+		Provider:     &fakeProvider{},
+		Registry:     registry,
+		ContextWindow: 32_000,
+	})
+	transcript := []providers.Message{
+		{Role: providers.MessageRoleUser, Content: repeatTokens("history", 12_000)},
+		{Role: providers.MessageRoleAssistant, Content: repeatTokens("reply", 6_000)},
+		{Role: providers.MessageRoleUser, Content: repeatTokens("current request", 10_000)},
+	}
+	memory := sessions.SessionMemory{
+		Summary: repeatTokens("session summary", 2_500),
+	}
+	request := r.assembleProviderChatRequest(transcript, memory, nil, runtimePromptOptions{
+		IncludeLongTermMemory: true,
+		PreSystemMessages: []providers.Message{
+			{Role: providers.MessageRoleSystem, Content: repeatTokens("active plan", 500)},
+		},
+	})
+	budget := r.contextBudget.normalized()
+	total := estimateProviderRequestTokens(request.Messages, request.Tools)
+	if total > budget.Available() {
+		t.Fatalf("assembled provider request exceeds budget: total=%d available=%d", total, budget.Available())
+	}
+	if estimateToolDefinitionsTokens(request.Tools) == 0 {
+		t.Fatal("expected tool schema tokens to be counted")
+	}
+}
+
+func TestRuntimeFailsStableWhenProviderRequestStillExceedsBudget(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(parallelRuntimeTool{
+		name:       "test.big_schema",
+		parameters: tools.ToolSchema{"type": "object", "properties": map[string]any{"blob": strings.Repeat("x", 12000)}},
+	}); err != nil {
+		t.Fatalf("register big schema tool: %v", err)
+	}
+	provider := &fakeProvider{}
+	r := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		ContextWindow: 1024,
+	})
+	response, err := r.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusFailed {
+		t.Fatalf("expected failed response, got %#v", response)
+	}
+	if response.Error == nil || response.Error.Code != contracts.ErrorInternal {
+		t.Fatalf("expected stable internal error for budget overflow, got %#v", response.Error)
+	}
+	if len(provider.calls) != 0 {
+		t.Fatalf("provider should not be called when request exceeds budget, got %d calls", len(provider.calls))
+	}
+	if !strings.Contains(response.Message, "exceeds context budget") {
+		t.Fatalf("expected context budget failure message, got %q", response.Message)
+	}
+}
 func TestRuntimePromptBoundsSandboxPDFExtractionOutput(t *testing.T) {
 	prompt := runtimeSystemPrompt(time.Date(2026, time.June, 10, 9, 30, 0, 0, time.FixedZone("ICT", 7*60*60)))
 	for _, want := range []string{

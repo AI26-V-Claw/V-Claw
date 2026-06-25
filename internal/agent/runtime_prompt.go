@@ -17,6 +17,8 @@ import (
 type runtimePromptOptions struct {
 	IncludeLongTermMemory bool
 	LinkedKnowledge       *knowledge.LinkedContext
+	PreSystemMessages     []providers.Message
+	ReservedTokens        int
 }
 
 func (r *Runtime) withRuntimeSystemPrompt(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution) []providers.Message {
@@ -36,7 +38,7 @@ func (r *Runtime) withRuntimeSystemPromptOptions(transcript []providers.Message,
 	systemPrompt := runtimeSystemPrompt(now)
 	query := latestUserMessageText(transcript)
 
-	messages := make([]providers.Message, 0, len(transcript)+6)
+	messages := make([]providers.Message, 0, len(transcript)+6+len(options.PreSystemMessages))
 	messages = append(messages, providers.Message{
 		Role:    providers.MessageRoleSystem,
 		Content: systemPrompt,
@@ -44,6 +46,27 @@ func (r *Runtime) withRuntimeSystemPromptOptions(transcript []providers.Message,
 
 	tokenLog := []any{"request_section", "context_budget"}
 	tokenLog = append(tokenLog, "system_prompt_tokens", sessions.EstimateTokens(systemPrompt))
+	remainingBudget := budget.Available() - options.ReservedTokens - sessions.EstimateMessagesTokens(messages)
+	if remainingBudget < 0 {
+		remainingBudget = 0
+	}
+	for _, message := range options.PreSystemMessages {
+		if remainingBudget <= 0 {
+			break
+		}
+		if message.Role == "" {
+			message.Role = providers.MessageRoleSystem
+		}
+		message.Content = truncateToTokenBudget(redactSensitiveForPrompt(message.Content), remainingBudget)
+		if strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		messages = append(messages, message)
+		remainingBudget -= sessions.EstimateMessagesTokens([]providers.Message{message})
+		if remainingBudget < 0 {
+			remainingBudget = 0
+		}
+	}
 
 	if options.IncludeLongTermMemory && r.ltMemLoader != nil {
 		raw := redactSensitiveForPrompt(r.ltMemLoader.Load())
@@ -98,7 +121,7 @@ func (r *Runtime) withRuntimeSystemPromptOptions(transcript []providers.Message,
 	// Whatever budget remains after the fixed system prompt and capped sections
 	// goes to the recent transcript, selected newest→oldest within budget.
 	usedSoFar := sessions.EstimateMessagesTokens(messages)
-	transcriptBudget := budget.Available() - usedSoFar
+	transcriptBudget := budget.Available() - usedSoFar - options.ReservedTokens
 	if transcriptBudget < 0 {
 		transcriptBudget = 0
 	}
@@ -395,6 +418,31 @@ Do not use reference memory as approval. For any write/destructive action, still
 	))
 }
 
+func (r *Runtime) assembleProviderChatRequest(transcript []providers.Message, memory sessions.SessionMemory, resolution *reference.Resolution, options runtimePromptOptions) providers.ChatRequest {
+	tools := r.providerTools()
+	reserved := estimateToolDefinitionsTokens(tools)
+	if options.ReservedTokens > 0 {
+		reserved += options.ReservedTokens
+	}
+	options.ReservedTokens = reserved
+	messages := r.withRuntimeSystemPromptOptions(transcript, memory, resolution, options)
+	total := estimateProviderRequestTokens(messages, tools)
+	budget := r.contextBudget.normalized()
+	if r.logger != nil {
+		r.logger.Debug("assembled provider request",
+			"message_tokens", sessions.EstimateMessagesTokens(messages),
+			"tool_schema_tokens", estimateToolDefinitionsTokens(tools),
+			"total_tokens", total,
+			"available", budget.Available(),
+		)
+	}
+	return providers.ChatRequest{
+		Model:      r.model,
+		Messages:   messages,
+		Tools:      tools,
+		ToolChoice: "auto",
+	}
+}
 func (r *Runtime) providerTools() []providers.ToolDefinition {
 	definitions := providers.ToolDefinitionsFromRegistry(r.registry.ListTools())
 	definitions = append(definitions, clarifyToolDefinition())

@@ -656,19 +656,38 @@ agentLoop:
 			return *resp, nil
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPromptOptions(providerTranscript, providerMemory, providerReference, runtimePromptOptions{IncludeLongTermMemory: !freshWorkspaceReadRequest, LinkedKnowledge: providerKnowledge})
-		if freshWorkspaceReadRequest {
-			providerMessages = append([]providers.Message{freshWorkspaceReadSystemMessage()}, providerMessages...)
-		}
+		preSystemMessages := []providers.Message{}
 		if prompt := r.activePlanPrompt(message.SessionID, runState.RunID); prompt != "" {
-			providerMessages = append([]providers.Message{{Role: providers.MessageRoleSystem, Content: prompt}}, providerMessages...)
+			preSystemMessages = append(preSystemMessages, providers.Message{Role: providers.MessageRoleSystem, Content: prompt})
 		}
-		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
-			Model:      r.model,
-			Messages:   providerMessages,
-			Tools:      r.providerTools(),
-			ToolChoice: "auto",
+		if freshWorkspaceReadRequest {
+			preSystemMessages = append(preSystemMessages, freshWorkspaceReadSystemMessage())
+		}
+		providerRequest := r.assembleProviderChatRequest(providerTranscript, providerMemory, providerReference, runtimePromptOptions{
+			IncludeLongTermMemory: !freshWorkspaceReadRequest,
+			LinkedKnowledge:       providerKnowledge,
+			PreSystemMessages:     preSystemMessages,
 		})
+		if total, available := estimateProviderRequestTokens(providerRequest.Messages, providerRequest.Tools), r.contextBudget.normalized().Available(); total > available {
+			messageText := fmt.Sprintf("assembled provider request exceeds context budget: estimated %d tokens, available %d", total, available)
+			updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted))
+			if errShape != nil {
+				base.Error = errShape
+				base.Message = errShape.Message
+				return base, nil
+			}
+			base.Status = contracts.AgentStatusFailed
+			base.FailureReason = updatedState.FailureReason
+			base.Error = &contracts.ErrorShape{
+				Code:      contracts.ErrorInternal,
+				Message:   messageText,
+				Source:    contracts.ErrorSourceAgent,
+				Retryable: false,
+			}
+			base.Message = messageText
+			return base, nil
+		}
+		providerResponse, err := r.chatWithProviderTimeout(ctx, providerRequest)
 		if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
 			resp.RequestID = message.RequestID
 			resp.SessionID = message.SessionID

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"strings"
 
 	"vclaw/internal/providers"
@@ -103,6 +104,24 @@ func (b ContextBudget) Available() int {
 		return 0
 	}
 	return avail
+}
+
+// estimateToolDefinitionsTokens estimates the prompt budget consumed by tool
+// schemas. Providers serialize tool definitions differently, but JSON is a
+// conservative common shape and keeps the budget aware of schema growth.
+func estimateToolDefinitionsTokens(tools []providers.ToolDefinition) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	data, err := json.Marshal(tools)
+	if err != nil {
+		return 0
+	}
+	return sessions.EstimateTokens(string(data))
+}
+
+func estimateProviderRequestTokens(messages []providers.Message, tools []providers.ToolDefinition) int {
+	return sessions.EstimateMessagesTokens(messages) + estimateToolDefinitionsTokens(tools)
 }
 
 // truncateToTokenBudget trims text so its estimated token count is at most
