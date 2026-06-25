@@ -71,9 +71,13 @@ func (g PathGuard) Resolve(path string) (string, error) {
 		return real, nil
 	}
 
-	// Check against allowed roots
+	// Check against allowed roots using path boundaries, not string prefixes.
 	for _, root := range g.allowedRoots {
-		if strings.HasPrefix(strings.ToLower(real), strings.ToLower(root)) {
+		rel, err := filepath.Rel(root, real)
+		if err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." && !filepath.IsAbs(rel) {
+			return real, nil
+		}
+		if err == nil && rel == "." {
 			return real, nil
 		}
 	}

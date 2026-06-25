@@ -248,6 +248,62 @@ func TestPathGuardBlocksOutsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestPathGuardDoesNotAllowSiblingWithRootPrefix(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	sibling := filepath.Join(parent, "workspace-evil")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	guard := NewPathGuard([]string{root})
+	if _, err := guard.Resolve(filepath.Join(sibling, "secret.txt")); err == nil {
+		t.Fatal("expected sibling path with shared prefix to be blocked")
+	}
+}
+
+func TestReadFileBlocksRenamedExecutable(t *testing.T) {
+	dir := tempWorkspace(t)
+	path := filepath.Join(dir, "invoice.pdf")
+	if err := os.WriteFile(path, []byte("MZ\x00\x00payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewReadFileTool(NewPathGuard([]string{dir}))
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID: "call_exe", Name: ToolNameReadFile,
+		Arguments: map[string]any{"path": path},
+	})
+	if result.Success {
+		t.Fatal("expected renamed executable to be blocked")
+	}
+	if result.Metadata == nil || result.Metadata["file_safety"] == nil {
+		t.Fatalf("expected file safety metadata, got %#v", result.Metadata)
+	}
+}
+
+func TestReadFileBlocksTooLargeBeforeContent(t *testing.T) {
+	dir := tempWorkspace(t)
+	path := filepath.Join(dir, "large.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", int(maxReadFileBytes)+1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewReadFileTool(NewPathGuard([]string{dir}))
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID: "call_large", Name: ToolNameReadFile,
+		Arguments: map[string]any{"path": path},
+	})
+	if result.Success {
+		t.Fatal("expected oversized file to be blocked")
+	}
+	if !strings.Contains(result.ContentForLLM, "File blocked by safety gate") {
+		t.Fatalf("unexpected result: %s", result.ContentForLLM)
+	}
+}
+
 func TestRegisterToolsRegistersAllTools(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	if err := RegisterTools(registry, Config{}); err != nil {

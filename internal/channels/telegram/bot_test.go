@@ -842,7 +842,7 @@ func TestProcessUpdateDownloadsPhotoAttachmentAndPassesMetadata(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/getFile"):
 			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"file_path":"photos/demo.jpg"}}`), nil
 		case strings.Contains(r.URL.Path, "/file/bottoken/photos/demo.jpg"):
-			return jsonResponse(http.StatusOK, `demo-image-bytes`), nil
+			return jsonResponse(http.StatusOK, string([]byte{0xff, 0xd8, 0xff, 0xd9})), nil
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
 			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
 		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
@@ -894,8 +894,52 @@ func TestProcessUpdateDownloadsPhotoAttachmentAndPassesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read downloaded attachment: %v", err)
 	}
-	if string(bytes) != "demo-image-bytes" {
+	if string(bytes) != string([]byte{0xff, 0xd8, 0xff, 0xd9}) {
 		t.Fatalf("unexpected downloaded bytes: %q", string(bytes))
+	}
+	attachments, ok := handler.received.Metadata["attachments"].([]map[string]any)
+	if !ok || len(attachments) != 1 || attachments[0]["fileSafety"] == nil {
+		t.Fatalf("expected file safety metadata, got %#v", handler.received.Metadata["attachments"])
+	}
+}
+
+func TestProcessUpdateBlocksUnsafeTelegramAttachment(t *testing.T) {
+	handler := &fakeHandler{}
+	botTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getFile"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"file_path":"docs/invoice.pdf"}}`), nil
+		case strings.Contains(r.URL.Path, "/file/bottoken/docs/invoice.pdf"):
+			return jsonResponse(http.StatusOK, "MZ\x00\x00payload"), nil
+		default:
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})
+
+	dataDir := t.TempDir()
+	t.Setenv("VCLAW_SANDBOX_WORKSPACE_DIR", filepath.Join(dataDir, "sandbox-root"))
+	bot := New("token", 123, dataDir, nil, handler, nil)
+	bot.client = &http.Client{Transport: botTransport}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 10,
+		Message: &telegramMessage{
+			MessageID: 89,
+			From:      &telegramUser{ID: 123},
+			Chat:      telegramChat{ID: 55},
+			Caption:   "xem file nay",
+			Document:  &telegramDocument{FileID: "doc1", FileName: "invoice.pdf", MimeType: "application/pdf"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "file safety gate") {
+		t.Fatalf("expected file safety error, got processed=%v err=%v", processed, err)
+	}
+	if processed {
+		t.Fatal("blocked attachment should not be processed")
+	}
+	if handler.calls != 0 {
+		t.Fatalf("handler should not receive blocked attachment, calls=%d", handler.calls)
 	}
 }
 

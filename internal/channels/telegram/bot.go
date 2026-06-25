@@ -22,6 +22,7 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
+	"vclaw/internal/filesafety"
 	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
@@ -343,10 +344,11 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		for _, attachment := range attachments {
 			paths = append(paths, attachment.Path)
 			metadata = append(metadata, map[string]any{
-				"path":     attachment.Path,
-				"filename": attachment.Filename,
-				"mimeType": attachment.MimeType,
-				"source":   "telegram",
+				"path":       attachment.Path,
+				"filename":   attachment.Filename,
+				"mimeType":   attachment.MimeType,
+				"source":     "telegram",
+				"fileSafety": attachment.Safety,
 			})
 		}
 		inbound.Metadata["attachmentPaths"] = paths
@@ -1445,6 +1447,7 @@ type downloadedTelegramAttachment struct {
 	Path     string
 	Filename string
 	MimeType string
+	Safety   map[string]any
 }
 
 func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramMessage) ([]downloadedTelegramAttachment, error) {
@@ -1472,14 +1475,37 @@ func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramM
 		if filepath.Ext(filename) == "" && candidate.Extension != "" {
 			filename += candidate.Extension
 		}
+		quarantinePath := filepath.Join(filesafety.QuarantineDir(outputDir), filename)
+		if err := os.MkdirAll(filepath.Dir(quarantinePath), 0o700); err != nil {
+			return nil, err
+		}
+		if err := b.downloadTelegramFile(ctx, filePath, quarantinePath); err != nil {
+			return nil, err
+		}
+		decision, err := filesafety.ScanPath(quarantinePath, filesafety.Input{
+			Filename:     filename,
+			ClaimedMIME:  candidate.MimeType,
+			Origin:       "telegram_attachment",
+			SourceTool:   "telegram.downloadAttachment",
+			MaxSizeBytes: filesafety.DefaultMaxSizeBytes,
+		})
+		if err != nil {
+			_ = os.Remove(quarantinePath)
+			return nil, err
+		}
+		if !decision.Allowed() {
+			_ = os.Remove(quarantinePath)
+			return nil, fmt.Errorf("telegram attachment blocked by file safety gate: %s", decision.ReasonUser)
+		}
 		localPath := filepath.Join(outputDir, filename)
-		if err := b.downloadTelegramFile(ctx, filePath, localPath); err != nil {
+		if err := filesafety.Promote(filesafety.QuarantinedFile{Path: quarantinePath, Dir: filepath.Dir(quarantinePath), Filename: filename}, localPath, decision); err != nil {
 			return nil, err
 		}
 		downloaded = append(downloaded, downloadedTelegramAttachment{
 			Path:     localPath,
 			Filename: filename,
 			MimeType: candidate.MimeType,
+			Safety:   decision.Metadata(),
 		})
 	}
 	return downloaded, nil

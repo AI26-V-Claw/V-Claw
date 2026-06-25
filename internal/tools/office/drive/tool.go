@@ -14,6 +14,7 @@ import (
 	googleconnector "vclaw/internal/connectors/google"
 	"vclaw/internal/connectors/google/common"
 	gdrive "vclaw/internal/connectors/google/drive"
+	"vclaw/internal/filesafety"
 	"vclaw/internal/tools"
 	"vclaw/internal/tools/office"
 
@@ -631,17 +632,33 @@ func (t DriveTool) saveFile(ctx context.Context, call tools.ToolCall) tools.Tool
 	if err := os.MkdirAll(resolvedDir, 0o750); err != nil {
 		return outputToolResult(call, nil, internalError("create outputDir: "+err.Error()))
 	}
+	decision := filesafety.ScanBytes([]byte(content.Content), filesafety.Input{
+		Filename:     filename,
+		ClaimedMIME:  content.MimeType,
+		Origin:       "drive_file",
+		SourceTool:   ToolNameSaveFile,
+		MaxSizeBytes: maxSaveFileBytes,
+	})
+	if !decision.Allowed() {
+		return outputToolResult(call, nil, invalidInput("file blocked by file safety gate: "+decision.ReasonUser))
+	}
+	quarantined, err := filesafety.QuarantineBytes(resolvedDir, filename, []byte(content.Content))
+	if err != nil {
+		return outputToolResult(call, nil, internalError("quarantine file: "+err.Error()))
+	}
 	destPath := filepath.Join(resolvedDir, filename)
-	if err := os.WriteFile(destPath, []byte(content.Content), 0o600); err != nil {
-		return outputToolResult(call, nil, internalError("write file: "+err.Error()))
+	if err := filesafety.Promote(quarantined, destPath, decision); err != nil {
+		return outputToolResult(call, nil, internalError("promote file: "+err.Error()))
 	}
 
 	result := map[string]any{
-		"FileID":   fileID,
-		"Filename": filename,
-		"Path":     destPath,
-		"MimeType": content.MimeType,
-		"Size":     int64(len(content.Content)),
+		"FileID":      fileID,
+		"Filename":    filename,
+		"Path":        destPath,
+		"MimeType":    content.MimeType,
+		"Size":        int64(len(content.Content)),
+		"FileSafety":  decision.Metadata(),
+		"SafetyFlags": decision.Flags,
 	}
 	return outputToolResult(call, result, nil)
 }
@@ -820,8 +837,21 @@ func (t DriveTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 		if errShape != nil {
 			return outputToolResult(call, nil, errShape)
 		}
+		decision, err := filesafety.ScanPath(localPath, filesafety.Input{
+			Filename:     filepath.Base(localPath),
+			ClaimedMIME:  stringArg(call.Arguments, "mimeType"),
+			Origin:       "local_workspace",
+			SourceTool:   ToolNameUploadFile,
+			MaxSizeBytes: maxSaveFileBytes,
+		})
+		if err != nil {
+			return outputToolResult(call, nil, internalError("scan localPath: "+err.Error()))
+		}
+		if !decision.Allowed() {
+			return outputToolResult(call, nil, invalidInput("localPath blocked by file safety gate: "+decision.ReasonUser))
+		}
 		output, errShape := t.service.UploadFile(ctx, UploadFileInput{LocalPath: localPath, Name: stringArg(call.Arguments, "name"), MimeType: stringArg(call.Arguments, "mimeType"), ParentIDs: stringSliceArg(call.Arguments, "parentIds")})
-		return outputToolResult(call, map[string]any{"File": output}, errShape)
+		return outputToolResult(call, map[string]any{"File": output, "FileSafety": decision.Metadata()}, errShape)
 	case ToolNameUpdateFileMetadata:
 		output, errShape := t.service.UpdateFileMetadata(ctx, UpdateFileMetadataInput{FileID: stringArg(call.Arguments, "fileId"), Name: stringArg(call.Arguments, "name"), Description: stringArg(call.Arguments, "description"), Starred: optionalBoolArg(call.Arguments, "starred")})
 		return outputToolResult(call, map[string]any{"File": output}, errShape)
@@ -1085,6 +1115,9 @@ func driveResultMetadata(call tools.ToolCall, output any) map[string]any {
 		meta["mime_type"] = v.MimeType
 		meta["size_bytes"] = v.Size
 	case map[string]any:
+		if safety, ok := v["FileSafety"]; ok {
+			meta["file_safety"] = safety
+		}
 		if permissions, ok := v["Permissions"].([]gdrive.PermissionSummary); ok {
 			meta["permission_count"] = len(permissions)
 		}

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>File Safety Gate - Implementation Plan</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #667085;
+      --border: #d7dce3;
+      --allow: #0f7b45;
+      --ask: #9a5b00;
+      --block: #b42318;
+      --flag: #244b7a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.5;
+    }
+
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+
+    header {
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 20px;
+    }
+
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 16px;
+    }
+
+    ul {
+      margin: 8px 0 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--border);
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef2f6;
+    }
+
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .allow {
+      color: var(--allow);
+      background: #e8f5ee;
+    }
+
+    .ask {
+      color: var(--ask);
+      background: #fff4df;
+    }
+
+    .block {
+      color: var(--block);
+      background: #fdebea;
+    }
+
+    .flag {
+      color: var(--flag);
+      background: #e8f1fb;
+    }
+
+    code {
+      background: #eef2f6;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 0.95em;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>File Safety Gate</h1>
+      <p class="subtitle">Spec ngắn cho lớp kiểm tra file trước khi agent đọc sâu, parse, gửi model, upload ra ngoài hoặc đưa vào tool.</p>
+    </header>
+
+    <section>
+      <h2>Mục tiêu</h2>
+      <ul>
+        <li>Không tin filename, extension, MIME khai báo hoặc metadata từ nguồn ngoài.</li>
+        <li>Chặn file nguy hiểm trước khi parse, OCR, đọc vào LLM context hoặc upload sang Gmail/Drive/tool khác.</li>
+        <li>Mọi quyết định phải có lý do ngắn cho user và dữ liệu đủ chi tiết cho audit log.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Cách Triển Khai</h2>
+      <ul>
+        <li>Ưu tiên thêm module nhỏ, API rõ ràng, test riêng; hạn chế sửa rộng các file đang có sẵn.</li>
+        <li>Nếu một điểm tích hợp bắt buộc phải sửa file hiện có thì sửa trực tiếp, scoped nhỏ, không refactor lan sang phần không liên quan.</li>
+        <li>Giữ contract ổn định để các team khác chỉ cần gọi gate chung thay vì tự viết logic scan riêng.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Điểm Gắn Bắt Buộc</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Luồng</th>
+            <th>Gate cần đặt</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>filesystem.readFile</code></td>
+            <td>Scan trước <code>os.ReadFile</code>; không đọc toàn bộ file lớn/nhị phân rồi mới truncate.</td>
+          </tr>
+          <tr>
+            <td><code>gmail.downloadAttachments</code></td>
+            <td>Tải vào quarantine, scan bytes thật, sau đó mới promote vào workspace.</td>
+          </tr>
+          <tr>
+            <td>Telegram attachments</td>
+            <td>Scan file tải về trước khi thêm vào <code>Attachment paths</code> cho agent.</td>
+          </tr>
+          <tr>
+            <td><code>drive.saveFile</code></td>
+            <td>Scan nội dung Drive tải về trước khi ghi ra workspace.</td>
+          </tr>
+          <tr>
+            <td><code>drive.uploadFile</code> và Gmail draft attachments</td>
+            <td>Scan local file trước khi upload ra ngoài.</td>
+          </tr>
+          <tr>
+            <td>Archive</td>
+            <td>Scan container trước khi giải nén và scan từng entry trước khi dùng.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Core Checks</h2>
+      <ul>
+        <li>Detect type bằng magic bytes/MIME sniffing; so với extension chỉ để cảnh báo hoặc chặn.</li>
+        <li>Giới hạn size: rỗng, quá nhỏ bất thường, quá lớn, hoặc vượt giới hạn parse/upload.</li>
+        <li>Chặn executable/script/shortcut: <code>.exe</code>, <code>.dll</code>, <code>.scr</code>, <code>.bat</code>, <code>.cmd</code>, <code>.ps1</code>, <code>.lnk</code>, <code>.url</code>.</li>
+        <li>Detect active content: Office macro/OLE, PDF JavaScript/Launch/OpenAction/embedded files, HTML/SVG script hoặc event handler.</li>
+        <li>Archive guard: zip slip, symlink, nested archive, số file quá lớn, tổng size giải nén quá lớn.</li>
+        <li>Parse nhẹ các type quan trọng để phát hiện file corrupt trước khi xử lý sâu.</li>
+        <li>Scan prompt injection sau khi extract text; luôn bọc nội dung file là untrusted content.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Decision Model</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Decision</th>
+            <th>Dùng khi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge allow">allow</span></td>
+            <td>Type được hỗ trợ, size hợp lệ, extension khớp hoặc lệch không đáng kể, parse nhẹ thành công.</td>
+          </tr>
+          <tr>
+            <td><span class="badge ask">requires_approval</span></td>
+            <td>Unknown type, thiếu extension, mismatch nhẹ, hoặc prompt injection nghi ngờ nhưng chưa đủ để chặn.</td>
+          </tr>
+          <tr>
+            <td><span class="badge block">block</span></td>
+            <td>Executable/script giả tài liệu, active content nguy hiểm, archive nguy hiểm, file corrupt, quá lớn, type bị cấm.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><code>ask_user</code> nếu dùng ở UI phải map về <code>requires_approval</code> trong backend/audit.</p>
+    </section>
+
+    <section>
+      <h2>Output Contract</h2>
+      <ul>
+        <li><code>decision</code>, <code>flags</code>, <code>reason_user</code>, <code>reason_audit</code>.</li>
+        <li><code>filename</code>, <code>extension</code>, <code>claimed_mime</code>, <code>detected_type</code>, <code>size_bytes</code>, <code>sha256</code>.</li>
+        <li><code>origin</code>, <code>source_tool</code>, <code>scanner_version</code>, <code>policy_version</code>.</li>
+        <li>Flags chính: <code>external_origin</code>, <code>type_match</code>, <code>type_mismatch</code>, <code>dangerous_type</code>, <code>unsupported_type</code>, <code>too_large</code>, <code>too_small</code>, <code>corrupt_or_unreadable</code>, <code>archive_risk</code>, <code>active_content</code>, <code>prompt_injection_suspected</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Code Cleanup Đi Kèm</h2>
+      <ul>
+        <li>Sửa <code>PathGuard.Resolve</code>: không dùng prefix string để check root; dùng <code>filepath.Rel</code> hoặc boundary separator.</li>
+        <li>Thêm quarantine/promote API để tool không ghi file chưa scan thẳng vào workspace.</li>
+        <li>Thêm audit event hoặc metadata cho file safety decision; không nhét chi tiết scan vào text tự do.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Test Bắt Buộc</h2>
+      <ul>
+        <li>Valid PDF/image/text/docx/csv được allow.</li>
+        <li>EXE đổi tên thành PDF, HTML đổi tên thành PDF, script/shortcut từ nguồn ngoài bị block.</li>
+        <li>File rỗng, file quá lớn, PDF/docx/zip corrupt bị block hoặc requires_approval theo policy.</li>
+        <li>Zip traversal, symlink, nested archive, decompressed-size vượt giới hạn bị block.</li>
+        <li>Prompt injection trong text/PDF/HTML/docx bị flag và không được đưa vào model như trusted instruction.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

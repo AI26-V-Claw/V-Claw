@@ -16,6 +16,7 @@ import (
 	googleconnector "vclaw/internal/connectors/google"
 	driveconnector "vclaw/internal/connectors/google/drive"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
+	"vclaw/internal/filesafety"
 	"vclaw/internal/tools"
 	"vclaw/internal/tools/office"
 
@@ -342,6 +343,7 @@ type DownloadedAttachment struct {
 	Path     string `json:"path"`
 	MimeType string `json:"mimeType"`
 	Size     int64  `json:"size"`
+	Safety   any    `json:"file_safety,omitempty"`
 }
 
 type DownloadAttachmentsOutput struct {
@@ -753,15 +755,35 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 			return DownloadAttachmentsOutput{}, MapError(err)
 		}
 		filename := safeAttachmentFilename(attachment)
+		quarantined, err := filesafety.QuarantineBytes(outputDir, filename, data.Data)
+		if err != nil {
+			return DownloadAttachmentsOutput{}, internalError("quarantine attachment: " + err.Error())
+		}
+		decision, err := filesafety.ScanPath(quarantined.Path, filesafety.Input{
+			Filename:     filename,
+			ClaimedMIME:  attachment.MimeType,
+			Origin:       "gmail_attachment",
+			SourceTool:   ToolNameDownloadAttachments,
+			MaxSizeBytes: maxDraftAttachmentRaw,
+		})
+		if err != nil {
+			_ = os.Remove(quarantined.Path)
+			return DownloadAttachmentsOutput{}, internalError("scan attachment: " + err.Error())
+		}
+		if !decision.Allowed() {
+			_ = os.Remove(quarantined.Path)
+			return DownloadAttachmentsOutput{}, invalidInput("attachment blocked by file safety gate: " + decision.ReasonUser)
+		}
 		path := filepath.Join(outputDir, filename)
-		if err := os.WriteFile(path, data.Data, 0600); err != nil {
-			return DownloadAttachmentsOutput{}, internalError("write attachment: " + err.Error())
+		if err := filesafety.Promote(quarantined, path, decision); err != nil {
+			return DownloadAttachmentsOutput{}, internalError("promote attachment: " + err.Error())
 		}
 		output.Files = append(output.Files, DownloadedAttachment{
 			Filename: filename,
 			Path:     path,
 			MimeType: attachment.MimeType,
 			Size:     int64(len(data.Data)),
+			Safety:   decision.Metadata(),
 		})
 	}
 	return output, nil
@@ -1002,6 +1024,18 @@ func loadDraftAttachments(paths []string) ([]gmailconnector.DraftAttachmentInput
 		if totalSize > maxDraftAttachmentRaw {
 			return nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
 		}
+		decision, err := filesafety.ScanPath(path, filesafety.Input{
+			Filename:     filepath.Base(path),
+			Origin:       "local_workspace",
+			SourceTool:   "gmail.draftAttachment",
+			MaxSizeBytes: maxDraftAttachmentRaw,
+		})
+		if err != nil {
+			return nil, internalError("scan attachment: " + err.Error())
+		}
+		if !decision.Allowed() {
+			return nil, invalidInput("attachment blocked by file safety gate: " + decision.ReasonUser)
+		}
 
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -1060,6 +1094,16 @@ func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([
 		mimeType := output.MimeType
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
+		}
+		decision := filesafety.ScanBytes([]byte(output.Content), filesafety.Input{
+			Filename:     output.File.Name,
+			ClaimedMIME:  mimeType,
+			Origin:       "drive_file",
+			SourceTool:   "gmail.driveAttachment",
+			MaxSizeBytes: maxDraftAttachmentRaw,
+		})
+		if !decision.Allowed() {
+			return nil, invalidInput("drive attachment blocked by file safety gate: " + decision.ReasonUser)
 		}
 		attachments = append(attachments, gmailconnector.DraftAttachmentInput{
 			Filename: output.File.Name,
