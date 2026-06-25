@@ -566,7 +566,7 @@ func (r *Runtime) legacyResolveApproval(ctx context.Context, sessionID string, d
 		if decision.Decision != contracts.RiskDecisionBlock {
 			result = r.executeAllowedTool(execCtx, pending.toolCall, pending.definition)
 		}
-		if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
+		if errShape := r.recordActionResultForRun(ctx, pending.message.SessionID, pending.runID, pending.message.RequestID, result); errShape != nil {
 			return contracts.AgentResponse{
 				RequestID: pending.message.RequestID,
 				SessionID: pending.message.SessionID,

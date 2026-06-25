@@ -556,7 +556,7 @@ Provenance bundle attached to every significant runtime record so the N4 monitor
 Fields:
 
 - `model` — LLM model ID used for the surrounding request, e.g. `claude-opus-4-8`, `gemini-1.5-pro`. Empty if the record was produced outside an LLM-driven step.
-- `promptVersion` — short content-hash fingerprint of the effective system prompt (`runtimeSystemPrompt` + `SOUL.md`). Computed by `governance.PromptVersion()` once when the runtime is constructed; same prompt → same version. Eight hex characters.
+- `promptVersion` — short content-hash fingerprint of the effective system prompt (`runtimeSystemPrompt`). Computed by `governance.PromptVersion()` once when the runtime is constructed; same prompt → same version. Eight hex characters. (`configs/SOUL.md` is reference documentation only — it is not injected at runtime and does not contribute to this hash.)
 - `toolSchemaVersion` — short content-hash fingerprint of the tool's parameter schema at call time. Computed by `governance.ToolSchemaVersion()` from the canonicalised schema; cosmetic key reordering does not shift the version. Eight hex characters.
 - `policyDecisionRef` — composite reference back to the `RiskDecision` that authorised the tool call. Format: `policy:<runID>:<toolCallId>:<unixSec>`. Computed by `governance.PolicyRef()` from the decision's `checkedAt` in UTC seconds. Readable in JSONL audit dumps via `grep`.
 
@@ -577,7 +577,7 @@ Rules:
 - All fields are optional strings. Empty values mean "unknown" and round-trip cleanly; existing producers that do not yet stamp governance keep working.
 - Channel UIs (Telegram, web) MUST NOT display governance to end users — these are backend trace identifiers, not human-facing context.
 - Governance values are stable identifiers, not secrets. They may be logged, indexed, and shipped to monitoring without redaction.
-- A change in any input that contributes to a hash (system prompt body, SOUL.md, tool parameter schema) automatically shifts the corresponding version. There is no manual version-bump step.
+- A change in any input that contributes to a hash (system prompt body, tool parameter schema) automatically shifts the corresponding version. There is no manual version-bump step.
 
 Implementation: see `internal/governance/governance.go`. Migration: `migrations/003_governance_metadata.sql`. Persistence: see [docs/05-erd.md §Governance columns](./05-erd.md#governance-columns).
 

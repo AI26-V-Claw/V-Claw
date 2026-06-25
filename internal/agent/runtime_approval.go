@@ -787,7 +787,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 		})
 	}
 
-	if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
+	if errShape := r.recordActionResultForRun(ctx, pending.message.SessionID, pending.runID, pending.message.RequestID, result); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
 			SessionID: pending.message.SessionID,
