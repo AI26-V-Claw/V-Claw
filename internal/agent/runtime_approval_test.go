@@ -92,7 +92,7 @@ func TestContinuationMessageFullTextReachesProvider(t *testing.T) {
 }
 
 func TestApprovalSummariesCoverProductionTools(t *testing.T) {
-fallback := approvalSummary("unknown.tool", contracts.RiskLevelExternalWrite, nil)
+	fallback := approvalSummary("unknown.tool", contracts.RiskLevelExternalWrite, nil)
 	legacyFallback := legacyApprovalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
 
 	for _, toolName := range productionToolNames() {
@@ -160,11 +160,11 @@ func TestEnrichDriveMoveApprovalInputUsesRecentListFilesResults(t *testing.T) {
 	if !ok || len(sources) != 1 {
 		t.Fatalf("sourceFiles = %#v, want one source", got["sourceFiles"])
 	}
-	if !strings.Contains(sources[0], "Thuật toán segment tree") || !strings.Contains(sources[0], "file_1") {
+	if sources[0] != "Thuật toán segment tree" {
 		t.Fatalf("unexpected source display: %q", sources[0])
 	}
 	target, _ := got["targetFolder"].(string)
-	if !strings.Contains(target, "Nhập môn lập trình") || !strings.Contains(target, "folder_1") {
+	if target != "Nhập môn lập trình" {
 		t.Fatalf("unexpected target display: %q", target)
 	}
 }
@@ -205,6 +205,80 @@ func TestEnrichCalendarRespondApprovalInputUsesEventTitle(t *testing.T) {
 	}
 	if got["eventId"] != "event_1" {
 		t.Fatalf("eventId changed unexpectedly: %#v", got["eventId"])
+	}
+}
+
+func TestEnrichApprovalInputUsesReadableResourceNamesAcrossDomains(t *testing.T) {
+	transcript := []providers.Message{
+		{
+			Role:    providers.MessageRoleTool,
+			Content: `{"Files":[{"id":"file_1","name":"Sprint report.pdf"}]}`,
+		},
+		{
+			Role:    providers.MessageRoleTool,
+			Content: `{"Document":{"documentId":"doc_1","title":"Sprint review notes"}}`,
+		},
+		{
+			Role:    providers.MessageRoleTool,
+			Content: `{"Spreadsheet":{"spreadsheetId":"sheet_1","title":"Sprint metrics"}}`,
+		},
+		{
+			Role:    providers.MessageRoleTool,
+			Content: `{"Messages":[{"ID":"msg_1","Subject":"Thông báo Demo Day"}]}`,
+		},
+		{
+			Role:    providers.MessageRoleTool,
+			Content: "- spaces/space_1 | VClaw | SPACE",
+		},
+	}
+
+	tests := []struct {
+		name     string
+		toolName string
+		input    map[string]any
+		key      string
+		want     string
+	}{
+		{name: "drive", toolName: "drive.trashFile", input: map[string]any{"fileId": "file_1"}, key: "resourceName", want: "Sprint report.pdf"},
+		{name: "docs", toolName: "docs.appendText", input: map[string]any{"documentId": "doc_1"}, key: "resourceName", want: "Sprint review notes"},
+		{name: "sheets", toolName: "sheets.updateValues", input: map[string]any{"spreadsheetId": "sheet_1"}, key: "resourceName", want: "Sprint metrics"},
+		{name: "gmail", toolName: "gmail.trashMessage", input: map[string]any{"messageId": "msg_1"}, key: "resourceName", want: "Thông báo Demo Day"},
+		{name: "chat", toolName: "chat.sendMessage", input: map[string]any{"space": "spaces/space_1"}, key: "conversationName", want: "VClaw"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := enrichApprovalInput(tt.toolName, tt.input, transcript)
+			if got[tt.key] != tt.want {
+				t.Fatalf("%s = %#v, want %q", tt.key, got[tt.key], tt.want)
+			}
+		})
+	}
+}
+
+func TestEnrichApprovalInputFindsDraftSubjectFromPrecedingCreateCall(t *testing.T) {
+	transcript := []providers.Message{
+		{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call_create_draft",
+				Name: "gmail.createDraft",
+				Arguments: map[string]any{
+					"to":      []any{"bao@example.com"},
+					"subject": "Mời tham dự Demo Day",
+				},
+			}},
+		},
+		{
+			Role:       providers.MessageRoleTool,
+			ToolCallID: "call_create_draft",
+			Content:    `{"Draft":{"ID":"draft_123","MessageID":"message_123"}}`,
+		},
+	}
+
+	got := enrichApprovalInput("gmail.sendDraft", map[string]any{"draftId": "draft_123"}, transcript)
+	if got["resourceName"] != "Mời tham dự Demo Day" {
+		t.Fatalf("resourceName = %#v, want draft subject", got["resourceName"])
 	}
 }
 

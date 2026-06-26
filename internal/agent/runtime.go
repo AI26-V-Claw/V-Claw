@@ -66,8 +66,8 @@ type RuntimeConfig struct {
 	LocalLocation              *time.Location // timezone for date calculations; nil falls back to time.Local
 	Compactor                  *sessions.Compactor
 	ContextWindow              int
+	ContextBudget              ContextBudget // zero value = scaled defaults from ContextWindow
 	MemoryClassifierModel      string
-	SoulPrompt                 string
 	LongMemDir                 string
 	KnowledgeRetriever         knowledge.Retriever
 }
@@ -100,9 +100,10 @@ type Runtime struct {
 	localLocation              *time.Location
 	compactor                  *sessions.Compactor
 	contextWindow              int
+	contextBudget              ContextBudget
 	memoryClassifierModel      string
 	// promptVersion is the content-hash fingerprint of the effective system
-	// prompt (runtimeSystemPrompt + SOUL.md). Computed once when the Runtime
+	// prompt (runtimeSystemPrompt). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
 	promptVersion      string
 	planStore          *PlanStore
@@ -233,11 +234,17 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	if contextWindow <= 0 {
 		contextWindow = 128_000
 	}
-	// Compute the prompt version once at construction. We pass a zero time so
-	// the dynamic "current time" segment of runtimeSystemPrompt doesn't shift
-	// the hash on every Runtime creation. SOUL.md is hashed alongside so any
-	// edit there bumps the version automatically.
-	promptVersion := governance.PromptVersion(runtimeSystemPrompt(time.Time{}), config.SoulPrompt)
+	contextBudget := config.ContextBudget
+	contextBudget.ContextWindow = contextWindow
+	contextBudget = contextBudget.normalized()
+	// Compute the prompt version once at construction from the static prompt
+	// content only. runtimeSystemPromptStatic() substitutes a stable placeholder
+	// for the dynamic datetime segment, so two Runtimes created at different
+	// times produce the same promptVersion as long as the static prompt is
+	// unchanged. runtimeSystemPrompt() is the single source of truth for the
+	// effective system prompt; configs/SOUL.md is reference documentation only
+	// and is not injected at runtime.
+	promptVersion := governance.PromptVersion(runtimeSystemPromptStatic())
 	subtasks := newSubtaskCoordinator(config.SubtaskMaxChildren)
 	subtasks.now = now
 	planStore := NewPlanStore()
@@ -279,6 +286,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		localLocation:              localLocation,
 		compactor:                  config.Compactor,
 		contextWindow:              contextWindow,
+		contextBudget:              contextBudget,
 		memoryClassifierModel:      memoryClassifierModel(config),
 		promptVersion:              promptVersion,
 		planStore:                  planStore,
@@ -587,6 +595,21 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		understandingMessage.Text = contextualReferenceText(history, referenceResolution, message.Text)
 	}
 	understandingMessage.Text = textWithAttachmentContext(understandingMessage.Text, message.Metadata)
+	requestEvidenceText := strings.TrimSpace(message.Text)
+	if activeClarification || contextualFollowUp || resultFollowUp || resolvedReference {
+		requestEvidenceText = strings.TrimSpace(understandingMessage.Text)
+	}
+	if requestEvidenceText == "" {
+		requestEvidenceText = strings.TrimSpace(message.Text)
+	}
+	actionMessage := message
+	actionMessage.Text = requestEvidenceText
+	if requestEvidenceText != "" && requestEvidenceText != strings.TrimSpace(message.Text) && strings.TrimSpace(runState.OriginalGoal) != requestEvidenceText {
+		runState.OriginalGoal = requestEvidenceText
+		if errShape := r.updateRunState(ctx, runState); errShape != nil {
+			return failStartedRun(errShape)
+		}
+	}
 
 	providerTranscript := transcript
 	providerMemory := sessionMemory
@@ -654,19 +677,38 @@ agentLoop:
 			return *resp, nil
 		}
 		emitProgress(ctx, ProgressEvent{Stage: ProgressStageThinking, Message: "Agent is thinking"})
-		providerMessages := r.withRuntimeSystemPromptOptions(providerTranscript, providerMemory, providerReference, runtimePromptOptions{IncludeLongTermMemory: !freshWorkspaceReadRequest, LinkedKnowledge: providerKnowledge})
-		if freshWorkspaceReadRequest {
-			providerMessages = append([]providers.Message{freshWorkspaceReadSystemMessage()}, providerMessages...)
-		}
+		preSystemMessages := []providers.Message{}
 		if prompt := r.activePlanPrompt(message.SessionID, runState.RunID); prompt != "" {
-			providerMessages = append([]providers.Message{{Role: providers.MessageRoleSystem, Content: prompt}}, providerMessages...)
+			preSystemMessages = append(preSystemMessages, providers.Message{Role: providers.MessageRoleSystem, Content: prompt})
 		}
-		providerResponse, err := r.chatWithProviderTimeout(ctx, providers.ChatRequest{
-			Model:      r.model,
-			Messages:   providerMessages,
-			Tools:      r.providerTools(),
-			ToolChoice: "auto",
+		if freshWorkspaceReadRequest {
+			preSystemMessages = append(preSystemMessages, freshWorkspaceReadSystemMessage())
+		}
+		providerRequest := r.assembleProviderChatRequest(providerTranscript, providerMemory, providerReference, runtimePromptOptions{
+			IncludeLongTermMemory: !freshWorkspaceReadRequest,
+			LinkedKnowledge:       providerKnowledge,
+			PreSystemMessages:     preSystemMessages,
 		})
+		if total, available := estimateProviderRequestTokens(providerRequest.Messages, providerRequest.Tools), r.contextBudget.normalized().Available(); total > available {
+			messageText := fmt.Sprintf("assembled provider request exceeds context budget: estimated %d tokens, available %d", total, available)
+			updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonAborted))
+			if errShape != nil {
+				base.Error = errShape
+				base.Message = errShape.Message
+				return base, nil
+			}
+			base.Status = contracts.AgentStatusFailed
+			base.FailureReason = updatedState.FailureReason
+			base.Error = &contracts.ErrorShape{
+				Code:      contracts.ErrorInternal,
+				Message:   messageText,
+				Source:    contracts.ErrorSourceAgent,
+				Retryable: false,
+			}
+			base.Message = messageText
+			return base, nil
+		}
+		providerResponse, err := r.chatWithProviderTimeout(ctx, providerRequest)
 		if resp := r.handleContextError(ctx, runState, toolResults); resp != nil {
 			resp.RequestID = message.RequestID
 			resp.SessionID = message.SessionID
@@ -877,7 +919,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
+				if errShape := r.recordActionResultForRun(ctx, message.SessionID, runState.RunID, message.RequestID, result); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -954,7 +996,7 @@ If required information is missing, ask one concise clarification question inste
 			// that must verify the user explicitly stated information in *this* request.
 			// Using the full evidenceText causes false positives when historical tool results
 			// contain times, titles, or emails that the user never mentioned in the current turn.
-			currentRequestText := message.Text
+			currentRequestText := requestEvidenceText
 			providerToolCall = sanitizeUnsupportedOptionalArguments(providerToolCall, evidenceText)
 			providerToolCall = applyChannelToolDefaults(message, providerToolCall)
 			if isClarifyToolCall(providerToolCall) {
@@ -978,7 +1020,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, message.Text, clarification.question, providerToolCall, stringSliceArg(providerToolCall.Arguments, "missing_fields"))); errShape != nil {
+				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, requestEvidenceText, clarification.question, providerToolCall, stringSliceArg(providerToolCall.Arguments, "missing_fields"))); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -1079,7 +1121,7 @@ If required information is missing, ask one concise clarification question inste
 					clarification.Status = contracts.AgentStatusFailed
 					return *clarification, nil
 				}
-				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, message.Text, clarification.Message, providerToolCall, toolCallMissingFields)); errShape != nil {
+				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, requestEvidenceText, clarification.Message, providerToolCall, toolCallMissingFields)); errShape != nil {
 					clarification.Error = errShape
 					clarification.Message = errShape.Message
 					clarification.Status = contracts.AgentStatusFailed
@@ -1111,7 +1153,7 @@ If required information is missing, ask one concise clarification question inste
 			}
 			switch decision.Decision {
 			case contracts.RiskDecisionAllow:
-				providerToolCall = normalizeProviderToolCall(r.now(), providerToolCall, message.Text)
+				providerToolCall = normalizeProviderToolCall(r.now(), providerToolCall, requestEvidenceText)
 				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusAllowed, decision.Reason, ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -1125,7 +1167,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.recordActionResult(ctx, message.SessionID, result); errShape != nil {
+				if errShape := r.recordActionResultForRun(ctx, message.SessionID, runState.RunID, message.RequestID, result); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -1179,8 +1221,8 @@ If required information is missing, ask one concise clarification question inste
 				}
 
 			case contracts.RiskDecisionRequiresApproval:
-				approval := r.approvalRequest(message, providerToolCall, decision, providerTranscript)
-				action, errShape := r.createApprovalAction(ctx, runState, message, providerToolCall, decision, approval)
+				approval := r.approvalRequest(actionMessage, providerToolCall, decision, providerTranscript)
+				action, errShape := r.createApprovalAction(ctx, runState, actionMessage, providerToolCall, decision, approval)
 				if errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -1215,7 +1257,7 @@ If required information is missing, ask one concise clarification question inste
 				r.storePendingApproval(pendingApproval{
 					runID:              runState.RunID,
 					actionID:           action.ActionID,
-					message:            message,
+					message:            actionMessage,
 					request:            approval,
 					toolCall:           providerToolCall,
 					definition:         definition,

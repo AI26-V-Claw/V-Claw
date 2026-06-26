@@ -389,17 +389,17 @@ func approvalDecisionRecord(sessionID string, decision contracts.ApprovalDecisio
 }
 
 func enrichApprovalInput(toolName string, input map[string]any, transcript []providers.Message) map[string]any {
+	enriched := input
 	switch strings.TrimSpace(toolName) {
 	case "drive.moveFile", "drive.moveFiles":
-		return enrichDriveMoveApprovalInput(input, transcript)
-	case "calendar.respondEvent":
-		return enrichCalendarRespondApprovalInput(input, transcript)
-	default:
-		return input
+		enriched = enrichDriveMoveApprovalInput(input, transcript)
+	case "calendar.updateEvent", "calendar.respondEvent", "calendar.deleteEvent":
+		enriched = enrichCalendarEventApprovalInput(input, transcript)
 	}
+	return enrichApprovalResourceNames(toolName, enriched, transcript)
 }
 
-func enrichCalendarRespondApprovalInput(input map[string]any, transcript []providers.Message) map[string]any {
+func enrichCalendarEventApprovalInput(input map[string]any, transcript []providers.Message) map[string]any {
 	if len(input) == 0 {
 		return input
 	}
@@ -417,6 +417,193 @@ func enrichCalendarRespondApprovalInput(input map[string]any, transcript []provi
 	enriched := cloneArguments(input)
 	enriched["eventTitle"] = title
 	return enriched
+}
+
+func enrichApprovalResourceNames(toolName string, input map[string]any, transcript []providers.Message) map[string]any {
+	if len(input) == 0 || len(transcript) == 0 {
+		return input
+	}
+
+	enriched := input
+	cloned := false
+	setName := func(idKey string, nameKey string) {
+		if strings.TrimSpace(stringArgument(enriched, nameKey)) != "" {
+			return
+		}
+		id := strings.TrimSpace(stringArgument(enriched, idKey))
+		if id == "" {
+			return
+		}
+		name := approvalResourceNameFromTranscript(transcript, id)
+		if name == "" {
+			return
+		}
+		if !cloned {
+			enriched = cloneArguments(enriched)
+			cloned = true
+		}
+		enriched[nameKey] = name
+	}
+
+	switch {
+	case strings.HasPrefix(toolName, "calendar."):
+		setName("eventId", "eventTitle")
+	case strings.HasPrefix(toolName, "drive."):
+		setName("fileId", "resourceName")
+		setName("targetParentId", "targetFolder")
+	case strings.HasPrefix(toolName, "docs."):
+		setName("documentId", "resourceName")
+	case strings.HasPrefix(toolName, "sheets."):
+		setName("spreadsheetId", "resourceName")
+		setName("sheetId", "sheetName")
+		setName("sourceSheetId", "sheetName")
+	case strings.HasPrefix(toolName, "gmail."):
+		setName("draftId", "resourceName")
+		setName("messageId", "resourceName")
+	case strings.HasPrefix(toolName, "chat."):
+		setName("space", "conversationName")
+		setName("name", "resourceName")
+	}
+	return enriched
+}
+
+func approvalResourceNameFromTranscript(transcript []providers.Message, resourceID string) string {
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
+		return ""
+	}
+	for i := len(transcript) - 1; i >= 0; i-- {
+		message := transcript[i]
+		if message.Role != providers.MessageRoleTool || strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		if strings.Contains(message.Content, resourceID) {
+			if name := approvalResourceNameFromPrecedingToolCall(transcript, i, message.ToolCallID); name != "" {
+				return name
+			}
+		}
+		var payload any
+		if err := json.Unmarshal([]byte(message.Content), &payload); err == nil {
+			if name := approvalResourceNameFromPayload(payload, resourceID); name != "" {
+				return name
+			}
+		}
+		if name := approvalResourceNameFromText(message.Content, resourceID); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+func approvalResourceNameFromPrecedingToolCall(transcript []providers.Message, toolResultIndex int, toolCallID string) string {
+	for i := toolResultIndex - 1; i >= 0 && i >= toolResultIndex-3; i-- {
+		message := transcript[i]
+		if message.Role == providers.MessageRoleUser {
+			break
+		}
+		if message.Role != providers.MessageRoleAssistant {
+			continue
+		}
+		for _, call := range message.ToolCalls {
+			if strings.TrimSpace(toolCallID) != "" && strings.TrimSpace(call.ID) != strings.TrimSpace(toolCallID) {
+				continue
+			}
+			for _, key := range []string{"subject", "title", "name", "eventTitle", "fileName"} {
+				if value, ok := call.Arguments[key].(string); ok && strings.TrimSpace(value) != "" {
+					return strings.TrimSpace(value)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func approvalResourceNameFromPayload(payload any, resourceID string) string {
+	switch typed := payload.(type) {
+	case []any:
+		for _, item := range typed {
+			if name := approvalResourceNameFromPayload(item, resourceID); name != "" {
+				return name
+			}
+		}
+	case map[string]any:
+		for _, key := range []string{"Event", "Message", "Draft", "File", "Document", "Spreadsheet", "Space"} {
+			if nested, ok := typed[key]; ok {
+				if name := approvalResourceNameFromPayload(nested, resourceID); name != "" {
+					return name
+				}
+			}
+		}
+		for _, key := range []string{"Events", "Messages", "Drafts", "Files", "Documents", "Spreadsheets", "Spaces", "Sheets"} {
+			if nested, ok := typed[key]; ok {
+				if name := approvalResourceNameFromPayload(nested, resourceID); name != "" {
+					return name
+				}
+			}
+		}
+		if approvalPayloadMatchesResource(typed, resourceID) {
+			for _, key := range []string{"title", "Title", "subject", "Subject", "displayName", "DisplayName", "filename", "Filename", "fileName", "FileName", "name", "Name"} {
+				if name := firstStringMapValue(typed, key); name != "" && name != resourceID && !looksLikeOpaqueResourceName(name) {
+					return name
+				}
+			}
+		}
+		for _, value := range typed {
+			if name := approvalResourceNameFromPayload(value, resourceID); name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func approvalPayloadMatchesResource(payload map[string]any, resourceID string) bool {
+	for _, key := range []string{
+		"id", "ID", "eventId", "EventID", "fileId", "FileID", "documentId", "DocumentID",
+		"spreadsheetId", "SpreadsheetID", "sheetId", "SheetID", "draftId", "DraftID",
+		"messageId", "MessageID", "name", "Name",
+	} {
+		value, ok := payload[key]
+		if ok && strings.TrimSpace(fmt.Sprint(value)) == resourceID {
+			return true
+		}
+	}
+	return false
+}
+
+func approvalResourceNameFromText(content string, resourceID string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.Contains(line, resourceID) {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		for i := 1; i < len(parts); i++ {
+			candidate := strings.TrimSpace(parts[i])
+			if candidate == "" || candidate == resourceID || looksLikeOpaqueResourceName(candidate) {
+				continue
+			}
+			switch candidate {
+			case "SPACE", "GROUP_CHAT", "DIRECT_MESSAGE":
+				continue
+			}
+			if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
+				continue
+			}
+			if len([]rune(candidate)) > 160 {
+				candidate = string([]rune(candidate)[:160]) + "..."
+			}
+			return candidate
+		}
+	}
+	return ""
+}
+
+func looksLikeOpaqueResourceName(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "spaces/") ||
+		strings.HasPrefix(value, "users/") ||
+		strings.HasPrefix(value, "people/") ||
+		strings.HasPrefix(value, "messages/")
 }
 
 func calendarEventTitleByIDFromTranscript(transcript []providers.Message, eventID string) string {
@@ -534,15 +721,8 @@ func driveFilesByIDFromTranscript(transcript []providers.Message) map[string]dri
 }
 
 func driveApprovalDisplayName(id string, ref driveApprovalFileRef) string {
-	id = strings.TrimSpace(id)
 	name := strings.TrimSpace(ref.Name)
-	if name == "" {
-		return id
-	}
-	if id == "" {
-		return name
-	}
-	return fmt.Sprintf("%s (ID: %s)", name, id)
+	return name
 }
 
 func firstStringMapValue(values map[string]any, keys ...string) string {
@@ -787,7 +967,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 		})
 	}
 
-	if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
+	if errShape := r.recordActionResultForRun(ctx, pending.message.SessionID, pending.runID, pending.message.RequestID, result); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
 			SessionID: pending.message.SessionID,

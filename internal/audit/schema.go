@@ -254,7 +254,7 @@ type AuditEvent struct {
 
 	// PromptVersion is the content-hash fingerprint of the system prompt that
 	// was active at this event. Changes automatically when runtimeSystemPrompt
-	// or SOUL.md changes. Computed by governance.PromptVersion().
+	// changes. Computed by governance.PromptVersion().
 	PromptVersion string `json:"prompt_version,omitempty"`
 
 	// ToolSchemaVersion is the content-hash fingerprint of the tool's
