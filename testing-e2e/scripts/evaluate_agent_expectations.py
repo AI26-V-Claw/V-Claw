@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_USECASE_DIR = REPO_ROOT / "testing-e2e" / "usecases"
 DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "usecases"
 DEFAULT_SUMMARY_PATH = DEFAULT_ARTIFACT_DIR / "agent-evaluation-report.json"
-DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_ENV_FILES = [
     REPO_ROOT / ".env",
     REPO_ROOT / "testing-e2e" / ".env",

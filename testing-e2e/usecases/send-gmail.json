@@ -2,7 +2,7 @@
   {
     "step": 0,
     "user": {
-      "message": "Gửi email cho vmkqa2@gmail.com với nội dung: Chào buổi sáng, chúc bạn một ngày làm việc hiệu quả."
+      "message": "Gửi email cho li14ngayvna@gmail.com với nội dung: Chào buổi sáng, chúc bạn một ngày làm việc hiệu quả."
     },
     "agent": {
       "expectation": "Agent cần tạo yêu cầu xác nhận trước khi tạo Gmail draft, hiển thị người nhận, tiêu đề và nội dung email nháp.",
@@ -44,7 +44,7 @@
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent cần xác nhận email đã được chuyển cho Gmail để gửi tới vmkqa2@gmail.com.",
+      "expectation": "Agent cần xác nhận email đã được chuyển cho Gmail để gửi tới li14ngayvna@gmail.com.",
       "requires_approval": false,
       "expected_tools": [],
       "expected_approval_tool": null,
