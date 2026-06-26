@@ -152,7 +152,11 @@ func userPolicyDecision(cfg UserPolicyConfig, riskLevel contracts.RiskLevel) (co
 	if containsRiskLevel(riskLevel, cfg.RequireApproval) {
 		return contracts.RiskDecisionRequiresApproval, true
 	}
-	if isLowRiskLevel(riskLevel) && containsRiskLevel(riskLevel, cfg.AutoAllow) {
+	// Honour the user's explicit auto_allow list for any risk level, not
+	// just low-risk ones. If the user chose to auto-allow sensitive_read,
+	// that decision should be respected so batch read operations (e.g.
+	// reading 10 emails) don't require per-call approval.
+	if containsRiskLevel(riskLevel, cfg.AutoAllow) {
 		return contracts.RiskDecisionAllow, true
 	}
 	return "", false
