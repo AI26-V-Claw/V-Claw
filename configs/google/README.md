@@ -16,6 +16,7 @@ internal/channels/README.md
 ```text
 Gmail API
 Google Calendar API
+Google Meet API
 Google Chat API
 Google People API
 Google Drive API
@@ -280,6 +281,7 @@ https://www.googleapis.com/auth/gmail.send
 https://www.googleapis.com/auth/gmail.modify
 https://www.googleapis.com/auth/calendar.readonly
 https://www.googleapis.com/auth/calendar.events
+https://www.googleapis.com/auth/meetings.space.created
 https://www.googleapis.com/auth/chat.spaces.readonly
 https://www.googleapis.com/auth/chat.messages.create
 https://www.googleapis.com/auth/chat.messages.readonly
@@ -301,6 +303,7 @@ Scope usage:
 - `gmail.compose`, `gmail.send`, `gmail.modify`: draft creation/update/send/delete, local file attachments in drafts, attachment download, message label changes, batch modify, trash, and untrash.
 - `calendar.readonly`: listing Calendar events.
 - `calendar.events`: creating, updating, and deleting Calendar events after HITL approval.
+- `meetings.space.created`: creating standalone Google Meet meeting spaces after HITL approval.
 - Chat scopes: listing spaces/messages, sending text replies/attachments, updating/deleting messages, creating spaces, and adding/removing members.
 - `directory.readonly`: searching Workspace directory profiles so the agent can resolve names or emails before matching Google Chat members.
 - `drive.readonly`: listing/searching Drive files, reading Drive file metadata, listing permissions, exporting Google Workspace files, and downloading capped file content.
@@ -320,6 +323,7 @@ Examples of mutating actions:
 Gmail draft/send/modify/download attachment
 Google Chat send/update/delete/create space/add member/remove member
 Calendar create/update/delete
+Google Meet link creation
 Drive create folder/update metadata/share/move/trash/untrash
 Docs create/append text
 Sheets create/update/append values

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1577,23 +1578,19 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape, loc
 	if errShape != nil {
 		return toolErrorResult(call, errShape)
 	}
-	userContent := gmailUserSummary(call.Name, output)
+	userContent := gmailUserSummary(call.Name, output, location)
 	if call.Name == ToolNameGetEmail {
 		userContent = formatJSON(output)
-	} else if call.Name == ToolNameListEmails {
-		if out, ok := output.(ListEmailsOutput); ok && len(out.Messages) == 1 {
-			userContent = formatJSON(output)
-		}
 	}
 	llmContent := formatJSON(compactOutputForLLM(call.Name, output, location))
 	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent, ArtifactRef: gmailArtifactRef(call.Name, output)}
 }
 
-func gmailUserSummary(toolName string, output any) string {
+func gmailUserSummary(toolName string, output any, location *time.Location) string {
 	switch toolName {
 	case ToolNameListEmails:
 		if out, ok := output.(ListEmailsOutput); ok {
-			return fmt.Sprintf("Đã tìm thấy %d email", len(out.Messages))
+			return formatListEmailsForUser(out, location)
 		}
 	case ToolNameGetEmail:
 		if out, ok := output.(GetEmailOutput); ok {
@@ -1665,6 +1662,119 @@ func gmailUserSummary(toolName string, output any) string {
 		return "Đã cập nhật nhãn cho nhiều email"
 	}
 	return formatJSON(output)
+}
+
+func formatListEmailsForUser(output ListEmailsOutput, location *time.Location) string {
+	if len(output.Messages) == 0 {
+		return "Không tìm thấy email nào."
+	}
+	if location == nil {
+		location = time.Local
+	}
+
+	lines := []string{formatListEmailsHeader(output)}
+	for index, message := range output.Messages {
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, formatListEmailSenderLine(message)))
+		subject := strings.TrimSpace(message.Subject)
+		if subject == "" {
+			subject = "(không có tiêu đề)"
+		}
+		lines = append(lines, "   • Tiêu đề: "+subject)
+		if message.HasAttachment {
+			lines = append(lines, "   • Tệp đính kèm: Có")
+		}
+		lines = append(lines, "   • Thời gian: "+formatListEmailTime(message, location))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatListEmailsHeader(output ListEmailsOutput) string {
+	query := strings.ToLower(strings.TrimSpace(output.Query))
+	switch {
+	case strings.Contains(query, "label:sent") || strings.Contains(query, " in:sent") || strings.HasPrefix(query, "in:sent"):
+		return "Đây là danh sách email bạn đã gửi:"
+	default:
+		return "Đây là danh sách email bạn nhận được:"
+	}
+}
+
+func formatListEmailSenderLine(message gmailconnector.MessageSummary) string {
+	fromName, fromEmail := parseEmailDisplay(strings.TrimSpace(message.From))
+	toName, toEmail := parseEmailDisplay(strings.TrimSpace(message.To))
+	if isSentMessage(message) {
+		sender := "Bạn"
+		if fromEmail != "" {
+			sender += " (" + fromEmail + ")"
+		} else if fromName != "" {
+			sender += " (" + fromName + ")"
+		}
+		target := firstNonEmpty(toEmail, toName, strings.TrimSpace(message.To))
+		if target != "" {
+			return fmt.Sprintf("Từ: %s gửi tới %s", sender, target)
+		}
+		return "Từ: " + sender
+	}
+	switch {
+	case fromName != "" && fromEmail != "":
+		return fmt.Sprintf("Từ: %s (%s)", fromName, fromEmail)
+	case fromEmail != "":
+		return "Từ: " + fromEmail
+	case fromName != "":
+		return "Từ: " + fromName
+	default:
+		return "Từ: (không rõ người gửi)"
+	}
+}
+
+func formatListEmailTime(message gmailconnector.MessageSummary, location *time.Location) string {
+	if message.InternalDate > 0 {
+		sentAt := time.UnixMilli(message.InternalDate).In(location)
+		return fmt.Sprintf("%02d:%02d, ngày %d tháng %d, %d",
+			sentAt.Hour(),
+			sentAt.Minute(),
+			sentAt.Day(),
+			sentAt.Month(),
+			sentAt.Year(),
+		)
+	}
+	if strings.TrimSpace(message.Date) != "" {
+		return strings.TrimSpace(message.Date)
+	}
+	return "(không rõ thời gian)"
+}
+
+func parseEmailDisplay(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ""
+	}
+	address, err := mail.ParseAddress(value)
+	if err == nil {
+		return strings.TrimSpace(address.Name), strings.TrimSpace(address.Address)
+	}
+	if strings.Contains(value, "@") {
+		return "", value
+	}
+	return value, ""
+}
+
+func isSentMessage(message gmailconnector.MessageSummary) bool {
+	for _, labelID := range message.LabelIDs {
+		if strings.EqualFold(strings.TrimSpace(labelID), "SENT") {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // gmailArtifactRef returns a typed reference to the message produced by a Gmail
@@ -1840,6 +1950,7 @@ type compactEmailMessage struct {
 	LocalDateTime string   `json:"LocalDateTime,omitempty"`
 	LabelIDs      []string `json:"LabelIDs,omitempty"`
 	InternalDate  int64    `json:"InternalDate"`
+	HasAttachment bool     `json:"has_attachment"`
 }
 
 func compactListEmailsOutput(output ListEmailsOutput, location *time.Location) compactListEmails {
@@ -1849,13 +1960,14 @@ func compactListEmailsOutput(output ListEmailsOutput, location *time.Location) c
 	messages := make([]compactEmailMessage, 0, len(output.Messages))
 	for _, message := range output.Messages {
 		compact := compactEmailMessage{
-			ID:           message.ID,
-			ThreadID:     message.ThreadID,
-			From:         message.From,
-			To:           message.To,
-			Subject:      message.Subject,
-			LabelIDs:     message.LabelIDs,
-			InternalDate: message.InternalDate,
+			ID:            message.ID,
+			ThreadID:      message.ThreadID,
+			From:          message.From,
+			To:            message.To,
+			Subject:       message.Subject,
+			LabelIDs:      message.LabelIDs,
+			InternalDate:  message.InternalDate,
+			HasAttachment: message.HasAttachment,
 		}
 		if message.InternalDate > 0 {
 			localTime := time.UnixMilli(message.InternalDate).In(location)

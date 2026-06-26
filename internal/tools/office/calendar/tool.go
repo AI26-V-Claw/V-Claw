@@ -117,18 +117,19 @@ func NewService(connector Connector) *Service {
 
 // EventSummary is the agent-facing event representation.
 type EventSummary struct {
-	ID          string         `json:"id"`
-	Title       string         `json:"title"`
-	Description string         `json:"description,omitempty"`
-	Location    string         `json:"location,omitempty"`
-	Start       string         `json:"start"`
-	End         string         `json:"end"`
-	Attendees   []AttendeeInfo `json:"attendees,omitempty"`
-	Organizer   PersonInfo     `json:"organizer,omitempty"`
-	Creator     PersonInfo     `json:"creator,omitempty"`
-	EventLink   string         `json:"eventLink,omitempty"`
-	MeetLink    string         `json:"meetLink,omitempty"`
-	IsRecurring bool           `json:"isRecurring,omitempty"`
+	ID               string         `json:"id"`
+	Title            string         `json:"title"`
+	Description      string         `json:"description,omitempty"`
+	Location         string         `json:"location,omitempty"`
+	Start            string         `json:"start"`
+	End              string         `json:"end"`
+	Attendees        []AttendeeInfo `json:"attendees,omitempty"`
+	Organizer        PersonInfo     `json:"organizer,omitempty"`
+	Creator          PersonInfo     `json:"creator,omitempty"`
+	EventLink        string         `json:"eventLink,omitempty"`
+	MeetLink         string         `json:"meetLink,omitempty"`
+	ConferenceStatus string         `json:"conferenceStatus,omitempty"`
+	IsRecurring      bool           `json:"isRecurring,omitempty"`
 }
 
 // AttendeeInfo represents a participant in a calendar event.
@@ -171,12 +172,13 @@ type GetEventOutput struct {
 
 // CreateEventInput is the input for calendar.createEvent.
 type CreateEventInput struct {
-	Title       string   // required
-	Start       string   // ISO-8601, required
-	End         string   // ISO-8601, required
-	Attendees   []string // email addresses, optional
-	Location    string   // optional
-	Description string   // optional
+	Title            string   // required
+	Start            string   // ISO-8601, required
+	End              string   // ISO-8601, required
+	Attendees        []string // email addresses, optional
+	Location         string   // optional
+	Description      string   // optional
+	CreateConference bool     // optional; asks Calendar to generate a Google Meet link
 }
 
 // CreateEventOutput is the output for calendar.createEvent.
@@ -187,13 +189,14 @@ type CreateEventOutput struct {
 
 // UpdateEventInput is the input for calendar.updateEvent.
 type UpdateEventInput struct {
-	EventID     string   // required
-	Title       string   // optional
-	Start       string   // optional, ISO-8601
-	End         string   // optional, ISO-8601
-	Attendees   []string // optional
-	Location    string   // optional
-	Description string   // optional
+	EventID          string   // required
+	Title            string   // optional
+	Start            string   // optional, ISO-8601
+	End              string   // optional, ISO-8601
+	Attendees        []string // optional
+	Location         string   // optional
+	Description      string   // optional
+	CreateConference bool     // optional; asks Calendar to generate a Google Meet link
 }
 
 // UpdateEventOutput is the output for calendar.updateEvent.
@@ -291,11 +294,12 @@ func (s *Service) CreateEvent(ctx context.Context, input CreateEventInput) (Crea
 	}
 
 	event := gcal.Event{
-		Title:       input.Title,
-		Description: input.Description,
-		Location:    input.Location,
-		StartTime:   startTime,
-		EndTime:     endTime,
+		Title:            input.Title,
+		Description:      input.Description,
+		Location:         input.Location,
+		StartTime:        startTime,
+		EndTime:          endTime,
+		CreateConference: input.CreateConference,
 	}
 
 	for _, email := range input.Attendees {
@@ -331,9 +335,10 @@ func (s *Service) UpdateEvent(ctx context.Context, input UpdateEventInput) (Upda
 	}
 
 	event := gcal.Event{
-		Title:       input.Title,
-		Description: input.Description,
-		Location:    input.Location,
+		Title:            input.Title,
+		Description:      input.Description,
+		Location:         input.Location,
+		CreateConference: input.CreateConference,
 	}
 
 	if input.Start != "" {
@@ -352,16 +357,27 @@ func (s *Service) UpdateEvent(ctx context.Context, input UpdateEventInput) (Upda
 		event.EndTime = endTime
 	}
 
-	if len(input.Attendees) > 0 {
-		current, err := s.connector.GetEvent(ctx, input.EventID)
+	var current gcal.Event
+	if len(input.Attendees) > 0 || input.CreateConference {
+		loaded, err := s.connector.GetEvent(ctx, input.EventID)
 		if err != nil {
 			return UpdateEventOutput{}, mapConnectorError(err)
 		}
+		current = loaded
+	}
+
+	if len(input.Attendees) > 0 {
 		merged, errShape := mergeAttendeesPreservingState(current.Attendees, input.Attendees)
 		if errShape != nil {
 			return UpdateEventOutput{}, errShape
 		}
 		event.Attendees = merged
+	}
+	if input.CreateConference && strings.TrimSpace(current.MeetLink) != "" {
+		event.CreateConference = false
+		if !updateHasPatchFields(input) {
+			return UpdateEventOutput{Event: toEventSummary(current)}, nil
+		}
 	}
 
 	updated, err := s.connector.UpdateEvent(ctx, input.EventID, event)
@@ -404,6 +420,15 @@ func mergeAttendeesPreservingState(existing []gcal.Attendee, additions []string)
 	}
 
 	return merged, nil
+}
+
+func updateHasPatchFields(input UpdateEventInput) bool {
+	return strings.TrimSpace(input.Title) != "" ||
+		strings.TrimSpace(input.Start) != "" ||
+		strings.TrimSpace(input.End) != "" ||
+		len(input.Attendees) > 0 ||
+		strings.TrimSpace(input.Location) != "" ||
+		strings.TrimSpace(input.Description) != ""
 }
 
 // RespondEvent updates one attendee's response status for an event.
@@ -466,16 +491,17 @@ func toEventSummary(e gcal.Event) EventSummary {
 	}
 
 	summary := EventSummary{
-		ID:          e.ID,
-		Title:       e.Title,
-		Description: e.Description,
-		Location:    e.Location,
-		Attendees:   attendees,
-		Organizer:   toPersonInfo(e.Organizer),
-		Creator:     toPersonInfo(e.Creator),
-		EventLink:   e.EventLink,
-		MeetLink:    e.MeetLink,
-		IsRecurring: e.IsRecurring,
+		ID:               e.ID,
+		Title:            e.Title,
+		Description:      e.Description,
+		Location:         e.Location,
+		Attendees:        attendees,
+		Organizer:        toPersonInfo(e.Organizer),
+		Creator:          toPersonInfo(e.Creator),
+		EventLink:        e.EventLink,
+		MeetLink:         e.MeetLink,
+		ConferenceStatus: e.ConferenceStatus,
+		IsRecurring:      e.IsRecurring,
 	}
 
 	if !e.StartTime.IsZero() {

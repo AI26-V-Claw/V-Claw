@@ -838,6 +838,183 @@ func TestFormatStatusShowsEmojiStatusLine(t *testing.T) {
 	}
 }
 
+func TestFormatStatusSummarizesStructuredResultsForUsers(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	run := &agent.RunState{
+		RunID:        "run_structured",
+		OriginalGoal: "hôm nay tôi có calendar nào mới không",
+		Status:       "completed",
+		CreatedAt:    time.Date(2026, 6, 23, 11, 39, 3, 0, loc),
+		CompletedAt:  func() *time.Time { t := time.Date(2026, 6, 23, 11, 39, 21, 0, loc); return &t }(),
+		Steps: []agent.RunStep{
+			{OK: true, Text: `[{"attendees":[],"description":"","end":"2026-06-23T16:00:00+07:00","eventLink":"https://www.google.com/calendar/event?eid=abc","id":"g96kranvu0qjvs9vpdkcpu14ds","isRecurring":false,"location":"","meetLink":"","start":"2026-06-23T15:00:00+07:00","title":"Họp vui"}]`},
+		},
+	}
+
+	text := FormatStatus(run)
+	for _, notWant := range []string{
+		`"attendees":[]`,
+		`"id":"g96kranvu0qjvs9vpdkcpu14ds"`,
+		`"isRecurring":false`,
+	} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("expected structured noise to be hidden, got:\n%s", text)
+		}
+	}
+	for _, want := range []string{
+		"✅ 1. Họp vui | Thời gian: 2026-06-23T15:00:00+07:00 - 2026-06-23T16:00:00+07:00 | Link: https://www.google.com/calendar/event?eid=abc",
+		"Trạng thái: ✅ Hoàn thành",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in status text:\n%s", want, text)
+		}
+	}
+}
+
+func TestFormatStatusKeepsPlainUserFriendlySteps(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	run := &agent.RunState{
+		RunID:       "run_plain",
+		Status:      "completed",
+		CreatedAt:   time.Date(2026, 6, 23, 11, 39, 3, 0, loc),
+		CompletedAt: func() *time.Time { t := time.Date(2026, 6, 23, 11, 39, 5, 0, loc); return &t }(),
+		Steps: []agent.RunStep{
+			{OK: true, Text: "Đã tạo bản nháp email"},
+		},
+	}
+
+	text := FormatStatus(run)
+	if !strings.Contains(text, "✅ Đã tạo bản nháp email") {
+		t.Fatalf("expected plain user-friendly step to remain unchanged, got:\n%s", text)
+	}
+}
+
+func TestFormatStatusTruncatesLongStructuredResultsForTelegram(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	items := make([]string, 0, 30)
+	for i := 1; i <= 30; i++ {
+		items = append(items, fmt.Sprintf(`{"subject":"Email số %d có tiêu đề khá dài để kiểm tra giới hạn độ dài của /status","from":"sender%d@example.com","to":"receiver%d@example.com","LocalDateTime":"2026-06-22T15:10:00+07:00"}`, i, i, i))
+	}
+	run := &agent.RunState{
+		RunID:        "run_long",
+		OriginalGoal: "xem danh sách gmail hôm qua",
+		Status:       "completed",
+		CreatedAt:    time.Date(2026, 6, 23, 16, 46, 0, 0, loc),
+		CompletedAt:  func() *time.Time { t := time.Date(2026, 6, 23, 16, 46, 18, 0, loc); return &t }(),
+		Steps: []agent.RunStep{
+			{OK: true, Text: "[" + strings.Join(items, ",") + "]"},
+		},
+	}
+
+	text := FormatStatus(run)
+	if len([]rune(text)) > 3200 {
+		t.Fatalf("expected status text to stay under Telegram limit, got %d runes", len([]rune(text)))
+	}
+	if !strings.Contains(text, "...và 22 mục khác") {
+		t.Fatalf("expected status list to be capped, got:\n%s", text)
+	}
+}
+
+func TestFormatStatusKeepsLongWriteDetailsSummarized(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	longBody := strings.Repeat("Nội dung email cần xác nhận. ", 300)
+	run := &agent.RunState{
+		RunID:        "run_long_write",
+		OriginalGoal: "Tạo email và gửi cho Bao",
+		Status:       "completed",
+		CreatedAt:    time.Date(2026, 6, 25, 16, 0, 0, 0, loc),
+		CompletedAt:  func() *time.Time { value := time.Date(2026, 6, 25, 16, 0, 5, 0, loc); return &value }(),
+		Steps: []agent.RunStep{{
+			OK:   true,
+			Text: "Đã tạo Gmail draft: " + longBody,
+		}},
+	}
+
+	text := FormatStatus(run)
+	if len([]rune(text)) > maxTelegramStatusRunes {
+		t.Fatalf("status exceeded Telegram limit: %d", len([]rune(text)))
+	}
+	if strings.Count(text, "Nội dung email cần xác nhận.") > 10 {
+		t.Fatalf("status should summarize long write details, got %d repetitions", strings.Count(text, "Nội dung email cần xác nhận."))
+	}
+	if !strings.Contains(text, "Trạng thái: ✅ Hoàn thành") {
+		t.Fatalf("status lost completion summary: %q", text)
+	}
+}
+
+func TestFormatStatusUsesShortLabelAndHidesInternalContext(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	run := &agent.RunState{
+		RunID:        "run_internal_context",
+		ShortLabel:   "Viết mail thông báo sự kiện",
+		OriginalGoal: "The current user message is a contextual follow-up. Use recent_history to infer what the follow-up refers to. Original request: user asked many things. Current task attachments are available.",
+		Status:       "waiting_approval",
+		CostUSD:      0.1169,
+		CreatedAt:    time.Date(2026, 6, 25, 16, 34, 54, 0, loc),
+		Steps: []agent.RunStep{
+			{OK: true, Text: "The current user message is a contextual follow-up. recent_history: assistant internal reasoning."},
+			{OK: true, Text: "Đã tạo Gmail draft: " + strings.Repeat("Nội dung email cần xác nhận. ", 80)},
+		},
+	}
+
+	text := FormatStatus(run)
+	for _, want := range []string{
+		"Viết mail thông báo sự kiện",
+		"✅ Đã tạo bản nháp email",
+		"Trạng thái: ⏳ Chờ xác nhận",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in status text:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{
+		"The current user message",
+		"recent_history",
+		"Current task attachments",
+		"Nội dung email cần xác nhận.",
+	} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("status leaked verbose/internal text %q:\n%s", notWant, text)
+		}
+	}
+	if len([]rune(text)) > maxTelegramStatusRunes {
+		t.Fatalf("status exceeded compact limit: %d", len([]rune(text)))
+	}
+}
+
+func TestFormatStatusSummarizesFriendlyGmailListForUsers(t *testing.T) {
+	loc := time.FixedZone("Asia/Ho_Chi_Minh", 7*60*60)
+	run := &agent.RunState{
+		RunID:        "run_gmail_list",
+		OriginalGoal: "xem danh sách gmail của tôi hôm qua",
+		Status:       "completed",
+		CreatedAt:    time.Date(2026, 6, 23, 16, 56, 1, 0, loc),
+		CompletedAt:  func() *time.Time { t := time.Date(2026, 6, 23, 16, 56, 34, 0, loc); return &t }(),
+		Steps: []agent.RunStep{
+			{OK: true, Text: "Đây là danh sách email bạn nhận được:\n\n1. Từ: Slack (no-reply@email.slackhq.com)\n   • Tiêu đề: Never miss an important message\n   • Thời gian: 23:13, ngày 22 tháng 6, 2026\n\n2. Từ: Duy Quang Ho Trong (quanghtd@vclaw.site)\n   • Tiêu đề: Invitation: N1 Long-term Test @ Mon Jun 22, 2026 12pm - 1pm (GMT+7) (Hai Nguyen)\n   • Thời gian: 16:49, ngày 22 tháng 6, 2026\n\n3. Từ: Bạn (hainx@vclaw.site) gửi tới 26ai.quangtv@vinuni.edu.vn\n   • Tiêu đề: Tuất liên quân\n   • Tệp đính kèm: Có\n   • Thời gian: 16:45, ngày 22 tháng 6, 2026\n\n4. Từ: OpenAI (noreply@tm.openai.com)\n   • Tiêu đề: New sign-in to your OpenAI account\n   • Thời gian: 11:58, ngày 22 tháng 6, 2026"},
+		},
+	}
+
+	text := FormatStatus(run)
+	for _, want := range []string{
+		"✅ Tìm thấy 4 email phù hợp. Người gửi đáng chú ý: Slack, Duy Quang Ho Trong, OpenAI. Có 1 email có tệp đính kèm.",
+		"Trạng thái: ✅ Hoàn thành",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in status text:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{
+		"Never miss an important message",
+		"Invitation: N1 Long-term Test",
+		"Tuất liên quân",
+	} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("expected gmail status summary to avoid raw list details, got:\n%s", text)
+		}
+	}
+}
+
 func TestSetMyCommandsRegistersTelegramSlashCommands(t *testing.T) {
 	bot := New("token", 123, t.TempDir(), &fakeHandler{}, nil)
 	var gotPath string
@@ -1422,8 +1599,8 @@ func TestTelegramTextHidesDetailedFailedErrors(t *testing.T) {
 	if strings.Contains(text, "openai") || strings.Contains(text, "token leaked detail") {
 		t.Fatalf("telegram text should hide detailed errors, got %q", text)
 	}
-	if !strings.Contains(text, "terminal local") {
-		t.Fatalf("telegram text should point to local terminal, got %q", text)
+	if !strings.Contains(text, "Mình không thể hoàn tất bước này vì có lỗi tạm thời.") {
+		t.Fatalf("telegram text should use the new generic error text, got %q", text)
 	}
 }
 
@@ -1468,8 +1645,8 @@ func TestTelegramTextFromFailedResponseIncludesTraceLinkWhenConfigured(t *testin
 		},
 	})
 
-	if !strings.Contains(text, "🔍 Xem chi tiết: https://us.cloud.langfuse.com/project/proj_123/traces/trace_abc") {
-		t.Fatalf("missing trace link: %q", text)
+	if strings.Contains(text, "trace_abc") || strings.Contains(text, "https://us.cloud.langfuse.com/project/proj_123/traces/trace_abc") {
+		t.Fatalf("trace link should not be shown to users: %q", text)
 	}
 }
 
@@ -1509,7 +1686,7 @@ func TestTelegramApprovalTextOmitsTechnicalFields(t *testing.T) {
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
 			ApprovalID: "appr_1",
-			Summary:    "Tôi cần bạn xác nhận trước khi gửi email.",
+			Summary:    "Mình sẽ gửi email. Xác nhận không?",
 			RiskLevel:  contracts.RiskLevelExternalWrite,
 			ToolCall: contracts.ToolCall{
 				ToolName: "gmail.sendDraft",
@@ -1525,19 +1702,23 @@ func TestTelegramApprovalTextOmitsTechnicalFields(t *testing.T) {
 			t.Fatalf("telegram approval text leaked %q: %q", forbidden, text)
 		}
 	}
-	for _, forbidden := range []string{"Cần bạn xác nhận trước khi thực hiện.", "Hành động:"} {
+	for _, forbidden := range []string{"Cần bạn xác nhận trước khi thực hiện."} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("telegram approval text should omit %q: %q", forbidden, text)
 		}
 	}
+	if !strings.Contains(text, "Mình sẽ gửi email. Xác nhận không?") {
+		t.Fatalf("expected concise approval summary, got %q", text)
+	}
 }
 
-func TestTelegramApprovalTextShowsSandboxPythonCode(t *testing.T) {
+func TestTelegramApprovalTextHidesSandboxPythonCode(t *testing.T) {
 	text := telegramTextFromResponse(contracts.AgentResponse{
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
 			ApprovalID: "appr_py",
-			Summary:    "Tôi cần bạn xác nhận trước khi chạy code trong sandbox.",
+			Summary:    "Mình sẽ chạy code hoặc lệnh trong sandbox. Xác nhận không?",
+			RiskLevel:  contracts.RiskLevelCodeExecution,
 			ToolCall: contracts.ToolCall{
 				ToolName: "sandbox.runPython",
 				Input: map[string]any{
@@ -1547,11 +1728,16 @@ func TestTelegramApprovalTextShowsSandboxPythonCode(t *testing.T) {
 		},
 	})
 
-	if !strings.Contains(text, "Mã Python sẽ chạy:") {
-		t.Fatalf("expected sandbox code heading, got %q", text)
+	if strings.Contains(text, "Mã Python sẽ chạy:") || strings.Contains(text, "print('hello')") || strings.Contains(text, "print('world')") {
+		t.Fatalf("expected sandbox approval to hide code, got %q", text)
 	}
-	if !strings.Contains(text, "print('hello')") || !strings.Contains(text, "print('world')") {
-		t.Fatalf("expected full sandbox code in approval text, got %q", text)
+	if !strings.Contains(text, "Mình sẽ chạy code hoặc lệnh trong sandbox. Xác nhận không?") {
+		t.Fatalf("expected concise sandbox approval summary, got %q", text)
+	}
+	for _, want := range []string{"Môi trường:", "Python sandbox", "Code được ẩn khỏi tin nhắn xác nhận."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected sandbox approval to contain %q, got %q", want, text)
+		}
 	}
 }
 
@@ -1609,7 +1795,8 @@ func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
 			ApprovalID: "appr_mail",
-			Summary:    "Tôi cần bạn xác nhận trước khi tạo Gmail draft.",
+			Summary:    "Mình sẽ tạo hoặc sửa Gmail draft. Xác nhận không?",
+			RiskLevel:  contracts.RiskLevelExternalWrite,
 			ToolCall: contracts.ToolCall{
 				ToolName: "gmail.createDraft",
 				Input: map[string]any{
@@ -1621,13 +1808,13 @@ func TestTelegramApprovalTextShowsEmailDraftDetails(t *testing.T) {
 		},
 	})
 
-	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,", telegramPreBlockOpen, telegramPreBlockClose, telegramFieldOpen, telegramFieldClose} {
+	if !strings.Contains(text, "Mình sẽ tạo hoặc sửa Gmail draft. Xác nhận không?") {
+		t.Fatalf("expected concise email draft summary, got %q", text)
+	}
+	for _, want := range []string{"Người nhận:", "vmkqa2@gmail.com", "Tiêu đề:", "Mời họp chiều nay", "Mời bạn tham dự cuộc họp chiều nay.", "Thân mến,"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected email approval text to contain %q, got %q", want, text)
 		}
-	}
-	if strings.Contains(text, "Nội dung email:") {
-		t.Fatalf("expected email approval text to omit body label, got %q", text)
 	}
 }
 
@@ -1636,21 +1823,26 @@ func TestTelegramApprovalTextShowsCalendarEventDetails(t *testing.T) {
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
 			ApprovalID: "appr_calendar",
-			Summary:    "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar.",
+			Summary:    "Mình sẽ tạo sự kiện Calendar. Xác nhận không?",
 			ToolCall: contracts.ToolCall{
 				ToolName: "calendar.createEvent",
 				Input: map[string]any{
-					"title":       "Họp",
-					"start":       "2026-06-10T08:00:00+07:00",
-					"end":         "2026-06-10T09:30:00+07:00",
-					"attendees":   []any{"a@test.com", "b@test.com"},
-					"location":    "Phòng A",
-					"description": "Chuẩn bị số liệu bán hàng.",
+					"title":            "Họp",
+					"start":            "2026-06-10T08:00:00+07:00",
+					"end":              "2026-06-10T09:30:00+07:00",
+					"attendees":        []any{"a@test.com", "b@test.com"},
+					"location":         "Phòng A",
+					"description":      "Chuẩn bị số liệu bán hàng.",
+					"createConference": true,
+					"eventId":          "event_internal_123",
 				},
 			},
 		},
 	})
 
+	if !strings.Contains(text, "Mình sẽ tạo sự kiện Calendar. Xác nhận không?") {
+		t.Fatalf("expected concise calendar summary, got %q", text)
+	}
 	for _, want := range []string{
 		"Tiêu đề:", "Họp",
 		"Bắt đầu:", "10/06/2026, 08:00 (+07:00)",
@@ -1658,16 +1850,58 @@ func TestTelegramApprovalTextShowsCalendarEventDetails(t *testing.T) {
 		"Thời lượng:", "1 giờ 30 phút",
 		"Người tham gia:", "a@test.com, b@test.com",
 		"Địa điểm:", "Phòng A",
+		"Google Meet:", "Sẽ tạo link cho sự kiện",
 		"Ghi chú:", "Chuẩn bị số liệu bán hàng.",
-		telegramTextFieldOpen, telegramTextFieldClose, telegramPreBlockOpen, telegramPreBlockClose,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected calendar approval text to contain %q, got %q", want, text)
 		}
 	}
-	for _, forbidden := range []string{"Start: 2026-06-10T08:00:00+07:00", "End: 2026-06-10T09:30:00+07:00"} {
+	for _, forbidden := range []string{"event_internal_123", "eventId", "Tool:", "Input:"} {
 		if strings.Contains(text, forbidden) {
-			t.Fatalf("expected calendar approval text to avoid raw time field %q, got %q", forbidden, text)
+			t.Fatalf("expected calendar approval text to hide technical field %q, got %q", forbidden, text)
+		}
+	}
+
+	rendered := telegramRenderHTML(text)
+	for _, want := range []string{
+		"<b>Tiêu đề:</b> Họp",
+		"<b>Bắt đầu:</b> 10/06/2026, 08:00 (+07:00)",
+		"<b>Kết thúc:</b> 10/06/2026, 09:30 (+07:00)",
+		"<b>Google Meet:</b> Sẽ tạo link cho sự kiện",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered calendar approval to contain %q, got %q", want, rendered)
+		}
+	}
+	for _, marker := range []string{telegramTextFieldOpen, telegramTextFieldClose, telegramPreBlockOpen, telegramPreBlockClose} {
+		if strings.Contains(rendered, marker) {
+			t.Fatalf("rendered calendar approval leaked internal marker %q: %q", marker, rendered)
+		}
+	}
+}
+
+func TestTelegramApprovalTextForGetEmailIsConcise(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusApprovalRequired,
+		ApprovalRequest: &contracts.ApprovalRequest{
+			ApprovalID: "appr_get_email",
+			Summary:    "Mình sẽ đọc nội dung email này. Xác nhận không?",
+			ToolCall: contracts.ToolCall{
+				ToolName: "gmail.getEmail",
+				Input: map[string]any{
+					"messageId": "msg-12",
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(text, "Mình sẽ đọc nội dung email này. Xác nhận không?") {
+		t.Fatalf("expected concise gmail.getEmail approval summary, got %q", text)
+	}
+	for _, forbidden := range []string{"messageId", "msg-12", "Tool:", "Input:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected gmail.getEmail approval to hide %q, got %q", forbidden, text)
 		}
 	}
 }
@@ -1694,21 +1928,40 @@ func TestTelegramApprovalTextFormatsCalendarRespondEvent(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"Tiêu đề:", "N1 Long-term Test",
-		"Email:", "quanghtd@vclaw.site",
-		"Trạng thái tham dự:", "accepted",
-		"Người tham gia:", "- email: quanghtd@vclaw.site",
-		"tên: Quang", "trạng thái: accepted",
+		"Tôi cần bạn xác nhận trước khi phản hồi lời mời Calendar.",
+		"Tiêu đề:",
+		"N1 Long-term Test",
+		"Email:",
+		"quanghtd@vclaw.site",
+		"Trạng thái tham dự:",
+		"accepted",
+		"Bạn có thể xác nhận hoặc hủy.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected calendar RSVP approval text to contain %q, got %q", want, text)
 		}
 	}
-	if strings.Contains(text, "map[") {
-		t.Fatalf("approval text should format maps readably, got %q", text)
+	for _, forbidden := range []string{
+		"event_001",
+		"eventId",
+		"map[",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected calendar RSVP approval text to hide %q, got %q", forbidden, text)
+		}
 	}
-	if strings.Contains(text, "Event ID:") || strings.Contains(text, "event_001") {
-		t.Fatalf("approval text should hide raw event ID when title is available, got %q", text)
+}
+
+func TestTelegramTextFromResponsePreservesFriendlyGetEmailDetail(t *testing.T) {
+	message := "Chi tiết của email số 12 mà bạn yêu cầu\n• Từ: Hai Nguyen <hainx@vclaw.site>\n• Đến: 26ai.quangtv@vinuni.edu.vn\n• Chủ đề: Tuất liên quan\n• Ngày: 22-06-2026 lúc 15:10\n• Nội dung: Đây là file ảnh đính kèm theo yêu cầu của bạn.\n• Tệp đính kèm: Có"
+
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: message,
+	})
+
+	if text != message {
+		t.Fatalf("expected friendly getEmail detail to be preserved, got %q want %q", text, message)
 	}
 }
 
@@ -1717,7 +1970,8 @@ func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
 			ApprovalID: "appr_chat",
-			Summary:    "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat.",
+			Summary:    "Mình sẽ gửi tin nhắn Google Chat. Xác nhận không?",
+			RiskLevel:  contracts.RiskLevelExternalWrite,
 			ToolCall: contracts.ToolCall{
 				ToolName: "chat.sendMessage",
 				Input: map[string]any{
@@ -1728,13 +1982,16 @@ func TestTelegramApprovalTextShowsChatMessageDetails(t *testing.T) {
 		},
 	})
 
-	for _, want := range []string{"Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.", telegramPreBlockOpen, telegramPreBlockClose} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("expected chat approval text to contain %q, got %q", want, text)
-		}
+	if !strings.Contains(text, "Mình sẽ gửi tin nhắn Google Chat. Xác nhận không?") {
+		t.Fatalf("expected concise chat summary, got %q", text)
 	}
-	if strings.Contains(text, "Nội dung:") || strings.Contains(text, "Space:") || strings.Contains(text, "spaces/87bFdyAAAAE") {
-		t.Fatalf("expected chat approval text to omit raw space identifier, got %q", text)
+	if !strings.Contains(text, "Mọi người vui lòng tăng ca đến 10h đêm nay nhé. Cảm ơn mọi người.") {
+		t.Fatalf("expected chat approval to show message body, got %q", text)
+	}
+	for _, forbidden := range []string{"Space:", "spaces/87bFdyAAAAE"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected chat approval text to hide %q, got %q", forbidden, text)
+		}
 	}
 }
 
@@ -1754,19 +2011,25 @@ func TestTelegramApprovalTextForChatListMessagesHidesSpaceID(t *testing.T) {
 		},
 	})
 
-	if !strings.Contains(text, "Cuộc trò chuyện: Google Chat đã chọn") {
-		t.Fatalf("expected chat list approval to show neutral conversation context, got %q", text)
+	if !strings.Contains(text, "Cho phép tôi đọc tin nhắn trong Google Chat nhé?") {
+		t.Fatalf("expected chat list summary to be preserved, got %q", text)
 	}
-	if strings.Contains(text, "Space:") || strings.Contains(text, "spaces/AAQAEUb3OG4") {
-		t.Fatalf("expected chat list approval to omit raw space identifier, got %q", text)
+	if !strings.Contains(text, "Bạn có thể xác nhận hoặc hủy.") {
+		t.Fatalf("expected concise approval footer, got %q", text)
+	}
+	for _, forbidden := range []string{"Cuộc trò chuyện:", "Space:", "spaces/AAQAEUb3OG4", "maxResults"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected chat list approval to omit raw space identifier, got %q", text)
+		}
 	}
 }
 
 func TestTelegramApprovalTextShowsWorkspaceDefaultForGmailAttachments(t *testing.T) {
-	// Relative and absent outputDir should both show the workspace sandbox label —
-	// not a Downloads path, which is outside the workspace guard's allowed roots.
 	for _, outputDir := range []any{"./", "", nil} {
-		input := map[string]any{"messageId": "msg-1"}
+		input := map[string]any{
+			"messageId": "msg-1",
+			"filenames": []any{"report.pdf", "chart.png"},
+		}
 		if outputDir != nil {
 			input["outputDir"] = outputDir
 		}
@@ -1774,7 +2037,8 @@ func TestTelegramApprovalTextShowsWorkspaceDefaultForGmailAttachments(t *testing
 			Status: contracts.AgentStatusApprovalRequired,
 			ApprovalRequest: &contracts.ApprovalRequest{
 				ApprovalID: "appr_download",
-				Summary:    "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local.",
+				Summary:    "Mình sẽ tải file đính kèm về máy. Xác nhận không?",
+				RiskLevel:  contracts.RiskLevelLocalWrite,
 				ToolCall: contracts.ToolCall{
 					ToolName: "gmail.downloadAttachments",
 					Input:    input,
@@ -1784,8 +2048,18 @@ func TestTelegramApprovalTextShowsWorkspaceDefaultForGmailAttachments(t *testing
 		if strings.Contains(text, "~/Downloads") {
 			t.Fatalf("outputDir=%v: expected no Downloads path in approval text, got %q", outputDir, text)
 		}
-		if !strings.Contains(text, "workspace sandbox") {
-			t.Fatalf("outputDir=%v: expected workspace sandbox label in approval text, got %q", outputDir, text)
+		if !strings.Contains(text, "Mình sẽ tải file đính kèm về máy. Xác nhận không?") {
+			t.Fatalf("outputDir=%v: expected concise approval summary, got %q", outputDir, text)
+		}
+		for _, want := range []string{"Tệp đính kèm:", "report.pdf, chart.png", "Lưu vào:", "workspace sandbox"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("outputDir=%v: expected approval text to contain %q, got %q", outputDir, want, text)
+			}
+		}
+		for _, forbidden := range []string{"outputDir", "messageId", "msg-1"} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("outputDir=%v: expected approval text to hide %q, got %q", outputDir, forbidden, text)
+			}
 		}
 	}
 }
@@ -1795,7 +2069,8 @@ func TestTelegramApprovalTextUsesGenericFallbackForUnknownTool(t *testing.T) {
 		Status: contracts.AgentStatusApprovalRequired,
 		ApprovalRequest: &contracts.ApprovalRequest{
 			ApprovalID: "appr_generic",
-			Summary:    "Cần bạn xác nhận trước khi tạo task.",
+			Summary:    "Mình sẽ thực hiện thao tác này. Xác nhận không?",
+			RiskLevel:  contracts.RiskLevelExternalWrite,
 			ToolCall: contracts.ToolCall{
 				ToolName: "tasks.createTask",
 				Input: map[string]any{
@@ -1808,13 +2083,102 @@ func TestTelegramApprovalTextUsesGenericFallbackForUnknownTool(t *testing.T) {
 		},
 	})
 
+	if !strings.Contains(text, "Mình sẽ thực hiện thao tác này. Xác nhận không?") {
+		t.Fatalf("expected concise generic approval summary, got %q", text)
+	}
 	for _, want := range []string{"Tiêu đề: Chuẩn bị báo cáo tuần", "Nội dung:", "Tổng hợp số liệu bán hàng", "Kết thúc: 2026-06-09"} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("expected generic approval text to contain %q, got %q", want, text)
+			t.Fatalf("expected generic approval to contain %q, got %q", want, text)
 		}
 	}
-	if strings.Contains(text, "task-123") {
-		t.Fatalf("expected generic fallback to avoid leaking raw ids, got %q", text)
+	for _, forbidden := range []string{"task-123", "taskId"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("expected generic fallback to hide %q, got %q", forbidden, text)
+		}
+	}
+}
+
+func TestTelegramApprovalTextShowsWorkspaceToolDetailsWithoutOpaqueIDs(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		input    map[string]any
+		want     []string
+		forbid   []string
+	}{
+		{
+			name:     "drive share",
+			toolName: "drive.shareFile",
+			input: map[string]any{
+				"fileId":       "drive_file_123",
+				"resourceName": "Sprint 3 report.pdf",
+				"type":         "user",
+				"role":         "writer",
+				"emailAddress": "bao@example.com",
+			},
+			want:   []string{"Tài nguyên: Sprint 3 report.pdf", "Người nhận: bao@example.com", "Quyền: writer", "Đối tượng chia sẻ: user"},
+			forbid: []string{"drive_file_123", "fileId"},
+		},
+		{
+			name:     "docs replace",
+			toolName: "docs.replaceText",
+			input: map[string]any{
+				"documentId":   "doc_123",
+				"resourceName": "Sprint review notes",
+				"oldText":      "Ngày demo cũ",
+				"newText":      "Ngày demo mới",
+			},
+			want:   []string{"Tài nguyên: Sprint review notes", "Nội dung cần thay:", "Ngày demo cũ", "Nội dung thay thế:", "Ngày demo mới"},
+			forbid: []string{"doc_123", "documentId"},
+		},
+		{
+			name:     "sheets update",
+			toolName: "sheets.updateValues",
+			input: map[string]any{
+				"spreadsheetId": "sheet_123",
+				"resourceName":  "Sprint metrics",
+				"range":         "Summary!A1:B2",
+				"values":        []any{[]any{"Done", 28}},
+			},
+			want:   []string{"Tài nguyên: Sprint metrics", "Vùng dữ liệu: Summary!A1:B2", "Giá trị:"},
+			forbid: []string{"sheet_123", "spreadsheetId"},
+		},
+		{
+			name:     "drive destructive",
+			toolName: "drive.trashFile",
+			input: map[string]any{
+				"fileId":       "file_delete_123",
+				"resourceName": "Old proposal.docx",
+			},
+			want:   []string{"Tài nguyên: Old proposal.docx"},
+			forbid: []string{"file_delete_123", "fileId"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text := telegramTextFromResponse(contracts.AgentResponse{
+				Status: contracts.AgentStatusApprovalRequired,
+				ApprovalRequest: &contracts.ApprovalRequest{
+					Summary:   "Mình sẽ thực hiện thao tác này. Xác nhận không?",
+					RiskLevel: contracts.RiskLevelExternalWrite,
+					ToolCall: contracts.ToolCall{
+						ToolName: tt.toolName,
+						Input:    tt.input,
+					},
+				},
+			})
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("expected approval text to contain %q, got %q", want, text)
+				}
+			}
+			for _, forbidden := range tt.forbid {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("approval text leaked %q: %q", forbidden, text)
+				}
+			}
+		})
 	}
 }
 
@@ -2135,11 +2499,11 @@ func TestTelegramRevisePromptIncludesPendingContext(t *testing.T) {
 	if !processed {
 		t.Fatal("expected callback to be processed")
 	}
-	if !strings.Contains(editedText, "Nội dung đang chờ xác nhận") {
-		t.Fatalf("expected revise prompt to include pending context, got %q", editedText)
+	if !strings.Contains(editedText, "Nhắn ngắn gọn phần bạn muốn đổi, rồi mình làm lại.") {
+		t.Fatalf("expected revise prompt to stay concise, got %q", editedText)
 	}
-	if !strings.Contains(editedText, "print(&#39;hello&#39;)") && !strings.Contains(editedText, "print('hello')") {
-		t.Fatalf("expected revise prompt to include pending code, got %q", editedText)
+	if strings.Contains(editedText, "print(&#39;hello&#39;)") || strings.Contains(editedText, "print('hello')") {
+		t.Fatalf("expected revise prompt to hide pending code, got %q", editedText)
 	}
 	if editAttempts != 0 {
 		t.Fatalf("expected revise flow to preserve the original approval message, got %d edit attempts", editAttempts)

@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -118,7 +119,7 @@ func (s *FileStore) LoadMemory(_ context.Context, sessionID string) (SessionMemo
 		return SessionMemory{}, err
 	}
 	var memory SessionMemory
-	if err := json.Unmarshal(data, &memory); err != nil {
+	if err := json.Unmarshal(trimJSONBOM(data), &memory); err != nil {
 		return SessionMemory{}, err
 	}
 	return memory, nil
@@ -140,10 +141,14 @@ func (s *FileStore) readTranscript(sessionID string) ([]providers.Message, error
 		return nil, err
 	}
 	var messages []providers.Message
-	if err := json.Unmarshal(data, &messages); err != nil {
+	if err := json.Unmarshal(trimJSONBOM(data), &messages); err != nil {
 		return nil, err
 	}
 	return messages, nil
+}
+
+func trimJSONBOM(data []byte) []byte {
+	return bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 }
 
 // atomicWriteJSON writes v as JSON to path using temp-file-then-rename so a

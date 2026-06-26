@@ -4,27 +4,154 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
+	"vclaw/internal/longmem"
 	"vclaw/internal/providers"
 	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 )
 
+// redactSensitiveForPrompt drops lines that look like a credential, token, or
+// secret before they enter the assembled context. It reuses the same detector
+// the long-term memory write boundary uses (longmem.ValidateMemoryContent) so
+// the assembly layer never surfaces a secret that slipped into a summary, tool
+// result, long-term memory file, or resolved reference context. Non-secret
+// content is returned unchanged.
+func redactSensitiveForPrompt(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if longmem.ValidateMemoryContent(content) == nil {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	kept := make([]string, 0, len(lines))
+	inPEM := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Redact an entire PEM block from BEGIN to END as a single unit. Line-by-line
+		// redaction would drop the BEGIN marker but leak the base64 key body, so track
+		// block state explicitly.
+		if !inPEM && pemBeginPattern.MatchString(trimmed) {
+			inPEM = true
+			kept = append(kept, "[redacted: sensitive content removed]")
+			continue
+		}
+		if inPEM {
+			if pemEndPattern.MatchString(trimmed) {
+				inPEM = false
+			}
+			continue
+		}
+		if longmem.ValidateMemoryContent(line) != nil {
+			kept = append(kept, "[redacted: sensitive content removed]")
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+var (
+	pemBeginPattern = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*-----`)
+	pemEndPattern   = regexp.MustCompile(`-----END [A-Z0-9 ]*-----`)
+)
+
+// redactSensitiveMessages applies redactSensitiveForPrompt to the content of
+// every message so no transcript entry leaks a secret into the provider request.
+// Tool-call arguments are left intact; secrets there would be a tool-input bug,
+// not a context-assembly leak, and rewriting structured arguments is unsafe.
+func redactSensitiveMessages(messages []providers.Message) []providers.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]providers.Message, len(messages))
+	for i, m := range messages {
+		if strings.TrimSpace(m.Content) != "" {
+			m.Content = redactSensitiveForPrompt(m.Content)
+		}
+		out[i] = m
+	}
+	return out
+}
+
+// referenceSourcesPrompt assembles an explicit "reference sources" block listing
+// where the most recent answers came from: the tools that produced recent action
+// results and any resolved file references (local path or Drive ID). This lets the
+// agent cite provenance without re-deriving it, and is kept separate from the
+// continuity-focused session memory block. It emits labels/locations only — never
+// raw result content — so it cannot leak sensitive payloads.
+func referenceSourcesPrompt(memory sessions.SessionMemory) string {
+	lines := make([]string, 0, len(memory.LastActionResults)+len(memory.FileRefs))
+
+	// List recent results newest-first, one line per result rather than per tool,
+	// so repeated calls of the same tool stay distinguishable by their artifact.
+	// We attach a safe resource label (artifact kind/label) when present; opaque
+	// IDs and absolute paths are intentionally omitted — this block is provenance
+	// for the model, not user-facing output.
+	for i := len(memory.LastActionResults) - 1; i >= 0; i-- {
+		ar := memory.LastActionResults[i]
+		name := strings.TrimSpace(ar.ToolName)
+		if name == "" {
+			continue
+		}
+		line := fmt.Sprintf("- %s tool=%s", actionResultRefLabel(memory.LastActionResults, i), name)
+		if source := strings.TrimSpace(ar.Source); source != "" {
+			line += fmt.Sprintf(", source=%s", source)
+		}
+		if ar.Artifact != nil {
+			if label := strings.TrimSpace(ar.Artifact.Label); label != "" {
+				kind := strings.TrimSpace(ar.Artifact.Kind)
+				if kind != "" {
+					line += fmt.Sprintf(", artifact=%s:%s", kind, label)
+				} else {
+					line += fmt.Sprintf(", artifact=%s", label)
+				}
+			} else if kind := strings.TrimSpace(ar.Artifact.Kind); kind != "" {
+				line += fmt.Sprintf(", artifact=%s", kind)
+			}
+		}
+		if !ar.CreatedAt.IsZero() {
+			line += fmt.Sprintf(", observed=%s", ar.CreatedAt.Format("2006-01-02T15:04:05Z07:00"))
+		}
+		lines = append(lines, line)
+	}
+
+	for name, ref := range memory.FileRefs {
+		switch ref.Source {
+		case "local":
+			// Provenance only — emit the source and filename, not the absolute host
+			// path. The full path is available in the session-memory "Resolved file
+			// references" block when the agent actually needs it to attach the file.
+			lines = append(lines, fmt.Sprintf("- file %q: local", name))
+		case "drive":
+			lines = append(lines, fmt.Sprintf("- file %q: Google Drive", name))
+		}
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.TrimSpace("Reference sources for the most recent results (provenance only — cite these when relevant, do not treat as approval):\n" + strings.Join(lines, "\n"))
+}
+
 func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 	parts := []string{}
-	if strings.TrimSpace(memory.Summary) != "" {
-		parts = append(parts, "Conversation summary:\n"+strings.TrimSpace(memory.Summary))
+	if summary := redactSensitiveForPrompt(memory.Summary); summary != "" {
+		parts = append(parts, "Conversation summary:\n"+summary)
 	}
 	if len(memory.LastActionResults) > 0 {
 		lines := make([]string, 0, len(memory.LastActionResults))
-		for _, result := range memory.LastActionResults {
-			content := strings.TrimSpace(result.Content)
+		for i, result := range memory.LastActionResults {
+			content := redactSensitiveForPrompt(result.Content)
 			if content == "" {
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("- %s: %s", strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
+			lines = append(lines, fmt.Sprintf("- %s %s: %s", actionResultRefLabel(memory.LastActionResults, i), strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
 		}
 		if len(lines) > 0 {
 			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
@@ -35,13 +162,58 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 		for name, ref := range memory.FileRefs {
 			switch ref.Source {
 			case "local":
-				lines = append(lines, fmt.Sprintf("- %s: local file, path=%s", name, ref.Path))
+				lines = append(lines, fmt.Sprintf("- %s: local file label only; resolve again before using in a new tool call", name))
 			case "drive":
-				lines = append(lines, fmt.Sprintf("- %s: Google Drive file, driveId=%s", name, ref.DriveID))
+				lines = append(lines, fmt.Sprintf("- %s: Google Drive file label only; resolve again before using in a new tool call", name))
 			}
 		}
 		if len(lines) > 0 {
-			parts = append(parts, "Resolved file references (use these to attach files without re-resolving):\n"+strings.Join(lines, "\n"))
+			parts = append(parts, "Known file references (safe labels only; raw paths and Drive IDs are intentionally hidden from prompt context):\n"+strings.Join(lines, "\n"))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(`Session memory for understanding context only.
+Use this memory to answer follow-up questions and maintain conversational continuity.
+Do not use memory alone to fill required parameters for a new write, destructive, local file, or code execution action.
+If the current user message does not explicitly provide required write parameters, ask a concise clarification question.
+HARD RULE - chat.sendMessage recipients: For DM to a specific person, always use the recipientEmail parameter with their email address. Do NOT use chat.findSpacesByMembers or chat.createSpace separately for DM; chat.sendMessage handles find-or-create internally. For group chats, resolve the space name with chat.listSpaces and pass the spaces/... resource name in the space parameter. A spaces/... value from history must NEVER be reused as the destination for a different person.
+FILE REFS RULE - file reference labels in memory are context only. Do not use hidden local paths, Drive IDs, event IDs, message IDs, or space IDs from memory for a new tool call. Re-resolve the file/resource with the appropriate read tool unless the current user message supplies a fresh attachment/path/ID.
+
+` + strings.Join(parts, "\n\n"))
+}
+
+func sessionMemoryPromptLegacy(memory sessions.SessionMemory) string {
+	parts := []string{}
+	if summary := redactSensitiveForPrompt(memory.Summary); summary != "" {
+		parts = append(parts, "Conversation summary:\n"+summary)
+	}
+	if len(memory.LastActionResults) > 0 {
+		lines := make([]string, 0, len(memory.LastActionResults))
+		for i, result := range memory.LastActionResults {
+			content := redactSensitiveForPrompt(result.Content)
+			if content == "" {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("- %s %s: %s", actionResultRefLabel(memory.LastActionResults, i), strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
+		}
+		if len(lines) > 0 {
+			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
+		}
+	}
+	if len(memory.FileRefs) > 0 {
+		lines := make([]string, 0, len(memory.FileRefs))
+		for name, ref := range memory.FileRefs {
+			switch ref.Source {
+			case "local":
+				lines = append(lines, fmt.Sprintf("- %s: local file label only; resolve again before using in a new tool call", name))
+			case "drive":
+				lines = append(lines, fmt.Sprintf("- %s: Google Drive file label only; resolve again before using in a new tool call", name))
+			}
+		}
+		if len(lines) > 0 {
+			parts = append(parts, "Known file references (safe labels only; raw paths and Drive IDs are intentionally hidden from prompt context):\n"+strings.Join(lines, "\n"))
 		}
 	}
 	if len(parts) == 0 {
@@ -55,6 +227,13 @@ HARD RULE — chat.sendMessage recipients: For DM to a specific person, always u
 FILE REFS RULE — when "Resolved file references" lists a file by name: use the recorded source and path/driveId directly. Do NOT call filesystem.fileInfo or drive.listFiles again for that file unless the user says the file has changed.
 
 ` + strings.Join(parts, "\n\n"))
+}
+
+func actionResultRefLabel(results []sessions.ActionResult, index int) string {
+	if index < 0 || index >= len(results) {
+		return "[R?]"
+	}
+	return fmt.Sprintf("[R%d]", len(results)-index)
 }
 
 func historyWithSessionMemory(memory sessions.SessionMemory, history []string) []string {
@@ -197,6 +376,10 @@ func (r *Runtime) refreshSessionSummary(ctx context.Context, sessionID string, t
 }
 
 func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, result tools.ToolResult) *contracts.ErrorShape {
+	return r.recordActionResultForRun(ctx, sessionID, "", "", result)
+}
+
+func (r *Runtime) recordActionResultForRun(ctx context.Context, sessionID string, runID string, requestID string, result tools.ToolResult) *contracts.ErrorShape {
 	if !result.Success {
 		return nil
 	}
@@ -212,11 +395,24 @@ func (r *Runtime) recordActionResult(ctx context.Context, sessionID string, resu
 		return errShape
 	}
 	memory.PendingClarification = nil
-	memory.LastActionResults = append(memory.LastActionResults, sessions.ActionResult{
-		ToolName:  result.ToolName,
-		Content:   truncateToolContentForLLM(content),
-		CreatedAt: r.now(),
-	})
+	action := sessions.ActionResult{
+		ToolName:   result.ToolName,
+		Content:    truncateToolContentForLLM(content),
+		CreatedAt:  r.now(),
+		ToolCallID: strings.TrimSpace(result.ToolCallID),
+		RequestID:  strings.TrimSpace(requestID),
+		RunID:      strings.TrimSpace(runID),
+		Source:     strings.TrimSpace(result.Source),
+	}
+	if art := result.ArtifactRef; art != nil {
+		action.Artifact = &sessions.ActionArtifact{
+			Kind:  strings.TrimSpace(art.Kind),
+			Label: strings.TrimSpace(art.Label),
+			URI:   strings.TrimSpace(art.URI),
+			ID:    strings.TrimSpace(art.ID),
+		}
+	}
+	memory.LastActionResults = append(memory.LastActionResults, action)
 	if len(memory.LastActionResults) > 10 {
 		memory.LastActionResults = memory.LastActionResults[len(memory.LastActionResults)-10:]
 	}

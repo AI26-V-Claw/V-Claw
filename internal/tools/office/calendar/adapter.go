@@ -115,7 +115,7 @@ type CreateEventTool struct {
 func (t *CreateEventTool) Name() string { return ToolNameCreateEvent }
 
 func (t *CreateEventTool) Description() string {
-	return "Create a new event in Google Calendar. Title, explicit start date+time, and explicit end date+time or duration are required. A date-only phrase like tomorrow is not a start time. If start time or end time/duration is missing, ask one clarification question for all missing time fields before calling this tool. Do not assume or auto-fill a default duration."
+	return "Create a new event in Google Calendar. Title, explicit start date+time, and explicit end date+time or duration are required. A date-only phrase like tomorrow is not a start time. If start time or end time/duration is missing, ask one clarification question for all missing time fields before calling this tool. Do not assume or auto-fill a default duration. Set createConference=true when the user asks to schedule the event with Google Meet."
 }
 
 func (t *CreateEventTool) Parameters() tools.ToolSchema {
@@ -147,6 +147,10 @@ func (t *CreateEventTool) Parameters() tools.ToolSchema {
 				"type":        "string",
 				"description": "Event description or notes",
 			},
+			"createConference": map[string]any{
+				"type":        "boolean",
+				"description": "Set true only when the user asks for a Google Meet link for this Calendar event. Google Calendar generates the Meet link; never pass or reuse a meetLink manually.",
+			},
 		},
 		"required":             []string{"title", "start", "end"},
 		"additionalProperties": false,
@@ -159,12 +163,13 @@ func (t *CreateEventTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelEx
 
 func (t *CreateEventTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
 	input := CreateEventInput{
-		Title:       stringArg(call.Arguments, "title"),
-		Start:       stringArg(call.Arguments, "start"),
-		End:         stringArg(call.Arguments, "end"),
-		Attendees:   stringSliceArg(call.Arguments, "attendees"),
-		Location:    stringArg(call.Arguments, "location"),
-		Description: stringArg(call.Arguments, "description"),
+		Title:            stringArg(call.Arguments, "title"),
+		Start:            stringArg(call.Arguments, "start"),
+		End:              stringArg(call.Arguments, "end"),
+		Attendees:        stringSliceArg(call.Arguments, "attendees"),
+		Location:         stringArg(call.Arguments, "location"),
+		Description:      stringArg(call.Arguments, "description"),
+		CreateConference: boolArg(call.Arguments, "createConference"),
 	}
 
 	output, errShape := t.service.CreateEvent(ctx, input)
@@ -206,7 +211,7 @@ type UpdateEventTool struct {
 func (t *UpdateEventTool) Name() string { return ToolNameUpdateEvent }
 
 func (t *UpdateEventTool) Description() string {
-	return "Update an existing event in Google Calendar. When attendees are provided, they are added to the existing attendee list while preserving existing attendee responseStatus values. Do not use this to RSVP or change an attendee responseStatus; use calendar.respondEvent for accept, decline, tentative, or needsAction."
+	return "Update an existing event in Google Calendar. When attendees are provided, they are added to the existing attendee list while preserving existing attendee responseStatus values. Set createConference=true when the user asks to add Google Meet to the event. Do not use this to RSVP or change an attendee responseStatus; use calendar.respondEvent for accept, decline, tentative, or needsAction."
 }
 
 func (t *UpdateEventTool) Parameters() tools.ToolSchema {
@@ -242,6 +247,10 @@ func (t *UpdateEventTool) Parameters() tools.ToolSchema {
 				"type":        "string",
 				"description": "New event description",
 			},
+			"createConference": map[string]any{
+				"type":        "boolean",
+				"description": "Set true to add a Google Meet link to the existing event. If the event already has a Meet link, the operation is idempotent. Never pass or reuse a meetLink manually.",
+			},
 		},
 		"required":             []string{"eventId"},
 		"additionalProperties": false,
@@ -254,13 +263,14 @@ func (t *UpdateEventTool) RiskLevel() tools.RiskLevel { return tools.RiskLevelEx
 
 func (t *UpdateEventTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolResult {
 	input := UpdateEventInput{
-		EventID:     stringArg(call.Arguments, "eventId"),
-		Title:       stringArg(call.Arguments, "title"),
-		Start:       stringArg(call.Arguments, "start"),
-		End:         stringArg(call.Arguments, "end"),
-		Attendees:   stringSliceArg(call.Arguments, "attendees"),
-		Location:    stringArg(call.Arguments, "location"),
-		Description: stringArg(call.Arguments, "description"),
+		EventID:          stringArg(call.Arguments, "eventId"),
+		Title:            stringArg(call.Arguments, "title"),
+		Start:            stringArg(call.Arguments, "start"),
+		End:              stringArg(call.Arguments, "end"),
+		Attendees:        stringSliceArg(call.Arguments, "attendees"),
+		Location:         stringArg(call.Arguments, "location"),
+		Description:      stringArg(call.Arguments, "description"),
+		CreateConference: boolArg(call.Arguments, "createConference"),
 	}
 
 	output, errShape := t.service.UpdateEvent(ctx, input)
@@ -268,7 +278,9 @@ func (t *UpdateEventTool) Execute(ctx context.Context, call tools.ToolCall) tool
 		return toToolError(call, errShape)
 	}
 
-	return toToolSuccess(call, formatUpdateEventOutput(output))
+	result := toToolSuccess(call, formatUpdateEventOutput(output))
+	result.ArtifactRef = calendarEventArtifactRef(output.Event)
+	return result
 }
 
 // --- RespondEvent Tool ---
@@ -417,6 +429,11 @@ func stringSliceArg(args map[string]any, key string) []string {
 	return result
 }
 
+func boolArg(args map[string]any, key string) bool {
+	v, ok := args[key].(bool)
+	return ok && v
+}
+
 // --- ToolResult converters ---
 
 func toToolSuccess(call tools.ToolCall, content string) tools.ToolResult {
@@ -500,18 +517,19 @@ func formatRespondEventOutput(output RespondEventOutput) string {
 
 func calendarEventPayload(event EventSummary) map[string]any {
 	payload := map[string]any{
-		"id":          event.ID,
-		"title":       event.Title,
-		"description": event.Description,
-		"location":    event.Location,
-		"start":       event.Start,
-		"end":         event.End,
-		"attendees":   event.Attendees,
-		"organizer":   event.Organizer,
-		"creator":     event.Creator,
-		"eventLink":   event.EventLink,
-		"meetLink":    event.MeetLink,
-		"isRecurring": event.IsRecurring,
+		"id":               event.ID,
+		"title":            event.Title,
+		"description":      event.Description,
+		"location":         event.Location,
+		"start":            event.Start,
+		"end":              event.End,
+		"attendees":        event.Attendees,
+		"organizer":        event.Organizer,
+		"creator":          event.Creator,
+		"eventLink":        event.EventLink,
+		"meetLink":         event.MeetLink,
+		"conferenceStatus": event.ConferenceStatus,
+		"isRecurring":      event.IsRecurring,
 	}
 	return payload
 }
