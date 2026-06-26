@@ -671,6 +671,86 @@ func TestRuntimeRemovesStaleAttendeesFromActiveFollowUpApproval(t *testing.T) {
 	}
 }
 
+func TestRuntimeClarificationAnswerUsesMergedRequestForCalendarApproval(t *testing.T) {
+	executions := 0
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{
+			Message: providers.Message{
+				Role:    providers.MessageRoleAssistant,
+				Content: `{"is_answer":true,"is_new_request":false,"updated_request":"Tạo sự kiện Demo Meet integration ngày mai từ 15:00 đến 16:00, thêm Bao Le vào người tham dự và tạo Google Meet cho sự kiện này","provided_fields":["date"],"still_missing":[],"reason":"Người dùng xác nhận ngày mai."}`,
+			},
+		},
+		{
+			Message: providers.Message{
+				Role: providers.MessageRoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID:   "call_calendar",
+					Name: "calendar.createEvent",
+					Arguments: map[string]any{
+						"title":            "Demo Meet integration",
+						"start":            "2026-06-26T15:00:00+07:00",
+						"end":              "2026-06-26T16:00:00+07:00",
+						"attendees":        []any{"baolnc@vclaw.site"},
+						"createConference": true,
+					},
+				}},
+			},
+		},
+	}}
+	registry := tools.NewToolRegistry()
+	if err := registry.Register(calendarCreateRuntimeTool{executions: &executions}); err != nil {
+		t.Fatalf("register calendar tool: %v", err)
+	}
+	store := sessions.NewInMemoryStore()
+	ctx := context.Background()
+	if err := store.SaveMemory(ctx, "sess_001", sessions.SessionMemory{
+		PendingClarification: &sessions.PendingClarification{
+			OriginalRequest: `Tạo sự kiện "Demo Meet integration" ngày mai từ 15:00 đến 16:00, thêm Bao Le vào người tham dự và tạo Google Meet cho sự kiện này`,
+			Question:        "Bạn xác nhận ngày mai là ngày nào?",
+			ToolName:        "calendar.createEvent",
+			MissingFields:   []string{"start"},
+			PartialInput: map[string]any{
+				"title":            "Demo Meet integration",
+				"start":            "2026-06-26T15:00:00+07:00",
+				"end":              "2026-06-26T16:00:00+07:00",
+				"attendees":        []any{"baolnc@vclaw.site"},
+				"createConference": true,
+			},
+			CreatedAt: runtimeTestMessage().Timestamp,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     registry,
+		SessionStore: store,
+		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+	})
+	message := runtimeTestMessage()
+	message.Text = "ngày mai"
+
+	response, err := runtime.Run(ctx, message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval_required, got %#v", response)
+	}
+	if response.ApprovalRequest == nil {
+		t.Fatal("expected approval request")
+	}
+	if response.ApprovalRequest.ToolCall.ToolName != "calendar.createEvent" {
+		t.Fatalf("unexpected approval tool: %#v", response.ApprovalRequest.ToolCall)
+	}
+	if response.ApprovalRequest.ToolCall.Input["title"] != "Demo Meet integration" {
+		t.Fatalf("approval lost merged request fields: %#v", response.ApprovalRequest.ToolCall.Input)
+	}
+	if executions != 0 {
+		t.Fatalf("calendar create must wait for approval, executions=%d", executions)
+	}
+}
+
 func TestRuntimeRetriesTextualApprovalRequestAsToolCall(t *testing.T) {
 	executions := 0
 	provider := &fakeProvider{responses: []providers.ChatResponse{
@@ -1118,8 +1198,8 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	if !strings.Contains(prompt, "YYYY-MM-DD") {
 		t.Fatalf("expected Gmail date-only guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "LocalDate") {
-		t.Fatalf("expected Gmail LocalDate grouping guidance in prompt, got: %s", prompt)
+	if !strings.Contains(prompt, "Tệp đính kèm: Có") {
+		t.Fatalf("expected Gmail attachment guidance in prompt, got: %s", prompt)
 	}
 }
 

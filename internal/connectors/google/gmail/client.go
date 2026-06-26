@@ -42,6 +42,7 @@ type MessageSummary struct {
 	InternalDate    int64
 	MessageIDHeader string
 	References      string
+	HasAttachment   bool `json:"has_attachment"`
 }
 
 type Attachment struct {
@@ -265,10 +266,9 @@ func ListMessages(ctx context.Context, client *http.Client, userID string, query
 
 	summaries := make([]MessageSummary, 0, len(response.Messages))
 	for _, msg := range response.Messages {
-		full, err := service.Users.Messages.Get(userID, msg.Id).
-			Format("metadata").
-			MetadataHeaders("From", "To", "Subject", "Date", "Message-ID", "References").
-			Do()
+			full, err := service.Users.Messages.Get(userID, msg.Id).
+				Format("full").
+				Do()
 		if err != nil {
 			return nil, "", err
 		}
@@ -601,7 +601,26 @@ func messageSummaryFromAPI(msg *gmail.Message) MessageSummary {
 		InternalDate:    msg.InternalDate,
 		MessageIDHeader: headers["message-id"],
 		References:      headers["references"],
+		HasAttachment:   messagePartHasAttachment(payload),
 	}
+}
+
+func messagePartHasAttachment(part *gmail.MessagePart) bool {
+	if part == nil {
+		return false
+	}
+	if strings.TrimSpace(part.Filename) != "" {
+		return true
+	}
+	if part.Body != nil && strings.TrimSpace(part.Body.AttachmentId) != "" {
+		return true
+	}
+	for _, child := range part.Parts {
+		if messagePartHasAttachment(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func headerMap(headers []*gmail.MessagePartHeader) map[string]string {

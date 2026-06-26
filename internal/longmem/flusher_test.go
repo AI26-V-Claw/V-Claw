@@ -234,6 +234,50 @@ func TestRecordRepeatedHabitsUsesLLMCanonicalIntent(t *testing.T) {
 	}
 }
 
+func TestHabitClassifierRedactsAttachmentPaths(t *testing.T) {
+	dir := t.TempDir()
+	p := &fakeProvider{response: `{
+		"is_habit_candidate": true,
+		"canonical_action": "summarize",
+		"target": "document",
+		"time_of_day": "",
+		"confidence": 0.92
+	}`}
+	f := NewFlusher(dir, p, "gpt-4o-mini")
+	text := strings.Join([]string{
+		"Tom tat file nay giup toi",
+		"",
+		"Current user attachments are available as local files.",
+		"Attachment paths:",
+		`- D:\Wan_Document\VinUni\VSF\V-Claw\.sandbox-workspace\agent\workspace\data\telegram_attachments\8563069511\2320\Pandas_Cheat_Sheet.pdf`,
+	}, "\n")
+
+	if err := f.RecordRepeatedHabits(context.Background(), HabitInput{
+		Transcript: []providers.Message{{Role: providers.MessageRoleUser, Content: text}},
+		SessionID:  "sess_attachment",
+		RequestID:  "req_attachment",
+		ObservedAt: time.Date(2026, 6, 25, 9, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("RecordRepeatedHabits error: %v", err)
+	}
+	if len(p.generateRequests) != 1 {
+		t.Fatalf("expected one habit classifier call, got %d", len(p.generateRequests))
+	}
+	prompt := p.generateRequests[0].UserPrompt
+	for _, leak := range []string{`D:\Wan_Document`, `.sandbox-workspace`, `telegram_attachments`, `8563069511`, `2320`} {
+		if strings.Contains(prompt, leak) {
+			t.Fatalf("habit classifier prompt leaked attachment path segment %q: %s", leak, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "Pandas_Cheat_Sheet.pdf") {
+		t.Fatalf("habit classifier prompt should keep safe filename label, got: %s", prompt)
+	}
+	patterns := readFileOrEmpty(t, dir, habitPatternsFile)
+	if strings.Contains(patterns, `D:\Wan_Document`) || strings.Contains(patterns, `telegram_attachments`) {
+		t.Fatalf("habit_patterns.json leaked raw attachment path, got:\n%s", patterns)
+	}
+}
+
 func TestRecordRepeatedHabitsDoesNotPromoteThreeRepeatsInOneShortSession(t *testing.T) {
 	dir := t.TempDir()
 	f := NewFlusher(dir, &fakeProvider{}, "")

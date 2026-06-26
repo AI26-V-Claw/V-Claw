@@ -1841,7 +1841,7 @@ func telegramProgressText(event agent.ProgressEvent) string {
 }
 
 func telegramGenericErrorText() string {
-	return "Mình chưa thể hoàn tất yêu cầu này. Chi tiết lỗi đã được ghi ở terminal local."
+	return "Mình không thể hoàn tất bước này vì có lỗi tạm thời. Bạn thử lại giúp mình nhé?"
 }
 
 func redactTelegramToken(text string, token string) string {

@@ -38,10 +38,9 @@ const (
 
 // PromptVersion returns a stable short fingerprint of the system-prompt
 // material. The caller passes every piece of text that contributes to the
-// effective system prompt — typically runtimeSystemPrompt() output and any
-// loaded SOUL.md content. The prompt content is the source of truth: when it
-// changes, the version changes automatically without anyone having to bump a
-// constant.
+// effective system prompt — typically runtimeSystemPrompt() output. The prompt
+// content is the source of truth: when it changes, the version changes
+// automatically without anyone having to bump a constant.
 //
 // Empty parts are skipped so callers can pass optional fragments unchecked.
 // Whitespace inside a part is preserved to keep the digest sensitive to layout

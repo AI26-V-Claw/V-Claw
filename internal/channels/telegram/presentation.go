@@ -18,6 +18,7 @@ import (
 )
 
 const telegramApprovalStateTTL = 30 * time.Minute
+const telegramApprovalPreviewRunes = 1200
 
 const (
 	telegramCodeBlockOpen  = "\uE000"
@@ -214,9 +215,6 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	}
 	if response.Error != nil && response.Error.Code == contracts.ErrorApprovalExpired {
 		return "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại."
-	}
-	if traceURL := telegramTraceURL(response); traceURL != "" {
-		return telegramGenericErrorText() + "\n\n🔍 Xem chi tiết: " + traceURL
 	}
 
 	switch response.Status {
@@ -445,33 +443,48 @@ func telegramApprovalText(approval contracts.ApprovalRequest) string {
 	if summary := sanitizeTelegramResponseText(approval.Summary); summary != "" && !strings.EqualFold(summary, "Mình cần bạn xác nhận trước khi thực hiện hành động này.") {
 		lines = append(lines, summary)
 	}
-	if detail := telegramApprovalDetailText(approval); detail != "" {
-		if len(lines) > 0 {
-			lines = append(lines, "")
+	if telegramShouldShowApprovalDetail(approval) {
+		if detail := telegramApprovalDetailText(approval); detail != "" {
+			lines = append(lines, "", detail)
 		}
-		lines = append(lines, detail)
 	}
-	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy. Nếu muốn thay đổi, cứ nhắn thêm cho mình.")
+	lines = append(lines, "", "Bạn có thể xác nhận hoặc hủy.")
 	return formatTelegramUserText(lines...)
 }
 
-func telegramRevisionPrompt(ctx telegramApprovalContext) string {
-	lines := []string{
-		"Bạn muốn chỉnh phần nào trước khi mình thực hiện?",
+func telegramShouldShowApprovalDetail(approval contracts.ApprovalRequest) bool {
+	switch approval.RiskLevel {
+	case contracts.RiskLevelExternalWrite,
+		contracts.RiskLevelLocalWrite,
+		contracts.RiskLevelCodeExecution,
+		contracts.RiskLevelDestructive:
+		return true
 	}
-	if strings.TrimSpace(ctx.PromptText) != "" {
-		lines = append(lines, "", "Nội dung đang chờ xác nhận:", "", ctx.PromptText)
-	}
-	lines = append(lines, "")
-	switch strings.TrimSpace(ctx.ToolName) {
-	case "sandbox.runPython":
-		lines = append(lines, "Ví dụ: đổi đoạn code, đổi file script, hoặc nói rõ bạn muốn code làm gì.")
-	case "sandbox.runShell":
-		lines = append(lines, "Ví dụ: đổi câu lệnh, đổi thư mục chạy, hoặc nói rõ kết quả bạn muốn.")
+
+	switch strings.TrimSpace(approval.ToolCall.ToolName) {
+	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft",
+		"gmail.sendDraft", "gmail.deleteDraft", "gmail.downloadAttachments",
+		"gmail.modifyMessage", "gmail.batchModifyMessages", "gmail.trashMessage", "gmail.untrashMessage",
+		"calendar.createEvent", "calendar.updateEvent", "calendar.respondEvent", "calendar.deleteEvent",
+		"chat.sendMessage", "chat.updateMessage", "chat.deleteMessage", "chat.createSpace", "chat.addMember", "chat.removeMember",
+		"drive.saveFile", "drive.createFolder", "drive.createFile", "drive.uploadFile", "drive.updateFileMetadata",
+		"drive.shareFile", "drive.revokePermission", "drive.moveFile", "drive.moveFiles", "drive.trashFile", "drive.untrashFile",
+		"docs.createDocument", "docs.appendText", "docs.replaceText", "docs.insertText", "docs.deleteContent",
+		"sheets.createSpreadsheet", "sheets.updateValues", "sheets.batchUpdateValues", "sheets.appendValues",
+		"sheets.clearValues", "sheets.addSheet", "sheets.renameSheet", "sheets.deleteSheet", "sheets.duplicateSheet",
+		"meet.createMeeting", "sandbox.runPython", "sandbox.runShell":
+		return true
 	default:
-		lines = append(lines, "Ví dụ: đổi người nhận, đổi nội dung, đổi thời gian, hoặc nói rõ phần bạn muốn sửa.")
+		return false
 	}
-	return formatTelegramUserText(lines...)
+}
+
+func telegramRevisionPrompt(ctx telegramApprovalContext) string {
+	return formatTelegramUserText(
+		"Bạn muốn chỉnh phần nào trước khi mình thực hiện?",
+		"",
+		"Nhắn ngắn gọn phần bạn muốn đổi, rồi mình làm lại.",
+	)
 }
 
 func telegramActionLabel(toolName string) string {
@@ -615,32 +628,33 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		if detail := telegramDraftApprovalDetailText(input); detail != "" {
 			return detail
 		}
-	case "calendar.createEvent", "calendar.updateEvent", "calendar.respondEvent":
+	case "gmail.sendDraft", "gmail.deleteDraft", "gmail.downloadAttachments",
+		"gmail.modifyMessage", "gmail.batchModifyMessages", "gmail.trashMessage", "gmail.untrashMessage":
+		if detail := telegramGmailApprovalDetailText(toolName, input); detail != "" {
+			return detail
+		}
+	case "calendar.createEvent", "calendar.updateEvent", "calendar.respondEvent", "calendar.deleteEvent":
 		if detail := telegramCalendarApprovalDetailText(input); detail != "" {
 			return detail
 		}
-	case "chat.sendMessage", "chat.updateMessage":
-		if detail := telegramChatApprovalDetailText(input); detail != "" {
+	case "chat.sendMessage", "chat.updateMessage", "chat.deleteMessage", "chat.createSpace", "chat.addMember", "chat.removeMember":
+		if detail := telegramChatApprovalDetailText(toolName, input); detail != "" {
 			return detail
 		}
-	case "chat.listMessages":
-		return "Cuộc trò chuyện: Google Chat đã chọn"
-	case "gmail.sendDraft":
-		return "Bản nháp Gmail này sẽ được gửi ngay sau khi bạn xác nhận."
-	case "gmail.downloadAttachments":
-		input = telegramDisplayDownloadAttachmentInput(input)
-	}
-	switch strings.TrimSpace(approval.ToolCall.ToolName) {
 	case "sandbox.runPython":
-		if code := stringMapValue(input, "code"); code != "" {
-			return "Mã Python sẽ chạy:\n\n" + telegramCodeBlock("python", code)
-		}
 		if scriptPath := stringMapValue(input, "script_path", "scriptPath"); scriptPath != "" {
-			return "File Python sẽ chạy: " + scriptPath
+			return telegramTextField("File Python", filepath.Base(scriptPath)) + "\n" +
+				telegramTextField("Môi trường", "Sandbox")
 		}
+		return telegramTextField("Môi trường", "Python sandbox") + "\n" +
+			"Code được ẩn khỏi tin nhắn xác nhận."
 	case "sandbox.runShell":
 		if command := stringMapValue(input, "command"); command != "" {
-			return "Lệnh shell sẽ chạy:\n\n" + telegramCodeBlock("bash", command)
+			return "Lệnh shell sẽ chạy:\n\n" + telegramCodeBlock("bash", telegramApprovalPreview(command))
+		}
+	case "meet.createMeeting":
+		if mode := stringMapValue(input, "mode"); mode != "" {
+			return telegramTextField("Chế độ", mode)
 		}
 	}
 	return telegramGenericApprovalDetailText(input)
@@ -683,7 +697,7 @@ func telegramDraftApprovalDetailText(input map[string]any) string {
 		lines = append(lines, telegramField("Tiêu đề", subject))
 	}
 	if body := firstNonEmptyStringMapValue(input, "textBody", "body", "content", "message", "text", "htmlBody"); body != "" {
-		lines = append(lines, "", telegramPreBlock(body))
+		lines = append(lines, "", telegramPreBlock(telegramApprovalPreview(body)))
 	}
 	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
 		lines = append(lines, "", telegramField("Tệp đính kèm", strings.Join(attachments, ", ")))
@@ -691,10 +705,46 @@ func telegramDraftApprovalDetailText(input map[string]any) string {
 	return formatTelegramUserText(lines...)
 }
 
+func telegramGmailApprovalDetailText(toolName string, input map[string]any) string {
+	lines := []string{}
+	if name := firstNonEmptyStringMapValue(input, "resourceName", "subject", "title"); name != "" {
+		lines = append(lines, telegramTextField("Email", name))
+	}
+
+	switch toolName {
+	case "gmail.sendDraft":
+		lines = append(lines, telegramTextField("Hành động", "Gửi bản nháp đã chọn"))
+	case "gmail.deleteDraft":
+		lines = append(lines, telegramTextField("Hành động", "Xóa bản nháp đã chọn"))
+	case "gmail.downloadAttachments":
+		input = telegramDisplayDownloadAttachmentInput(input)
+		if filenames := stringSliceMapValue(input, "filenames"); len(filenames) > 0 {
+			lines = append(lines, telegramTextField("Tệp đính kèm", strings.Join(filenames, ", ")))
+		} else {
+			lines = append(lines, telegramTextField("Tệp đính kèm", "Tất cả tệp trong email đã chọn"))
+		}
+		if outputDir := stringMapValue(input, "outputDir"); outputDir != "" {
+			lines = append(lines, telegramTextField("Lưu vào", outputDir))
+		}
+	case "gmail.modifyMessage", "gmail.batchModifyMessages":
+		if action := stringMapValue(input, "action"); action != "" {
+			lines = append(lines, telegramTextField("Thay đổi", action))
+		}
+		if labels := stringSliceMapValue(input, "labelIds"); len(labels) > 0 {
+			lines = append(lines, telegramTextField("Nhãn", strings.Join(labels, ", ")))
+		}
+	case "gmail.trashMessage":
+		lines = append(lines, telegramTextField("Hành động", "Chuyển email vào thùng rác"))
+	case "gmail.untrashMessage":
+		lines = append(lines, telegramTextField("Hành động", "Khôi phục email khỏi thùng rác"))
+	}
+	return formatTelegramUserText(lines...)
+}
+
 func telegramCalendarApprovalDetailText(input map[string]any) string {
 	lines := []string{}
 
-	if title := firstNonEmptyStringMapValue(input, "eventTitle", "title", "name", "subject"); title != "" {
+	if title := firstNonEmptyStringMapValue(input, "eventTitle", "resourceName", "title", "name", "subject"); title != "" {
 		lines = append(lines, telegramTextField("Tiêu đề", title))
 	}
 
@@ -727,17 +777,41 @@ func telegramCalendarApprovalDetailText(input map[string]any) string {
 	if location := stringMapValue(input, "location"); location != "" {
 		lines = append(lines, telegramTextField("Địa điểm", location))
 	}
+	if createConference, ok := input["createConference"].(bool); ok && createConference {
+		lines = append(lines, telegramTextField("Google Meet", "Sẽ tạo link cho sự kiện"))
+	}
 	if description := firstNonEmptyStringMapValue(input, "description"); description != "" {
-		lines = append(lines, "", "Ghi chú:", "", telegramPreBlock(description))
+		lines = append(lines, "", "Ghi chú:", "", telegramPreBlock(telegramApprovalPreview(description)))
 	}
 
 	return formatTelegramUserText(lines...)
 }
 
-func telegramChatApprovalDetailText(input map[string]any) string {
+func telegramChatApprovalDetailText(toolName string, input map[string]any) string {
 	lines := []string{}
+	if recipient := stringMapValue(input, "recipientEmail"); recipient != "" {
+		lines = append(lines, telegramTextField("Người nhận", recipient))
+	} else if conversation := firstNonEmptyStringMapValue(input, "conversationName", "displayName"); conversation != "" {
+		lines = append(lines, telegramTextField("Cuộc trò chuyện", conversation))
+	}
+	if members := stringSliceMapValue(input, "memberUsers", "users"); len(members) > 0 {
+		lines = append(lines, telegramTextField("Thành viên", strings.Join(members, ", ")))
+	}
+	if spaceType := stringMapValue(input, "spaceType"); spaceType != "" {
+		lines = append(lines, telegramTextField("Loại", spaceType))
+	}
+	if resource := firstNonEmptyStringMapValue(input, "resourceName", "messagePreview"); resource != "" {
+		label := "Tin nhắn"
+		if toolName == "chat.removeMember" {
+			label = "Thành viên"
+		}
+		lines = append(lines, telegramTextField(label, telegramApprovalPreview(resource)))
+	}
 	if body := firstNonEmptyStringMapValue(input, "text", "message", "content", "body"); body != "" {
-		lines = append(lines, telegramPreBlock(body))
+		lines = append(lines, "", telegramPreBlock(telegramApprovalPreview(body)))
+	}
+	if attachments := attachmentNames(input, "attachments"); len(attachments) > 0 {
+		lines = append(lines, "", telegramTextField("Tệp đính kèm", strings.Join(attachments, ", ")))
 	}
 	return formatTelegramUserText(lines...)
 }
@@ -764,20 +838,42 @@ func telegramGenericApprovalDetailText(input map[string]any) string {
 		lines = append(lines, label+":", "", value)
 	}
 
+	if localPath := stringMapValue(input, "localPath"); localPath != "" {
+		lines = append(lines, "Tệp local: "+filepath.Base(localPath))
+		seen["localPath"] = struct{}{}
+	}
+
 	for _, spec := range []struct {
 		keys      []string
 		label     string
 		multiline bool
 	}{
+		{keys: []string{"resourceName"}, label: "Tài nguyên"},
+		{keys: []string{"resourceNames"}, label: "Tài nguyên"},
+		{keys: []string{"sourceFiles"}, label: "Nguồn di chuyển"},
+		{keys: []string{"targetFolder"}, label: "Thư mục đích"},
 		{keys: []string{"title", "name", "subject"}, label: "Tiêu đề"},
 		{keys: []string{"description", "textBody", "body", "content", "message", "text", "htmlBody"}, label: "Nội dung", multiline: true},
-		{keys: []string{"to"}, label: "Người nhận"},
+		{keys: []string{"to", "recipientEmail", "emailAddress"}, label: "Người nhận"},
 		{keys: []string{"cc"}, label: "CC"},
 		{keys: []string{"bcc"}, label: "BCC"},
+		{keys: []string{"users", "memberUsers"}, label: "Thành viên"},
 		{keys: []string{"location"}, label: "Địa điểm"},
 		{keys: []string{"date", "startDate", "startTime"}, label: "Bắt đầu"},
 		{keys: []string{"endDate", "endTime", "dueDate", "dueTime"}, label: "Kết thúc"},
-		{keys: []string{"attachments"}, label: "Tệp đính kèm"},
+		{keys: []string{"attachments", "filenames"}, label: "Tệp đính kèm"},
+		{keys: []string{"filename"}, label: "Tên tệp"},
+		{keys: []string{"outputDir"}, label: "Lưu vào"},
+		{keys: []string{"role"}, label: "Quyền"},
+		{keys: []string{"type"}, label: "Đối tượng chia sẻ"},
+		{keys: []string{"action"}, label: "Thay đổi"},
+		{keys: []string{"range"}, label: "Vùng dữ liệu"},
+		{keys: []string{"ranges"}, label: "Các vùng dữ liệu"},
+		{keys: []string{"values"}, label: "Giá trị"},
+		{keys: []string{"sheetTitles"}, label: "Tên các sheet"},
+		{keys: []string{"newTitle"}, label: "Tên mới"},
+		{keys: []string{"oldText"}, label: "Nội dung cần thay", multiline: true},
+		{keys: []string{"newText"}, label: "Nội dung thay thế", multiline: true},
 		{keys: []string{"query"}, label: "Truy vấn"},
 		{keys: []string{"command"}, label: "Lệnh", multiline: true},
 		{keys: []string{"path", "filePath", "scriptPath", "script_path"}, label: "Đường dẫn"},
@@ -789,7 +885,7 @@ func telegramGenericApprovalDetailText(input map[string]any) string {
 			}
 			seen[key] = struct{}{}
 			if spec.multiline {
-				appendMultiline(spec.label, fmt.Sprint(value))
+				appendMultiline(spec.label, telegramApprovalPreview(fmt.Sprint(value)))
 			} else {
 				appendLine(spec.label, value)
 			}
@@ -810,6 +906,15 @@ func telegramGenericApprovalDetailText(input map[string]any) string {
 	}
 
 	return formatTelegramUserText(lines...)
+}
+
+func telegramApprovalPreview(text string) string {
+	text = formatting.NormalizeLineEndings(strings.TrimSpace(text))
+	runes := []rune(text)
+	if len(runes) <= telegramApprovalPreviewRunes {
+		return text
+	}
+	return strings.TrimSpace(string(runes[:telegramApprovalPreviewRunes])) + "\n...[đã rút gọn]"
 }
 
 func telegramCodeBlock(language string, code string) string {
@@ -981,10 +1086,23 @@ func telegramShouldSkipApprovalField(key string, value any) bool {
 	case "draftid", "messageid", "threadid", "userid", "user_id", "approvalid", "toolcallid", "tool_call_id", "rendermode", "previewchars", "full", "pagetoken", "page_token", "source", "space":
 		return true
 	}
+	if key == "name" {
+		if text, ok := value.(string); ok && looksLikeTelegramOpaqueResourceName(text) {
+			return true
+		}
+	}
 	if strings.HasSuffix(key, "id") || strings.HasSuffix(key, "ids") {
 		return true
 	}
 	return strings.TrimSpace(telegramApprovalValueText(value)) == ""
+}
+
+func looksLikeTelegramOpaqueResourceName(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "spaces/") ||
+		strings.HasPrefix(value, "users/") ||
+		strings.HasPrefix(value, "people/") ||
+		strings.HasPrefix(value, "messages/")
 }
 
 func telegramApprovalValueText(value any) string {
@@ -1036,7 +1154,6 @@ func telegramApprovalMapText(value map[string]any) string {
 		{key: "email", label: "email"},
 		{key: "displayName", label: "tên"},
 		{key: "responseStatus", label: "trạng thái"},
-		{key: "eventId", label: "eventId"},
 		{key: "title", label: "tiêu đề"},
 	}
 	seen := map[string]bool{}

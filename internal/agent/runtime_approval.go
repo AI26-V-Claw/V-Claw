@@ -345,10 +345,10 @@ func (r *Runtime) approvalRequest(message contracts.UserMessage, toolCall provid
 		Input:      input,
 		Governance: governanceMeta,
 	}
-	summary := approvalSummary(toolCall.Name, decision.RiskLevel)
+	summary := approvalSummary(toolCall.Name, decision.RiskLevel, input)
 	if toolCall.Name == "chat.sendMessage" {
 		if email, ok := input["recipientEmail"].(string); ok && strings.TrimSpace(email) != "" {
-			summary = fmt.Sprintf("Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat đến %s. Nếu chưa có DM space, sẽ tự động tạo.", strings.TrimSpace(email))
+			summary = "Mình sẽ gửi tin nhắn Google Chat. Xác nhận không?"
 		}
 	}
 	parentApprovalID := ""
@@ -389,17 +389,17 @@ func approvalDecisionRecord(sessionID string, decision contracts.ApprovalDecisio
 }
 
 func enrichApprovalInput(toolName string, input map[string]any, transcript []providers.Message) map[string]any {
+	enriched := input
 	switch strings.TrimSpace(toolName) {
 	case "drive.moveFile", "drive.moveFiles":
-		return enrichDriveMoveApprovalInput(input, transcript)
-	case "calendar.respondEvent":
-		return enrichCalendarRespondApprovalInput(input, transcript)
-	default:
-		return input
+		enriched = enrichDriveMoveApprovalInput(input, transcript)
+	case "calendar.updateEvent", "calendar.respondEvent", "calendar.deleteEvent":
+		enriched = enrichCalendarEventApprovalInput(input, transcript)
 	}
+	return enrichApprovalResourceNames(toolName, enriched, transcript)
 }
 
-func enrichCalendarRespondApprovalInput(input map[string]any, transcript []providers.Message) map[string]any {
+func enrichCalendarEventApprovalInput(input map[string]any, transcript []providers.Message) map[string]any {
 	if len(input) == 0 {
 		return input
 	}
@@ -417,6 +417,193 @@ func enrichCalendarRespondApprovalInput(input map[string]any, transcript []provi
 	enriched := cloneArguments(input)
 	enriched["eventTitle"] = title
 	return enriched
+}
+
+func enrichApprovalResourceNames(toolName string, input map[string]any, transcript []providers.Message) map[string]any {
+	if len(input) == 0 || len(transcript) == 0 {
+		return input
+	}
+
+	enriched := input
+	cloned := false
+	setName := func(idKey string, nameKey string) {
+		if strings.TrimSpace(stringArgument(enriched, nameKey)) != "" {
+			return
+		}
+		id := strings.TrimSpace(stringArgument(enriched, idKey))
+		if id == "" {
+			return
+		}
+		name := approvalResourceNameFromTranscript(transcript, id)
+		if name == "" {
+			return
+		}
+		if !cloned {
+			enriched = cloneArguments(enriched)
+			cloned = true
+		}
+		enriched[nameKey] = name
+	}
+
+	switch {
+	case strings.HasPrefix(toolName, "calendar."):
+		setName("eventId", "eventTitle")
+	case strings.HasPrefix(toolName, "drive."):
+		setName("fileId", "resourceName")
+		setName("targetParentId", "targetFolder")
+	case strings.HasPrefix(toolName, "docs."):
+		setName("documentId", "resourceName")
+	case strings.HasPrefix(toolName, "sheets."):
+		setName("spreadsheetId", "resourceName")
+		setName("sheetId", "sheetName")
+		setName("sourceSheetId", "sheetName")
+	case strings.HasPrefix(toolName, "gmail."):
+		setName("draftId", "resourceName")
+		setName("messageId", "resourceName")
+	case strings.HasPrefix(toolName, "chat."):
+		setName("space", "conversationName")
+		setName("name", "resourceName")
+	}
+	return enriched
+}
+
+func approvalResourceNameFromTranscript(transcript []providers.Message, resourceID string) string {
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
+		return ""
+	}
+	for i := len(transcript) - 1; i >= 0; i-- {
+		message := transcript[i]
+		if message.Role != providers.MessageRoleTool || strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		if strings.Contains(message.Content, resourceID) {
+			if name := approvalResourceNameFromPrecedingToolCall(transcript, i, message.ToolCallID); name != "" {
+				return name
+			}
+		}
+		var payload any
+		if err := json.Unmarshal([]byte(message.Content), &payload); err == nil {
+			if name := approvalResourceNameFromPayload(payload, resourceID); name != "" {
+				return name
+			}
+		}
+		if name := approvalResourceNameFromText(message.Content, resourceID); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+func approvalResourceNameFromPrecedingToolCall(transcript []providers.Message, toolResultIndex int, toolCallID string) string {
+	for i := toolResultIndex - 1; i >= 0 && i >= toolResultIndex-3; i-- {
+		message := transcript[i]
+		if message.Role == providers.MessageRoleUser {
+			break
+		}
+		if message.Role != providers.MessageRoleAssistant {
+			continue
+		}
+		for _, call := range message.ToolCalls {
+			if strings.TrimSpace(toolCallID) != "" && strings.TrimSpace(call.ID) != strings.TrimSpace(toolCallID) {
+				continue
+			}
+			for _, key := range []string{"subject", "title", "name", "eventTitle", "fileName"} {
+				if value, ok := call.Arguments[key].(string); ok && strings.TrimSpace(value) != "" {
+					return strings.TrimSpace(value)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func approvalResourceNameFromPayload(payload any, resourceID string) string {
+	switch typed := payload.(type) {
+	case []any:
+		for _, item := range typed {
+			if name := approvalResourceNameFromPayload(item, resourceID); name != "" {
+				return name
+			}
+		}
+	case map[string]any:
+		for _, key := range []string{"Event", "Message", "Draft", "File", "Document", "Spreadsheet", "Space"} {
+			if nested, ok := typed[key]; ok {
+				if name := approvalResourceNameFromPayload(nested, resourceID); name != "" {
+					return name
+				}
+			}
+		}
+		for _, key := range []string{"Events", "Messages", "Drafts", "Files", "Documents", "Spreadsheets", "Spaces", "Sheets"} {
+			if nested, ok := typed[key]; ok {
+				if name := approvalResourceNameFromPayload(nested, resourceID); name != "" {
+					return name
+				}
+			}
+		}
+		if approvalPayloadMatchesResource(typed, resourceID) {
+			for _, key := range []string{"title", "Title", "subject", "Subject", "displayName", "DisplayName", "filename", "Filename", "fileName", "FileName", "name", "Name"} {
+				if name := firstStringMapValue(typed, key); name != "" && name != resourceID && !looksLikeOpaqueResourceName(name) {
+					return name
+				}
+			}
+		}
+		for _, value := range typed {
+			if name := approvalResourceNameFromPayload(value, resourceID); name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func approvalPayloadMatchesResource(payload map[string]any, resourceID string) bool {
+	for _, key := range []string{
+		"id", "ID", "eventId", "EventID", "fileId", "FileID", "documentId", "DocumentID",
+		"spreadsheetId", "SpreadsheetID", "sheetId", "SheetID", "draftId", "DraftID",
+		"messageId", "MessageID", "name", "Name",
+	} {
+		value, ok := payload[key]
+		if ok && strings.TrimSpace(fmt.Sprint(value)) == resourceID {
+			return true
+		}
+	}
+	return false
+}
+
+func approvalResourceNameFromText(content string, resourceID string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.Contains(line, resourceID) {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		for i := 1; i < len(parts); i++ {
+			candidate := strings.TrimSpace(parts[i])
+			if candidate == "" || candidate == resourceID || looksLikeOpaqueResourceName(candidate) {
+				continue
+			}
+			switch candidate {
+			case "SPACE", "GROUP_CHAT", "DIRECT_MESSAGE":
+				continue
+			}
+			if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
+				continue
+			}
+			if len([]rune(candidate)) > 160 {
+				candidate = string([]rune(candidate)[:160]) + "..."
+			}
+			return candidate
+		}
+	}
+	return ""
+}
+
+func looksLikeOpaqueResourceName(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "spaces/") ||
+		strings.HasPrefix(value, "users/") ||
+		strings.HasPrefix(value, "people/") ||
+		strings.HasPrefix(value, "messages/")
 }
 
 func calendarEventTitleByIDFromTranscript(transcript []providers.Message, eventID string) string {
@@ -534,15 +721,8 @@ func driveFilesByIDFromTranscript(transcript []providers.Message) map[string]dri
 }
 
 func driveApprovalDisplayName(id string, ref driveApprovalFileRef) string {
-	id = strings.TrimSpace(id)
 	name := strings.TrimSpace(ref.Name)
-	if name == "" {
-		return id
-	}
-	if id == "" {
-		return name
-	}
-	return fmt.Sprintf("%s (ID: %s)", name, id)
+	return name
 }
 
 func firstStringMapValue(values map[string]any, keys ...string) string {
@@ -663,7 +843,7 @@ func (r *Runtime) pendingApprovalFromState(ctx context.Context, sessionID string
 		ToolCallID: record.ToolCallID,
 		Status:     approvalStatusForAction(record.Status),
 		RiskLevel:  record.RiskLevel,
-		Summary:    approvalSummary(record.ToolName, record.RiskLevel),
+		Summary:    approvalSummary(record.ToolName, record.RiskLevel, record.ArgsSnapshot),
 		ToolCall: contracts.ToolCall{
 			ToolCallID: record.ToolCallID,
 			RequestID:  record.RequestID,
@@ -787,7 +967,7 @@ func (r *Runtime) resumeApprovedAction(ctx context.Context, pending pendingAppro
 		})
 	}
 
-	if errShape := r.recordActionResult(ctx, pending.message.SessionID, result); errShape != nil {
+	if errShape := r.recordActionResultForRun(ctx, pending.message.SessionID, pending.runID, pending.message.RequestID, result); errShape != nil {
 		return contracts.AgentResponse{
 			RequestID: pending.message.RequestID,
 			SessionID: pending.message.SessionID,
@@ -988,7 +1168,7 @@ Ghi chú chỉnh sửa:
 %s`, pending.message.Text, pending.request.ToolCall.ToolName, input, comment))
 }
 
-func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
+func approvalSummary(toolName string, riskLevel contracts.RiskLevel, arguments map[string]any) string {
 	switch toolName {
 	case "get_current_time":
 		return "Cho phép tôi xem thời gian hiện tại nhé?"
@@ -1025,33 +1205,33 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 	case "gmail.getDraft":
 		return "Cho phép tôi đọc nội dung Gmail draft nhé?"
 	case "gmail.createDraft", "gmail.updateDraft", "gmail.replyDraft", "gmail.forwardDraft":
-		return "Tôi cần bạn xác nhận trước khi tạo hoặc sửa Gmail draft."
+		return "Mình sẽ tạo hoặc sửa Gmail draft. Xác nhận không?"
 	case "gmail.sendDraft":
-		return "Tôi cần bạn xác nhận trước khi gửi email."
+		return "Mình sẽ gửi email. Xác nhận không?"
 	case "gmail.deleteDraft":
-		return "Tôi cần bạn xác nhận trước khi xóa Gmail draft."
+		return "Mình sẽ xóa Gmail draft. Xác nhận không?"
 	case "gmail.downloadAttachments":
-		return "Tôi cần bạn xác nhận trước khi tải attachment Gmail xuống máy local."
+		return "Mình sẽ tải file đính kèm về máy. Xác nhận không?"
 	case "gmail.getEmail":
-		return "Cho phép tôi đọc nội dung email trong Gmail nhé?"
+		return "Mình sẽ đọc nội dung email này. Xác nhận không?"
 	case "gmail.modifyMessage", "gmail.batchModifyMessages":
-		return "Tôi cần bạn xác nhận trước khi sửa trạng thái hoặc nhãn Gmail."
+		return "Mình sẽ sửa trạng thái hoặc nhãn Gmail. Xác nhận không?"
 	case "gmail.trashMessage":
-		return "Tôi cần bạn xác nhận trước khi chuyển email vào thùng rác."
+		return "Mình sẽ chuyển email vào thùng rác. Xác nhận không?"
 	case "gmail.untrashMessage":
-		return "Tôi cần bạn xác nhận trước khi khôi phục email khỏi thùng rác."
+		return "Mình sẽ khôi phục email. Xác nhận không?"
 	case "calendar.createEvent":
-		return "Tôi cần bạn xác nhận trước khi tạo sự kiện Calendar."
+		return "Mình sẽ tạo sự kiện Calendar. Xác nhận không?"
 	case "calendar.updateEvent":
-		return "Tôi cần bạn xác nhận trước khi sửa sự kiện Calendar."
+		return "Mình sẽ sửa sự kiện Calendar. Xác nhận không?"
 	case "calendar.respondEvent":
 		return "Tôi cần bạn xác nhận trước khi phản hồi lời mời Calendar."
-	case "calendar.deleteEvent":
-		return "Tôi cần bạn xác nhận trước khi xóa sự kiện Calendar."
 	case "calendar.listEvents":
 		return "Cho phép tôi xem lịch Calendar nhé?"
 	case "calendar.getEvent":
 		return "Cho phép tôi xem chi tiết sự kiện Calendar nhé?"
+	case "calendar.deleteEvent":
+		return "Mình sẽ xóa sự kiện Calendar. Xác nhận không?"
 	case "chat.listSpaces":
 		return "Cho phép tôi xem danh sách Google Chat space nhé?"
 	case "chat.listMembers":
@@ -1061,17 +1241,17 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 	case "chat.listMessages":
 		return "Cho phép tôi đọc tin nhắn trong Google Chat nhé?"
 	case "chat.sendMessage":
-		return "Tôi cần bạn xác nhận trước khi gửi tin nhắn Google Chat."
+		return "Mình sẽ gửi tin nhắn Google Chat. Xác nhận không?"
 	case "chat.updateMessage":
-		return "Tôi cần bạn xác nhận trước khi sửa tin nhắn Google Chat."
+		return "Mình sẽ sửa tin nhắn Google Chat. Xác nhận không?"
 	case "chat.deleteMessage":
-		return "Tôi cần bạn xác nhận trước khi xóa tin nhắn Google Chat."
+		return "Mình sẽ xóa tin nhắn Google Chat. Xác nhận không?"
 	case "chat.createSpace":
-		return "Tôi cần bạn xác nhận trước khi tạo Google Chat space."
+		return "Mình sẽ tạo Google Chat space. Xác nhận không?"
 	case "chat.addMember":
-		return "Tôi cần bạn xác nhận trước khi thêm thành viên Google Chat."
+		return "Mình sẽ thêm thành viên Google Chat. Xác nhận không?"
 	case "chat.removeMember":
-		return "Tôi cần bạn xác nhận trước khi xóa thành viên Google Chat."
+		return "Mình sẽ xóa thành viên Google Chat. Xác nhận không?"
 	case "drive.listFiles":
 		return "Cho phép tôi xem danh sách file trong Google Drive nhé?"
 	case "drive.getFile":
@@ -1083,48 +1263,96 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel) string {
 	case "drive.saveFile":
 		return "Tôi cần bạn xác nhận trước khi lưu file Google Drive xuống workspace."
 	case "drive.createFolder":
-		return "Tôi cần bạn xác nhận trước khi tạo folder trên Google Drive."
+		return "Mình sẽ tạo folder trên Google Drive. Xác nhận không?"
 	case "drive.createFile", "drive.uploadFile":
-		return "Tôi cần bạn xác nhận trước khi tạo hoặc upload file lên Google Drive."
+		return "Mình sẽ tạo hoặc tải file lên Google Drive. Xác nhận không?"
 	case "drive.updateFileMetadata":
-		return "Tôi cần bạn xác nhận trước khi sửa metadata file Google Drive."
+		return "Mình sẽ sửa metadata file Google Drive. Xác nhận không?"
 	case "drive.shareFile":
-		return "Tôi cần bạn xác nhận trước khi chia sẻ file Google Drive."
+		return "Mình sẽ chia sẻ file Google Drive. Xác nhận không?"
 	case "drive.listPermissions":
 		return "Cho phép tôi xem quyền chia sẻ file Google Drive nhé?"
 	case "drive.revokePermission":
-		return "Tôi cần bạn xác nhận trước khi thu hồi quyền chia sẻ file Google Drive."
+		return "Mình sẽ thu hồi quyền chia sẻ file Google Drive. Xác nhận không?"
 	case "drive.moveFile", "drive.moveFiles":
-		return "Tôi cần bạn xác nhận trước khi di chuyển file hoặc folder Google Drive."
+		return "Mình sẽ di chuyển file hoặc folder Google Drive. Xác nhận không?"
 	case "drive.trashFile":
-		return "Tôi cần bạn xác nhận trước khi chuyển file hoặc folder Google Drive vào thùng rác."
+		return "Mình sẽ chuyển file hoặc folder vào thùng rác. Xác nhận không?"
 	case "drive.untrashFile":
-		return "Tôi cần bạn xác nhận trước khi khôi phục file hoặc folder Google Drive."
+		return "Mình sẽ khôi phục file hoặc folder Google Drive. Xác nhận không?"
 	case "docs.getDocument":
 		return "Cho phép tôi đọc nội dung Google Docs document nhé?"
 	case "docs.createDocument":
-		return "Tôi cần bạn xác nhận trước khi tạo Google Docs document."
+		return "Mình sẽ tạo tài liệu Google Docs. Xác nhận không?"
 	case "docs.appendText", "docs.replaceText", "docs.insertText":
-		return "Tôi cần bạn xác nhận trước khi sửa nội dung Google Docs document."
+		return "Mình sẽ sửa nội dung Google Docs. Xác nhận không?"
 	case "docs.deleteContent":
-		return "Tôi cần bạn xác nhận trước khi xóa nội dung trong Google Docs document."
+		return "Mình sẽ xóa nội dung trong Google Docs. Xác nhận không?"
 	case "sheets.getSpreadsheet":
 		return "Cho phép tôi xem thông tin Google Sheets spreadsheet nhé?"
 	case "sheets.readValues", "sheets.batchGetValues":
 		return "Cho phép tôi đọc dữ liệu trong Google Sheets nhé?"
 	case "sheets.createSpreadsheet":
-		return "Tôi cần bạn xác nhận trước khi tạo Google Sheets spreadsheet."
+		return "Mình sẽ tạo Google Sheets spreadsheet. Xác nhận không?"
 	case "sheets.updateValues", "sheets.batchUpdateValues", "sheets.appendValues", "sheets.clearValues":
-		return "Tôi cần bạn xác nhận trước khi thay đổi dữ liệu trong Google Sheets."
+		return "Mình sẽ thay đổi dữ liệu trong Google Sheets. Xác nhận không?"
 	case "sheets.addSheet", "sheets.renameSheet", "sheets.duplicateSheet":
-		return "Tôi cần bạn xác nhận trước khi thay đổi tab trong Google Sheets."
+		return "Mình sẽ thay đổi tab trong Google Sheets. Xác nhận không?"
 	case "sheets.deleteSheet":
-		return "Tôi cần bạn xác nhận trước khi xóa tab trong Google Sheets."
-	case "sandbox.runPython", "sandbox.runShell":
-		return "Tôi cần bạn xác nhận trước khi chạy code hoặc lệnh trong sandbox."
+		return "Mình sẽ xóa tab trong Google Sheets. Xác nhận không?"
+	case "sandbox.runPython":
+		code, _ := arguments["code"].(string)
+		return inferSandboxSummary(toolName, code)
+	case "sandbox.runShell":
+		code, _ := arguments["code"].(string)
+		return inferSandboxSummary(toolName, code)
 	default:
-		return "Tôi cần bạn xác nhận trước khi thực hiện thao tác này."
+		return "Mình sẽ thực hiện thao tác này. Xác nhận không?"
 	}
+}
+
+func inferSandboxSummary(toolName, code string) string {
+	if strings.TrimSpace(code) == "" {
+		if toolName == "sandbox.runShell" {
+			return "Mình sẽ xử lý yêu cầu này bằng lệnh shell. Xác nhận không?"
+		}
+		return "Mình sẽ xử lý yêu cầu này bằng mã Python. Xác nhận không?"
+	}
+
+	hint := ""
+	for _, line := range strings.Split(code, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "import ") || strings.HasPrefix(trimmed, "from ") {
+			continue
+		}
+		hint = trimmed
+		break
+	}
+	if len(hint) > 60 {
+		hint = hint[:60]
+	}
+
+	lowerHint := strings.ToLower(hint)
+	lowerCode := strings.ToLower(code)
+	text := lowerHint + "\n" + lowerCode
+
+	outcome := "xử lý dữ liệu"
+	switch {
+	case strings.Contains(text, "open(") || strings.Contains(text, "fitz") || strings.Contains(text, ".pdf"):
+		outcome = "đọc nội dung file PDF"
+	case strings.Contains(text, "csv") || strings.Contains(text, "pandas"):
+		outcome = "xử lý dữ liệu từ file"
+	case strings.Contains(text, "requests") || strings.Contains(text, "http"):
+		outcome = "gọi API bên ngoài"
+	}
+
+	if toolName == "sandbox.runShell" {
+		return "Mình sẽ " + outcome + " bằng lệnh shell. Xác nhận không?"
+	}
+	return "Mình sẽ " + outcome + " bằng mã Python. Xác nhận không?"
 }
 
 func approvalExecutionMessage(result tools.ToolResult, contractResult contracts.ToolResult) string {

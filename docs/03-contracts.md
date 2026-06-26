@@ -164,7 +164,7 @@ expired
 }
 ```
 
-Known artifact kinds in Sprint 1: `gmail.message`, `chat.message`, `calendar.event`.
+Known artifact kinds include `gmail.message`, `chat.message`, `calendar.event`, `google.meet.space`, `drive.file`, `docs.document`, and `sheets.spreadsheet`.
 
 `failureReason` is a machine-readable string populated on failed, blocked, expired, cancelled, or max-iteration responses. It is omitted when empty, including completed and approval-required responses. Values are typed constants from `orchestration.FailureReason`:
 
@@ -556,7 +556,7 @@ Provenance bundle attached to every significant runtime record so the N4 monitor
 Fields:
 
 - `model` — LLM model ID used for the surrounding request, e.g. `claude-opus-4-8`, `gemini-1.5-pro`. Empty if the record was produced outside an LLM-driven step.
-- `promptVersion` — short content-hash fingerprint of the effective system prompt (`runtimeSystemPrompt` + `SOUL.md`). Computed by `governance.PromptVersion()` once when the runtime is constructed; same prompt → same version. Eight hex characters.
+- `promptVersion` — short content-hash fingerprint of the effective system prompt (`runtimeSystemPrompt`). Computed by `governance.PromptVersion()` once when the runtime is constructed; same prompt → same version. Eight hex characters. (`configs/SOUL.md` is reference documentation only — it is not injected at runtime and does not contribute to this hash.)
 - `toolSchemaVersion` — short content-hash fingerprint of the tool's parameter schema at call time. Computed by `governance.ToolSchemaVersion()` from the canonicalised schema; cosmetic key reordering does not shift the version. Eight hex characters.
 - `policyDecisionRef` — composite reference back to the `RiskDecision` that authorised the tool call. Format: `policy:<runID>:<toolCallId>:<unixSec>`. Computed by `governance.PolicyRef()` from the decision's `checkedAt` in UTC seconds. Readable in JSONL audit dumps via `grep`.
 
@@ -577,7 +577,7 @@ Rules:
 - All fields are optional strings. Empty values mean "unknown" and round-trip cleanly; existing producers that do not yet stamp governance keep working.
 - Channel UIs (Telegram, web) MUST NOT display governance to end users — these are backend trace identifiers, not human-facing context.
 - Governance values are stable identifiers, not secrets. They may be logged, indexed, and shipped to monitoring without redaction.
-- A change in any input that contributes to a hash (system prompt body, SOUL.md, tool parameter schema) automatically shifts the corresponding version. There is no manual version-bump step.
+- A change in any input that contributes to a hash (system prompt body, tool parameter schema) automatically shifts the corresponding version. There is no manual version-bump step.
 
 Implementation: see `internal/governance/governance.go`. Migration: `migrations/003_governance_metadata.sql`. Persistence: see [docs/05-erd.md §Governance columns](./05-erd.md#governance-columns).
 
@@ -644,7 +644,7 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
-| `docs.getDocument` | Integration | `safe_read` | No |
+| `docs.getDocument` | Integration | `sensitive_read` | No |
 | `docs.createDocument` | Integration | `external_write` | Yes |
 | `docs.appendText` | Integration | `external_write` | Yes |
 | `docs.replaceText` | Integration | `external_write` | Yes |
@@ -656,7 +656,7 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | Tool | Owner | Risk | Approval |
 |---|---|---|---|
 | `sheets.getSpreadsheet` | Integration | `safe_read` | No |
-| `sheets.readValues` | Integration | `safe_read` | No |
+| `sheets.readValues` | Integration | `sensitive_read` | No |
 | `sheets.batchGetValues` | Integration | `safe_read` | No |
 | `sheets.createSpreadsheet` | Integration | `external_write` | Yes |
 | `sheets.updateValues` | Integration | `external_write` | Yes |
@@ -691,6 +691,15 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 
 > `calendar.createEvent` requires an explicit start date+time and an explicit end date+time or duration before approval. Date-only phrases such as `tomorrow` / `ngay mai` are not enough to infer a start time. If the user also asks to send an email about the event, Calendar attendees/invitations do not satisfy that separate Gmail action.
 > `calendar.updateEvent` preserves existing Calendar attendee RSVP state when adding attendees. Tool input `attendees` is treated as attendees to add, not a blind replacement list; RSVP changes must use `calendar.respondEvent`.
+> `calendar.createEvent` and `calendar.updateEvent` accept `createConference=true` to ask Google Calendar to generate a Google Meet link for the event. Tool input must not accept a caller-supplied `meetLink`; the link must come from the current Calendar API result. Adding Meet to an existing event is idempotent when the event already has a Meet link.
+
+### Google Meet
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `meet.createMeeting` | Integration | `external_write` | Yes |
+
+> `meet.createMeeting` creates a standalone Google Meet space for later use or immediate sharing. Scheduled Calendar meetings must use `calendar.createEvent` with `createConference=true`, and adding Meet to an existing Calendar event must use `calendar.updateEvent` with `createConference=true`. Agent responses must not invent or reuse Meet links from older transcript/memory; share only links returned by the current Meet or Calendar tool result.
 
 ### Chat
 
