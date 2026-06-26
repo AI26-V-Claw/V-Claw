@@ -1,0 +1,50 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc email mới nhất từ baolnc@vclaw.site, tìm file Docs 'Project Status' trên Drive và cập nhật phần 'Cập nhật mới nhất' với nội dung từ email đó."
+    },
+    "agent": {
+      "expectation": "Agent đọc email và tìm Docs trên Drive. Không cần approval.",
+      "requires_approval": false,
+      "expected_tools": [
+        "gmail.listEmails",
+        "gmail.getEmail",
+        "drive.listFiles",
+        "docs.getDocument"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận cập nhật nội dung Docs.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.replaceText"
+      ],
+      "expected_approval_tool": "docs.replaceText",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent cập nhật thành công, báo cáo đã cập nhật.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Project Status"
+      ]
+    }
+  }
+]

@@ -1,0 +1,46 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Tìm email mới nhất từ baolnc@vclaw.site và soạn reply cảm ơn."
+    },
+    "agent": {
+      "expectation": "Agent tìm email rồi xin xác nhận tạo draft reply cảm ơn.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.listEmails",
+        "gmail.replyDraft"
+      ],
+      "expected_approval_tool": "gmail.replyDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận gửi email reply.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.sendDraft"
+      ],
+      "expected_approval_tool": "gmail.sendDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent gửi email reply thành công.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

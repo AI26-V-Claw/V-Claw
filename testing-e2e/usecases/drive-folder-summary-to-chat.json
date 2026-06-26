@@ -1,0 +1,28 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Liệt kê tất cả file trong folder 'Sprint 2' trên Drive, tóm tắt danh sách và gửi thông báo vào space VClaw trên Chat."
+    },
+    "agent": {
+      "expectation": "Agent liệt kê file trong folder, tìm space VClaw và xin xác nhận gửi tóm tắt vào Chat.",
+      "requires_approval": true,
+      "expected_tools": ["drive.listFiles", "chat.listSpaces", "chat.sendMessage"],
+      "expected_approval_tool": "chat.sendMessage",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent gửi thành công, xác nhận với user.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": ["Chat", "gửi"]
+    }
+  }
+]

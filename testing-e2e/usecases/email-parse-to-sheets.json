@@ -1,0 +1,62 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc 5 email mới nhất có nhãn 'Order', trích xuất thông tin đơn hàng bằng Python và thêm vào sheet 'Đơn hàng' trong file 'Sales Tracker'."
+    },
+    "agent": {
+      "expectation": "Agent đọc email có nhãn Order và lấy thông tin sheet. Không cần approval cho thao tác đọc.",
+      "requires_approval": false,
+      "expected_tools": [
+        "gmail.listEmails",
+        "gmail.getEmail",
+        "sheets.getSpreadsheet"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận chạy Python trích xuất thông tin đơn hàng từ email.",
+      "requires_approval": true,
+      "expected_tools": [
+        "sandbox.runPython"
+      ],
+      "expected_approval_tool": "sandbox.runPython",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent trích xuất xong, xin xác nhận thêm dữ liệu vào Sheets.",
+      "requires_approval": true,
+      "expected_tools": [
+        "sheets.appendValues"
+      ],
+      "expected_approval_tool": "sheets.appendValues",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent thêm dữ liệu xong, báo số dòng đã thêm.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

@@ -1,0 +1,75 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Tạo lịch họp 'Demo Day Sprint 2' vào ngày 2026-07-03 lúc 3 giờ chiều, kéo dài 1 tiếng, thêm attendee li14ngayvna@gmail.com, sau đó thông báo vào space spaces/AAQAEUb3OG4 trên Chat và soạn email xác nhận cho tất cả attendees."
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận tạo Calendar event với attendee đã nêu.",
+      "requires_approval": true,
+      "expected_tools": [
+        "calendar.createEvent"
+      ],
+      "expected_approval_tool": "calendar.createEvent",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo lịch xong, xin xác nhận gửi thông báo Chat vào space đã nêu.",
+      "requires_approval": true,
+      "expected_tools": [
+        "chat.sendMessage"
+      ],
+      "expected_approval_tool": "chat.sendMessage",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent gửi Chat xong, xin xác nhận tạo draft email xác nhận cho attendee.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.createDraft"
+      ],
+      "expected_approval_tool": "gmail.createDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận gửi email xác nhận cho attendee.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.sendDraft"
+      ],
+      "expected_approval_tool": "gmail.sendDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 4,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành gửi email xác nhận cho attendee.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

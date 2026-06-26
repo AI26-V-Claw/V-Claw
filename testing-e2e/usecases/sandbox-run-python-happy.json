@@ -1,0 +1,28 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc nội dung file sprint_report.pdf và tóm tắt cho mình."
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận trước khi chạy Python để đọc PDF. Confirmation phải mô tả outcome, không dùng từ 'sandbox' hay 'chạy code'.",
+      "requires_approval": true,
+      "expected_tools": ["sandbox.runPython"],
+      "expected_approval_tool": "sandbox.runPython",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent trả về nội dung tóm tắt từ file PDF.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

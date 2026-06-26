@@ -1,0 +1,47 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc tin nhắn mới nhất trong space VClaw, tạo lịch follow-up tên 'VClaw Follow-up' vào ngày mai lúc 10 giờ sáng, kéo dài 1 tiếng, dựa trên nội dung thảo luận và ghi biên bản vào Docs."
+    },
+    "agent": {
+      "expectation": "Agent tìm space VClaw, đọc tin nhắn rồi xin xác nhận tạo lịch follow-up.",
+      "requires_approval": true,
+      "expected_tools": [
+        "chat.listSpaces",
+        "chat.listMessages",
+        "calendar.createEvent"
+      ],
+      "expected_approval_tool": "calendar.createEvent",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo lịch xong, xin xác nhận tạo Docs biên bản.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.createDocument"
+      ],
+      "expected_approval_tool": "docs.createDocument",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành, trả link Docs biên bản và thông tin lịch họp.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

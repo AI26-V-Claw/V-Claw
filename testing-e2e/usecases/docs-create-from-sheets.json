@@ -1,0 +1,63 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc dữ liệu từ sheet 'KPI tháng 6' trong file 'VClaw', tạo báo cáo KPI tháng 6 trên Google Docs từ dữ liệu đó."
+    },
+    "agent": {
+      "expectation": "Agent đọc dữ liệu Sheets. Không cần approval cho thao tác đọc.",
+      "requires_approval": false,
+      "expected_tools": [
+        "sheets.getSpreadsheet",
+        "sheets.readValues"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận tạo Docs báo cáo KPI.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.createDocument"
+      ],
+      "expected_approval_tool": "docs.createDocument",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận điền nội dung KPI vào Docs.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.appendText"
+      ],
+      "expected_approval_tool": "docs.appendText",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành, trả link Docs báo cáo KPI.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "KPI tháng 6"
+      ]
+    }
+  }
+]

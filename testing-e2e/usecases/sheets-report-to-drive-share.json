@@ -1,0 +1,64 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc toàn bộ sheet 'Báo cáo tháng 6' trong file VClaw Finance, xuất thành file PDF lưu lên Drive và chia sẻ link cho team VClaw qua Chat."
+    },
+    "agent": {
+      "expectation": "Agent đọc Sheets và tìm space VClaw. Không cần approval.",
+      "requires_approval": false,
+      "expected_tools": [
+        "sheets.getSpreadsheet",
+        "sheets.batchGetValues",
+        "chat.listSpaces"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận lưu file báo cáo lên Drive.",
+      "requires_approval": true,
+      "expected_tools": [
+        "drive.createFile"
+      ],
+      "expected_approval_tool": "drive.createFile",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+      "agent": {
+        "expectation": "Agent lưu xong, xin xác nhận chia sẻ file và gửi link Chat.",
+        "requires_approval": true,
+        "expected_tools": [
+          "drive.shareFile"
+        ],
+        "expected_approval_tool": "drive.shareFile",
+        "response_contains": []
+      }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+      "agent": {
+        "expectation": "Agent hoàn thành, báo cáo link Drive và đã gửi Chat.",
+        "requires_approval": false,
+        "expected_tools": [
+          "chat.sendMessage"
+        ],
+        "expected_approval_tool": null,
+        "response_contains": []
+      }
+  }
+]
