@@ -333,6 +333,7 @@ func (t *SubtaskTool) runChild(ctx context.Context, taskID string, parentRunID s
 		Compactor:                  nil,
 		ContextWindow:              t.parent.contextWindow,
 		ContextBudget:              t.parent.contextBudget,
+		PriceSource:                t.parent.priceSource,
 		MemoryClassifierModel:      t.parent.memoryClassifierModel,
 		SubtaskMaxChildren:         t.parent.subtasks.maxChildrenPerRun,
 		SubtaskMaxDepth:            t.parent.subtaskMaxDepth,
