@@ -433,6 +433,16 @@ func TestApprovalReviseCreatesReplacementApprovalWithoutExecutingOriginal(t *tes
 
 func newApprovalLifecycleTestRuntime(t *testing.T, executions *int, provider *fakeProvider, now func() time.Time) *Runtime {
 	t.Helper()
+	// The mock provider returns a workspace read (chat.listSpaces) first so
+	// that ValidateReadBeforeWrite is satisfied before the write tool call.
+	readResponse := providers.ChatResponse{Message: providers.Message{
+		Role: providers.MessageRoleAssistant,
+		ToolCalls: []providers.ToolCall{{
+			ID:        "call_list_spaces",
+			Name:      "chat.listSpaces",
+			Arguments: map[string]any{},
+		}},
+	}}
 	initialApprovalResponse := providers.ChatResponse{Message: providers.Message{
 		Role: providers.MessageRoleAssistant,
 		ToolCalls: []providers.ToolCall{{
@@ -447,8 +457,12 @@ func newApprovalLifecycleTestRuntime(t *testing.T, executions *int, provider *fa
 	if provider == nil {
 		provider = &fakeProvider{}
 	}
-	provider.responses = append([]providers.ChatResponse{initialApprovalResponse}, provider.responses...)
+	provider.responses = append([]providers.ChatResponse{readResponse, initialApprovalResponse}, provider.responses...)
 	registry := tools.NewToolRegistry()
+	// Register a read tool so chat.listSpaces executes successfully.
+	if err := registry.Register(chatListSpacesRuntimeTool{}); err != nil {
+		t.Fatalf("register chat.listSpaces tool: %v", err)
+	}
 	if err := registry.Register(chatSendRuntimeTool{executions: executions}); err != nil {
 		t.Fatalf("register calendar tool: %v", err)
 	}

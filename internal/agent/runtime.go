@@ -971,7 +971,7 @@ If required information is missing, ask one concise clarification question inste
 		// to sandbox.runPython, which fails.
 		// Continuation messages are identified by the "continuationOf" metadata
 		// key set in buildApprovalContinuationMessage.
-		isContinuation := message.Metadata != nil && message.Metadata["continuationOf"] != nil
+		isContinuation := isRevisionMessage(message)
 		if !isContinuation && readBeforeWriteNudges < readBeforeWriteNudgeLimit {
 			if warning, violated := ValidateReadBeforeWrite(assistantMessage.ToolCalls, toolResults); violated {
 				readBeforeWriteNudges++
