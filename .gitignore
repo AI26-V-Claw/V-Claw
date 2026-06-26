@@ -69,3 +69,4 @@ docs/superpowers/
 logs/*.csv
 
 __pycache__
+cache/skills/
