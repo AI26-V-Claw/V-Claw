@@ -94,6 +94,8 @@ func runTelegramRun(ctx context.Context, args []string) error {
 		Observer:                   metrics,
 		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
 		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
+		SkillNudgeInterval:         envIntOrDefault("VCLAW_SKILL_NUDGE_INTERVAL", 0),
+		SkillCacheDir:              envOrDefault("VCLAW_SKILL_CACHE_DIR", "./cache/skills"),
 		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),
 	})
 	if err != nil {

@@ -100,6 +100,10 @@ type AgentRuntimeConfig struct {
 	SubtaskMaxDepth            int
 	SubtaskDefaultTimeout      time.Duration
 	SubtaskMaxTimeout          time.Duration
+
+	// Skill auto-learn config
+	SkillNudgeInterval int    // 0 = disabled (default); trigger review every N iterations
+	SkillCacheDir      string // path to cache/skills/; defaults to cache/skills
 }
 
 type RuntimeBundle struct {
@@ -275,6 +279,8 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		SubtaskMaxDepth:            config.SubtaskMaxDepth,
 		SubtaskDefaultTimeout:      config.SubtaskDefaultTimeout,
 		SubtaskMaxTimeout:          config.SubtaskMaxTimeout,
+		SkillNudgeInterval:         config.SkillNudgeInterval,
+		SkillCacheDir:              config.SkillCacheDir,
 	})
 	if err := registry.RegisterWithEntry(agent.NewSubtaskTool(runtime), tools.ToolRegistryEntry{Owner: "agent_core", Group: "delegation"}); err != nil {
 		return RuntimeBundle{}, fmt.Errorf("register subtask tool: %w", err)
@@ -636,6 +642,10 @@ func registerSkills(registry *tools.ToolRegistry, logger *slog.Logger, tavilyCli
 	manifestPath := envOrDefault("VCLAW_SKILLS_MANIFEST", "./configs/skills.json")
 	if err := skills.RegisterSkillsFromFile(registry, manifestPath, logger); err != nil {
 		return fmt.Errorf("register skills from manifest: %w", err)
+	}
+	cacheDir := envOrDefault("VCLAW_SKILL_CACHE_DIR", "./cache/skills")
+	if err := skills.RegisterSkillsFromCacheDir(registry, cacheDir, logger); err != nil {
+		return fmt.Errorf("register auto-learned skills from cache: %w", err)
 	}
 	return nil
 }

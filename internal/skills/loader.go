@@ -98,3 +98,76 @@ func RegisterSkillsFromFile(registry *tools.ToolRegistry, path string, logger *s
 	}
 	return RegisterSkills(registry, plugins)
 }
+
+// CacheSkillRecord mirrors skill_manage.SkillRecord for loading auto-learned skills.
+// Defined here to avoid circular import with tools/skill_manage package.
+type CacheSkillRecord struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Content string `json:"content"`
+	Enabled bool   `json:"enabled"`
+}
+
+// LoadSkillsFromCacheDir loads auto-learned skills from cache/skills/manifest.json.
+// Returns empty list (no error) if the directory or manifest does not exist.
+func LoadSkillsFromCacheDir(cacheDir string, logger *slog.Logger) ([]SkillPlugin, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	cacheDir = strings.TrimSpace(cacheDir)
+	if cacheDir == "" {
+		return nil, nil
+	}
+	manifestPath := cacheDir + "/manifest.json"
+	data, err := os.ReadFile(manifestPath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read cache skills manifest %q: %w", manifestPath, err)
+	}
+	var records []CacheSkillRecord
+	if err := json.Unmarshal(data, &records); err != nil {
+		return nil, fmt.Errorf("parse cache skills manifest: %w", err)
+	}
+	plugins := make([]SkillPlugin, 0, len(records))
+	for _, r := range records {
+		if strings.TrimSpace(r.Name) == "" {
+			continue
+		}
+		def := SkillDefinition{
+			Name:        r.Name,
+			Version:     r.Version,
+			Description: extractDescriptionFromContent(r.Content),
+			Fallback:    "Auto-learned skill " + r.Name + " could not handle this request.",
+			RiskLevel:   tools.RiskLevelSafeCompute,
+			Enabled:     true,
+		}
+		plugins = append(plugins, &manifestPlugin{def: def})
+		logger.Info("loaded auto-learned skill from cache", "name", def.Name, "version", r.Version)
+	}
+	return plugins, nil
+}
+
+// RegisterSkillsFromCacheDir loads and registers auto-learned skills from cache dir.
+func RegisterSkillsFromCacheDir(registry *tools.ToolRegistry, cacheDir string, logger *slog.Logger) error {
+	plugins, err := LoadSkillsFromCacheDir(cacheDir, logger)
+	if err != nil {
+		return err
+	}
+	return RegisterSkills(registry, plugins)
+}
+
+// extractDescriptionFromContent tries to extract the description line from SKILL.md content.
+// Looks for "description:" in YAML frontmatter. Returns empty string if not found.
+func extractDescriptionFromContent(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "description:") {
+			desc := strings.TrimPrefix(line, "description:")
+			desc = strings.Trim(strings.TrimSpace(desc), `"`)
+			return desc
+		}
+	}
+	return ""
+}
