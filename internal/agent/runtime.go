@@ -630,6 +630,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	iterationBudget := NewIterationBudget(r.iterationBudgetLimit)
 	housekeepingRefunds := 0
 	housekeepingRefundLimit := r.iterationBudgetLimit
+	// readBeforeWriteNudges tracks how many times we have nudged the LLM to
+	// read workspace data before writing.  After readBeforeWriteNudgeLimit
+	// nudges the guard is disabled so that "create-from-scratch" requests
+	// (e.g. "create a calendar event") are not blocked indefinitely.
+	readBeforeWriteNudges := 0
+	const readBeforeWriteNudgeLimit = 2
 agentLoop:
 	for iteration := 1; ; iteration++ {
 		if !iterationBudget.Consume() {
@@ -911,6 +917,37 @@ If required information is missing, ask one concise clarification question inste
 			continue agentLoop
 		}
 
+		// Workspace flow validation: nudge the agent to read data before writing.
+		// This only fires when the agent proposes a workspace write without any
+		// prior successful workspace read in this run.
+		//
+		// We skip this check for approval continuations (runs that resume after
+		// the user approved a tool). In those cases the reads already happened
+		// in the run *before* the approval exit, but toolResults is reset to
+		// empty when the new continuation run starts. Without this skip the
+		// agent enters a retry loop (up to 6 times) and eventually falls back
+		// to sandbox.runPython, which fails.
+		// Continuation messages are identified by the "continuationOf" metadata
+		// key set in buildApprovalContinuationMessage.
+		isContinuation := message.Metadata != nil && message.Metadata["continuationOf"] != nil
+		if !isContinuation && readBeforeWriteNudges < readBeforeWriteNudgeLimit {
+			if warning, violated := ValidateReadBeforeWrite(assistantMessage.ToolCalls, toolResults); violated {
+				readBeforeWriteNudges++
+				r.logger.Warn("workspace flow order violated: write before read",
+					"request_id", message.RequestID,
+					"session_id", message.SessionID,
+					"iteration", iteration,
+					"nudge", readBeforeWriteNudges,
+					"nudge_limit", readBeforeWriteNudgeLimit,
+				)
+				providerTranscript = append(providerTranscript, providers.Message{
+					Role:    providers.MessageRoleSystem,
+					Content: warning,
+				})
+				continue agentLoop
+			}
+		}
+
 		for index, providerToolCall := range assistantMessage.ToolCalls {
 			evidenceText := providerTranscriptEvidenceText(providerTranscript)
 			// currentRequestText contains only the current user message for evidence checks
@@ -1115,17 +1152,30 @@ If required information is missing, ask one concise clarification question inste
 					return base, nil
 				}
 				if !result.Success {
-					updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError))
-					if errShape != nil {
-						base.Error = errShape
-						base.Message = errShape.Message
+					// Read-only tools that fail should not halt the entire multi-tool flow.
+					// The error is already in the transcript (appended above), so the agent
+					// can see it and produce a fallback response using data from other tools.
+					// Write/mutating tool failures still terminate immediately.
+					if definition.Capability == tools.CapabilityReadOnly {
+						r.logger.Warn("read-only tool failed, continuing workspace flow",
+							"request_id", message.RequestID,
+							"session_id", message.SessionID,
+							"tool_name", providerToolCall.Name,
+							"error_code", toolErrorCode(result),
+						)
+					} else {
+						updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError))
+						if errShape != nil {
+							base.Error = errShape
+							base.Message = errShape.Message
+							return base, nil
+						}
+						base.FailureReason = updatedState.FailureReason
+						base.ToolResults = toolResults
+						base.Error = toolErrorShape(result)
+						base.Message = base.Error.Message
 						return base, nil
 					}
-					base.FailureReason = updatedState.FailureReason
-					base.ToolResults = toolResults
-					base.Error = toolErrorShape(result)
-					base.Message = base.Error.Message
-					return base, nil
 				}
 
 			case contracts.RiskDecisionRequiresApproval:
