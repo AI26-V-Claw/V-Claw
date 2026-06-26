@@ -313,7 +313,7 @@ func TestReferenceSourcesBlockListsProvenance(t *testing.T) {
 		if strings.Contains(m.Content, "Reference sources") {
 			refBlock = m.Content
 		}
-		if strings.Contains(m.Content, "Resolved file references") {
+		if strings.Contains(m.Content, "Known file references") {
 			memBlock = m.Content
 		}
 	}
@@ -332,8 +332,11 @@ func TestReferenceSourcesBlockListsProvenance(t *testing.T) {
 	if strings.Contains(refBlock, "/workspace/report.pdf") {
 		t.Errorf("reference sources block should not leak the absolute path, got: %q", refBlock)
 	}
-	if !strings.Contains(memBlock, "/workspace/report.pdf") {
-		t.Errorf("session memory block should retain the resolvable path, got: %q", memBlock)
+	if strings.Contains(memBlock, "/workspace/report.pdf") || strings.Contains(memBlock, "path=") || strings.Contains(memBlock, "driveId=") {
+		t.Errorf("session memory block should not leak raw path/ID metadata, got: %q", memBlock)
+	}
+	if !strings.Contains(memBlock, "report.pdf") {
+		t.Errorf("session memory block should retain the safe filename label, got: %q", memBlock)
 	}
 }
 
@@ -349,8 +352,11 @@ func TestReferenceSourcesDistinguishesRepeatedToolCalls(t *testing.T) {
 	if !strings.Contains(block, "alpha.pdf") || !strings.Contains(block, "beta.pdf") {
 		t.Fatalf("provenance should distinguish both resources, got: %q", block)
 	}
+	if !strings.Contains(block, "[R1]") || !strings.Contains(block, "[R2]") {
+		t.Fatalf("provenance should include stable prompt-local reference labels, got: %q", block)
+	}
 	// Two distinct result lines for the same tool.
-	if got := strings.Count(block, "tool result from drive.downloadFile"); got != 2 {
+	if got := strings.Count(block, "tool=drive.downloadFile"); got != 2 {
 		t.Fatalf("expected 2 distinct provenance lines for repeated tool, got %d: %q", got, block)
 	}
 	// Opaque resource IDs must not be exposed in the provenance block.
@@ -572,8 +578,8 @@ func TestAssembleProviderChatRequestCountsToolSchemasInBudget(t *testing.T) {
 		t.Fatalf("register big schema tool: %v", err)
 	}
 	r := NewRuntime(RuntimeConfig{
-		Provider:     &fakeProvider{},
-		Registry:     registry,
+		Provider:      &fakeProvider{},
+		Registry:      registry,
 		ContextWindow: 32_000,
 	})
 	transcript := []providers.Message{
@@ -610,8 +616,8 @@ func TestRuntimeFailsStableWhenProviderRequestStillExceedsBudget(t *testing.T) {
 	}
 	provider := &fakeProvider{}
 	r := NewRuntime(RuntimeConfig{
-		Provider:     provider,
-		Registry:     registry,
+		Provider:      provider,
+		Registry:      registry,
 		ContextWindow: 1024,
 	})
 	response, err := r.Run(context.Background(), runtimeTestMessage())

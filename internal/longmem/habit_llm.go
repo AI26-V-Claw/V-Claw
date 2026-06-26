@@ -21,15 +21,16 @@ type habitLLMResult struct {
 }
 
 func (f *Flusher) habitCandidateFromMessage(ctx context.Context, text string) (habitCandidate, bool) {
-	if candidate, ok := habitCandidateFromMessage(text); ok {
+	sanitized := sanitizeHabitClassifierText(text)
+	if candidate, ok := habitCandidateFromMessage(sanitized); ok {
 		if candidate.source == "approved_tool" {
 			return candidate, true
 		}
 	}
-	if candidate, ok := f.habitCandidateWithLLM(ctx, text); ok {
+	if candidate, ok := f.habitCandidateWithLLM(ctx, sanitized); ok {
 		return candidate, true
 	}
-	return habitCandidateFromMessage(text)
+	return habitCandidateFromMessage(sanitized)
 }
 
 func (f *Flusher) habitCandidateWithLLM(ctx context.Context, text string) (habitCandidate, bool) {
@@ -39,7 +40,7 @@ func (f *Flusher) habitCandidateWithLLM(ctx context.Context, text string) (habit
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	original := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	original := strings.Join(strings.Fields(strings.TrimSpace(sanitizeHabitClassifierText(text))), " ")
 	if original == "" || strings.HasPrefix(original, "/") {
 		return habitCandidate{}, false
 	}
@@ -131,6 +132,45 @@ func habitClassifierUserPrompt(text string) string {
 
 Return JSON with this shape:
 {"is_habit_candidate":true,"canonical_action":"inspect","target":"calendar_event","time_of_day":"08:00","confidence":0.92}`, text)
+}
+
+func sanitizeHabitClassifierText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	inAttachmentPaths := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.EqualFold(trimmed, "Attachment paths:") {
+			inAttachmentPaths = true
+			out = append(out, "Attachment filenames:")
+			continue
+		}
+		if inAttachmentPaths {
+			if strings.HasPrefix(trimmed, "- ") {
+				out = append(out, "- "+safeAttachmentFilename(strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))))
+				continue
+			}
+			inAttachmentPaths = false
+		}
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func safeAttachmentFilename(path string) string {
+	path = strings.Trim(path, "\"'")
+	if path == "" {
+		return "[attachment]"
+	}
+	idx := strings.LastIndexAny(path, `\/`)
+	if idx >= 0 && idx+1 < len(path) {
+		return path[idx+1:]
+	}
+	return path
 }
 
 func parseHabitLLMResult(text string) (habitLLMResult, bool) {

@@ -125,6 +125,40 @@ func TestSelectTranscriptNewestFirstWithinBudget(t *testing.T) {
 	}
 }
 
+func TestSelectTranscriptKeepsToolCallSequenceAtomic(t *testing.T) {
+	toolBlock := []providers.Message{
+		{Role: providers.MessageRoleAssistant, ToolCalls: []providers.ToolCall{
+			{ID: "call_events", Name: "calendar.listEvents", Arguments: map[string]any{"timeMin": "2026-06-25T00:00:00+07:00"}},
+			{ID: "call_mail", Name: "gmail.listEmails", Arguments: map[string]any{"query": "demo"}},
+		}},
+		{Role: providers.MessageRoleTool, ToolCallID: "call_events", Content: repeatTokens("calendar result", 100)},
+		{Role: providers.MessageRoleTool, ToolCallID: "call_mail", Content: repeatTokens("gmail result", 100)},
+	}
+	transcript := append([]providers.Message{
+		{Role: providers.MessageRoleUser, Content: repeatTokens("old", 200)},
+		{Role: providers.MessageRoleAssistant, Content: repeatTokens("old reply", 200)},
+		{Role: providers.MessageRoleUser, Content: "current request"},
+	}, toolBlock...)
+
+	budget := messageCost([]providers.Message{{Role: providers.MessageRoleUser, Content: "current request"}}) +
+		messageCost(toolBlock) + 20
+	out := selectTranscriptWithinBudget(transcript, budget)
+	out = sanitizeProviderTranscriptForToolProtocol(out)
+
+	if len(out) < 4 {
+		t.Fatalf("expected current user plus complete tool sequence, got %#v", out)
+	}
+	if out[len(out)-3].Role != providers.MessageRoleAssistant || len(out[len(out)-3].ToolCalls) != 2 {
+		t.Fatalf("assistant tool call block was not retained atomically: %#v", out)
+	}
+	if out[len(out)-2].Role != providers.MessageRoleTool || out[len(out)-1].Role != providers.MessageRoleTool {
+		t.Fatalf("tool results should remain adjacent to assistant tool calls: %#v", out)
+	}
+	if out[len(out)-2].ToolCallID != "call_events" || out[len(out)-1].ToolCallID != "call_mail" {
+		t.Fatalf("wrong tool results retained: %#v", out)
+	}
+}
+
 // newBudgetedRuntime builds a Runtime with a small context window so assembly
 // budgeting is exercised without needing huge inputs.
 func newBudgetedRuntime(t *testing.T, contextWindow int, ltm string) *Runtime {

@@ -598,6 +598,21 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		understandingMessage.Text = contextualReferenceText(history, referenceResolution, message.Text)
 	}
 	understandingMessage.Text = textWithAttachmentContext(understandingMessage.Text, message.Metadata)
+	requestEvidenceText := strings.TrimSpace(message.Text)
+	if activeClarification || contextualFollowUp || resultFollowUp || resolvedReference {
+		requestEvidenceText = strings.TrimSpace(understandingMessage.Text)
+	}
+	if requestEvidenceText == "" {
+		requestEvidenceText = strings.TrimSpace(message.Text)
+	}
+	actionMessage := message
+	actionMessage.Text = requestEvidenceText
+	if requestEvidenceText != "" && requestEvidenceText != strings.TrimSpace(message.Text) && strings.TrimSpace(runState.OriginalGoal) != requestEvidenceText {
+		runState.OriginalGoal = requestEvidenceText
+		if errShape := r.updateRunState(ctx, runState); errShape != nil {
+			return failStartedRun(errShape)
+		}
+	}
 
 	providerTranscript := transcript
 	providerMemory := sessionMemory
@@ -947,7 +962,7 @@ If required information is missing, ask one concise clarification question inste
 			// that must verify the user explicitly stated information in *this* request.
 			// Using the full evidenceText causes false positives when historical tool results
 			// contain times, titles, or emails that the user never mentioned in the current turn.
-			currentRequestText := message.Text
+			currentRequestText := requestEvidenceText
 			providerToolCall = sanitizeUnsupportedOptionalArguments(providerToolCall, evidenceText)
 			providerToolCall = applyChannelToolDefaults(message, providerToolCall)
 			if isClarifyToolCall(providerToolCall) {
@@ -971,7 +986,7 @@ If required information is missing, ask one concise clarification question inste
 					base.Message = errShape.Message
 					return base, nil
 				}
-				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, message.Text, clarification.question, providerToolCall, stringSliceArg(providerToolCall.Arguments, "missing_fields"))); errShape != nil {
+				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, requestEvidenceText, clarification.question, providerToolCall, stringSliceArg(providerToolCall.Arguments, "missing_fields"))); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
 					return base, nil
@@ -1072,7 +1087,7 @@ If required information is missing, ask one concise clarification question inste
 					clarification.Status = contracts.AgentStatusFailed
 					return *clarification, nil
 				}
-				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, message.Text, clarification.Message, providerToolCall, toolCallMissingFields)); errShape != nil {
+				if errShape := r.storePendingClarification(ctx, message.SessionID, pendingClarificationFromToolCall(runState.RunID, requestEvidenceText, clarification.Message, providerToolCall, toolCallMissingFields)); errShape != nil {
 					clarification.Error = errShape
 					clarification.Message = errShape.Message
 					clarification.Status = contracts.AgentStatusFailed
@@ -1104,7 +1119,7 @@ If required information is missing, ask one concise clarification question inste
 			}
 			switch decision.Decision {
 			case contracts.RiskDecisionAllow:
-				providerToolCall = normalizeProviderToolCall(r.now(), providerToolCall, message.Text)
+				providerToolCall = normalizeProviderToolCall(r.now(), providerToolCall, requestEvidenceText)
 				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusAllowed, decision.Reason, ""); errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -1159,8 +1174,8 @@ If required information is missing, ask one concise clarification question inste
 				}
 
 			case contracts.RiskDecisionRequiresApproval:
-				approval := r.approvalRequest(message, providerToolCall, decision, providerTranscript)
-				action, errShape := r.createApprovalAction(ctx, runState, message, providerToolCall, decision, approval)
+				approval := r.approvalRequest(actionMessage, providerToolCall, decision, providerTranscript)
+				action, errShape := r.createApprovalAction(ctx, runState, actionMessage, providerToolCall, decision, approval)
 				if errShape != nil {
 					base.Error = errShape
 					base.Message = errShape.Message
@@ -1195,7 +1210,7 @@ If required information is missing, ask one concise clarification question inste
 				r.storePendingApproval(pendingApproval{
 					runID:              runState.RunID,
 					actionID:           action.ActionID,
-					message:            message,
+					message:            actionMessage,
 					request:            approval,
 					toolCall:           providerToolCall,
 					definition:         definition,

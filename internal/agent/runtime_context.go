@@ -99,18 +99,24 @@ func referenceSourcesPrompt(memory sessions.SessionMemory) string {
 		if name == "" {
 			continue
 		}
-		line := "- tool result from " + name
+		line := fmt.Sprintf("- %s tool=%s", actionResultRefLabel(memory.LastActionResults, i), name)
+		if source := strings.TrimSpace(ar.Source); source != "" {
+			line += fmt.Sprintf(", source=%s", source)
+		}
 		if ar.Artifact != nil {
 			if label := strings.TrimSpace(ar.Artifact.Label); label != "" {
 				kind := strings.TrimSpace(ar.Artifact.Kind)
 				if kind != "" {
-					line += fmt.Sprintf(" (%s: %s)", kind, label)
+					line += fmt.Sprintf(", artifact=%s:%s", kind, label)
 				} else {
-					line += fmt.Sprintf(" (%s)", label)
+					line += fmt.Sprintf(", artifact=%s", label)
 				}
 			} else if kind := strings.TrimSpace(ar.Artifact.Kind); kind != "" {
-				line += fmt.Sprintf(" (%s)", kind)
+				line += fmt.Sprintf(", artifact=%s", kind)
 			}
+		}
+		if !ar.CreatedAt.IsZero() {
+			line += fmt.Sprintf(", observed=%s", ar.CreatedAt.Format("2006-01-02T15:04:05Z07:00"))
 		}
 		lines = append(lines, line)
 	}
@@ -140,12 +146,12 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 	}
 	if len(memory.LastActionResults) > 0 {
 		lines := make([]string, 0, len(memory.LastActionResults))
-		for _, result := range memory.LastActionResults {
+		for i, result := range memory.LastActionResults {
 			content := redactSensitiveForPrompt(result.Content)
 			if content == "" {
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("- %s: %s", strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
+			lines = append(lines, fmt.Sprintf("- %s %s: %s", actionResultRefLabel(memory.LastActionResults, i), strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
 		}
 		if len(lines) > 0 {
 			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
@@ -156,13 +162,58 @@ func sessionMemoryPrompt(memory sessions.SessionMemory) string {
 		for name, ref := range memory.FileRefs {
 			switch ref.Source {
 			case "local":
-				lines = append(lines, fmt.Sprintf("- %s: local file, path=%s", name, ref.Path))
+				lines = append(lines, fmt.Sprintf("- %s: local file label only; resolve again before using in a new tool call", name))
 			case "drive":
-				lines = append(lines, fmt.Sprintf("- %s: Google Drive file, driveId=%s", name, ref.DriveID))
+				lines = append(lines, fmt.Sprintf("- %s: Google Drive file label only; resolve again before using in a new tool call", name))
 			}
 		}
 		if len(lines) > 0 {
-			parts = append(parts, "Resolved file references (use these to attach files without re-resolving):\n"+strings.Join(lines, "\n"))
+			parts = append(parts, "Known file references (safe labels only; raw paths and Drive IDs are intentionally hidden from prompt context):\n"+strings.Join(lines, "\n"))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(`Session memory for understanding context only.
+Use this memory to answer follow-up questions and maintain conversational continuity.
+Do not use memory alone to fill required parameters for a new write, destructive, local file, or code execution action.
+If the current user message does not explicitly provide required write parameters, ask a concise clarification question.
+HARD RULE - chat.sendMessage recipients: For DM to a specific person, always use the recipientEmail parameter with their email address. Do NOT use chat.findSpacesByMembers or chat.createSpace separately for DM; chat.sendMessage handles find-or-create internally. For group chats, resolve the space name with chat.listSpaces and pass the spaces/... resource name in the space parameter. A spaces/... value from history must NEVER be reused as the destination for a different person.
+FILE REFS RULE - file reference labels in memory are context only. Do not use hidden local paths, Drive IDs, event IDs, message IDs, or space IDs from memory for a new tool call. Re-resolve the file/resource with the appropriate read tool unless the current user message supplies a fresh attachment/path/ID.
+
+` + strings.Join(parts, "\n\n"))
+}
+
+func sessionMemoryPromptLegacy(memory sessions.SessionMemory) string {
+	parts := []string{}
+	if summary := redactSensitiveForPrompt(memory.Summary); summary != "" {
+		parts = append(parts, "Conversation summary:\n"+summary)
+	}
+	if len(memory.LastActionResults) > 0 {
+		lines := make([]string, 0, len(memory.LastActionResults))
+		for i, result := range memory.LastActionResults {
+			content := redactSensitiveForPrompt(result.Content)
+			if content == "" {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("- %s %s: %s", actionResultRefLabel(memory.LastActionResults, i), strings.TrimSpace(result.ToolName), truncateToolContentForLLM(content)))
+		}
+		if len(lines) > 0 {
+			parts = append(parts, "Recent action results:\n"+strings.Join(lines, "\n"))
+		}
+	}
+	if len(memory.FileRefs) > 0 {
+		lines := make([]string, 0, len(memory.FileRefs))
+		for name, ref := range memory.FileRefs {
+			switch ref.Source {
+			case "local":
+				lines = append(lines, fmt.Sprintf("- %s: local file label only; resolve again before using in a new tool call", name))
+			case "drive":
+				lines = append(lines, fmt.Sprintf("- %s: Google Drive file label only; resolve again before using in a new tool call", name))
+			}
+		}
+		if len(lines) > 0 {
+			parts = append(parts, "Known file references (safe labels only; raw paths and Drive IDs are intentionally hidden from prompt context):\n"+strings.Join(lines, "\n"))
 		}
 	}
 	if len(parts) == 0 {
@@ -176,6 +227,13 @@ HARD RULE — chat.sendMessage recipients: For DM to a specific person, always u
 FILE REFS RULE — when "Resolved file references" lists a file by name: use the recorded source and path/driveId directly. Do NOT call filesystem.fileInfo or drive.listFiles again for that file unless the user says the file has changed.
 
 ` + strings.Join(parts, "\n\n"))
+}
+
+func actionResultRefLabel(results []sessions.ActionResult, index int) string {
+	if index < 0 || index >= len(results) {
+		return "[R?]"
+	}
+	return fmt.Sprintf("[R%d]", len(results)-index)
 }
 
 func historyWithSessionMemory(memory sessions.SessionMemory, history []string) []string {

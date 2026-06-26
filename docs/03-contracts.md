@@ -164,7 +164,7 @@ expired
 }
 ```
 
-Known artifact kinds in Sprint 1: `gmail.message`, `chat.message`, `calendar.event`.
+Known artifact kinds include `gmail.message`, `chat.message`, `calendar.event`, `google.meet.space`, `drive.file`, `docs.document`, and `sheets.spreadsheet`.
 
 `failureReason` is a machine-readable string populated on failed, blocked, expired, cancelled, or max-iteration responses. It is omitted when empty, including completed and approval-required responses. Values are typed constants from `orchestration.FailureReason`:
 
@@ -691,6 +691,15 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 
 > `calendar.createEvent` requires an explicit start date+time and an explicit end date+time or duration before approval. Date-only phrases such as `tomorrow` / `ngay mai` are not enough to infer a start time. If the user also asks to send an email about the event, Calendar attendees/invitations do not satisfy that separate Gmail action.
 > `calendar.updateEvent` preserves existing Calendar attendee RSVP state when adding attendees. Tool input `attendees` is treated as attendees to add, not a blind replacement list; RSVP changes must use `calendar.respondEvent`.
+> `calendar.createEvent` and `calendar.updateEvent` accept `createConference=true` to ask Google Calendar to generate a Google Meet link for the event. Tool input must not accept a caller-supplied `meetLink`; the link must come from the current Calendar API result. Adding Meet to an existing event is idempotent when the event already has a Meet link.
+
+### Google Meet
+
+| Tool | Owner | Risk | Approval |
+|---|---|---|---|
+| `meet.createMeeting` | Integration | `external_write` | Yes |
+
+> `meet.createMeeting` creates a standalone Google Meet space for later use or immediate sharing. Scheduled Calendar meetings must use `calendar.createEvent` with `createConference=true`, and adding Meet to an existing Calendar event must use `calendar.updateEvent` with `createConference=true`. Agent responses must not invent or reuse Meet links from older transcript/memory; share only links returned by the current Meet or Calendar tool result.
 
 ### Chat
 

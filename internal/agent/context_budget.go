@@ -263,13 +263,176 @@ func lineMatchesTerms(line string, terms []string) bool {
 	return false
 }
 
-// selectTranscriptWithinBudget keeps the most recent transcript messages that
+// selectTranscriptWithinBudget keeps recent transcript by atomic conversation
 // fit within budgetTokens, walking newest→oldest. Oversized individual messages
 // are truncated (user/assistant by token budget, tool messages by the existing
 // byte cap) rather than dropped outright. The current (latest) user message is
 // always retained, truncated if necessary, so the model never loses the request
 // it must answer. Returned messages are in chronological order.
+// selectTranscriptWithinBudget keeps recent transcript by atomic conversation
+// blocks. Assistant tool-call messages and their immediate tool results are kept
+// together so context trimming cannot create invalid provider history.
 func selectTranscriptWithinBudget(transcript []providers.Message, budgetTokens int) []providers.Message {
+	if len(transcript) == 0 {
+		return nil
+	}
+	if budgetTokens < 0 {
+		budgetTokens = 0
+	}
+
+	blocks, latestUserBlock := transcriptBlocks(transcript)
+	if len(blocks) == 0 {
+		return nil
+	}
+	selected := make([]bool, len(blocks))
+	used := 0
+
+	if latestUserBlock >= 0 {
+		block, ok := fitTranscriptBlock(blocks[latestUserBlock], budgetTokens)
+		if ok {
+			blocks[latestUserBlock] = block
+			selected[latestUserBlock] = true
+			used += messageCost(block.messages)
+		}
+	}
+
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if selected[i] {
+			continue
+		}
+		remaining := budgetTokens - used
+		if remaining <= 0 {
+			break
+		}
+		block, ok := fitTranscriptBlock(blocks[i], remaining)
+		if !ok {
+			continue
+		}
+		blocks[i] = block
+		selected[i] = true
+		used += messageCost(block.messages)
+	}
+
+	out := make([]providers.Message, 0, len(transcript))
+	for i, block := range blocks {
+		if !selected[i] {
+			continue
+		}
+		out = append(out, block.messages...)
+	}
+	return out
+}
+
+type transcriptBlock struct {
+	messages []providers.Message
+}
+
+func transcriptBlocks(transcript []providers.Message) ([]transcriptBlock, int) {
+	blocks := make([]transcriptBlock, 0, len(transcript))
+	latestUserBlock := -1
+	for i := 0; i < len(transcript); {
+		message := cloneProviderMessages([]providers.Message{transcript[i]})[0]
+		if message.Role == providers.MessageRoleAssistant && len(message.ToolCalls) > 0 {
+			block := transcriptBlock{messages: []providers.Message{message}}
+			i++
+			for i < len(transcript) && transcript[i].Role == providers.MessageRoleTool {
+				block.messages = append(block.messages, cloneProviderMessages([]providers.Message{transcript[i]})[0])
+				i++
+			}
+			blocks = append(blocks, block)
+			continue
+		}
+		if message.Role == providers.MessageRoleTool {
+			i++
+			continue
+		}
+		block := transcriptBlock{messages: []providers.Message{message}}
+		if message.Role == providers.MessageRoleUser {
+			latestUserBlock = len(blocks)
+		}
+		blocks = append(blocks, block)
+		i++
+	}
+	return blocks, latestUserBlock
+}
+
+func fitTranscriptBlock(block transcriptBlock, budgetTokens int) (transcriptBlock, bool) {
+	if budgetTokens <= 0 || len(block.messages) == 0 {
+		return transcriptBlock{}, false
+	}
+	block.messages = cloneProviderMessages(block.messages)
+	normalizeToolResultContent(block.messages)
+	if messageCost(block.messages) <= budgetTokens {
+		return block, true
+	}
+	if isPlainTextBlock(block) {
+		block.messages[0].Content = truncateToTokenBudget(block.messages[0].Content, budgetTokens)
+		return block, strings.TrimSpace(block.messages[0].Content) != ""
+	}
+	if isToolCallBlock(block) {
+		block = truncateToolCallBlock(block, budgetTokens)
+		return block, messageCost(block.messages) <= budgetTokens
+	}
+	return transcriptBlock{}, false
+}
+
+func normalizeToolResultContent(messages []providers.Message) {
+	for i := range messages {
+		if messages[i].Role == providers.MessageRoleTool {
+			messages[i].Content = truncateStringBytes(strings.TrimSpace(messages[i].Content), 1600)
+		}
+	}
+}
+
+func truncateToolCallBlock(block transcriptBlock, budgetTokens int) transcriptBlock {
+	toolIndexes := make([]int, 0, len(block.messages))
+	for i := range block.messages {
+		if block.messages[i].Role == providers.MessageRoleTool {
+			toolIndexes = append(toolIndexes, i)
+		}
+	}
+	if len(toolIndexes) == 0 {
+		return block
+	}
+	assistantCost := messageCost([]providers.Message{block.messages[0]})
+	remaining := budgetTokens - assistantCost
+	if remaining < len(toolIndexes) {
+		remaining = len(toolIndexes)
+	}
+	perTool := remaining / len(toolIndexes)
+	if perTool < 1 {
+		perTool = 1
+	}
+	for _, idx := range toolIndexes {
+		block.messages[idx].Content = truncateToTokenBudget(block.messages[idx].Content, perTool)
+		if strings.TrimSpace(block.messages[idx].Content) == "" {
+			block.messages[idx].Content = "[tool result omitted to fit context budget]"
+		}
+	}
+	return block
+}
+
+func isPlainTextBlock(block transcriptBlock) bool {
+	return len(block.messages) == 1 &&
+		block.messages[0].Role != providers.MessageRoleTool &&
+		len(block.messages[0].ToolCalls) == 0
+}
+
+func isToolCallBlock(block transcriptBlock) bool {
+	return len(block.messages) > 0 &&
+		block.messages[0].Role == providers.MessageRoleAssistant &&
+		len(block.messages[0].ToolCalls) > 0
+}
+
+func messageCost(messages []providers.Message) int {
+	c := sessions.EstimateMessagesTokens(messages)
+	if c == 0 && len(messages) > 0 {
+		return 1
+	}
+	return c
+}
+
+func selectTranscriptWithinBudgetLegacy(transcript []providers.Message, budgetTokens int) []providers.Message {
 	if len(transcript) == 0 {
 		return nil
 	}

@@ -12,8 +12,10 @@ import (
 )
 
 const usdToVnd = 25700.0
-const maxTelegramStatusRunes = 3200
-const maxStatusStepRunes = 220
+const maxTelegramStatusRunes = 1600
+const maxStatusGoalRunes = 180
+const maxStatusStepRunes = 140
+const maxStatusResultLines = 3
 const maxStatusListItems = 8
 
 var statusEmailItemPattern = regexp.MustCompile(`(?m)^\d+\.\s+Từ:`)
@@ -75,31 +77,17 @@ func FormatStatus(run *agent.RunState) string {
 		formatCostLine(run.CostUSD),
 		"",
 		"📝 *Yêu cầu*",
-		escapeTelegramMarkdown(textOrFallback(run.OriginalGoal, "(không có dữ liệu)")),
+		escapeTelegramMarkdown(statusGoalText(run)),
 		"",
 		"📌 *Kết quả*",
 	}
 
-	if len(run.Steps) == 0 {
+	resultLines := statusResultLines(run)
+	if len(resultLines) == 0 {
 		lines = append(lines, "_(chưa có dữ liệu bước)_")
 	} else {
-		for _, step := range run.Steps {
-			prefix := "✅"
-			if !step.OK {
-				prefix = "❌"
-			}
-			texts := summarizeStatusStepText(step.Text)
-			if len(texts) == 0 {
-				texts = []string{"(không có nội dung)"}
-			}
-				for i, text := range texts {
-					text = truncateRune(text, maxStatusStepRunes)
-					if i == 0 {
-						lines = append(lines, fmt.Sprintf("%s %s", prefix, escapeTelegramMarkdown(text)))
-						continue
-					}
-					lines = append(lines, "   "+escapeTelegramMarkdown(text))
-			}
+		for _, resultLine := range resultLines {
+			lines = append(lines, escapeTelegramMarkdown(resultLine))
 		}
 	}
 
@@ -112,6 +100,72 @@ func FormatStatus(run *agent.RunState) string {
 	}
 
 	return trimTelegramStatusText(strings.Join(lines, "\n"))
+}
+
+func statusGoalText(run *agent.RunState) string {
+	if run == nil {
+		return "(không có dữ liệu)"
+	}
+	for _, candidate := range []string{run.ShortLabel, run.OriginalGoal} {
+		text := sanitizeStatusPlainText(candidate)
+		if text == "" || looksLikeInternalStatusText(text) {
+			continue
+		}
+		return truncateRune(text, maxStatusGoalRunes)
+	}
+	return "(không có dữ liệu)"
+}
+
+func statusResultLines(run *agent.RunState) []string {
+	if run == nil || len(run.Steps) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, maxStatusResultLines)
+	for _, step := range run.Steps {
+		prefix := "✅"
+		if !step.OK {
+			prefix = "❌"
+		}
+		texts := summarizeStatusStepText(step.Text)
+		texts = compactStatusSummaryLines(texts, maxStatusResultLines-len(lines))
+		for _, text := range texts {
+			text = sanitizeStatusPlainText(text)
+			if text == "" || looksLikeInternalStatusText(text) {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%s %s", prefix, truncateRune(text, maxStatusStepRunes)))
+			if len(lines) >= maxStatusResultLines {
+				return lines
+			}
+		}
+	}
+	return lines
+}
+
+func compactStatusSummaryLines(lines []string, remaining int) []string {
+	if remaining <= 0 || len(lines) == 0 {
+		return nil
+	}
+	if len(lines) <= remaining {
+		return lines
+	}
+	if remaining == 1 {
+		if isStatusMoreItemsLine(lines[len(lines)-1]) {
+			return []string{lines[len(lines)-1]}
+		}
+		return lines[:1]
+	}
+	out := append([]string{}, lines[:remaining-1]...)
+	if isStatusMoreItemsLine(lines[len(lines)-1]) {
+		out = append(out, lines[len(lines)-1])
+	} else {
+		out = append(out, lines[remaining-1])
+	}
+	return out
+}
+
+func isStatusMoreItemsLine(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "...và ")
 }
 
 func FormatHistory(runs []*agent.RunState, now time.Time) string {
@@ -180,6 +234,20 @@ func textOrFallback(value string, fallback string) string {
 	return strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
 }
 
+func sanitizeStatusPlainText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Join(fields, " ")
+}
+
 func summarizeStatusStepText(text string) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -191,7 +259,56 @@ func summarizeStatusStepText(text string) []string {
 	if lines := summarizeStructuredStatusText(text); len(lines) > 0 {
 		return lines
 	}
+	if line := summarizePlainStatusStepText(text); line != "" {
+		return []string{line}
+	}
 	return []string{text}
+}
+
+func summarizePlainStatusStepText(text string) string {
+	plain := sanitizeStatusPlainText(text)
+	if plain == "" || looksLikeInternalStatusText(plain) {
+		return ""
+	}
+	lower := strings.ToLower(plain)
+	switch {
+	case strings.Contains(lower, "gmail draft") || strings.Contains(lower, "bản nháp email") || strings.Contains(lower, "draft email"):
+		return "Đã tạo bản nháp email"
+	case strings.Contains(lower, "calendar") && (strings.Contains(lower, "create") || strings.Contains(lower, "tạo sự kiện")):
+		return "Đã tạo sự kiện Calendar"
+	case strings.Contains(lower, "calendar") && (strings.Contains(lower, "update") || strings.Contains(lower, "sửa sự kiện") || strings.Contains(lower, "cập nhật sự kiện")):
+		return "Đã cập nhật sự kiện Calendar"
+	case strings.Contains(lower, "chat") && (strings.Contains(lower, "send") || strings.Contains(lower, "gửi tin nhắn")):
+		return "Đã gửi tin nhắn Google Chat"
+	case strings.Contains(lower, "drive") && (strings.Contains(lower, "upload") || strings.Contains(lower, "tải lên")):
+		return "Đã upload file lên Google Drive"
+	case strings.Contains(lower, "đã hoàn tất") || strings.Contains(lower, "đã tạo") || strings.Contains(lower, "đã gửi") || strings.Contains(lower, "đã cập nhật"):
+		return plain
+	default:
+		return plain
+	}
+}
+
+func looksLikeInternalStatusText(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"the current user message is",
+		"current task attachments",
+		"recent_history",
+		"original request:",
+		"assistant answer:",
+		"return json with this shape",
+		"linked knowledge context",
+		"system prompt",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func summarizeFriendlyEmailListText(text string) []string {

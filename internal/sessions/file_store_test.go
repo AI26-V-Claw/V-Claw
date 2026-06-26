@@ -2,6 +2,8 @@ package sessions
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -74,6 +76,31 @@ func TestFileStoreMemoryPersistsAcrossInstances(t *testing.T) {
 	}
 }
 
+func TestFileStoreLoadMemoryAcceptsUTF8BOM(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	sessionDir := filepath.Join(dir, "sessions", "sess")
+	if err := os.MkdirAll(sessionDir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"summary":"bom summary"}`)...)
+	if err := os.WriteFile(filepath.Join(sessionDir, "memory.json"), data, 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	loaded, err := store.LoadMemory(ctx, "sess")
+	if err != nil {
+		t.Fatalf("LoadMemory: %v", err)
+	}
+	if loaded.Summary != "bom summary" {
+		t.Fatalf("expected BOM memory to load, got %q", loaded.Summary)
+	}
+}
+
 func TestFileStoreSaveMemoryOverwritesExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -92,6 +119,31 @@ func TestFileStoreSaveMemoryOverwritesExistingFile(t *testing.T) {
 	}
 	if loaded.Summary != "second" {
 		t.Fatalf("expected overwritten summary, got %q", loaded.Summary)
+	}
+}
+
+func TestFileStoreLoadTranscriptAcceptsUTF8BOM(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	sessionDir := filepath.Join(dir, "sessions", "sess")
+	if err := os.MkdirAll(sessionDir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`[{"role":"user","content":"hello"}]`)...)
+	if err := os.WriteFile(filepath.Join(sessionDir, "transcript.json"), data, 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	messages, err := store.LoadTranscript(ctx, "sess")
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Content != "hello" {
+		t.Fatalf("expected BOM transcript to load, got %#v", messages)
 	}
 }
 
