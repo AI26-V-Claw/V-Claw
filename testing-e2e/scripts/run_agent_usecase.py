@@ -22,7 +22,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_USECASE = REPO_ROOT / "testing-e2e" / "usecases"
 DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "usecases"
 DEFAULT_SESSION_SEEDS = REPO_ROOT / "testing-e2e" / "sessions"
-DEFAULT_FIXTURES_DIR = REPO_ROOT / "testing-e2e" / "fixtures"
 DEFAULT_SANDBOX_WORKSPACE_DIR = REPO_ROOT / ".sandbox-workspace"
 E2E_ATTACHMENT_DIR = Path("data") / "e2e_attachments"
 ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -522,15 +521,19 @@ def resolve_attachment_source(path_text: str, usecase_path: Path) -> Path:
     if expanded.is_absolute():
         return expanded
 
-    fixture_path = DEFAULT_FIXTURES_DIR / usecase_path.stem / path_text
-    if fixture_path.exists():
-        return fixture_path
-
-    usecase_asset_path = usecase_path.parent / usecase_path.stem / path_text
-    if usecase_asset_path.exists():
-        return usecase_asset_path
+    usecase_relative_path = usecase_path.parent / path_text
+    if usecase_relative_path.exists():
+        return usecase_relative_path
 
     return REPO_ROOT / path_text
+
+
+def path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def unique_attachment_destination(destination_dir: Path, filename: str, used: set[str]) -> Path:
@@ -557,8 +560,8 @@ def prepare_step_attachments(
         return []
 
     usecase_name = sanitize_path_component(usecase_path.stem)
-    destination_dir = sandbox_workspace_root() / E2E_ATTACHMENT_DIR / usecase_name
-    destination_dir.mkdir(parents=True, exist_ok=True)
+    workspace_root = sandbox_workspace_root().resolve()
+    destination_dir = workspace_root / E2E_ATTACHMENT_DIR / usecase_name
 
     attachments: list[dict[str, Any]] = []
     for index, spec in enumerate(specs, start=1):
@@ -586,11 +589,17 @@ def prepare_step_attachments(
         filename = expand_vars(filename, variables).strip() if filename else source_path.name
         if not mime_type:
             mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        destination = unique_attachment_destination(destination_dir, filename, used_names)
-        shutil.copy2(source_path, destination)
+
+        if path_is_within(source_path, workspace_root):
+            agent_path = source_path
+        else:
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            agent_path = unique_attachment_destination(destination_dir, filename, used_names)
+            shutil.copy2(source_path, agent_path)
+
         attachments.append({
-            "path": str(destination.resolve()),
-            "filename": destination.name,
+            "path": str(agent_path.resolve()),
+            "filename": agent_path.name,
             "mimeType": mime_type,
             "source": display_path(source_path),
         })
