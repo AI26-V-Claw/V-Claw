@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"unicode/utf8"
 
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/providers"
@@ -25,17 +26,22 @@ func executeToolSafely(ctx context.Context, tool tools.Tool, toolCall tools.Tool
 
 func truncateToolContentForLLM(content string) string {
 	if len(content) <= maxToolContentForLLM {
-		return content
+		return strings.ToValidUTF8(content, "")
 	}
 
-	return content[:maxToolContentForLLM] + fmt.Sprintf("\n...[truncated %d bytes]", len(content)-maxToolContentForLLM)
+	return truncateStringBytes(content, maxToolContentForLLM)
 }
 
 func truncateStringBytes(content string, limit int) string {
 	if limit <= 0 || len(content) <= limit {
-		return content
+		return strings.ToValidUTF8(content, "")
 	}
-	return content[:limit] + fmt.Sprintf("\n...[truncated %d bytes]", len(content)-limit)
+	cut := limit
+	for cut > 0 && !utf8.ValidString(content[:cut]) {
+		cut--
+	}
+	prefix := strings.ToValidUTF8(content[:cut], "")
+	return prefix + fmt.Sprintf("\n...[truncated %d bytes]", len(content)-cut)
 }
 
 func extractPlannerJSONObject(text string) string {
@@ -82,26 +88,6 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 		cloned[i].ToolCalls = cloneProviderToolCalls(message.ToolCalls)
 	}
 	return cloned
-}
-
-func compactProviderTranscriptForPrompt(transcript []providers.Message) []providers.Message {
-	const maxMessages = 12
-	const maxToolContent = 1600
-
-	if len(transcript) == 0 {
-		return nil
-	}
-	start := 0
-	if len(transcript) > maxMessages {
-		start = len(transcript) - maxMessages
-	}
-	compacted := cloneProviderMessages(transcript[start:])
-	for i := range compacted {
-		if compacted[i].Role == providers.MessageRoleTool {
-			compacted[i].Content = truncateStringBytes(strings.TrimSpace(compacted[i].Content), maxToolContent)
-		}
-	}
-	return compacted
 }
 
 func sanitizeProviderTranscriptForToolProtocol(messages []providers.Message) []providers.Message {

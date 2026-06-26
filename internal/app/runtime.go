@@ -18,6 +18,7 @@ import (
 	gdocs "vclaw/internal/connectors/google/docs"
 	gdrive "vclaw/internal/connectors/google/drive"
 	ggmail "vclaw/internal/connectors/google/gmail"
+	gmeet "vclaw/internal/connectors/google/meet"
 	googleoauth "vclaw/internal/connectors/google/oauth"
 	gpeople "vclaw/internal/connectors/google/people"
 	gsheets "vclaw/internal/connectors/google/sheets"
@@ -41,6 +42,7 @@ import (
 	docstool "vclaw/internal/tools/office/docs"
 	drivetool "vclaw/internal/tools/office/drive"
 	gmailtool "vclaw/internal/tools/office/gmail"
+	meettool "vclaw/internal/tools/office/meet"
 	peopletool "vclaw/internal/tools/office/people"
 	sheetstool "vclaw/internal/tools/office/sheets"
 	fstool "vclaw/internal/tools/os/filesystem"
@@ -49,9 +51,10 @@ import (
 )
 
 const (
-	ToolModeAuto     = "auto"
-	ToolModeRequired = "required"
-	ToolModeOff      = "off"
+	ToolModeAuto          = "auto"
+	ToolModeRequired      = "required"
+	ToolModeOff           = "off"
+	defaultCompactorModel = "gpt-4o-mini"
 )
 
 type AgentRuntimeConfig struct {
@@ -208,10 +211,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		return RuntimeBundle{}, fmt.Errorf("load user policy config: %w", err)
 	}
 
-	compactorModel := strings.TrimSpace(config.CompactorModel)
-	if compactorModel == "" {
-		compactorModel = model
-	}
+	compactorModel := resolveCompactorModel(config.CompactorModel)
 	compactor := sessions.NewCompactor(provider, sessions.CompactorConfig{
 		SummarizeModel: compactorModel,
 	}, config.Logger)
@@ -297,6 +297,14 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		GoogleOAuthConfigured: googleOAuthConfigured(config),
 		TavilyConfigured:      strings.TrimSpace(config.TavilyAPIKey) != "",
 	}, nil
+}
+
+func resolveCompactorModel(override string) string {
+	model := strings.TrimSpace(override)
+	if model != "" {
+		return model
+	}
+	return defaultCompactorModel
 }
 
 func persistToolRegistry(ctx context.Context, registry *tools.ToolRegistry, stores ...any) error {
@@ -431,6 +439,9 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	calendarSvc := calendartool.NewService(calendarClient)
 	if err := calendartool.RegisterTools(registry, calendarSvc); err != nil {
 		return skillbuiltin.WorkspaceServices{}, err
+	}
+	if err := meettool.RegisterTools(registry, meettool.NewService(gmeet.NewClient(httpClient))); err != nil {
+		return err
 	}
 	peopleClient := gpeople.NewClient(httpClient)
 	chatSvc := chattool.NewServiceWithPeople(gchat.NewClient(httpClient), peopleClient)

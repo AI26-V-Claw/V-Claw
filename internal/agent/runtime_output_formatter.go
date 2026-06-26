@@ -13,6 +13,9 @@ func renderAssistantMessage(message string, results []contracts.ToolResult) stri
 	if message == "" {
 		return ""
 	}
+	if rendered := preferredGmailListFallback(message, results); rendered != "" {
+		return rendered
+	}
 	if looksLikeMachinePayload(message) {
 		for i := len(results) - 1; i >= 0; i-- {
 			if !results[i].Success {
@@ -37,6 +40,35 @@ func renderAssistantMessage(message string, results []contracts.ToolResult) stri
 	}
 	message = sanitizeDeliveryClaimsForResults(message, results)
 	return formatOutboundText(message)
+}
+
+func preferredGmailListFallback(message string, results []contracts.ToolResult) string {
+	if strings.TrimSpace(message) == "" {
+		return ""
+	}
+	successful := 0
+	hasSingleGmailList := false
+	for _, result := range results {
+		if result.Success {
+			successful++
+			if strings.TrimSpace(result.ToolName) == "gmail.listEmails" {
+				hasSingleGmailList = true
+			}
+		}
+	}
+	if successful != 1 || !hasSingleGmailList {
+		return ""
+	}
+	for _, result := range results {
+		if !result.Success || strings.TrimSpace(result.ToolName) != "gmail.listEmails" {
+			continue
+		}
+		rendered := renderToolResultForUser(result)
+		if strings.TrimSpace(rendered) != "" {
+			return rendered
+		}
+	}
+	return ""
 }
 
 func sanitizeDeliveryClaimsForResults(message string, results []contracts.ToolResult) string {

@@ -1,6 +1,10 @@
 package calendar
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"strings"
 	"time"
 
 	gcal "google.golang.org/api/calendar/v3"
@@ -8,18 +12,20 @@ import (
 
 // Event represents a domain calendar event used by the tools layer.
 type Event struct {
-	ID          string
-	Title       string
-	Description string
-	Location    string
-	StartTime   time.Time
-	EndTime     time.Time
-	Attendees   []Attendee
-	Organizer   Person
-	Creator     Person
-	EventLink   string
-	MeetLink    string
-	IsRecurring bool
+	ID               string
+	Title            string
+	Description      string
+	Location         string
+	StartTime        time.Time
+	EndTime          time.Time
+	Attendees        []Attendee
+	Organizer        Person
+	Creator          Person
+	EventLink        string
+	MeetLink         string
+	CreateConference bool
+	ConferenceStatus string
+	IsRecurring      bool
 }
 
 // Attendee represents a participant in a calendar event.
@@ -73,19 +79,36 @@ func toDomainEvent(gEvent *gcal.Event) Event {
 		}
 	}
 
+	meetLink := strings.TrimSpace(gEvent.HangoutLink)
+	conferenceStatus := ""
+	if gEvent.ConferenceData != nil {
+		if meetLink == "" {
+			for _, entry := range gEvent.ConferenceData.EntryPoints {
+				if entry != nil && entry.EntryPointType == "video" && strings.TrimSpace(entry.Uri) != "" {
+					meetLink = strings.TrimSpace(entry.Uri)
+					break
+				}
+			}
+		}
+		if gEvent.ConferenceData.CreateRequest != nil && gEvent.ConferenceData.CreateRequest.Status != nil {
+			conferenceStatus = gEvent.ConferenceData.CreateRequest.Status.StatusCode
+		}
+	}
+
 	return Event{
-		ID:          gEvent.Id,
-		Title:       gEvent.Summary,
-		Description: gEvent.Description,
-		Location:    gEvent.Location,
-		StartTime:   startTime,
-		EndTime:     endTime,
-		Attendees:   attendees,
-		Organizer:   toPerson(gEvent.Organizer),
-		Creator:     toPerson(gEvent.Creator),
-		EventLink:   gEvent.HtmlLink,
-		MeetLink:    gEvent.HangoutLink,
-		IsRecurring: len(gEvent.Recurrence) > 0 || gEvent.RecurringEventId != "",
+		ID:               gEvent.Id,
+		Title:            gEvent.Summary,
+		Description:      gEvent.Description,
+		Location:         gEvent.Location,
+		StartTime:        startTime,
+		EndTime:          endTime,
+		Attendees:        attendees,
+		Organizer:        toPerson(gEvent.Organizer),
+		Creator:          toPerson(gEvent.Creator),
+		EventLink:        gEvent.HtmlLink,
+		MeetLink:         meetLink,
+		ConferenceStatus: conferenceStatus,
+		IsRecurring:      len(gEvent.Recurrence) > 0 || gEvent.RecurringEventId != "",
 	}
 }
 
@@ -133,6 +156,22 @@ func toGoogleEvent(e Event) *gcal.Event {
 			ResponseStatus: a.ResponseStatus,
 		})
 	}
+	if e.CreateConference {
+		gEvent.ConferenceData = &gcal.ConferenceData{
+			CreateRequest: &gcal.CreateConferenceRequest{
+				RequestId:             newConferenceRequestID(),
+				ConferenceSolutionKey: &gcal.ConferenceSolutionKey{Type: "hangoutsMeet"},
+			},
+		}
+	}
 
 	return gEvent
+}
+
+func newConferenceRequestID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return "vclaw-" + hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("vclaw-%d", time.Now().UnixNano())
 }

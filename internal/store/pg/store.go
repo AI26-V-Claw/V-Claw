@@ -76,6 +76,7 @@ func applyEmbeddedMigrations(ctx context.Context, db *sql.DB) error {
 }
 
 func (s *Store) CreateRun(ctx context.Context, state agent.RunState) error {
+	state = sanitizeRunStateText(state)
 	if err := s.upsertRun(ctx, state); err != nil {
 		return err
 	}
@@ -107,6 +108,7 @@ func (s *Store) GetRun(ctx context.Context, runID string) (agent.RunState, error
 }
 
 func (s *Store) UpdateRun(ctx context.Context, state agent.RunState) error {
+	state = sanitizeRunStateText(state)
 	data := state.Data
 	if data == nil {
 		data = map[string]any{}
@@ -165,6 +167,18 @@ func (s *Store) UpdateRun(ctx context.Context, state agent.RunState) error {
 		},
 		Timestamp: zeroNow(state.UpdatedAt),
 	})
+}
+
+func sanitizeRunStateText(state agent.RunState) agent.RunState {
+	state.SessionID = strings.ToValidUTF8(state.SessionID, "")
+	state.RequestID = strings.ToValidUTF8(state.RequestID, "")
+	state.OriginalGoal = strings.ToValidUTF8(state.OriginalGoal, "")
+	state.ShortLabel = strings.ToValidUTF8(state.ShortLabel, "")
+	state.Category = strings.ToValidUTF8(state.Category, "")
+	state.ErrorRef = strings.ToValidUTF8(state.ErrorRef, "")
+	state.Model = strings.ToValidUTF8(state.Model, "")
+	state.PromptVersion = strings.ToValidUTF8(state.PromptVersion, "")
+	return state
 }
 
 // runStatusEventType maps a terminal run status to the contract run event

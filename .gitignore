@@ -65,5 +65,7 @@ docs/superpowers/
 
 .gocache2/
 .gocache/
+# Runtime CSV logs
+logs/*.csv
 
 __pycache__
