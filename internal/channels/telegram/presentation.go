@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"vclaw/internal/agent"
 	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
 	"vclaw/internal/traceutil"
@@ -219,7 +220,12 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 	}
 
 	switch response.Status {
-	case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusIterationBudgetExhausted:
+	case contracts.AgentStatusBlocked, contracts.AgentStatusIterationBudgetExhausted, contracts.AgentStatusCancelled:
+		if reason := agent.ExitReason(response); reason != "" {
+			return sanitizeTelegramResponseText(reason)
+		}
+		return telegramGenericErrorText()
+	case contracts.AgentStatusFailed:
 		return telegramGenericErrorText()
 	case contracts.AgentStatusApprovalRequired:
 		if response.ApprovalRequest != nil {

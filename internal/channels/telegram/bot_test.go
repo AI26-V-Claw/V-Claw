@@ -20,16 +20,18 @@ import (
 )
 
 type fakeHandler struct {
-	calls        int
-	ignored      int
-	finalized    int
-	received     contracts.UserMessage
-	receivedAll  []contracts.UserMessage
-	resetSession string
-	outbound     contracts.AgentResponse
-	progress     []agent.ProgressEvent
-	handleErr    error
-	finalizedErr error
+	calls         int
+	ignored       int
+	finalized     int
+	received      contracts.UserMessage
+	receivedAll   []contracts.UserMessage
+	resetSession  string
+	cancelSession string
+	cancelled     bool
+	outbound      contracts.AgentResponse
+	progress      []agent.ProgressEvent
+	handleErr     error
+	finalizedErr  error
 }
 
 func ptrTime(t time.Time) *time.Time {
@@ -216,6 +218,11 @@ func (f *fakeHandler) HandleMessage(ctx context.Context, message contracts.UserM
 func (f *fakeHandler) ResetSession(_ context.Context, sessionID string) error {
 	f.resetSession = sessionID
 	return nil
+}
+
+func (f *fakeHandler) CancelSession(sessionID string) bool {
+	f.cancelSession = sessionID
+	return f.cancelled
 }
 
 func (f *fakeHandler) FinalizeAudit(_ contracts.UserMessage, err error) {
@@ -477,6 +484,73 @@ func TestIsTelegramNewCommand(t *testing.T) {
 		if isTelegramNewCommand(input) {
 			t.Fatalf("unexpected match for %q", input)
 		}
+	}
+}
+
+func TestIsTelegramCancelCommandMatchesStop(t *testing.T) {
+	for _, input := range []string{"/stop", "/stop@vclaw_bot", "/stop now", "/cancel"} {
+		if !isTelegramCancelCommand(input) {
+			t.Fatalf("expected %q to match cancel command", input)
+		}
+	}
+	for _, input := range []string{"stop", "cancel", "/other"} {
+		if isTelegramCancelCommand(input) {
+			t.Fatalf("unexpected cancel match for %q", input)
+		}
+	}
+}
+
+func TestProcessUpdateRoutesStopCommandToCancelSession(t *testing.T) {
+	handler := &fakeHandler{cancelled: true}
+	var sentText string
+	bot := New("token", 123, t.TempDir(), nil, handler, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			t.Fatalf("unexpected telegram path: %s", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		sentText = fmt.Sprint(payload["text"])
+		return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
+	})}
+
+	processed, err := bot.processUpdate(context.Background(), telegramUpdate{
+		UpdateID: 24,
+		Message: &telegramMessage{
+			From: &telegramUser{ID: 123},
+			Chat: telegramChat{ID: 55},
+			Text: "/stop",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdate() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected update to be processed")
+	}
+	if handler.cancelSession != "telegram_chat_55" {
+		t.Fatalf("expected cancel for active telegram session, got %q", handler.cancelSession)
+	}
+	if handler.calls != 0 {
+		t.Fatalf("/stop should not call HandleMessage, got %d calls", handler.calls)
+	}
+	if !strings.Contains(sentText, "Đã hủy lệnh đang chạy") {
+		t.Fatalf("unexpected stop confirmation: %q", sentText)
+	}
+}
+
+func TestTelegramTextFromResponseUsesExitReason(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusIterationBudgetExhausted,
+		Data: map[string]any{
+			"iteration_used":  8,
+			"iteration_limit": 8,
+		},
+	})
+	if !strings.Contains(text, "8/8") {
+		t.Fatalf("expected iteration budget detail, got %q", text)
 	}
 }
 

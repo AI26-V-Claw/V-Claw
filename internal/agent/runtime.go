@@ -1285,14 +1285,23 @@ If required information is missing, ask one concise clarification question inste
 		return base, nil
 	}
 	base.FailureReason = updatedState.FailureReason
+	budgetData := r.traceData(referenceResolution)
+	budgetData["iteration_used"] = iterationBudget.Used()
+	budgetData["iteration_limit"] = iterationBudget.MaxTotal()
+	emitProgress(ctx, ProgressEvent{
+		Stage:   ProgressStageBudgetCut,
+		Message: "iteration budget exhausted",
+		Meta:    map[string]any{"used": iterationBudget.Used(), "limit": iterationBudget.MaxTotal()},
+	})
 	return contracts.AgentResponse{
 		RequestID:     message.RequestID,
 		SessionID:     message.SessionID,
 		Status:        contracts.AgentStatusIterationBudgetExhausted,
 		FailureReason: updatedState.FailureReason,
 		Message:       "agent exhausted iteration budget",
-		Data:          r.traceData(referenceResolution),
+		Data:          budgetData,
 		ToolResults:   toolResults,
+		Plan:          r.responsePlan(message.SessionID, runState.RunID),
 		Error: &contracts.ErrorShape{
 			Code:      contracts.ErrorIterationBudgetExhausted,
 			Message:   "agent exhausted iteration budget",
@@ -1343,8 +1352,9 @@ func (r *Runtime) handleContextError(ctx context.Context, runState RunState, too
 	messageText := "request timed out"
 	if errors.Is(err, context.Canceled) {
 		runStatus = RuntimeRunStatusCancelled
-		statusCode = contracts.ErrorInternal
-		messageText = "request canceled"
+		statusCode = contracts.ErrorCancelled
+		messageText = "run cancelled by user"
+		emitProgress(ctx, ProgressEvent{Stage: ProgressStageCancelled, Message: messageText})
 	}
 
 	contextReason := orchestration.FromContextError(err)
@@ -1354,9 +1364,10 @@ func (r *Runtime) handleContextError(ctx context.Context, runState RunState, too
 	}
 
 	return &contracts.AgentResponse{
-		Status:        contracts.AgentStatusFailed,
+		Status:        agentStatusForRunStatus(runStatus),
 		FailureReason: updatedState.FailureReason,
 		ToolResults:   toolResults,
+		Plan:          r.responsePlan(runState.SessionID, runState.RunID),
 		Error: &contracts.ErrorShape{
 			Code:      statusCode,
 			Message:   messageText,

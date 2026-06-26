@@ -2,14 +2,50 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"vclaw/internal/contracts"
 )
+
+type blockingChatMessenger struct {
+	started   chan struct{}
+	release   chan struct{}
+	cancelled chan string
+	onStarted sync.Once
+	response  contracts.AgentResponse
+}
+
+func newBlockingChatMessenger() *blockingChatMessenger {
+	return &blockingChatMessenger{
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+		cancelled: make(chan string, 1),
+	}
+}
+
+func (m *blockingChatMessenger) HandleMessage(ctx context.Context, msg contracts.UserMessage) (contracts.AgentResponse, error) {
+	m.onStarted.Do(func() { close(m.started) })
+	select {
+	case <-m.release:
+		if m.response.Status != "" || m.response.Message != "" || m.response.Output != nil {
+			return m.response, nil
+		}
+		return contracts.AgentResponse{Status: contracts.AgentStatusCompleted, Message: "done"}, nil
+	case <-ctx.Done():
+		return contracts.AgentResponse{Status: contracts.AgentStatusCancelled}, nil
+	}
+}
+
+func (m *blockingChatMessenger) CancelSession(sessionID string) bool {
+	m.cancelled <- sessionID
+	return true
+}
 
 func TestPrintAgentResponseUsesUserOutputByDefault(t *testing.T) {
 	stdout, stderr := captureStdStreams(t, func() {
@@ -167,6 +203,177 @@ func TestPrintAgentResponseTraceModeIncludesStatus(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Tool results:") {
 		t.Fatalf("expected trace tool results, got %q", stdout)
+	}
+}
+
+func TestPrintAgentResponsePrintsExitReasonWithIterationCount(t *testing.T) {
+	_, stderr := captureStdStreams(t, func() {
+		printAgentResponse(contracts.AgentResponse{
+			Status: contracts.AgentStatusIterationBudgetExhausted,
+			Data: map[string]any{
+				"iteration_used":  8,
+				"iteration_limit": 8,
+			},
+		}, false, false)
+	})
+
+	for _, want := range []string{"[exit]", "8/8", "ngân sách xử lý"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("expected stderr to contain %q, got %q", want, stderr)
+		}
+	}
+}
+
+func TestPrintAgentResponsePrintsCurrentPlanStep(t *testing.T) {
+	_, stderr := captureStdStreams(t, func() {
+		printAgentResponse(contracts.AgentResponse{
+			Status: contracts.AgentStatusApprovalRequired,
+			Plan: &contracts.Plan{Steps: []contracts.PlanStep{
+				{Description: "Đọc email gần đây", Status: "completed"},
+				{Description: "Tạo draft trả lời", Status: "in_progress"},
+				{Description: "Xin xác nhận gửi", Status: "pending"},
+			}},
+		}, false, false)
+	})
+
+	for _, want := range []string{"[plan]", "✓ Đọc email gần đây", "▶ Tạo draft trả lời", "· Xin xác nhận gửi"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("expected stderr to contain %q, got %q", want, stderr)
+		}
+	}
+}
+
+func TestRunAgentChatLoopProcessesStopWhileMessageIsRunning(t *testing.T) {
+	messenger := newBlockingChatMessenger()
+	inputR, inputW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe input: %v", err)
+	}
+	defer inputR.Close()
+
+	output := &bytes.Buffer{}
+	done := make(chan error, 1)
+	sessionID := "dev"
+	go func() {
+		done <- runAgentChatLoop(context.Background(), inputR, output, messenger, &sessionID, "dev-cli", false, false, time.Now)
+	}()
+
+	if _, err := inputW.WriteString("long request\n"); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	select {
+	case <-messenger.started:
+	case <-time.After(time.Second):
+		t.Fatal("HandleMessage did not start")
+	}
+	if _, err := inputW.WriteString("/stop\n/exit\n"); err != nil {
+		t.Fatalf("write stop: %v", err)
+	}
+
+	select {
+	case got := <-messenger.cancelled:
+		if got != "dev" {
+			t.Fatalf("CancelSession() session = %q, want dev", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("/stop was not processed while HandleMessage was running")
+	}
+	close(messenger.release)
+	_ = inputW.Close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAgentChatLoop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("chat loop did not exit")
+	}
+}
+
+func TestRunAgentChatLoopPrintsResponseWithoutMoreInput(t *testing.T) {
+	messenger := newBlockingChatMessenger()
+	messenger.response = contracts.AgentResponse{Status: contracts.AgentStatusCompleted, Message: "visible response"}
+	inputR, inputW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe input: %v", err)
+	}
+	defer inputR.Close()
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	defer stdoutR.Close()
+	origStdout := os.Stdout
+	os.Stdout = stdoutW
+	t.Cleanup(func() { os.Stdout = origStdout })
+
+	output := &bytes.Buffer{}
+	done := make(chan error, 1)
+	sessionID := "dev"
+	go func() {
+		done <- runAgentChatLoop(context.Background(), inputR, output, messenger, &sessionID, "dev-cli", false, false, time.Now)
+	}()
+
+	if _, err := inputW.WriteString("hello\n"); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	select {
+	case <-messenger.started:
+	case <-time.After(time.Second):
+		t.Fatal("HandleMessage did not start")
+	}
+	close(messenger.release)
+
+	stdoutText := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, err := stdoutR.Read(buf)
+			if n > 0 && strings.Contains(string(buf[:n]), "visible response") {
+				stdoutText <- string(buf[:n])
+				return
+			}
+			if err != nil {
+				stdoutText <- ""
+				return
+			}
+		}
+	}()
+	select {
+	case got := <-stdoutText:
+		if !strings.Contains(got, "visible response") {
+			t.Fatalf("response was not printed without more input; stdout chunk = %q", got)
+		}
+	case <-time.After(time.Second):
+		_ = stdoutW.Close()
+		os.Stdout = origStdout
+		t.Fatalf("response was not printed without more input; prompt output = %q", output.String())
+	}
+	os.Stdout = origStdout
+	_ = stdoutW.Close()
+
+	deadline := time.After(time.Second)
+	for !strings.Contains(output.String(), "You>") {
+		select {
+		case <-deadline:
+			t.Fatalf("prompt was not printed; output = %q", output.String())
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	if _, err := inputW.WriteString("/exit\n"); err != nil {
+		t.Fatalf("write exit: %v", err)
+	}
+	_ = inputW.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAgentChatLoop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("chat loop did not exit")
 	}
 }
 
