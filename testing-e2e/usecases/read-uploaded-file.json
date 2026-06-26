@@ -1,0 +1,37 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "attachments": [
+        {
+          "path": "chair-description.txt",
+          "mimeType": "text/plain"
+        }
+      ]
+    },
+    "agent": {
+      "expectation": "Agent cần xác nhận đã nhận được file đính kèm và hỏi người dùng muốn làm gì với file này.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "đọc cho mình file này có gì"
+    },
+    "agent": {
+      "expectation": "Agent cần dùng file người dùng đã gửi ở bước trước, đọc nội dung file văn bản và tóm tắt rằng file là bài văn tả một cái ghế.",
+      "requires_approval": false,
+      "expected_tools": [
+        "filesystem.readFile"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "cái ghế"
+      ]
+    }
+  }
+]

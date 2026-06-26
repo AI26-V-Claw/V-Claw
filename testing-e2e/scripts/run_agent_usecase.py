@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -21,6 +22,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_USECASE = REPO_ROOT / "testing-e2e" / "usecases"
 DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "usecases"
 DEFAULT_SESSION_SEEDS = REPO_ROOT / "testing-e2e" / "sessions"
+DEFAULT_FIXTURES_DIR = REPO_ROOT / "testing-e2e" / "fixtures"
+DEFAULT_SANDBOX_WORKSPACE_DIR = REPO_ROOT / ".sandbox-workspace"
+E2E_ATTACHMENT_DIR = Path("data") / "e2e_attachments"
 ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 DEFAULT_ENV_FILES = [
     REPO_ROOT / ".env",
@@ -69,6 +73,23 @@ def resolve_repo_path(path_text: str) -> Path:
     if not path.is_absolute():
         path = REPO_ROOT / path
     return path
+
+
+def sandbox_workspace_root() -> Path:
+    workspace_dir = os.environ.get("VCLAW_SANDBOX_WORKSPACE_DIR", "").strip()
+    root = resolve_repo_path(workspace_dir) if workspace_dir else DEFAULT_SANDBOX_WORKSPACE_DIR
+    return root / "agent" / "workspace"
+
+
+def sanitize_path_component(value: str) -> str:
+    cleaned = []
+    for char in value.strip():
+        if char.isascii() and (char.isalnum() or char in ("-", "_", ".")):
+            cleaned.append(char)
+        else:
+            cleaned.append("_")
+    result = "".join(cleaned).strip("._")
+    return result or "unnamed"
 
 
 def sanitize_session_id(session_id: str) -> str:
@@ -400,7 +421,7 @@ def build_agent_command(
         if value := str(flags.get("googleToken") or "").strip():
             command.extend(["-google-token", value])
         if value := str(flags.get("maxIterations") or "").strip():
-            command.extend(["-max-iterations", value])
+            command.extend(["-iteration-budget", value])
 
     return command
 
@@ -480,6 +501,114 @@ def run_agent_command(command: list[str], timeout_seconds: int) -> dict[str, Any
         "parseError": parse_error,
         "status": response_status(response),
     }
+
+
+def attachment_values_from_step(step: dict[str, Any]) -> list[Any]:
+    user = step.get("user")
+    if not isinstance(user, dict):
+        return []
+    raw = user.get("attachments")
+    if raw is None:
+        raw = user.get("files")
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    return [raw]
+
+
+def resolve_attachment_source(path_text: str, usecase_path: Path) -> Path:
+    expanded = Path(path_text)
+    if expanded.is_absolute():
+        return expanded
+
+    fixture_path = DEFAULT_FIXTURES_DIR / usecase_path.stem / path_text
+    if fixture_path.exists():
+        return fixture_path
+
+    usecase_asset_path = usecase_path.parent / usecase_path.stem / path_text
+    if usecase_asset_path.exists():
+        return usecase_asset_path
+
+    return REPO_ROOT / path_text
+
+
+def unique_attachment_destination(destination_dir: Path, filename: str, used: set[str]) -> Path:
+    filename = sanitize_path_component(filename)
+    stem = Path(filename).stem or "attachment"
+    suffix = Path(filename).suffix
+    candidate = filename
+    counter = 2
+    while candidate.lower() in used:
+        candidate = f"{stem}_{counter}{suffix}"
+        counter += 1
+    used.add(candidate.lower())
+    return destination_dir / candidate
+
+
+def prepare_step_attachments(
+    step: dict[str, Any],
+    variables: dict[str, str],
+    usecase_path: Path,
+    used_names: set[str],
+) -> list[dict[str, Any]]:
+    specs = attachment_values_from_step(step)
+    if not specs:
+        return []
+
+    usecase_name = sanitize_path_component(usecase_path.stem)
+    destination_dir = sandbox_workspace_root() / E2E_ATTACHMENT_DIR / usecase_name
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    attachments: list[dict[str, Any]] = []
+    for index, spec in enumerate(specs, start=1):
+        source_text = ""
+        filename = ""
+        mime_type = ""
+        if isinstance(spec, str):
+            source_text = spec
+        elif isinstance(spec, dict):
+            source_text = str(spec.get("path") or spec.get("source") or spec.get("localPath") or "").strip()
+            filename = str(spec.get("filename") or spec.get("name") or "").strip()
+            mime_type = str(spec.get("mimeType") or spec.get("mime") or "").strip()
+        else:
+            raise ValueError(f"attachment #{index} must be a string or object")
+
+        source_text = expand_vars(source_text, variables).strip()
+        if not source_text:
+            raise ValueError(f"attachment #{index} is missing path")
+        source_path = resolve_attachment_source(source_text, usecase_path).resolve()
+        if not source_path.exists():
+            raise ValueError(f"attachment not found: {source_text}")
+        if not source_path.is_file():
+            raise ValueError(f"attachment must be a file: {source_text}")
+
+        filename = expand_vars(filename, variables).strip() if filename else source_path.name
+        if not mime_type:
+            mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        destination = unique_attachment_destination(destination_dir, filename, used_names)
+        shutil.copy2(source_path, destination)
+        attachments.append({
+            "path": str(destination.resolve()),
+            "filename": destination.name,
+            "mimeType": mime_type,
+            "source": display_path(source_path),
+        })
+
+    return attachments
+
+
+def prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any]]) -> str:
+    paths = [str(item.get("path") or "").strip() for item in attachments if str(item.get("path") or "").strip()]
+    if not paths:
+        return prompt
+    lines = [
+        "Current user attachments are available as local files.",
+        'If the user says "file này", "ảnh này", or asks to send/upload the attached file, use these paths in tool inputs that accept attachments.',
+        "Attachment paths:",
+    ]
+    lines.extend(f"- {path}" for path in paths)
+    return prompt.rstrip() + "\n\n" + "\n".join(lines)
 
 
 def str_list(value: Any) -> list[str]:
@@ -593,34 +722,46 @@ def normalize_step(step: dict[str, Any], variables: dict[str, str]) -> dict[str,
 
     user = normalized.get("user")
     if not isinstance(user, dict):
-        raise ValueError(f"step {normalized['id']!r} must contain user.message")
+        raise ValueError(f"step {normalized['id']!r} must contain user.message or user.attachments")
     message = str(user.get("message") or "").strip()
-    if not message:
-        raise ValueError(f"step {normalized['id']!r} has empty user.message")
-    normalized["prompt"] = message
+    attachments = attachment_values_from_step(normalized)
+    if message and attachments:
+        raise ValueError(
+            f"step {normalized['id']!r} cannot combine user.message and user.attachments; split them into separate steps"
+        )
+    if not message and not attachments:
+        raise ValueError(f"step {normalized['id']!r} must contain user.message or user.attachments")
+    normalized["prompt"] = message or "User sent an attachment."
     return normalized
 
 
 def run_step(
     step: dict[str, Any],
     usecase: dict[str, Any],
+    usecase_path: Path,
     variables: dict[str, str],
+    attachment_used_names: set[str],
     session_id: str,
     channel: str,
     timeout_seconds: int,
 ) -> dict[str, Any]:
     step = normalize_step(step, variables)
 
-    prompt = expand_vars(str(step.get("prompt") or ""), variables).strip()
-    if not prompt:
+    user_prompt = expand_vars(str(step.get("prompt") or ""), variables).strip()
+    if not user_prompt:
         raise ValueError(f"step {step.get('id')!r} has empty prompt")
+    attachments = prepare_step_attachments(step, variables, usecase_path, attachment_used_names)
+    prompt = prompt_with_attachment_context(user_prompt, attachments)
 
     result: dict[str, Any] = {
         "id": step.get("id"),
         "name": step.get("name"),
-        "prompt": prompt,
+        "prompt": user_prompt,
         "messages": [],
     }
+    if attachments:
+        result["attachments"] = attachments
+        result["agentPrompt"] = prompt
     agent_expectations = agent_expectations_for_step(step)
     if agent_expectations:
         result["agent"] = agent_expectations
@@ -629,7 +770,12 @@ def run_step(
     log("")
     log(step_separator(result["id"]))
     log("USER >")
-    log_block(prompt)
+    log_block(user_prompt)
+    if attachments:
+        log("")
+        log("ATTACHMENTS >")
+        for attachment in attachments:
+            log_block(f"{attachment.get('filename')}: {attachment.get('path')}")
     agent_expectation = str(agent_expectations.get("expectation") or "").strip()
     if agent_expectation:
         log("")
@@ -638,9 +784,11 @@ def run_step(
     first_run = run_agent_command(command, timeout_seconds)
     first_summary = summarize_run(
         first_run,
-        prompt,
+        user_prompt,
         pending_approval_tool_refs(variables),
     )
+    if attachments:
+        first_summary["attachments"] = attachments
     first_run["summary"] = first_summary
     result["messages"].append(first_summary)
     first_response = first_run.get("response")
@@ -771,6 +919,7 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
 
     try:
         executable_index = 0
+        attachment_used_names: set[str] = set()
         for step in steps:
             executable_index += 1
             step_variables = dict(variables)
@@ -778,7 +927,9 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
             step_result = run_step(
                 step=step,
                 usecase=usecase,
+                usecase_path=usecase_path,
                 variables=step_variables,
+                attachment_used_names=attachment_used_names,
                 session_id=session_id,
                 channel=channel,
                 timeout_seconds=args.timeout_seconds,
@@ -793,10 +944,13 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
                 if failure_reason := str(step_result.get("failureReason") or "").strip():
                     turn_entry["failureReason"] = failure_reason
                 user_text = str(message.get("user") or "").strip()
+                user_payload: dict[str, Any] = {}
                 if user_text:
-                    turn_entry["user"] = {
-                        "message": user_text,
-                    }
+                    user_payload["message"] = user_text
+                if message.get("attachments"):
+                    user_payload["attachments"] = message["attachments"]
+                if user_payload:
+                    turn_entry["user"] = user_payload
 
                 agent_payload: dict[str, Any] = {}
                 agent_text = str(message.get("agent") or "").strip()
