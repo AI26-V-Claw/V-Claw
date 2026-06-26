@@ -117,6 +117,7 @@ type Runtime struct {
 
 type activeRunCancel struct {
 	token  uint64
+	runID  string
 	cancel context.CancelFunc
 }
 
@@ -402,6 +403,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		base.Message = errShape.Message
 		return base, nil
 	}
+	r.cancelMu.Lock()
+	if current, ok := r.activeCancels[message.SessionID]; ok && current.token == runToken {
+		current.runID = runState.RunID
+		r.activeCancels[message.SessionID] = current
+	}
+	r.cancelMu.Unlock()
 	ctx = withParentRunID(ctx, runState.RunID)
 	ctx = WithPlanScope(ctx, message.SessionID, runState.RunID)
 	defer func() {
@@ -1428,6 +1435,17 @@ func (r *Runtime) CancelSession(sessionID string) bool {
 	r.cancelMu.Unlock()
 	if !ok {
 		return false
+	}
+	if strings.TrimSpace(entry.runID) != "" && r.stateStore != nil {
+		_ = r.stateStore.AppendRunEvent(context.WithoutCancel(context.Background()), RunEvent{
+			RunID: entry.runID,
+			Type:  "run.cancel_requested",
+			Data: map[string]any{
+				"session_id": strings.TrimSpace(sessionID),
+				"source":     "control",
+			},
+			CreatedAt: r.now(),
+		})
 	}
 	entry.cancel()
 	return true

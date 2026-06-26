@@ -15,9 +15,13 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/app"
 	"vclaw/internal/contracts"
+	"vclaw/internal/localapi/control"
 )
 
 func runAgent(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "cancel" {
+		return runAgentCancel(ctx, args[1:])
+	}
 	if len(args) > 0 && args[0] == "chat" {
 		return runAgentChat(ctx, args[1:])
 	}
@@ -70,6 +74,11 @@ func runAgent(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	controlServer, err := control.Start(ctx, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime))
+	if err != nil {
+		return fmt.Errorf("start agent control server: %w", err)
+	}
+	defer controlServer.Close(context.Background())
 
 	response, err := agent.NewRuntimeMessenger(bundle.Runtime).HandleMessage(ctx, contracts.UserMessage{
 		RequestID: "req_" + time.Now().UTC().Format("20060102T150405.000000000"),
@@ -135,10 +144,38 @@ func runAgentChat(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	controlServer, err := control.Start(ctx, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime))
+	if err != nil {
+		return fmt.Errorf("start agent control server: %w", err)
+	}
+	defer controlServer.Close(context.Background())
 
 	fmt.Fprintf(os.Stderr, "V-Claw interactive chat (model: %s, session: %s)\n", bundle.Model, *sessionID)
 	fmt.Fprintln(os.Stderr, "Type /exit to quit, /new to start a new session, /stop to cancel the current run.")
 	return runAgentChatLoop(ctx, os.Stdin, os.Stderr, agent.NewRuntimeMessenger(bundle.Runtime), sessionID, *channel, *jsonOutput, *trace, time.Now)
+}
+
+func runAgentCancel(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("vclaw agent cancel", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	sessionID := fs.String("session", "dev", "session id")
+	dataDir := fs.String("data-dir", envOrDefault("DATA_DIR", "./data"), "runtime data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	response, err := control.Cancel(ctx, *dataDir, *sessionID)
+	if err != nil {
+		return err
+	}
+	switch response.Status {
+	case "cancelled":
+		fmt.Fprintf(os.Stdout, "Đã gửi yêu cầu hủy session %s.\n", response.SessionID)
+	case "no_active_run":
+		fmt.Fprintf(os.Stdout, "Không có lệnh nào đang chạy cho session %s.\n", response.SessionID)
+	default:
+		fmt.Fprintf(os.Stdout, "%s: %s\n", response.SessionID, response.Status)
+	}
+	return nil
 }
 
 type agentChatMessenger interface {

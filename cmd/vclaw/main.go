@@ -312,7 +312,7 @@ func loadDotEnv(path string) error {
 		}
 		if _, exists := os.LookupEnv(key); exists {
 			if _, override := overrideKeys[key]; !override {
-			continue
+				continue
 			}
 		}
 
@@ -353,6 +353,7 @@ func printUsage() {
 	fmt.Println(`Usage:
   vclaw agent -prompt "..."
   vclaw agent chat
+  vclaw agent cancel [-session dev]
   vclaw status
   vclaw logs [-limit 50] [-since 1h] [-level error|info] [-tool gmail.createDraft]
   vclaw approvals [-status pending|approved|rejected|expired|revised] [-limit 20]
