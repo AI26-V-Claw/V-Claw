@@ -651,6 +651,8 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | `docs.insertText` | Integration | `external_write` | Yes |
 | `docs.deleteContent` | Integration | `external_write` | Yes |
 
+> `docs.createDocument` accepts an optional `content` (string) parameter: body text to append immediately after the document is created. If the content append fails, the tool returns `PARTIAL_FAILURE` with `Success=false`, but the empty document is still created and its ID is included in the response so the user can manually add content later via `docs.appendText`.
+
 ### Google Sheets
 
 | Tool | Owner | Risk | Approval |

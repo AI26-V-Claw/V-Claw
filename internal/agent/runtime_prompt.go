@@ -243,7 +243,8 @@ Sending email (two-step):
 
 Calendar event creation:
 - calendar.createEvent requires a title, an explicit start date+time, and an explicit end date+time or duration.
-- A date-only phrase such as "tomorrow", "ngay mai", or "hom nay" is not a valid start time. Ask one concise clarification question for every missing time field before calling calendar.createEvent.
+- When the user provides a relative date with an explicit time (e.g. "3h chiều mai", "tomorrow at 2pm for 1 hour"), call get_current_time first to resolve "today"/"tomorrow"/"next Monday" into concrete ISO dates, then proceed to create the event. Do NOT ask the user to provide a concrete date.
+- Only ask for clarification when the user omits essential time information entirely (e.g. just "tạo lịch ngày mai" with no start time or duration).
 - Attendees are only Calendar participants. They do not replace a separate email-send request.
 
 Google Meet:
@@ -262,6 +263,20 @@ Bulk calendar delete:
 Listing emails or files completely:
 - When the user asks to list emails (gmail.listEmails / gmail.listThreads) or Drive files (drive.listFiles) without naming a specific count, do NOT set maxResults. Omitting it makes the tool return ALL matching results via automatic pagination.
 - Only set maxResults when the user explicitly asks for a specific number (e.g. "5 latest emails"). A set value returns a single truncated page and will miss older results.
+
+Google Docs creation and editing:
+- When the user asks to create a Google Docs document (e.g. "tạo docs", "tạo tài liệu", "viết báo cáo lên Google Docs"), ALWAYS use docs.createDocument — NEVER sandbox.runPython or sandbox.runShell.
+- docs.createDocument accepts a title and an optional content parameter. Use content to write the full document body in one call.
+- To add more content to an existing document, use docs.appendText with the documentId returned by docs.createDocument.
+- To edit content, use docs.replaceText, docs.insertText, or docs.deleteContent.
+- Do NOT write Python code to call the Google Docs API via sandbox. The dedicated docs.* tools handle authentication and API calls automatically.
+- For multi-step workflows (e.g. "tóm tắt 10 email rồi tạo docs"): complete all read steps first (gmail.listEmails, gmail.getEmail), then call docs.createDocument with the summarized content in one turn — do not split into separate turns or ask for confirmation between reading and creating.
+Web search (tìm kiếm trên internet):
+- When the user asks to search the web/internet (e.g. "tìm kiếm về...", "search for...", "tra cứu...", "tìm hiểu về..."), ALWAYS use web.search — NEVER gmail.listEmails or any gmail.* tool.
+- gmail.listEmails is ONLY for searching emails in the user's mailbox. Do NOT use it for general knowledge or topic research.
+- When the user says "tìm kiếm về [chủ đề]" without specifying a source, default to web.search.
+- For multi-step flows (e.g. "tìm kiếm về X rồi tạo docs"): call web.search first, optionally web.fetch for more detail, then docs.createDocument with summarized content.
+- If web.search returns no results, tell the user — do NOT fall back to gmail.listEmails.
 
 Downloading email attachments:
 - When the user asks to download or read an attachment, use gmail.getEmail to find the message first.
@@ -469,16 +484,40 @@ func (r *Runtime) providerTools() []providers.ToolDefinition {
 	return definitions
 }
 
+// shouldRetryTextualApprovalAsToolCall detects when the LLM responds with a
+// natural-language confirmation request instead of producing a tool call.
+// When true, the runtime injects a system message and retries so the LLM
+// generates the actual tool call rather than asking the user to confirm.
+//
+// Two-stage filter:
+//  1. The response must mention an actionable intent (write, read-continuation,
+//     or multi-step workflow keywords).
+//  2. The response must contain a Vietnamese or English confirmation phrase.
+//
+// Added "tiếp tục"/"đọc"/"tóm tắt"/"thực hiện" (read-continuation keywords)
+// because gpt-4.1-mini frequently asks "Xin phép tiếp tục đọc email…" or
+// "Xác nhận cho tôi thực hiện tiếp không?" mid-batch instead of calling the
+// next gmail.getEmail / docs.createDocument tool.
 func shouldRetryTextualApprovalAsToolCall(content string) bool {
 	lower := strings.ToLower(strings.TrimSpace(content))
 	if lower == "" {
 		return false
 	}
+	// Stage 1: action keywords — write actions + read-continuation actions.
+	// Original set: tạo/gửi/xóa/cập nhật (write intents).
+	// Extended with: tiếp tục/thực hiện/đọc/tóm tắt to catch multi-step
+	// read workflows where the LLM pauses mid-batch to ask permission.
 	if !containsAnyText(lower,
+		// Write-action keywords (original)
 		"tạo", "tao", "create",
 		"gửi", "gui", "send",
 		"xóa", "xoa", "delete",
 		"cập nhật", "cap nhat", "update",
+		// Read-continuation keywords (added to fix batch-read stalls)
+		"tiếp tục", "tiep tuc", "continue",
+		"thực hiện", "thuc hien", "proceed",
+		"đọc", "doc", "read",
+		"tóm tắt", "tom tat", "summarize",
 	) {
 		return false
 	}
@@ -486,6 +525,10 @@ func shouldRetryTextualApprovalAsToolCall(content string) bool {
 	if containsAnyText(lower, "đã xác nhận", "da xac nhan", "already confirmed", "has been confirmed") {
 		return false
 	}
+	// Stage 2: confirmation phrases — must match a known approval-request pattern.
+	// Added "xác nhận cho/không", "xin phép", "cho tôi thực hiện" to catch
+	// patterns like "Xác nhận cho tôi thực hiện tiếp không?" and
+	// "Xin phép tiếp tục đọc các email còn lại" that gpt-4.1-mini generates.
 	return containsAnyText(lower,
 		"vui lòng xác nhận", "vui long xac nhan",
 		"xin vui lòng xác nhận", "xin vui long xac nhan",
@@ -494,6 +537,11 @@ func shouldRetryTextualApprovalAsToolCall(content string) bool {
 		"cần bạn xác nhận", "can ban xac nhan",
 		"xác nhận trước", "xac nhan truoc",
 		"xác nhận để", "xac nhan de",
+		// Added to catch mid-batch confirmation patterns
+		"xác nhận cho", "xac nhan cho",
+		"xác nhận không", "xac nhan khong",
+		"xin phép", "xin phep",
+		"cho tôi thực hiện", "cho toi thuc hien",
 		"confirm before", "please confirm", "confirm to proceed",
 		"need your confirmation", "please approve", "approve before",
 	)

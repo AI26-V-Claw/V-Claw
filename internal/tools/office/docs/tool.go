@@ -9,6 +9,7 @@ import (
 
 	"vclaw/internal/connectors/google/common"
 	gdocs "vclaw/internal/connectors/google/docs"
+	"vclaw/internal/contracts"
 	"vclaw/internal/tools"
 	"vclaw/internal/tools/office"
 )
@@ -76,7 +77,8 @@ type DocumentOutput struct {
 }
 
 type CreateDocumentInput struct {
-	Title string
+	Title   string
+	Content string // optional: if set, appends content to the document after creation
 }
 
 type AppendTextInput struct {
@@ -128,6 +130,21 @@ func (s *Service) CreateDocument(ctx context.Context, input CreateDocumentInput)
 	document, err := s.connector.CreateDocument(ctx, input.Title)
 	if err != nil {
 		return gdocs.Document{}, mapError(err)
+	}
+	// If content is provided, append it to the newly created document.
+	if strings.TrimSpace(input.Content) != "" {
+		_, appendErr := s.connector.AppendText(ctx, document.ID, input.Content)
+		if appendErr != nil {
+			// Document was created but content failed to append.
+			// Return the document so the caller can still reference it,
+			// but signal partial failure via an ErrorShape.
+			return document, &ErrorShape{
+				Code:      contracts.ErrorInternal,
+				Message:   fmt.Sprintf("Document created but content could not be appended: %s", appendErr.Error()),
+				Retryable: false,
+			}
+		}
+		document.BodyText = input.Content
 	}
 	return document, nil
 }
@@ -252,7 +269,10 @@ func (t DocsTool) Parameters() tools.ToolSchema {
 			"full":         map[string]any{"type": "boolean", "description": "Return full extracted text when true."},
 		}, "required": []string{"documentId"}, "additionalProperties": false}
 	case ToolNameCreateDocument:
-		return tools.ToolSchema{"type": "object", "properties": map[string]any{"title": map[string]any{"type": "string"}}, "required": []string{"title"}, "additionalProperties": false}
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{
+			"title":   map[string]any{"type": "string", "description": "Document title."},
+			"content": map[string]any{"type": "string", "description": "Optional initial content to write into the document."},
+		}, "required": []string{"title"}, "additionalProperties": false}
 	case ToolNameAppendText:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{
 			"documentId": map[string]any{"type": "string"},
@@ -302,7 +322,21 @@ func (t DocsTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolRe
 		output, errShape := t.service.GetDocument(ctx, GetDocumentInput{DocumentID: stringArg(call.Arguments, "documentId"), PreviewChars: intArg(call.Arguments, "previewChars"), Full: boolArg(call.Arguments, "full")})
 		return outputToolResult(call, output, errShape)
 	case ToolNameCreateDocument:
-		output, errShape := t.service.CreateDocument(ctx, CreateDocumentInput{Title: stringArg(call.Arguments, "title")})
+		output, errShape := t.service.CreateDocument(ctx, CreateDocumentInput{Title: stringArg(call.Arguments, "title"), Content: stringArg(call.Arguments, "content")})
+		// Handle partial failure: document was created but content append failed.
+		// Include document info in ContentForLLM so the LLM can reference the created document.
+		if errShape != nil && strings.TrimSpace(output.ID) != "" {
+			data, _ := json.Marshal(output)
+			return tools.ToolResult{
+				ToolCallID:     call.ID,
+				ToolName:       call.Name,
+				Success:        false,
+				ContentForLLM:  fmt.Sprintf("%s: %s\nDocument: %s", errShape.Code, errShape.Message, string(data)),
+				ContentForUser: errShape.Message,
+				Error:          &tools.ToolError{Code: errShape.Code, Message: errShape.Message},
+				ArtifactRef:    documentArtifactRef(output.ID, output.Title),
+			}
+		}
 		return outputToolResult(call, output, errShape)
 	case ToolNameAppendText:
 		output, errShape := t.service.AppendText(ctx, AppendTextInput{DocumentID: stringArg(call.Arguments, "documentId"), Text: stringArg(call.Arguments, "text")})
@@ -460,16 +494,16 @@ func mapError(err error) *ErrorShape {
 	case errors.Is(err, common.ErrAPI):
 		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Docs", err.Error()), Retryable: true}
 	default:
-		return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error(), Retryable: false}
+		return &ErrorShape{Code: contracts.ErrorInternal, Message: err.Error(), Retryable: false}
 	}
 }
 
 func invalidInput(message string) *ErrorShape {
-	return &ErrorShape{Code: "INVALID_INPUT", Message: message, Retryable: false}
+	return &ErrorShape{Code: contracts.ErrorInvalidInput, Message: message, Retryable: false}
 }
 
 func internalError(message string) *ErrorShape {
-	return &ErrorShape{Code: "INTERNAL_ERROR", Message: message, Retryable: false}
+	return &ErrorShape{Code: contracts.ErrorInternal, Message: message, Retryable: false}
 }
 
 func stringArg(args map[string]any, name string) string {
