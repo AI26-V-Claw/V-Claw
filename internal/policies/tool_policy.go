@@ -92,6 +92,15 @@ func (p ToolPolicy) DecideToolCall(toolCallID string, definition tools.ToolDefin
 	}
 	userConfig := p.currentUserConfig()
 	if policyDecision, matched := userPolicyDecision(userConfig, contracts.RiskLevel(definition.RiskLevel)); matched {
+		// User auto-allow must not override tool-level RequiresApproval for
+		// high-risk tools (external_write, destructive). These tools need HITL
+		// regardless of user preference.
+		if policyDecision == contracts.RiskDecisionAllow && definition.RequiresApproval && !isLowRiskLevel(contracts.RiskLevel(definition.RiskLevel)) {
+			decision.Decision = contracts.RiskDecisionRequiresApproval
+			decision.RequiresApproval = true
+			decision.Reason = fmt.Sprintf("tool %s requires approval for risk %s (user auto-allow overridden)", definition.Name, definition.RiskLevel)
+			return decision
+		}
 		decision.Decision = policyDecision
 		decision.RequiresApproval = policyDecision == contracts.RiskDecisionRequiresApproval
 		decision.Reason = userPolicyReason(definition.Name, definition.RiskLevel, policyDecision)
