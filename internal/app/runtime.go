@@ -143,6 +143,7 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 		provider = openAI
 	}
 	telemetry := config.Telemetry
+	var priceSource agent.PriceSource
 	if telemetry == nil {
 		langfuse, err := monitoring.NewLangfuse(ctx, monitoring.LangfuseConfig{
 			PublicKey:   config.LangfusePublicKey,
@@ -156,6 +157,11 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 			return RuntimeBundle{}, err
 		}
 		telemetry = langfuse
+		// Concrete-pointer guard: a nil *Langfuse assigned to the interface would be
+		// a non-nil typed-nil. Only treat a real instance as the price source.
+		if langfuse != nil {
+			priceSource = langfuse
+		}
 	}
 	if telemetry != nil && provider != nil {
 		provider = telemetry.WrapProvider(provider)
@@ -246,10 +252,11 @@ func BuildRuntime(ctx context.Context, config AgentRuntimeConfig) (RuntimeBundle
 	}
 
 	runtime := agent.NewRuntime(agent.RuntimeConfig{
-		Provider:  provider,
-		Registry:  registry,
-		Observer:  config.Observer,
-		Telemetry: telemetry,
+		Provider:    provider,
+		Registry:    registry,
+		Observer:    config.Observer,
+		Telemetry:   telemetry,
+		PriceSource: priceSource,
 		ReferenceResolver: reference.NewFallbackResolver(
 			reference.NewLLMResolver(provider, model),
 			reference.NewHeuristicResolver(),

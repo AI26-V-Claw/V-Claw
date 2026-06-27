@@ -45,6 +45,7 @@ type RuntimeConfig struct {
 	Registry                   *tools.ToolRegistry
 	Observer                   RuntimeObserver
 	Telemetry                  RuntimeTelemetry
+	PriceSource                PriceSource
 	ReferenceResolver          reference.Resolver
 	Policy                     policies.ToolPolicy
 	SessionStore               sessions.Store
@@ -78,6 +79,7 @@ type Runtime struct {
 	registry                   *tools.ToolRegistry
 	observer                   RuntimeObserver
 	telemetry                  RuntimeTelemetry
+	priceSource                PriceSource
 	referenceResolver          reference.Resolver
 	policy                     policies.ToolPolicy
 	sessionStore               sessions.Store
@@ -266,6 +268,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		registry:                   config.Registry,
 		observer:                   config.Observer,
 		telemetry:                  config.Telemetry,
+		priceSource:                config.PriceSource,
 		referenceResolver:          referenceResolver,
 		policy:                     config.Policy,
 		sessionStore:               sessionStore,

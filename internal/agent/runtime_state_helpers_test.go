@@ -60,13 +60,24 @@ func TestFinishRunStateAttachesErrorRefToActiveTrace(t *testing.T) {
 	}
 }
 
+type stubPriceSource struct {
+	price ModelPrice
+	calls int
+}
+
+func (s *stubPriceSource) PriceFor(context.Context, string) ModelPrice {
+	s.calls++
+	return s.price
+}
+
 func TestRecordLLMUsageCostPersistsWithCanceledContext(t *testing.T) {
 	store := NewInMemoryRuntimeStateStore()
 	run := RunState{RunID: "run_cost", CostUSD: 1.25}
 	if err := store.CreateRun(context.Background(), run); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	r := &Runtime{stateStore: store, now: time.Now}
+	price := &stubPriceSource{price: ModelPrice{InputPricePerToken: 0.000003, OutputPricePerToken: 0.000015, Found: true}}
+	r := &Runtime{stateStore: store, now: time.Now, priceSource: price}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -79,6 +90,48 @@ func TestRecordLLMUsageCostPersistsWithCanceledContext(t *testing.T) {
 	want := 1.25 + float64(10)*0.000003 + float64(20)*0.000015
 	if stored.CostUSD != want {
 		t.Fatalf("cost_usd = %v, want %v", stored.CostUSD, want)
+	}
+}
+
+func TestRecordLLMUsageCostSkipsWhenPriceNotFound(t *testing.T) {
+	store := NewInMemoryRuntimeStateStore()
+	run := RunState{RunID: "run_cost_missing", CostUSD: 2.0}
+	if err := store.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	price := &stubPriceSource{price: ModelPrice{Found: false}}
+	r := &Runtime{stateStore: store, now: time.Now, priceSource: price}
+
+	r.recordLLMUsageCost(context.Background(), &run, &providers.Usage{PromptTokens: 100, CompletionTokens: 200})
+
+	stored, err := store.GetRun(context.Background(), run.RunID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.CostUSD != 2.0 {
+		t.Fatalf("cost_usd = %v, want unchanged 2.0", stored.CostUSD)
+	}
+	if price.calls != 1 {
+		t.Fatalf("PriceFor calls = %d, want 1", price.calls)
+	}
+}
+
+func TestRecordLLMUsageCostSkipsWhenNoPriceSource(t *testing.T) {
+	store := NewInMemoryRuntimeStateStore()
+	run := RunState{RunID: "run_cost_nil_source", CostUSD: 3.0}
+	if err := store.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	r := &Runtime{stateStore: store, now: time.Now}
+
+	r.recordLLMUsageCost(context.Background(), &run, &providers.Usage{PromptTokens: 100, CompletionTokens: 200})
+
+	stored, err := store.GetRun(context.Background(), run.RunID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.CostUSD != 3.0 {
+		t.Fatalf("cost_usd = %v, want unchanged 3.0", stored.CostUSD)
 	}
 }
 
