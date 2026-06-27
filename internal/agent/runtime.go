@@ -41,36 +41,36 @@ var (
 )
 
 type RuntimeConfig struct {
-	Provider                   providers.Provider
-	Registry                   *tools.ToolRegistry
-	Observer                   RuntimeObserver
-	Telemetry                  RuntimeTelemetry
-	PriceSource                PriceSource
-	ReferenceResolver          reference.Resolver
-	Policy                     policies.ToolPolicy
-	SessionStore               sessions.Store
-	StateStore                 RuntimeStateStore
-	Logger                     *slog.Logger
-	ToolHooks                  toolhooks.Hooks
-	IterationBudget            int
-	ProviderTimeout            time.Duration
-	ToolTimeout                time.Duration
-	ParallelExecutionEnabled   bool
-	ParallelMaxWorkers         int
-	ParallelToolTimeoutDefault time.Duration
-	SubtaskMaxChildren         int
-	SubtaskMaxDepth            int
-	SubtaskDefaultTimeout      time.Duration
-	SubtaskMaxTimeout          time.Duration
-	Model                      string
-	Now                        func() time.Time
-	LocalLocation              *time.Location // timezone for date calculations; nil falls back to time.Local
-	Compactor                  *sessions.Compactor
-	ContextWindow              int
-	ContextBudget              ContextBudget // zero value = scaled defaults from ContextWindow
-	MemoryClassifierModel      string
-	LongMemDir                 string
-	KnowledgeRetriever         knowledge.Retriever
+	Provider                         providers.Provider
+	Registry                         *tools.ToolRegistry
+	Observer                         RuntimeObserver
+	Telemetry                        RuntimeTelemetry
+	PriceSource                      PriceSource
+	ReferenceResolver                reference.Resolver
+	Policy                           policies.ToolPolicy
+	SessionStore                     sessions.Store
+	StateStore                       RuntimeStateStore
+	Logger                           *slog.Logger
+	ToolHooks                        toolhooks.Hooks
+	IterationBudget                  int
+	ProviderTimeout                  time.Duration
+	ToolTimeout                      time.Duration
+	ParallelExecutionEnabled         bool
+	ParallelMaxWorkers               int
+	ParallelToolTimeoutDefault       time.Duration
+	SubtaskMaxChildren               int
+	SubtaskMaxDepth                  int
+	SubtaskDefaultTimeout            time.Duration
+	SubtaskMaxTimeout                time.Duration
+	Model                            string
+	Now                              func() time.Time
+	LocalLocation                    *time.Location // timezone for date calculations; nil falls back to time.Local
+	Compactor                        *sessions.Compactor
+	ContextWindow                    int
+	ContextBudget                    ContextBudget // zero value = scaled defaults from ContextWindow
+	MemoryClassifierModel            string
+	LongMemDir                       string
+	KnowledgeRetriever               knowledge.Retriever
 	DisableReadBeforeWriteValidation bool // skip ValidateReadBeforeWrite; useful for tests that focus on other behavior
 }
 
@@ -108,15 +108,15 @@ type Runtime struct {
 	// promptVersion is the content-hash fingerprint of the effective system
 	// prompt (runtimeSystemPrompt). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
-	promptVersion      string
-	planStore          *PlanStore
-	subtasks           *subtaskCoordinator
-	ltMemLoader        longTermMemoryLoader  // nil = disabled
-	ltMemFlusher       longTermMemoryFlusher // nil = disabled
-	knowledgeRetriever knowledge.Retriever
+	promptVersion                    string
+	planStore                        *PlanStore
+	subtasks                         *subtaskCoordinator
+	ltMemLoader                      longTermMemoryLoader  // nil = disabled
+	ltMemFlusher                     longTermMemoryFlusher // nil = disabled
+	knowledgeRetriever               knowledge.Retriever
 	disableReadBeforeWriteValidation bool
-	cancelMu           sync.Mutex
-	activeCancels      map[string]activeRunCancel // sessionID → active run cancel state
+	cancelMu                         sync.Mutex
+	activeCancels                    map[string]activeRunCancel // sessionID → active run cancel state
 }
 
 type activeRunCancel struct {
@@ -264,42 +264,42 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
 	}
 	return &Runtime{
-		provider:                   provider,
-		registry:                   config.Registry,
-		observer:                   config.Observer,
-		telemetry:                  config.Telemetry,
-		priceSource:                config.PriceSource,
-		referenceResolver:          referenceResolver,
-		policy:                     config.Policy,
-		sessionStore:               sessionStore,
-		stateStore:                 stateStore,
-		logger:                     logger,
-		toolHooks:                  hooks,
-		pendingApprovals:           make(map[string]pendingApproval),
-		pendingBySession:           make(map[string]string),
-		iterationBudgetLimit:       iterationBudgetLimit,
-		providerTimeout:            providerTimeout,
-		toolTimeout:                toolTimeout,
-		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
-		parallelMaxWorkers:         parallelMaxWorkers,
-		parallelToolTimeoutDefault: parallelToolTimeoutDefault,
-		subtaskMaxDepth:            subtaskMaxDepth,
-		subtaskDefaultTimeout:      subtaskDefaultTimeout,
-		subtaskMaxTimeout:          subtaskMaxTimeout,
-		model:                      config.Model,
-		now:                        now,
-		localLocation:              localLocation,
-		compactor:                  config.Compactor,
-		contextWindow:              contextWindow,
-		contextBudget:              contextBudget,
-		memoryClassifierModel:      memoryClassifierModel(config),
-		promptVersion:              promptVersion,
-		planStore:                  planStore,
-		subtasks:                   subtasks,
-		ltMemLoader:                ltLoader,
-		ltMemFlusher:               ltFlusher,
-		activeCancels:              make(map[string]activeRunCancel),
-		knowledgeRetriever:         config.KnowledgeRetriever,
+		provider:                         provider,
+		registry:                         config.Registry,
+		observer:                         config.Observer,
+		telemetry:                        config.Telemetry,
+		priceSource:                      config.PriceSource,
+		referenceResolver:                referenceResolver,
+		policy:                           config.Policy,
+		sessionStore:                     sessionStore,
+		stateStore:                       stateStore,
+		logger:                           logger,
+		toolHooks:                        hooks,
+		pendingApprovals:                 make(map[string]pendingApproval),
+		pendingBySession:                 make(map[string]string),
+		iterationBudgetLimit:             iterationBudgetLimit,
+		providerTimeout:                  providerTimeout,
+		toolTimeout:                      toolTimeout,
+		parallelExecutionEnabled:         config.ParallelExecutionEnabled,
+		parallelMaxWorkers:               parallelMaxWorkers,
+		parallelToolTimeoutDefault:       parallelToolTimeoutDefault,
+		subtaskMaxDepth:                  subtaskMaxDepth,
+		subtaskDefaultTimeout:            subtaskDefaultTimeout,
+		subtaskMaxTimeout:                subtaskMaxTimeout,
+		model:                            config.Model,
+		now:                              now,
+		localLocation:                    localLocation,
+		compactor:                        config.Compactor,
+		contextWindow:                    contextWindow,
+		contextBudget:                    contextBudget,
+		memoryClassifierModel:            memoryClassifierModel(config),
+		promptVersion:                    promptVersion,
+		planStore:                        planStore,
+		subtasks:                         subtasks,
+		ltMemLoader:                      ltLoader,
+		ltMemFlusher:                     ltFlusher,
+		activeCancels:                    make(map[string]activeRunCancel),
+		knowledgeRetriever:               config.KnowledgeRetriever,
 		disableReadBeforeWriteValidation: config.DisableReadBeforeWriteValidation,
 	}
 }
@@ -1015,12 +1015,27 @@ If required information is missing, ask one concise clarification question inste
 					base.Status = contracts.AgentStatusFailed
 					base.Message = "Cannot write workspace data without reading first. Please read relevant data before making changes."
 					base.Error = &contracts.ErrorShape{
-						Code:    "WRITE_BEFORE_READ",
-						Message: base.Message,
+						Code:      contracts.ErrorActionBlockedByPolicy,
+						Message:   base.Message,
+						Source:    contracts.ErrorSourcePolicy,
+						Retryable: false,
 					}
 					return base, nil
 				}
 			}
+		}
+
+		deferredWorkspaceToolCalls := []providers.ToolCall{}
+		if readPrefix, deferred, ok := SplitWorkspaceReadPrefix(assistantMessage.ToolCalls, toolResults, r.registry); ok {
+			r.logger.Info("workspace flow: splitting read prefix before deferred write tools",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"iteration", iteration,
+				"read_count", len(readPrefix),
+				"deferred_count", len(deferred),
+			)
+			assistantMessage.ToolCalls = readPrefix
+			deferredWorkspaceToolCalls = deferred
 		}
 
 		for index, providerToolCall := range assistantMessage.ToolCalls {
@@ -1383,6 +1398,18 @@ If required information is missing, ask one concise clarification question inste
 				base.FailureReason = updatedState.FailureReason
 				return base, nil
 			}
+		}
+		if len(deferredWorkspaceToolCalls) > 0 {
+			for _, skipped := range skippedToolObservationMessages(deferredWorkspaceToolCalls, "ACTION_BLOCKED_BY_POLICY: deferred until workspace read results are available") {
+				transcript = append(transcript, skipped)
+				providerTranscript = append(providerTranscript, skipped)
+				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, skipped); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+			}
+			continue agentLoop
 		}
 		if onlyPlanToolCalls(assistantMessage.ToolCalls) && housekeepingRefunds < housekeepingRefundLimit {
 			iterationBudget.Refund()

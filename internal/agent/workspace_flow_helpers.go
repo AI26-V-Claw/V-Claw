@@ -120,6 +120,39 @@ func ValidateReadBeforeWrite(
 		"then use the results to compose your write action.", true
 }
 
+// SplitWorkspaceReadPrefix returns the leading workspace read calls before the
+// first workspace write, plus the deferred suffix, when a mixed read/write
+// response should be split into a read iteration followed by an LLM
+// continuation. This prevents the model from pre-composing a write before it
+// has seen the read results.
+func SplitWorkspaceReadPrefix(
+	proposedCalls []providers.ToolCall,
+	previousResults []contracts.ToolResult,
+	registry *tools.ToolRegistry,
+) (readPrefix []providers.ToolCall, deferred []providers.ToolCall, ok bool) {
+	if HasSuccessfulWorkspaceRead(previousResults, registry) {
+		return nil, nil, false
+	}
+	firstWriteIdx := -1
+	for i, call := range proposedCalls {
+		if IsWorkspaceWriteTool(call.Name, registry) {
+			firstWriteIdx = i
+			break
+		}
+	}
+	if firstWriteIdx <= 0 {
+		return nil, nil, false
+	}
+	for _, call := range proposedCalls[:firstWriteIdx] {
+		if !IsWorkspaceReadTool(call.Name, registry) {
+			return nil, nil, false
+		}
+	}
+	readPrefix = cloneProviderToolCalls(proposedCalls[:firstWriteIdx])
+	deferred = cloneProviderToolCalls(proposedCalls[firstWriteIdx:])
+	return readPrefix, deferred, len(readPrefix) > 0 && len(deferred) > 0
+}
+
 // HasSuccessfulWorkspaceRead reports whether results contain at least one
 // successful execution of a workspace read tool.
 func HasSuccessfulWorkspaceRead(results []contracts.ToolResult, registry *tools.ToolRegistry) bool {
@@ -157,6 +190,7 @@ func isCreateFromScratch(writeCalls []providers.ToolCall) bool {
 		"eventId":       true,
 		"fileId":        true,
 		"draftId":       true,
+		"space":         true,
 		"spaceId":       true,
 		"memberId":      true,
 		"permissionId":  true,

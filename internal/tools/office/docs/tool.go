@@ -9,6 +9,7 @@ import (
 
 	"vclaw/internal/connectors/google/common"
 	gdocs "vclaw/internal/connectors/google/docs"
+	"vclaw/internal/contracts"
 	"vclaw/internal/tools"
 	"vclaw/internal/tools/office"
 )
@@ -138,7 +139,7 @@ func (s *Service) CreateDocument(ctx context.Context, input CreateDocumentInput)
 			// Return the document so the caller can still reference it,
 			// but signal partial failure via an ErrorShape.
 			return document, &ErrorShape{
-				Code:      "PARTIAL_FAILURE",
+				Code:      contracts.ErrorInternal,
 				Message:   fmt.Sprintf("Document created but content could not be appended: %s", appendErr.Error()),
 				Retryable: false,
 			}
@@ -493,16 +494,16 @@ func mapError(err error) *ErrorShape {
 	case errors.Is(err, common.ErrAPI):
 		return &ErrorShape{Code: office.ErrorProviderUnavailable, Message: office.FriendlyGoogleToolError(office.ErrorProviderUnavailable, "Google Docs", err.Error()), Retryable: true}
 	default:
-		return &ErrorShape{Code: "INTERNAL_ERROR", Message: err.Error(), Retryable: false}
+		return &ErrorShape{Code: contracts.ErrorInternal, Message: err.Error(), Retryable: false}
 	}
 }
 
 func invalidInput(message string) *ErrorShape {
-	return &ErrorShape{Code: "INVALID_INPUT", Message: message, Retryable: false}
+	return &ErrorShape{Code: contracts.ErrorInvalidInput, Message: message, Retryable: false}
 }
 
 func internalError(message string) *ErrorShape {
-	return &ErrorShape{Code: "INTERNAL_ERROR", Message: message, Retryable: false}
+	return &ErrorShape{Code: contracts.ErrorInternal, Message: message, Retryable: false}
 }
 
 func stringArg(args map[string]any, name string) string {

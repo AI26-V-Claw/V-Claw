@@ -75,11 +75,11 @@ type stubTool struct {
 	risk tools.RiskLevel
 }
 
-func (s stubTool) Name() string                                                   { return s.name }
-func (s stubTool) Description() string                                            { return s.name }
-func (s stubTool) Parameters() tools.ToolSchema                                   { return tools.ToolSchema{} }
-func (s stubTool) Capability() tools.Capability                                   { return s.cap }
-func (s stubTool) RiskLevel() tools.RiskLevel                                     { return s.risk }
+func (s stubTool) Name() string                 { return s.name }
+func (s stubTool) Description() string          { return s.name }
+func (s stubTool) Parameters() tools.ToolSchema { return tools.ToolSchema{} }
+func (s stubTool) Capability() tools.Capability { return s.cap }
+func (s stubTool) RiskLevel() tools.RiskLevel   { return s.risk }
 func (s stubTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
 	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true}
 }
@@ -308,6 +308,54 @@ func TestValidateReadBeforeWrite_MixedBatchGmailCalendarChat(t *testing.T) {
 	}
 }
 
+// ---------- SplitWorkspaceReadPrefix ----------
+
+func TestSplitWorkspaceReadPrefix_ReadThenWrite(t *testing.T) {
+	registry := newTestRegistry()
+	proposed := []providers.ToolCall{
+		{ID: "call_1", Name: "web.search", Arguments: map[string]any{"query": "Go testing"}},
+		{ID: "call_2", Name: "docs.createDocument", Arguments: map[string]any{"title": "Research"}},
+	}
+
+	readPrefix, deferred, ok := SplitWorkspaceReadPrefix(proposed, nil, registry)
+	if !ok {
+		t.Fatal("expected mixed read/write batch to be split")
+	}
+	if len(readPrefix) != 1 || readPrefix[0].Name != "web.search" {
+		t.Fatalf("unexpected read prefix: %#v", readPrefix)
+	}
+	if len(deferred) != 1 || deferred[0].Name != "docs.createDocument" {
+		t.Fatalf("unexpected deferred calls: %#v", deferred)
+	}
+}
+
+func TestSplitWorkspaceReadPrefix_NoSplitAfterSuccessfulRead(t *testing.T) {
+	registry := newTestRegistry()
+	proposed := []providers.ToolCall{
+		{ID: "call_2", Name: "docs.createDocument", Arguments: map[string]any{"title": "Research"}},
+	}
+	previousResults := []contracts.ToolResult{
+		{ToolCallID: "call_1", ToolName: "web.search", Success: true},
+	}
+
+	_, _, ok := SplitWorkspaceReadPrefix(proposed, previousResults, registry)
+	if ok {
+		t.Fatal("expected no split after a successful workspace read")
+	}
+}
+
+func TestSplitWorkspaceReadPrefix_NoSplitForWriteOnly(t *testing.T) {
+	registry := newTestRegistry()
+	proposed := []providers.ToolCall{
+		{ID: "call_1", Name: "docs.createDocument", Arguments: map[string]any{"title": "Research"}},
+	}
+
+	_, _, ok := SplitWorkspaceReadPrefix(proposed, nil, registry)
+	if ok {
+		t.Fatal("expected no split for write-only batch")
+	}
+}
+
 // ---------- HasSuccessfulWorkspaceRead ----------
 
 func TestHasSuccessfulWorkspaceRead(t *testing.T) {
@@ -404,12 +452,12 @@ func TestIsCreateFromScratch(t *testing.T) {
 			true,
 		},
 		{
-			"chat.sendMessage with space and text",
+			"chat.sendMessage references resolved space",
 			[]providers.ToolCall{{
 				ID: "c1", Name: "chat.sendMessage",
 				Arguments: map[string]any{"space": "spaces/A", "text": "hello"},
 			}},
-			true,
+			false,
 		},
 		{
 			"calendar.updateEvent references eventId",

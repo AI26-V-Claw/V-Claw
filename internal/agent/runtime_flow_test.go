@@ -54,8 +54,8 @@ type flowStubTool struct {
 	risk tools.RiskLevel
 }
 
-func (f flowStubTool) Name() string               { return f.name }
-func (f flowStubTool) Description() string         { return f.name }
+func (f flowStubTool) Name() string                 { return f.name }
+func (f flowStubTool) Description() string          { return f.name }
 func (f flowStubTool) Parameters() tools.ToolSchema { return tools.ToolSchema{} }
 func (f flowStubTool) Capability() tools.Capability { return f.cap }
 func (f flowStubTool) RiskLevel() tools.RiskLevel   { return f.risk }
@@ -98,8 +98,8 @@ func TestFlowReadBeforeWriteBlocksWriteOnly(t *testing.T) {
 	if response.Status != contracts.AgentStatusFailed {
 		t.Fatalf("expected failed status after 2nd write violation, got %v", response.Status)
 	}
-	if response.Error == nil || response.Error.Code != "WRITE_BEFORE_READ" {
-		t.Fatalf("expected WRITE_BEFORE_READ error, got %+v", response.Error)
+	if response.Error == nil || response.Error.Code != contracts.ErrorActionBlockedByPolicy {
+		t.Fatalf("expected ACTION_BLOCKED_BY_POLICY error, got %+v", response.Error)
 	}
 }
 
@@ -138,9 +138,10 @@ func TestFlowCreateFromScratchAllowedWithoutRead(t *testing.T) {
 	}
 }
 
-// TestFlowBatchReadWriteAllowed verifies that a batch containing
-// read + write (read before write) passes validation.
-func TestFlowBatchReadWriteAllowed(t *testing.T) {
+// TestFlowBatchReadWriteDeferred verifies that a batch containing
+// read + write only executes the read first. The write must be proposed again
+// after the model has seen the read result, then it still goes through approval.
+func TestFlowBatchReadWriteDeferred(t *testing.T) {
 	registry := flowToolRegistry()
 	provider := &fakeProvider{responses: []providers.ChatResponse{
 		// Batch: web.search + docs.createDocument.
@@ -151,7 +152,13 @@ func TestFlowBatchReadWriteAllowed(t *testing.T) {
 				{ID: "c2", Name: "docs.createDocument", Arguments: map[string]any{"title": "Research"}},
 			},
 		}},
-		{Message: providers.Message{Role: "assistant", Content: "Đã tạo tài liệu research"}},
+		// The model now has the web.search result and can compose the write.
+		{Message: providers.Message{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{
+				{ID: "c3", Name: "docs.createDocument", Arguments: map[string]any{"title": "Research", "content": "web.search ok"}},
+			},
+		}},
 	}}
 
 	runtime := NewRuntime(RuntimeConfig{
@@ -165,8 +172,20 @@ func TestFlowBatchReadWriteAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if response.Status == contracts.AgentStatusFailed {
-		t.Fatalf("batch with read before write should pass, got %+v", response)
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected deferred write to require approval after read result, got %+v", response)
+	}
+	if response.ApprovalRequest == nil || response.ApprovalRequest.ToolCall.ToolName != "docs.createDocument" {
+		t.Fatalf("expected docs.createDocument approval, got %+v", response.ApprovalRequest)
+	}
+	if len(response.ToolResults) != 1 {
+		t.Fatalf("expected only the read tool to execute before approval, got %d results", len(response.ToolResults))
+	}
+	if response.ToolResults[0].ToolName != "web.search" {
+		t.Fatalf("expected web.search to execute first, got %+v", response.ToolResults[0])
+	}
+	if got := response.ApprovalRequest.ToolCall.Input["content"]; got != "web.search ok" {
+		t.Fatalf("expected approval input to be composed after read result, got %#v", response.ApprovalRequest.ToolCall.Input)
 	}
 }
 
