@@ -135,9 +135,13 @@ func (s *Service) CreateDocument(ctx context.Context, input CreateDocumentInput)
 		_, appendErr := s.connector.AppendText(ctx, document.ID, input.Content)
 		if appendErr != nil {
 			// Document was created but content failed to append.
-			// Return the document so the user can manually add content.
-			document.BodyText = "[content append failed: " + appendErr.Error() + "]"
-			return document, nil
+			// Return the document so the caller can still reference it,
+			// but signal partial failure via an ErrorShape.
+			return document, &ErrorShape{
+				Code:      "PARTIAL_FAILURE",
+				Message:   fmt.Sprintf("Document created but content could not be appended: %s", appendErr.Error()),
+				Retryable: false,
+			}
 		}
 		document.BodyText = input.Content
 	}
@@ -318,6 +322,20 @@ func (t DocsTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolRe
 		return outputToolResult(call, output, errShape)
 	case ToolNameCreateDocument:
 		output, errShape := t.service.CreateDocument(ctx, CreateDocumentInput{Title: stringArg(call.Arguments, "title"), Content: stringArg(call.Arguments, "content")})
+		// Handle partial failure: document was created but content append failed.
+		// Include document info in ContentForLLM so the LLM can reference the created document.
+		if errShape != nil && strings.TrimSpace(output.ID) != "" {
+			data, _ := json.Marshal(output)
+			return tools.ToolResult{
+				ToolCallID:     call.ID,
+				ToolName:       call.Name,
+				Success:        false,
+				ContentForLLM:  fmt.Sprintf("%s: %s\nDocument: %s", errShape.Code, errShape.Message, string(data)),
+				ContentForUser: errShape.Message,
+				Error:          &tools.ToolError{Code: errShape.Code, Message: errShape.Message},
+				ArtifactRef:    documentArtifactRef(output.ID, output.Title),
+			}
+		}
 		return outputToolResult(call, output, errShape)
 	case ToolNameAppendText:
 		output, errShape := t.service.AppendText(ctx, AppendTextInput{DocumentID: stringArg(call.Arguments, "documentId"), Text: stringArg(call.Arguments, "text")})

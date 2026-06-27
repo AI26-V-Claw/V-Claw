@@ -1126,6 +1126,7 @@ func TestRuntimeDownloadAttachmentsApprovalWithRelativeOutputDir(t *testing.T) {
 		Provider: provider,
 		Registry: registry,
 		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		DisableReadBeforeWriteValidation: true,
 	})
 
 	message := runtimeTestMessage()
@@ -1168,6 +1169,7 @@ func TestRuntimeDownloadAttachmentsApprovalWithoutOutputDir(t *testing.T) {
 		Provider: provider,
 		Registry: registry,
 		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		DisableReadBeforeWriteValidation: true,
 	})
 
 	message := runtimeTestMessage()

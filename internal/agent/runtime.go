@@ -659,12 +659,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	iterationBudget := NewIterationBudget(r.iterationBudgetLimit)
 	housekeepingRefunds := 0
 	housekeepingRefundLimit := r.iterationBudgetLimit
-	// readBeforeWriteNudges tracks how many times we have nudged the LLM to
-	// read workspace data before writing.  After readBeforeWriteNudgeLimit
-	// nudges the guard is disabled so that "create-from-scratch" requests
-	// (e.g. "create a calendar event") are not blocked indefinitely.
-	readBeforeWriteNudges := 0
-	const readBeforeWriteNudgeLimit = 2
+	// readBeforeWriteNudged tracks whether we have already nudged the LLM
+	// to read workspace data before writing.  On the first violation we
+	// inject a system message and retry.  On the second violation we return
+	// failed — unless the write is a "create-from-scratch" that does not
+	// depend on workspace data.
+	readBeforeWriteNudged := false
 agentLoop:
 	for iteration := 1; ; iteration++ {
 		if !iterationBudget.Consume() {
@@ -972,27 +972,54 @@ If required information is missing, ask one concise clarification question inste
 		// We skip this check for approval continuations (runs that resume after
 		// the user approved a tool). In those cases the reads already happened
 		// in the run *before* the approval exit, but toolResults is reset to
-		// empty when the new continuation run starts. Without this skip the
-		// agent enters a retry loop (up to 6 times) and eventually falls back
-		// to sandbox.runPython, which fails.
-		// Continuation messages are identified by the "continuationOf" metadata
-		// key set in buildApprovalContinuationMessage.
+		// empty when the new continuation run starts.
 		isContinuation := isRevisionMessage(message)
-		if !isContinuation && !r.disableReadBeforeWriteValidation && readBeforeWriteNudges < readBeforeWriteNudgeLimit {
-			if warning, violated := ValidateReadBeforeWrite(assistantMessage.ToolCalls, toolResults); violated {
-				readBeforeWriteNudges++
-				r.logger.Warn("workspace flow order violated: write before read",
-					"request_id", message.RequestID,
-					"session_id", message.SessionID,
-					"iteration", iteration,
-					"nudge", readBeforeWriteNudges,
-					"nudge_limit", readBeforeWriteNudgeLimit,
-				)
-				providerTranscript = append(providerTranscript, providers.Message{
-					Role:    providers.MessageRoleSystem,
-					Content: warning,
-				})
-				continue agentLoop
+		if !isContinuation && !r.disableReadBeforeWriteValidation {
+			if warning, violated := ValidateReadBeforeWrite(assistantMessage.ToolCalls, toolResults, r.registry); violated {
+				// Allow "create-from-scratch" writes that don't reference
+				// existing resource IDs and don't need prior read data.
+				writes := WorkspaceWriteCalls(assistantMessage.ToolCalls, r.registry)
+				if isCreateFromScratch(writes) {
+					r.logger.Info("workspace flow: create-from-scratch write allowed without prior read",
+						"request_id", message.RequestID,
+						"session_id", message.SessionID,
+						"iteration", iteration,
+					)
+				} else if !readBeforeWriteNudged {
+					// First violation: nudge the LLM to read first.
+					readBeforeWriteNudged = true
+					r.logger.Warn("workspace flow order violated: write before read (nudging)",
+						"request_id", message.RequestID,
+						"session_id", message.SessionID,
+						"iteration", iteration,
+					)
+					providerTranscript = append(providerTranscript, providers.Message{
+						Role:    providers.MessageRoleSystem,
+						Content: warning,
+					})
+					continue agentLoop
+				} else {
+					// Second violation: LLM did not comply after nudge → fail.
+					r.logger.Error("workspace flow order violated: write before read (failing)",
+						"request_id", message.RequestID,
+						"session_id", message.SessionID,
+						"iteration", iteration,
+					)
+					updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, "write_before_read")
+					if errShape != nil {
+						base.Error = errShape
+						base.Message = errShape.Message
+						return base, nil
+					}
+					base.FailureReason = updatedState.FailureReason
+					base.Status = contracts.AgentStatusFailed
+					base.Message = "Cannot write workspace data without reading first. Please read relevant data before making changes."
+					base.Error = &contracts.ErrorShape{
+						Code:    "WRITE_BEFORE_READ",
+						Message: base.Message,
+					}
+					return base, nil
+				}
 			}
 		}
 
