@@ -662,6 +662,7 @@ func TestRuntimeRemovesStaleAttendeesFromActiveFollowUpApproval(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
+		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
 	message.Text = "Thời gian từ 10am đến 12am"
@@ -739,6 +740,7 @@ func TestRuntimeClarificationAnswerUsesMergedRequestForCalendarApproval(t *testi
 		Registry:     registry,
 		SessionStore: store,
 		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
 	message.Text = "ngày mai"
@@ -800,6 +802,7 @@ Xin vui lòng xác nhận để tôi tiến hành tạo sự kiện này.`,
 	runtime := NewRuntime(RuntimeConfig{
 		Provider: provider,
 		Registry: registry,
+		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
 	message.Text = "Tạo lịch họp tiêu đề hoàn thành chức năng HITL vào ngày mai từ 10am đến 11am"
@@ -1073,6 +1076,7 @@ func TestRuntimeResolvesNamedChatSpaceBeforeApproval(t *testing.T) {
 		Provider: provider,
 		Registry: registry,
 		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
 	message.Text = "gui tin nhan vao nhom chat VClaw, thong bao ve cuoc hop Demo Sprint1"

@@ -243,7 +243,7 @@ Sending email (two-step):
 
 Calendar event creation:
 - calendar.createEvent requires a title, an explicit start date+time, and an explicit end date+time or duration.
-- When the user provides a relative date with an explicit time (e.g. "3h chiều mai", "tomorrow at 10am for 1 hour"), call get_current_time first to resolve "today"/"tomorrow"/"next Monday" into concrete ISO dates, then proceed to create the event. Do NOT ask the user to provide a concrete date.
+- When the user provides a relative date with an explicit time (e.g. "3h chiều mai", "tomorrow at 2pm for 1 hour"), call get_current_time first to resolve "today"/"tomorrow"/"next Monday" into concrete ISO dates, then proceed to create the event. Do NOT ask the user to provide a concrete date.
 - Only ask for clarification when the user omits essential time information entirely (e.g. just "tạo lịch ngày mai" with no start time or duration).
 - Attendees are only Calendar participants. They do not replace a separate email-send request.
 

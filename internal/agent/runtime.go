@@ -70,6 +70,7 @@ type RuntimeConfig struct {
 	MemoryClassifierModel      string
 	LongMemDir                 string
 	KnowledgeRetriever         knowledge.Retriever
+	DisableReadBeforeWriteValidation bool // skip ValidateReadBeforeWrite; useful for tests that focus on other behavior
 }
 
 type Runtime struct {
@@ -111,6 +112,7 @@ type Runtime struct {
 	ltMemLoader        longTermMemoryLoader  // nil = disabled
 	ltMemFlusher       longTermMemoryFlusher // nil = disabled
 	knowledgeRetriever knowledge.Retriever
+	disableReadBeforeWriteValidation bool
 	cancelMu           sync.Mutex
 	activeCancels      map[string]activeRunCancel // sessionID → active run cancel state
 }
@@ -295,6 +297,7 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltMemFlusher:               ltFlusher,
 		activeCancels:              make(map[string]activeRunCancel),
 		knowledgeRetriever:         config.KnowledgeRetriever,
+		disableReadBeforeWriteValidation: config.DisableReadBeforeWriteValidation,
 	}
 }
 
@@ -972,7 +975,7 @@ If required information is missing, ask one concise clarification question inste
 		// Continuation messages are identified by the "continuationOf" metadata
 		// key set in buildApprovalContinuationMessage.
 		isContinuation := isRevisionMessage(message)
-		if !isContinuation && readBeforeWriteNudges < readBeforeWriteNudgeLimit {
+		if !isContinuation && !r.disableReadBeforeWriteValidation && readBeforeWriteNudges < readBeforeWriteNudgeLimit {
 			if warning, violated := ValidateReadBeforeWrite(assistantMessage.ToolCalls, toolResults); violated {
 				readBeforeWriteNudges++
 				r.logger.Warn("workspace flow order violated: write before read",
@@ -1194,30 +1197,17 @@ If required information is missing, ask one concise clarification question inste
 					return base, nil
 				}
 				if !result.Success {
-					// Read-only tools that fail should not halt the entire multi-tool flow.
-					// The error is already in the transcript (appended above), so the agent
-					// can see it and produce a fallback response using data from other tools.
-					// Write/mutating tool failures still terminate immediately.
-					if definition.Capability == tools.CapabilityReadOnly {
-						r.logger.Warn("read-only tool failed, continuing workspace flow",
-							"request_id", message.RequestID,
-							"session_id", message.SessionID,
-							"tool_name", providerToolCall.Name,
-							"error_code", toolErrorCode(result),
-						)
-					} else {
-						updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError))
-						if errShape != nil {
-							base.Error = errShape
-							base.Message = errShape.Message
-							return base, nil
-						}
-						base.FailureReason = updatedState.FailureReason
-						base.ToolResults = toolResults
-						base.Error = toolErrorShape(result)
-						base.Message = base.Error.Message
+					updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, string(orchestration.FailureReasonToolError))
+					if errShape != nil {
+						base.Error = errShape
+						base.Message = errShape.Message
 						return base, nil
 					}
+					base.FailureReason = updatedState.FailureReason
+					base.ToolResults = toolResults
+					base.Error = toolErrorShape(result)
+					base.Message = base.Error.Message
+					return base, nil
 				}
 
 			case contracts.RiskDecisionRequiresApproval:
