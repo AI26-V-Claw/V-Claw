@@ -2,7 +2,7 @@
   {
     "step": 0,
     "user": {
-      "message": "Đọc email mới nhất từ li14ngayvna@gmail.com, sau đó tìm file 'Proposal Q3.docx' trên Drive và soạn reply đính kèm thông tin từ file đó."
+      "message": "Đọc email '[Sprint 2] Wrap-up Report & Chuẩn bị Demo Day' từ baolnc@vclaw.site ngày 2026-06-19, sau đó tìm file 'Notes - Demo Day Invite' trên Drive và soạn reply đính kèm thông tin từ file đó."
     },
     "agent": {
       "expectation": "Agent đọc email và tìm file trên Drive. Không cần approval cho thao tác đọc.",
@@ -23,7 +23,7 @@
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent soạn draft reply có nội dung từ file Proposal Q3, xin xác nhận tạo draft.",
+      "expectation": "Agent soạn draft reply có nội dung từ file Notes - Demo Day Invite, xin xác nhận tạo draft.",
       "requires_approval": true,
       "expected_tools": [
         "gmail.createDraft"

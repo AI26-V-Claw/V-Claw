@@ -1,0 +1,48 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Gửi tin nhắn 'Họp lúc 3 giờ nhé' vào space VClaw."
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận trước khi gửi tin nhắn Chat ban đầu.",
+      "requires_approval": true,
+      "expected_tools": [
+        "chat.listSpaces",
+        "chat.sendMessage"
+      ],
+      "expected_approval_tool": "chat.sendMessage",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "revise đổi nội dung thành 'Họp lúc 4 giờ nhé'"
+    },
+    "agent": {
+      "expectation": "Agent hủy proposal cũ, áp dụng nội dung chỉnh sửa rồi tạo lại yêu cầu xác nhận cho cùng tool chat.sendMessage.",
+      "requires_approval": true,
+      "expected_tools": [
+        "chat.sendMessage"
+      ],
+      "expected_approval_tool": "chat.sendMessage",
+      "response_contains": [
+        "4 giờ"
+      ]
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent gửi tin nhắn với nội dung đã chỉnh sửa và xác nhận hoàn tất.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

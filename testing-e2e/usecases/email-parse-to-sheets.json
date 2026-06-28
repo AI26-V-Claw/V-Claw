@@ -2,10 +2,10 @@
   {
     "step": 0,
     "user": {
-      "message": "Đọc 5 email mới nhất có nhãn 'Order', trích xuất thông tin đơn hàng bằng Python và thêm vào sheet 'Đơn hàng' trong file 'Sales Tracker'."
+      "message": "Đọc 5 email mới nhất có nhãn 'INBOX', trích xuất thông tin đơn hàng bằng Python và thêm vào sheet 'Sheet1' trong file 'Untitled spreadsheet'."
     },
     "agent": {
-      "expectation": "Agent đọc email có nhãn Order và lấy thông tin sheet. Không cần approval cho thao tác đọc.",
+      "expectation": "Agent đọc email có nhãn INBOX và lấy thông tin sheet. Không cần approval cho thao tác đọc.",
       "requires_approval": false,
       "expected_tools": [
         "gmail.listEmails",

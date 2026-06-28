@@ -2,7 +2,7 @@
   {
     "step": 0,
     "user": {
-      "message": "Liệt kê tất cả sự kiện tuần này trên Calendar, tóm tắt lại và gửi email báo cáo lịch tuần cho li14ngayvna@gmail.com."
+      "message": "Liệt kê tất cả sự kiện tuần này trên Calendar, tóm tắt lại và gửi email báo cáo lịch tuần cho baolnc@vclaw.site."
     },
     "agent": {
       "expectation": "Agent đọc danh sách events tuần này, tóm tắt lại và xin xác nhận tạo draft email báo cáo.",

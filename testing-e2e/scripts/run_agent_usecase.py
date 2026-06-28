@@ -614,6 +614,8 @@ def prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any]
     lines = [
         "Current user attachments are available as local files.",
         'If the user says "file này", "ảnh này", or asks to send/upload the attached file, use these paths in tool inputs that accept attachments.',
+        "Tool mapping: gmail.createDraft.attachments for Gmail, drive.uploadFile.localPath for Drive uploads.",
+        "For Google Docs or Google Sheets, first read or parse the local file, then create/update the Docs or Sheets content from that extracted text or table.",
         "Attachment paths:",
     ]
     lines.extend(f"- {path}" for path in paths)

@@ -2,7 +2,7 @@
   {
     "step": 0,
     "user": {
-      "message": "Email từ nxhaicr7@gmail.com có file CSV dữ liệu ngày hôm kia. Tải về, xử lý bằng Python, cập nhật vào Sheets 'Daily Data', lưu báo cáo lên Drive và thông báo kết quả vào Chat."
+      "message": "Email từ nxhaicr7@gmail.com ngày 2026-06-22 có file dữ liệu đính kèm. Tải về, xử lý bằng Python, cập nhật vào Sheets 'Daily Data', lưu báo cáo lên Drive và thông báo kết quả vào Chat."
     },
     "agent": {
       "expectation": "Agent tìm email từ nxhaicr7@gmail.com, xin xác nhận tải file đính kèm.",

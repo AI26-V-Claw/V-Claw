@@ -2,10 +2,26 @@
   {
     "step": 0,
     "user": {
-      "message": "Soạn và gửi email cho li14ngayvna@gmail.com với nội dung: Chào buổi sáng, chúc bạn một ngày làm việc hiệu quả."
+      "message": "Gửi email chúc buổi sáng cho baolnc@vclaw.site."
     },
     "agent": {
-      "expectation": "Agent tạo draft email trước, xin xác nhận trước khi gửi.",
+      "expectation": "Agent cần hỏi lại nội dung email vì yêu cầu chưa có body cụ thể.",
+      "requires_approval": false,
+      "expected_tools": [
+        "clarify"
+      ],
+      "expected_approval_tool": null,
+      "expected_status": "waiting_clarification",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "Nội dung là: Chào buổi sáng, chúc bạn một ngày làm việc hiệu quả."
+    },
+    "agent": {
+      "expectation": "Agent tạo draft email rồi xin xác nhận trước khi gửi.",
       "requires_approval": true,
       "expected_tools": [
         "gmail.createDraft"
@@ -15,12 +31,12 @@
     }
   },
   {
-    "step": 1,
+    "step": 2,
     "user": {
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent gửi draft, xin xác nhận lần 2 trước khi sendDraft.",
+      "expectation": "Agent xin xác nhận lần nữa trước khi sendDraft.",
       "requires_approval": true,
       "expected_tools": [
         "gmail.sendDraft"
@@ -30,7 +46,7 @@
     }
   },
   {
-    "step": 2,
+    "step": 3,
     "user": {
       "message": "/approve"
     },

@@ -2,7 +2,7 @@
   {
     "step": 0,
     "user": {
-      "message": "Đọc dữ liệu trong sheet 'Doanh thu' của file Google Sheets 'Báo cáo tháng 6'."
+      "message": "Đọc dữ liệu trong sheet 'Sheet1' của file Google Sheets 'Untitled spreadsheet'."
     },
     "agent": {
       "expectation": "Agent đọc giá trị sheet không cần approval, trả về dữ liệu.",

@@ -308,7 +308,11 @@ chat.sendMessage, chat.listMessages, chat.listMembers, and chat.addMember requir
 <file-handling>
 Channel attachments:
 - If the user message contains "Attachment paths:", those are local files sent through the current channel.
-- If the user says "file này", "file tôi đã gửi", "ảnh này", or asks to attach/send/upload the current file, use those paths in gmail.createDraft or chat.sendMessage attachments.
+- If the user says "file này", "file tôi đã gửi", "ảnh này", or asks to attach/send/upload the current file, reuse those local paths for the requested action.
+- For Gmail attachments, pass the local paths in gmail.createDraft.attachments.
+- For Drive uploads, pass the local path in drive.uploadFile.localPath.
+- For Google Docs imports, read or parse the local file first, then use docs.createDocument plus docs.appendText/insertText/replaceText with the extracted content.
+- For Google Sheets imports (especially CSV/TSV/XLSX), parse the local file first, then use sheets.createSpreadsheet plus sheets.updateValues or sheets.appendValues with the extracted rows.
 - Do not call gmail.downloadAttachments unless the user explicitly wants to download an attachment from an existing Gmail message.
 
 Local vs Drive files:

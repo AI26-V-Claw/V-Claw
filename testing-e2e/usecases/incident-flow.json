@@ -2,10 +2,10 @@
   {
     "step": 0,
     "user": {
-      "message": "Có sự cố xảy ra. Đọc tin nhắn trong space 'VCLaw' trên Chat, ghi log vào Docs, tạo lịch họp khẩn cấp tên 'Incident War Room' vào hôm nay lúc 10 giờ sáng, kéo dài 1 tiếng, và gửi email thông báo cho team."
+      "message": "Có sự cố xảy ra. Đọc tin nhắn trong space 'VClaw' trên Chat, ghi log vào Docs, tạo lịch họp khẩn cấp tên 'Incident War Room' vào hôm nay lúc 10 giờ sáng, kéo dài 1 tiếng, và gửi email thông báo cho team."
     },
     "agent": {
-      "expectation": "Agent tìm space VCLaw, đọc tin nhắn. Không cần approval cho thao tác đọc.",
+      "expectation": "Agent tìm space VClaw, đọc tin nhắn. Không cần approval cho thao tác đọc.",
       "requires_approval": false,
       "expected_tools": [
         "chat.listSpaces",
@@ -20,60 +20,87 @@
     "user": {
       "message": "/approve"
     },
-      "agent": {
-        "expectation": "Agent xin xác nhận tạo Docs incident log.",
-        "requires_approval": true,
-        "expected_tools": [
-          "docs.createDocument"
-        ],
-        "expected_approval_tool": "docs.createDocument",
-        "response_contains": []
-      }
+    "agent": {
+      "expectation": "Agent xin xác nhận tạo Docs incident log.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.createDocument"
+      ],
+      "expected_approval_tool": "docs.createDocument",
+      "response_contains": []
+    }
   },
   {
     "step": 2,
     "user": {
       "message": "/approve"
     },
-      "agent": {
-        "expectation": "Agent tạo log xong, xin xác nhận tạo lịch họp khẩn.",
-        "requires_approval": true,
-        "expected_tools": [
-          "docs.appendText",
-          "calendar.createEvent"
-        ],
-        "expected_approval_tool": "calendar.createEvent",
-        "response_contains": []
-      }
+    "agent": {
+      "expectation": "Agent tạo log xong, xin xác nhận điền nội dung incident log vào Docs.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.appendText"
+      ],
+      "expected_approval_tool": "docs.appendText",
+      "response_contains": []
+    }
   },
   {
     "step": 3,
     "user": {
       "message": "/approve"
     },
-      "agent": {
-        "expectation": "Agent tạo lịch xong, xin xác nhận gửi email thông báo.",
-        "requires_approval": true,
-        "expected_tools": [
-          "gmail.createDraft"
-        ],
-        "expected_approval_tool": "gmail.createDraft",
-        "response_contains": []
-      }
+    "agent": {
+      "expectation": "Agent ghi log xong, xin xác nhận tạo lịch họp khẩn.",
+      "requires_approval": true,
+      "expected_tools": [
+        "calendar.createEvent"
+      ],
+      "expected_approval_tool": "calendar.createEvent",
+      "response_contains": []
+    }
   },
   {
     "step": 4,
     "user": {
       "message": "/approve"
     },
-      "agent": {
-        "expectation": "Agent hoàn thành incident flow, báo cáo đã ghi log, tạo lịch và gửi email.",
-        "requires_approval": false,
-        "expected_tools": [
-          "gmail.sendDraft"
-        ],
-        "expected_approval_tool": null,
-        "response_contains": []
-      }
+    "agent": {
+      "expectation": "Agent tạo lịch xong, xin xác nhận tạo draft email thông báo.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.createDraft"
+      ],
+      "expected_approval_tool": "gmail.createDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 5,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận gửi email thông báo cho team.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.sendDraft"
+      ],
+      "expected_approval_tool": "gmail.sendDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 6,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành incident flow, báo cáo đã ghi log, tạo lịch và gửi email.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
   }
 ]

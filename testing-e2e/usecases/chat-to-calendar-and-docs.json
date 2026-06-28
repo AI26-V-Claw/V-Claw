@@ -2,14 +2,30 @@
   {
     "step": 0,
     "user": {
-      "message": "Đọc tin nhắn mới nhất trong space VClaw, tạo lịch follow-up tên 'VClaw Follow-up' vào ngày mai lúc 10 giờ sáng, kéo dài 1 tiếng, dựa trên nội dung thảo luận và ghi biên bản vào Docs."
+      "message": "Đọc tin nhắn mới nhất trong space VClaw, tạo lịch follow-up tên 'VClaw Follow-up' dựa trên nội dung thảo luận và ghi biên bản vào Docs."
     },
     "agent": {
-      "expectation": "Agent tìm space VClaw, đọc tin nhắn rồi xin xác nhận tạo lịch follow-up.",
-      "requires_approval": true,
+      "expectation": "Agent đọc Chat trước, rồi hỏi lại thời gian họp vì yêu cầu chưa có ngày giờ cụ thể.",
+      "requires_approval": false,
       "expected_tools": [
         "chat.listSpaces",
         "chat.listMessages",
+        "clarify"
+      ],
+      "expected_approval_tool": null,
+      "expected_status": "waiting_clarification",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "Ngày mai lúc 10 giờ sáng, kéo dài 1 tiếng."
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận tạo lịch follow-up sau khi đã đủ thời gian.",
+      "requires_approval": true,
+      "expected_tools": [
         "calendar.createEvent"
       ],
       "expected_approval_tool": "calendar.createEvent",
@@ -17,7 +33,7 @@
     }
   },
   {
-    "step": 1,
+    "step": 2,
     "user": {
       "message": "/approve"
     },
@@ -32,7 +48,22 @@
     }
   },
   {
-    "step": 2,
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo Docs xong, xin xác nhận điền nội dung biên bản vào tài liệu.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.appendText"
+      ],
+      "expected_approval_tool": "docs.appendText",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 4,
     "user": {
       "message": "/approve"
     },

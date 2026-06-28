@@ -50,31 +50,44 @@
     "user": {
       "message": "/approve"
     },
-      "agent": {
-        "expectation": "Agent thêm member xong, xin xác nhận tạo Docs checklist onboarding.",
-        "requires_approval": true,
-        "expected_tools": [
-          "docs.createDocument"
-        ],
-        "expected_approval_tool": "docs.createDocument",
-        "response_contains": []
-      }
+    "agent": {
+      "expectation": "Agent thêm member xong, xin xác nhận tạo Docs checklist onboarding.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.createDocument"
+      ],
+      "expected_approval_tool": "docs.createDocument",
+      "response_contains": []
+    }
   },
   {
     "step": 4,
     "user": {
       "message": "/approve"
     },
-      "agent": {
-        "expectation": "Agent hoàn thành onboarding flow.",
-        "requires_approval": false,
-        "expected_tools": [
-          "docs.appendText"
-        ],
-        "expected_approval_tool": null,
-        "response_contains": [
-          "Nguyễn Văn A"
-        ]
+    "agent": {
+      "expectation": "Agent tạo Docs xong, xin xác nhận điền checklist onboarding.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.appendText"
+      ],
+      "expected_approval_tool": "docs.appendText",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 5,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành onboarding flow.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Nguyễn Văn A"
+      ]
     }
   }
 ]
