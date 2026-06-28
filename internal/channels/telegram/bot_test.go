@@ -1538,6 +1538,21 @@ func TestTelegramTextFromApprovalExpiredResponseShowsExpiredMessage(t *testing.T
 	}
 }
 
+func TestTelegramTextFromVisionUnsupportedShowsSpecificMessage(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusFailed,
+		Error: &contracts.ErrorShape{
+			Code:      contracts.ErrorProviderUnavailable,
+			Message:   "model không hỗ trợ input với ảnh",
+			Source:    contracts.ErrorSourceProvider,
+			Retryable: false,
+		},
+	})
+	if text != "model không hỗ trợ input với ảnh" {
+		t.Fatalf("unexpected vision unsupported text: %q", text)
+	}
+}
+
 func TestTelegramTextFromFailedResponseIncludesTraceLinkWhenConfigured(t *testing.T) {
 	t.Setenv("LANGFUSE_HOST", "https://us.cloud.langfuse.com")
 	t.Setenv("LANGFUSE_PROJECT_ID", "proj_123")

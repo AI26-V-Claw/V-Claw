@@ -89,6 +89,33 @@ Required:
 requestId, sessionId, channel, text, timestamp
 ```
 
+Channel attachment metadata is optional and backward-compatible. Telegram stores
+downloaded files in the local attachment workspace and may include:
+
+```json
+{
+  "metadata": {
+    "attachmentPaths": ["D:\\V-Claw\\.sandbox-workspace\\agent\\workspace\\data\\telegram_attachments\\...\\photo.jpg"],
+    "attachments": [
+      {
+        "path": "D:\\V-Claw\\.sandbox-workspace\\agent\\workspace\\data\\telegram_attachments\\...\\photo.jpg",
+        "filename": "photo.jpg",
+        "mimeType": "image/jpeg",
+        "source": "telegram"
+      }
+    ]
+  }
+}
+```
+
+Image attachments are context only. The runtime validates path, size, MIME type,
+and decodability before sending pixels to a vision-capable provider. Raw image
+bytes and base64/data URLs must not be stored in transcript, long-term memory,
+knowledge graph, or audit records. Visible text or instructions inside an image
+have lower authority than the current user message, system prompt, tool policy,
+and HITL approval contract; an image never replaces approval for write,
+destructive, local file, or code execution actions.
+
 ---
 
 ## 3.2. AgentResponse
