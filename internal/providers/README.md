@@ -14,3 +14,7 @@ Planned submodules:
 - `local`: Ollama, LM Studio, or other local model runtimes.
 - `router`: provider selection, fallback, model registry, usage accounting.
 
+OpenAI's native adapter supports text and image input through Chat Completions
+when `providers.Message.Parts` contains image parts. Other providers remain
+text-only unless they explicitly advertise `Capabilities().ImageInput`.
+

@@ -38,6 +38,7 @@ type SessionMemory struct {
 	// FileRefs tracks files the agent has resolved this session, keyed by filename.
 	// Persists across bot restarts so the agent knows whether a file is local or on Drive.
 	FileRefs  map[string]FileRef `json:"fileRefs,omitempty"`
+	ImageRefs []ImageRef         `json:"imageRefs,omitempty"`
 	UpdatedAt time.Time          `json:"updatedAt,omitempty"`
 }
 
@@ -49,6 +50,17 @@ type FileRef struct {
 	Path string `json:"path,omitempty"`
 	// DriveID is the Google Drive file ID for Drive files.
 	DriveID string `json:"driveId,omitempty"`
+}
+
+type ImageRef struct {
+	Path       string    `json:"path,omitempty"`
+	MIMEType   string    `json:"mimeType,omitempty"`
+	Filename   string    `json:"filename,omitempty"`
+	SizeBytes  int64     `json:"sizeBytes,omitempty"`
+	Width      int       `json:"width,omitempty"`
+	Height     int       `json:"height,omitempty"`
+	ReceivedAt time.Time `json:"receivedAt,omitempty"`
+	RequestID  string    `json:"requestId,omitempty"`
 }
 
 type ActionResult struct {
@@ -172,6 +184,9 @@ func cloneMessages(messages []providers.Message) []providers.Message {
 
 func cloneMessage(message providers.Message) providers.Message {
 	cloned := message
+	if len(message.Parts) > 0 {
+		cloned.Parts = cloneContentParts(message.Parts)
+	}
 	if len(message.ToolCalls) == 0 {
 		return cloned
 	}
@@ -184,6 +199,24 @@ func cloneMessage(message providers.Message) providers.Message {
 		cloned.ToolCalls[i].Arguments = make(map[string]any, len(toolCall.Arguments))
 		for key, value := range toolCall.Arguments {
 			cloned.ToolCalls[i].Arguments[key] = value
+		}
+	}
+	return cloned
+}
+
+func cloneContentParts(parts []providers.ContentPart) []providers.ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	cloned := make([]providers.ContentPart, len(parts))
+	for i, part := range parts {
+		cloned[i] = part
+		if part.Image != nil {
+			image := *part.Image
+			if len(part.Image.Data) > 0 {
+				image.Data = append([]byte(nil), part.Image.Data...)
+			}
+			cloned[i].Image = &image
 		}
 	}
 	return cloned
@@ -202,6 +235,9 @@ func cloneMemory(memory SessionMemory) SessionMemory {
 		for k, v := range memory.FileRefs {
 			cloned.FileRefs[k] = v
 		}
+	}
+	if len(memory.ImageRefs) > 0 {
+		cloned.ImageRefs = append([]ImageRef(nil), memory.ImageRefs...)
 	}
 	return cloned
 }

@@ -435,7 +435,7 @@ func (p *langfuseProvider) Chat(ctx context.Context, request providers.ChatReque
 	attrs := []attribute.KeyValue{
 		attribute.String("langfuse.observation.type", "generation"),
 		attribute.String("langfuse.observation.input", compactJSON(map[string]any{
-			"messages":   request.Messages,
+			"messages":   sanitizeProviderMessagesForTelemetry(request.Messages),
 			"tools":      request.Tools,
 			"toolChoice": strings.TrimSpace(request.ToolChoice),
 		})),
@@ -491,8 +491,34 @@ func (p *langfuseProvider) Name() string {
 	return p.next.Name()
 }
 
+func (p *langfuseProvider) Capabilities() providers.Capabilities {
+	return providers.ProviderCapabilities(p.next)
+}
+
 func (p *langfuseProvider) Close() error {
 	return p.next.Close()
+}
+
+func sanitizeProviderMessagesForTelemetry(messages []providers.Message) []providers.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	sanitized := make([]providers.Message, len(messages))
+	for i, message := range messages {
+		sanitized[i] = message
+		if len(message.Parts) > 0 {
+			sanitized[i].Parts = make([]providers.ContentPart, len(message.Parts))
+			for j, part := range message.Parts {
+				sanitized[i].Parts[j] = part
+				if part.Image != nil {
+					image := *part.Image
+					image.Data = nil
+					sanitized[i].Parts[j].Image = &image
+				}
+			}
+		}
+	}
+	return sanitized
 }
 
 func compactJSON(value any) string {

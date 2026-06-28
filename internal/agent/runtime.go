@@ -499,6 +499,25 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 			return failStartedRun(errShape)
 		}
 	}
+	currentVisionAttachments := len(imageAttachmentCandidates(message.Metadata)) > 0
+	visionImages, errShape := r.loadVisionImagesForMessage(ctx, message, sessionMemory)
+	if errShape != nil {
+		return failStartedRun(errShape)
+	}
+	if len(visionImages) > 0 && !providers.ProviderCapabilities(r.provider).ImageInput {
+		return failStartedRun(&contracts.ErrorShape{
+			Code:      contracts.ErrorProviderUnavailable,
+			Message:   "model không hỗ trợ input với ảnh",
+			Source:    contracts.ErrorSourceProvider,
+			Retryable: false,
+		})
+	}
+	if currentVisionAttachments && len(visionImages) > 0 {
+		sessionMemory.ImageRefs = imageRefsFromLoaded(visionImages)
+		if errShape := r.saveSessionMemory(ctx, message.SessionID, sessionMemory); errShape != nil {
+			return failStartedRun(errShape)
+		}
+	}
 	isRevision := isRevisionMessage(message)
 	var turnMeta turnAnalysis
 	if !isRevision {
@@ -632,6 +651,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 		providerTranscript = append(cloneProviderMessages(activeTranscript), providerUserMessage)
 	} else if contextualFollowUp {
 		providerTranscript = transcriptWithLastUserContent(transcript, understandingMessage.Text)
+	}
+	if len(visionImages) > 0 {
+		providerTranscript = attachVisionImagesToLastUser(providerTranscript, visionImages)
 	}
 
 	var providerKnowledge *knowledge.LinkedContext
