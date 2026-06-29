@@ -658,6 +658,9 @@ func TestRuntimePromptBoundsSandboxPDFExtractionOutput(t *testing.T) {
 		"Never invent a local path from the Drive filename",
 		"docs.createDocument and docs.appendMarkdown",
 		"Do not call filesystem.readFile first",
+		"check recent emails",
+		"Do not add in:sent, label:sent, from:<user>, or to:<user>",
+		"include that topic keyword/phrase in gmail.listEmails.query",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("runtime prompt missing sandbox output guidance %q", want)
