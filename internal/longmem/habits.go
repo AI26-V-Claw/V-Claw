@@ -189,7 +189,7 @@ func habitIntentFromToolName(toolName string) (string, string, bool) {
 		return "send", "chat_message", true
 	case "drive.createFile", "drive.uploadFile", "drive.createFolder":
 		return "create", "drive_file", true
-	case "drive.updateFileMetadata", "drive.moveFile", "docs.appendText", "docs.replaceText", "docs.insertText":
+	case "drive.updateFileMetadata", "drive.moveFile", "docs.appendText", "docs.appendMarkdown", "docs.replaceText", "docs.insertText":
 		return "update", "drive_file", true
 	case "docs.createDocument":
 		return "create", "document", true

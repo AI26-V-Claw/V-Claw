@@ -35,7 +35,7 @@ sequenceDiagram
     alt Target is Google Doc
         Agent->>Docs: docs.getDocument
         Docs-->>Agent: Document content/metadata
-        Agent->>Policy: Propose docs.appendText / replaceText / insertText / deleteContent
+        Agent->>Policy: Propose docs.appendText / appendMarkdown / replaceText / insertText / deleteContent
     else Target is Google Sheet
         Agent->>Sheets: sheets.getSpreadsheet / sheets.readValues
         Sheets-->>Agent: Sheet metadata/values
@@ -77,7 +77,7 @@ sequenceDiagram
 | Tool Group | Safe Reads | Writes Requiring HITL |
 |---|---|---|
 | Drive | `drive.listFiles`, `drive.getFile`, `drive.exportFile`, `drive.downloadFile`, `drive.listPermissions` | `drive.createFolder`, `drive.createFile`, `drive.uploadFile`, `drive.updateFileMetadata`, `drive.shareFile`, `drive.revokePermission`, `drive.moveFile`, `drive.moveFiles`, `drive.trashFile`, `drive.untrashFile` |
-| Docs | `docs.getDocument` | `docs.createDocument`, `docs.appendText`, `docs.replaceText`, `docs.insertText`, `docs.deleteContent` |
+| Docs | `docs.getDocument` | `docs.createDocument`, `docs.appendText`, `docs.appendMarkdown`, `docs.replaceText`, `docs.insertText`, `docs.deleteContent` |
 | Sheets | `sheets.getSpreadsheet`, `sheets.readValues`, `sheets.batchGetValues` | `sheets.createSpreadsheet`, `sheets.updateValues`, `sheets.batchUpdateValues`, `sheets.appendValues`, `sheets.clearValues`, `sheets.addSheet`, `sheets.renameSheet`, `sheets.deleteSheet`, `sheets.duplicateSheet` |
 
 ## HITL Proposal Must Include

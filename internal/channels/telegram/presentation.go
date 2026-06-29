@@ -469,10 +469,10 @@ func telegramShouldShowApprovalDetail(approval contracts.ApprovalRequest) bool {
 		"chat.sendMessage", "chat.updateMessage", "chat.deleteMessage", "chat.createSpace", "chat.addMember", "chat.removeMember",
 		"drive.saveFile", "drive.createFolder", "drive.createFile", "drive.uploadFile", "drive.updateFileMetadata",
 		"drive.shareFile", "drive.revokePermission", "drive.moveFile", "drive.moveFiles", "drive.trashFile", "drive.untrashFile",
-		"docs.createDocument", "docs.appendText", "docs.replaceText", "docs.insertText", "docs.deleteContent",
+		"docs.createDocument", "docs.appendText", "docs.appendMarkdown", "docs.replaceText", "docs.insertText", "docs.deleteContent",
 		"sheets.createSpreadsheet", "sheets.updateValues", "sheets.batchUpdateValues", "sheets.appendValues",
 		"sheets.clearValues", "sheets.addSheet", "sheets.renameSheet", "sheets.deleteSheet", "sheets.duplicateSheet",
-		"meet.createMeeting", "sandbox.runPython", "sandbox.runShell":
+		"meet.createMeeting", "sandbox.runPython", "sandbox.runShell", "sandbox.extractPDF":
 		return true
 	default:
 		return false
@@ -537,7 +537,7 @@ func telegramActionLabel(toolName string) string {
 		return "Khôi phục tệp Google Drive"
 	case "docs.createDocument":
 		return "Tạo Google Docs"
-	case "docs.appendText", "docs.replaceText", "docs.insertText":
+	case "docs.appendText", "docs.appendMarkdown", "docs.replaceText", "docs.insertText":
 		return "Cập nhật nội dung Google Docs"
 	case "docs.deleteContent":
 		return "Xóa nội dung Google Docs"
@@ -563,6 +563,8 @@ func telegramActionLabel(toolName string) string {
 		return "Xóa thành viên khỏi Google Chat"
 	case "sandbox.runPython":
 		return "Chạy mã Python trong sandbox"
+	case "sandbox.extractPDF":
+		return "Trích xuất PDF có cấu trúc"
 	case "sandbox.runShell":
 		return "Chạy lệnh shell trong sandbox"
 	default:
@@ -648,6 +650,12 @@ func telegramApprovalDetailText(approval contracts.ApprovalRequest) string {
 		}
 		return telegramTextField("Môi trường", "Python sandbox") + "\n" +
 			"Code được ẩn khỏi tin nhắn xác nhận."
+	case "sandbox.extractPDF":
+		lines := []string{telegramTextField("PDF", filepath.Base(stringMapValue(input, "localPath")))}
+		if outputFile := stringMapValue(input, "outputFile"); outputFile != "" {
+			lines = append(lines, telegramTextField("Markdown đầu ra", filepath.Base(outputFile)))
+		}
+		return strings.Join(lines, "\n")
 	case "sandbox.runShell":
 		if command := stringMapValue(input, "command"); command != "" {
 			return "Lệnh shell sẽ chạy:\n\n" + telegramCodeBlock("bash", telegramApprovalPreview(command))

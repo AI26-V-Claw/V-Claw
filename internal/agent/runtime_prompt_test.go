@@ -644,6 +644,13 @@ func TestRuntimePromptBoundsSandboxPDFExtractionOutput(t *testing.T) {
 		"under 4000 characters",
 		"For PDF summarization specifically",
 		"Do not do text += page_text for every page followed by print(text)",
+		"use that exact path in Python and preserve every subdirectory",
+		"/workspace/data/telegram_attachments/",
+		"Do not reduce a nested file to its basename",
+		"docs.createDocument creates an empty document only",
+		"use sandbox.extractPDF to produce structured Markdown",
+		"docs.createDocument and docs.appendMarkdown",
+		"Do not call filesystem.readFile first",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("runtime prompt missing sandbox output guidance %q", want)

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"unicode/utf8"
 
 	"vclaw/internal/connectors/google/common"
 	gdocs "vclaw/internal/connectors/google/docs"
@@ -18,10 +20,13 @@ const (
 	ToolNameGetDocument    = "docs.getDocument"
 	ToolNameCreateDocument = "docs.createDocument"
 	ToolNameAppendText     = "docs.appendText"
+	ToolNameAppendMarkdown = "docs.appendMarkdown"
 	ToolNameReplaceText    = "docs.replaceText"
 	ToolNameInsertText     = "docs.insertText"
 	ToolNameDeleteContent  = "docs.deleteContent"
 )
+
+const maxAppendLocalFileBytes = int64(1024 * 1024)
 
 type ToolRegistryEntry struct {
 	Name             string
@@ -35,6 +40,7 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameGetDocument, Owner: "integration", Description: "Read a Google Docs document in full or preview mode.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameCreateDocument, Owner: "integration", Description: "Create a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameAppendText, Owner: "integration", Description: "Append text to a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameAppendMarkdown, Owner: "integration", Description: "Append Markdown as styled Google Docs content.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameReplaceText, Owner: "integration", Description: "Replace matching text in a Google Docs document.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameInsertText, Owner: "integration", Description: "Insert text at a Google Docs structural index.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameDeleteContent, Owner: "integration", Description: "Delete content from a Google Docs structural range.", DefaultRiskLevel: "external_write", RequiresApproval: true},
@@ -44,6 +50,7 @@ type Connector interface {
 	GetDocument(ctx context.Context, documentID string) (gdocs.Document, error)
 	CreateDocument(ctx context.Context, title string) (gdocs.Document, error)
 	AppendText(ctx context.Context, documentID string, text string) (gdocs.AppendTextOutput, error)
+	AppendRichText(ctx context.Context, documentID string, content gdocs.RichTextContent) (gdocs.AppendTextOutput, error)
 	ReplaceText(ctx context.Context, documentID string, oldText string, newText string, matchCase bool) (gdocs.EditTextOutput, error)
 	InsertText(ctx context.Context, documentID string, index int64, text string) (gdocs.EditTextOutput, error)
 	DeleteContent(ctx context.Context, documentID string, startIndex int64, endIndex int64) (gdocs.EditTextOutput, error)
@@ -84,6 +91,12 @@ type CreateDocumentInput struct {
 type AppendTextInput struct {
 	DocumentID string
 	Text       string
+}
+
+// PathGuard confines local file reads to the configured sandbox workspace.
+// filesystem.PathGuard satisfies this interface.
+type PathGuard interface {
+	Resolve(path string) (string, error)
 }
 
 type ReplaceTextInput struct {
@@ -166,6 +179,23 @@ func (s *Service) AppendText(ctx context.Context, input AppendTextInput) (gdocs.
 	return output, nil
 }
 
+func (s *Service) AppendMarkdown(ctx context.Context, documentID string, content gdocs.RichTextContent) (gdocs.AppendTextOutput, *ErrorShape) {
+	if errShape := s.validateConnector(); errShape != nil {
+		return gdocs.AppendTextOutput{}, errShape
+	}
+	if strings.TrimSpace(documentID) == "" {
+		return gdocs.AppendTextOutput{}, invalidInput("documentId is required")
+	}
+	if strings.TrimSpace(content.Text) == "" {
+		return gdocs.AppendTextOutput{}, invalidInput("markdown content is required")
+	}
+	output, err := s.connector.AppendRichText(ctx, documentID, content)
+	if err != nil {
+		return gdocs.AppendTextOutput{}, mapError(err)
+	}
+	return output, nil
+}
+
 func (s *Service) ReplaceText(ctx context.Context, input ReplaceTextInput) (gdocs.EditTextOutput, *ErrorShape) {
 	if errShape := s.validateConnector(); errShape != nil {
 		return gdocs.EditTextOutput{}, errShape
@@ -233,10 +263,15 @@ func (s *Service) validateConnector() *ErrorShape {
 type DocsTool struct {
 	name    string
 	service *Service
+	guard   PathGuard
 }
 
-func NewTool(name string, service *Service) DocsTool {
-	return DocsTool{name: name, service: service}
+func NewTool(name string, service *Service, guards ...PathGuard) DocsTool {
+	var guard PathGuard
+	if len(guards) > 0 {
+		guard = guards[0]
+	}
+	return DocsTool{name: name, service: service, guard: guard}
 }
 
 func (t DocsTool) Name() string { return t.name }
@@ -248,7 +283,9 @@ func (t DocsTool) Description() string {
 	case ToolNameCreateDocument:
 		return "Create a Google Docs document. Requires human approval before execution."
 	case ToolNameAppendText:
-		return "Append text to an existing Google Docs document. Requires human approval before execution."
+		return "Append inline text or the complete contents of one UTF-8 local workspace file to an existing Google Docs document. Provide exactly one of text or localPath. Use localPath for text extracted from PDF/Word/Excel so long content does not pass through or get truncated by the model context. localPath must be the exact absolute host path from sandbox workspace_files, not a /workspace container path. Requires human approval before execution."
+	case ToolNameAppendMarkdown:
+		return "Append Markdown as styled Google Docs content. Supports headings, bullet lists, italic notes, fenced code blocks, and readable monospaced Markdown tables. Provide exactly one of markdown or localPath. For PDF workflows, use the exact structured .md host path returned by sandbox.extractPDF. Requires human approval before execution."
 	case ToolNameReplaceText:
 		return "Replace all matching text in an existing Google Docs document. Requires human approval before execution."
 	case ToolNameInsertText:
@@ -276,8 +313,15 @@ func (t DocsTool) Parameters() tools.ToolSchema {
 	case ToolNameAppendText:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{
 			"documentId": map[string]any{"type": "string"},
-			"text":       map[string]any{"type": "string"},
-		}, "required": []string{"documentId", "text"}, "additionalProperties": false}
+			"text":       map[string]any{"type": "string", "description": "Inline text to append. Provide exactly one of text or localPath."},
+			"localPath":  map[string]any{"type": "string", "description": "Exact absolute host path of a UTF-8 text file inside the sandbox workspace. Provide exactly one of text or localPath."},
+		}, "required": []string{"documentId"}, "additionalProperties": false}
+	case ToolNameAppendMarkdown:
+		return tools.ToolSchema{"type": "object", "properties": map[string]any{
+			"documentId": map[string]any{"type": "string"},
+			"markdown":   map[string]any{"type": "string", "description": "Inline Markdown. Provide exactly one of markdown or localPath."},
+			"localPath":  map[string]any{"type": "string", "description": "Exact absolute host path of a UTF-8 Markdown file inside the sandbox workspace."},
+		}, "required": []string{"documentId"}, "additionalProperties": false}
 	case ToolNameReplaceText:
 		return tools.ToolSchema{"type": "object", "properties": map[string]any{
 			"documentId": map[string]any{"type": "string"},
@@ -339,8 +383,9 @@ func (t DocsTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolRe
 		}
 		return outputToolResult(call, output, errShape)
 	case ToolNameAppendText:
-		output, errShape := t.service.AppendText(ctx, AppendTextInput{DocumentID: stringArg(call.Arguments, "documentId"), Text: stringArg(call.Arguments, "text")})
-		return outputToolResult(call, output, errShape)
+		return t.appendText(ctx, call)
+	case ToolNameAppendMarkdown:
+		return t.appendMarkdown(ctx, call)
 	case ToolNameReplaceText:
 		output, errShape := t.service.ReplaceText(ctx, ReplaceTextInput{DocumentID: stringArg(call.Arguments, "documentId"), OldText: stringArg(call.Arguments, "oldText"), NewText: stringArg(call.Arguments, "newText"), MatchCase: boolArg(call.Arguments, "matchCase")})
 		return outputToolResult(call, output, errShape)
@@ -355,9 +400,62 @@ func (t DocsTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolRe
 	}
 }
 
-func RegisterTools(registry *tools.ToolRegistry, service *Service) error {
-	for _, name := range []string{ToolNameGetDocument, ToolNameCreateDocument, ToolNameAppendText, ToolNameReplaceText, ToolNameInsertText, ToolNameDeleteContent} {
-		if err := registry.RegisterWithEntry(NewTool(name, service), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
+func (t DocsTool) appendText(ctx context.Context, call tools.ToolCall) tools.ToolResult {
+	documentID := strings.TrimSpace(stringArg(call.Arguments, "documentId"))
+	text := stringArg(call.Arguments, "text")
+	localPath := strings.TrimSpace(stringArg(call.Arguments, "localPath"))
+	if strings.TrimSpace(text) != "" && localPath != "" {
+		return outputToolResult(call, nil, invalidInput("provide exactly one of text or localPath"))
+	}
+	if localPath == "" {
+		output, errShape := t.service.AppendText(ctx, AppendTextInput{DocumentID: documentID, Text: text})
+		return outputToolResult(call, output, errShape)
+	}
+	if t.guard == nil {
+		return outputToolResult(call, nil, invalidInput("localPath is unavailable: no sandbox workspace is configured"))
+	}
+	resolved, err := t.guard.Resolve(localPath)
+	if err != nil {
+		return outputToolResult(call, nil, invalidInput("localPath is outside the allowed workspace: "+err.Error()))
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return outputToolResult(call, nil, invalidInput("cannot read localPath: "+err.Error()))
+	}
+	if !info.Mode().IsRegular() {
+		return outputToolResult(call, nil, invalidInput("localPath must reference a regular file"))
+	}
+	if info.Size() <= 0 {
+		return outputToolResult(call, nil, invalidInput("localPath file is empty"))
+	}
+	if info.Size() > maxAppendLocalFileBytes {
+		return outputToolResult(call, nil, invalidInput(fmt.Sprintf("localPath file exceeds the %d byte limit", maxAppendLocalFileBytes)))
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return outputToolResult(call, nil, invalidInput("cannot read localPath: "+err.Error()))
+	}
+	if !utf8.Valid(data) {
+		return outputToolResult(call, nil, invalidInput("localPath must contain valid UTF-8 text"))
+	}
+	output, errShape := t.service.AppendText(ctx, AppendTextInput{DocumentID: documentID, Text: string(data)})
+	result := outputToolResult(call, output, errShape)
+	if result.Success {
+		if result.Metadata == nil {
+			result.Metadata = map[string]any{}
+		}
+		result.Metadata["local_file_bytes"] = len(data)
+	}
+	return result
+}
+
+func RegisterTools(registry *tools.ToolRegistry, service *Service, guards ...PathGuard) error {
+	var guard PathGuard
+	if len(guards) > 0 {
+		guard = guards[0]
+	}
+	for _, name := range []string{ToolNameGetDocument, ToolNameCreateDocument, ToolNameAppendText, ToolNameAppendMarkdown, ToolNameReplaceText, ToolNameInsertText, ToolNameDeleteContent} {
+		if err := registry.RegisterWithEntry(NewTool(name, service, guard), tools.ToolRegistryEntry{Owner: "integration", Group: "google_workspace"}); err != nil {
 			return err
 		}
 	}
@@ -408,7 +506,7 @@ func docsUserSummary(toolName string, output any) string {
 		if out, ok := output.(gdocs.Document); ok {
 			return fmt.Sprintf("Đã tạo tài liệu %s", firstNonEmpty(out.Title, out.ID))
 		}
-	case ToolNameAppendText, ToolNameInsertText:
+	case ToolNameAppendText, ToolNameAppendMarkdown, ToolNameInsertText:
 		return "Đã thêm nội dung vào tài liệu"
 	case ToolNameReplaceText:
 		return "Đã thay thế nội dung trong tài liệu"

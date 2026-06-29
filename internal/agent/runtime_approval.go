@@ -1061,7 +1061,8 @@ func (r *Runtime) responseForUnclaimedApprovedAction(record ActionRecord, pendin
 
 func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
-	resultNote := approvalContinuationResultNote(pending.toolCall.Name)
+	originalRequest := approvalOriginalRequest(pending.message)
+	resultNote := approvalContinuationResultNote(pending.toolCall.Name, docsContentWriteRequested(originalRequest))
 	resultContent := truncateToolContentForLLM(result.ContentForLLM)
 	if len(pending.remainingToolCalls) > 0 {
 		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
@@ -1082,7 +1083,7 @@ Result: %s
 Continue by calling the remaining tools in the original plan: %s
 Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.
 Call each remaining tool exactly once. Do not call a tool that already appears in the conversation history.`,
-			pending.message.Text,
+			originalRequest,
 			pending.toolCall.Name,
 			resultContent,
 			resultNote,
@@ -1107,7 +1108,7 @@ Check whether the original request contained additional tasks that have not yet 
 If yes, call the necessary tool(s) now — do NOT ask the user again for information already given in the original request.
 If all tasks are already complete, respond with a short Vietnamese summary of what was accomplished.
 Do not repeat the tool that was just executed.`,
-			pending.message.Text,
+			originalRequest,
 			pending.toolCall.Name,
 			resultContent,
 			resultNote,
@@ -1117,12 +1118,42 @@ Do not repeat the tool that was just executed.`,
 	msg := pending.message
 	msg.Text = text
 	msg.Timestamp = now
+	msg.Metadata = cloneAnyMap(pending.message.Metadata)
 	if msg.Metadata == nil {
 		msg.Metadata = map[string]any{}
 	}
+	msg.Metadata["originalRequest"] = originalRequest
 	msg.Metadata["continuationOf"] = pending.request.ApprovalID
 	msg.Metadata["completedTool"] = pending.toolCall.Name
 	return msg
+}
+
+func approvalOriginalRequest(message contracts.UserMessage) string {
+	if original, ok := message.Metadata["originalRequest"].(string); ok && strings.TrimSpace(original) != "" {
+		return strings.TrimSpace(original)
+	}
+	return strings.TrimSpace(message.Text)
+}
+
+func docsContentWriteRequested(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	if containsAnyText(lower,
+		"với nội dung", "voi noi dung", "chứa nội dung", "chua noi dung", "with content", "containing text",
+		"append to docs", "append vào docs", "ghi vào docs", "ghi vao docs", "write to docs",
+	) {
+		return true
+	}
+	contentSource := containsAnyText(lower,
+		"nội dung", "noi dung", "content", "text", "pdf", "word", "excel",
+		"trích xuất", "trich xuat", "extract", "tóm tắt", "tom tat", "summary", "kết quả", "ket qua", "result",
+	)
+	writeIntent := containsAnyText(lower,
+		"lưu", "luu", "save", "ghi", "write", "đưa vào", "dua vao", "put into", "append", "chèn", "chen", "insert",
+	)
+	return contentSource && writeIntent
 }
 
 func isDraftCreationTool(toolName string) bool {
@@ -1134,9 +1165,12 @@ func isDraftCreationTool(toolName string) bool {
 	}
 }
 
-func approvalContinuationResultNote(toolName string) string {
+func approvalContinuationResultNote(toolName string, docsContentRequired bool) string {
 	if strings.TrimSpace(toolName) == "gmail.sendDraft" {
 		return "Important delivery wording: gmail.sendDraft means the email was handed to Gmail for sending. Do not say the recipient received the email, do not say delivery succeeded, and avoid wording like 'sent successfully'. In Vietnamese, prefer 'Email da duoc chuyen cho Gmail de gui'."
+	}
+	if strings.TrimSpace(toolName) == "docs.createDocument" && docsContentRequired {
+		return "MANDATORY: docs.createDocument created an empty document only. The original request requires content to be stored, so the task is NOT complete. If sandbox.extractPDF produced structured Markdown, call docs.appendMarkdown using the new document ID and the exact absolute host workspace path as localPath. Use docs.appendText only for plain text sources. Do not call filesystem.readFile and do not put /workspace container paths in localPath. Do not answer with a completion message before the content-write tool succeeds."
 	}
 	return ""
 }
@@ -1284,7 +1318,7 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel, arguments m
 		return "Cho phép tôi đọc nội dung Google Docs document nhé?"
 	case "docs.createDocument":
 		return "Mình sẽ tạo tài liệu Google Docs. Xác nhận không?"
-	case "docs.appendText", "docs.replaceText", "docs.insertText":
+	case "docs.appendText", "docs.appendMarkdown", "docs.replaceText", "docs.insertText":
 		return "Mình sẽ sửa nội dung Google Docs. Xác nhận không?"
 	case "docs.deleteContent":
 		return "Mình sẽ xóa nội dung trong Google Docs. Xác nhận không?"
@@ -1303,6 +1337,8 @@ func approvalSummary(toolName string, riskLevel contracts.RiskLevel, arguments m
 	case "sandbox.runPython":
 		code, _ := arguments["code"].(string)
 		return inferSandboxSummary(toolName, code)
+	case "sandbox.extractPDF":
+		return "Mình sẽ trích xuất PDF thành Markdown có cấu trúc trong workspace. Xác nhận không?"
 	case "sandbox.runShell":
 		code, _ := arguments["code"].(string)
 		return inferSandboxSummary(toolName, code)
