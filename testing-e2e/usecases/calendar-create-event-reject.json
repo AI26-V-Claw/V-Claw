@@ -2,7 +2,7 @@
   {
     "step": 0,
     "user": {
-      "message": "Tạo lịch họp tên 'Sprint Review' vào ngày mai lúc 10 giờ sáng, kéo dài 1 tiếng."
+      "message": "Tạo lịch họp tên 'Sprint Review' vào ngày 15/07/2026 lúc 10:00 sáng, kéo dài 1 tiếng."
     },
     "agent": {
       "expectation": "Agent xin xác nhận trước khi tạo event trên Calendar.",
@@ -17,15 +17,15 @@
   {
     "step": 1,
     "user": {
-      "message": "/approve"
+      "message": "/reject"
     },
     "agent": {
-      "expectation": "Agent tạo event thành công và xác nhận với user.",
+      "expectation": "Agent xác nhận đã hủy yêu cầu tạo event và không tạo lịch trên Calendar.",
       "requires_approval": false,
       "expected_tools": [],
       "expected_approval_tool": null,
       "response_contains": [
-        "Sprint Review"
+        "hủy"
       ]
     }
   }

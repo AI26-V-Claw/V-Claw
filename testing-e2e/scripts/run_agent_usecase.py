@@ -340,10 +340,20 @@ def summarize_run(
 ) -> dict[str, Any]:
     response = run.get("response")
     tool_trace = tool_trace_from_response(response)
+    status = response_status(response)
+    agent_text = user_text_from_response(response)
+    if not agent_text:
+        stderr = str(run.get("stderr") or "").strip()
+        stdout = str(run.get("stdout") or "").strip()
+        fallback_text = stderr or stdout
+        if fallback_text:
+            agent_text = fallback_text[-2000:]
+    if not status and run.get("exitCode") not in (0, None):
+        status = "failed"
     summary: dict[str, Any] = {
         "user": user_message,
-        "status": response_status(response),
-        "agent": user_text_from_response(response),
+        "status": status,
+        "agent": agent_text,
         "durationMs": run.get("durationMs"),
         "exitCode": run.get("exitCode"),
     }
@@ -651,6 +661,19 @@ def str_list(value: Any) -> list[str]:
     return [text] if text else []
 
 
+def int_list(value: Any) -> list[int]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    result: list[int] = []
+    for item in values:
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
 def agent_expectations_for_step(step: Any) -> dict[str, Any]:
     if not isinstance(step, dict):
         return {}
@@ -669,7 +692,7 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
     summary = final_run.get("summary")
     if not isinstance(summary, dict):
         summary = {}
-    status = response_status(response)
+    status = response_status(response) or str(summary.get("status") or "").strip()
     supported = {
         "expectation",
         "requires_approval",
@@ -719,12 +742,25 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
 
 
 def step_passed(step: dict[str, Any], final_run: dict[str, Any]) -> tuple[bool, str]:
+    allowed_exit_codes = int_list(step.get("allowed_exit_codes"))
     if final_run.get("timedOut"):
         return False, "agent command timed out"
-    if final_run.get("parseError"):
+    if final_run.get("parseError") and not allowed_exit_codes:
         return False, str(final_run["parseError"])
-    if final_run.get("exitCode") not in (0, None):
-        return False, f"agent command exited with {final_run.get('exitCode')}"
+    if final_run.get("parseError") and allowed_exit_codes:
+        stderr = str(final_run.get("stderr") or "").strip()
+        stdout = str(final_run.get("stdout") or "").strip()
+        if not stderr and not stdout:
+            return False, str(final_run["parseError"])
+    exit_code = final_run.get("exitCode")
+    if allowed_exit_codes:
+        if exit_code is None:
+            if 0 not in allowed_exit_codes:
+                return False, f"agent command exited with {exit_code}, expected one of {allowed_exit_codes!r}"
+        elif exit_code not in allowed_exit_codes:
+            return False, f"agent command exited with {exit_code}, expected one of {allowed_exit_codes!r}"
+    elif exit_code not in (0, None):
+        return False, f"agent command exited with {exit_code}"
 
     expected = step.get("expectStatusIn")
     if isinstance(expected, list) and expected:

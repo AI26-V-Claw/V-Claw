@@ -1,46 +1,42 @@
-[
-  {
-    "step": 0,
-    "user": {
-      "message": "Liệt kê tất cả sự kiện tuần này trên Calendar, tóm tắt lại và gửi email báo cáo lịch tuần cho baolnc@vclaw.site."
-    },
-    "agent": {
-      "expectation": "Agent đọc danh sách events tuần này, tóm tắt lại và xin xác nhận tạo draft email báo cáo.",
-      "requires_approval": true,
-      "expected_tools": [
-        "calendar.listEvents",
-        "gmail.createDraft"
-      ],
-      "expected_approval_tool": "gmail.createDraft",
-      "response_contains": []
-    }
+{
+  "feature": "periodic_workflow",
+  "workflow": {
+    "id": "weekly-calendar-event",
+    "trigger": "schedule",
+    "cron": "0 8 * * MON",
+    "timezone": "Asia/Ho_Chi_Minh",
+    "frequency": "weekly"
   },
-  {
-    "step": 1,
-    "user": {
-      "message": "/approve"
+  "steps": [
+    {
+      "step": 0,
+      "user": {
+        "message": "Workflow định kỳ 'weekly-calendar-event' vừa được kích hoạt. Mỗi tuần 1 lần vào sáng thứ Hai lúc 08:00, hãy tạo một lịch trên Google Calendar cho tôi với tiêu đề 'Chúc tuần mới tốt lành', kéo dài 30 phút. Ở lần chạy này, hãy chuẩn bị tạo lịch cho tuần này."
+      },
+      "agent": {
+        "expectation": "Agent nhận đây là workflow định kỳ được scheduler kích hoạt và xin xác nhận tạo lịch trên Google Calendar cho tuần này.",
+        "requires_approval": true,
+        "expected_tools": [
+          "calendar.createEvent"
+        ],
+        "expected_approval_tool": "calendar.createEvent",
+        "response_contains": [
+          "Chúc tuần mới tốt lành"
+        ]
+      }
     },
-    "agent": {
-      "expectation": "Agent xin xác nhận gửi email.",
-      "requires_approval": true,
-      "expected_tools": [
-        "gmail.sendDraft"
-      ],
-      "expected_approval_tool": "gmail.sendDraft",
-      "response_contains": []
+    {
+      "step": 1,
+      "user": {
+        "message": "/approve"
+      },
+      "agent": {
+        "expectation": "Agent tạo lịch thành công và xác nhận đã lên lịch cho tuần này.",
+        "requires_approval": false,
+        "expected_tools": [],
+        "expected_approval_tool": null,
+        "response_contains": []
+      }
     }
-  },
-  {
-    "step": 2,
-    "user": {
-      "message": "/approve"
-    },
-    "agent": {
-      "expectation": "Agent gửi email thành công.",
-      "requires_approval": false,
-      "expected_tools": [],
-      "expected_approval_tool": null,
-      "response_contains": []
-    }
-  }
-]
+  ]
+}
