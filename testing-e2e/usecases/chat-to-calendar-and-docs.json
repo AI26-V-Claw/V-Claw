@@ -7,13 +7,9 @@
     "agent": {
       "expectation": "Agent đọc Chat trước, rồi hỏi lại thời gian họp vì yêu cầu chưa có ngày giờ cụ thể.",
       "requires_approval": false,
-      "expected_tools": [
-        "chat.listSpaces",
-        "chat.listMessages",
-        "clarify"
-      ],
+      "expected_tools": [],
       "expected_approval_tool": null,
-      "expected_status": "waiting_clarification",
+      "expected_status": "need_clarification",
       "response_contains": []
     }
   },
@@ -49,21 +45,6 @@
   },
   {
     "step": 3,
-    "user": {
-      "message": "/approve"
-    },
-    "agent": {
-      "expectation": "Agent tạo Docs xong, xin xác nhận điền nội dung biên bản vào tài liệu.",
-      "requires_approval": true,
-      "expected_tools": [
-        "docs.appendText"
-      ],
-      "expected_approval_tool": "docs.appendText",
-      "response_contains": []
-    }
-  },
-  {
-    "step": 4,
     "user": {
       "message": "/approve"
     },

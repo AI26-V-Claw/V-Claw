@@ -1,0 +1,18 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Bạn nhớ sở thích làm việc nào của mình không?"
+    },
+    "agent": {
+      "expectation": "Agent dùng lịch sử phiên đã seed để nhớ sở thích làm việc của user, không cần gọi thêm tool.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "ngắn gọn",
+        "tiếng Việt"
+      ]
+    }
+  }
+]
