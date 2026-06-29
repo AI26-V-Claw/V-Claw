@@ -1201,6 +1201,15 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	if !strings.Contains(prompt, "Tệp đính kèm: Có") {
 		t.Fatalf("expected Gmail attachment guidance in prompt, got: %s", prompt)
 	}
+	if !strings.Contains(prompt, "For plain-text CSV/TSV attachments, you MUST call filesystem.readFile before proposing any Google Sheets write tool") {
+		t.Fatalf("expected CSV attachment guidance in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Do NOT use sandbox.runPython for plain-text CSV/TSV imports unless filesystem.readFile is insufficient") {
+		t.Fatalf("expected CSV sandbox avoidance guidance in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "If the user says append/add rows to Google Sheets, prefer sheets.appendValues") {
+		t.Fatalf("expected sheets append guidance in prompt, got: %s", prompt)
+	}
 }
 
 func TestGmailToolDescriptionsCarryDateAndAttachmentRules(t *testing.T) {

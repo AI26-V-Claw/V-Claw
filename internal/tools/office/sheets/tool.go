@@ -41,9 +41,9 @@ var RegistryEntries = []ToolRegistryEntry{
 	{Name: ToolNameReadValues, Owner: "integration", Description: "Read values from a Google Sheets range.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameBatchGetValues, Owner: "integration", Description: "Read values from multiple Google Sheets ranges.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameCreateSpreadsheet, Owner: "integration", Description: "Create a Google Sheets spreadsheet.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameUpdateValues, Owner: "integration", Description: "Update values in a Google Sheets range.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameUpdateValues, Owner: "integration", Description: "Overwrite values in a specific Google Sheets range. Prefer sheets.appendValues when the user asks to append/add rows.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameBatchUpdateValues, Owner: "integration", Description: "Update values in multiple Google Sheets ranges.", DefaultRiskLevel: "external_write", RequiresApproval: true},
-	{Name: ToolNameAppendValues, Owner: "integration", Description: "Append values to a Google Sheets range.", DefaultRiskLevel: "external_write", RequiresApproval: true},
+	{Name: ToolNameAppendValues, Owner: "integration", Description: "Append rows to a Google Sheets range. Prefer this when the user asks to append/add rows instead of overwriting a fixed range.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameClearValues, Owner: "integration", Description: "Clear values from a Google Sheets range.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameAddSheet, Owner: "integration", Description: "Add a tab to a Google Sheets spreadsheet.", DefaultRiskLevel: "external_write", RequiresApproval: true},
 	{Name: ToolNameRenameSheet, Owner: "integration", Description: "Rename a Google Sheets tab.", DefaultRiskLevel: "external_write", RequiresApproval: true},
@@ -374,11 +374,11 @@ func (t SheetsTool) Description() string {
 	case ToolNameCreateSpreadsheet:
 		return "Create a Google Sheets spreadsheet. Requires human approval before execution."
 	case ToolNameUpdateValues:
-		return "Update values in a Google Sheets range. Requires human approval before execution."
+		return "Overwrite values in a specific Google Sheets range. Prefer sheets.appendValues when the user asks to append/add rows. Requires human approval before execution."
 	case ToolNameBatchUpdateValues:
 		return "Update values in multiple Google Sheets ranges. Requires human approval before execution."
 	case ToolNameAppendValues:
-		return "Append rows to a Google Sheets range. Requires human approval before execution."
+		return "Append rows to a Google Sheets range. Prefer this when the user asks to append/add rows instead of overwriting a fixed range. Requires human approval before execution."
 	case ToolNameClearValues:
 		return "Clear values from a Google Sheets range. Requires human approval before execution."
 	case ToolNameAddSheet:

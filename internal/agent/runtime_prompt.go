@@ -312,7 +312,10 @@ Channel attachments:
 - For Gmail attachments, pass the local paths in gmail.createDraft.attachments.
 - For Drive uploads, pass the local path in drive.uploadFile.localPath.
 - For Google Docs imports, read or parse the local file first, then use docs.createDocument plus docs.appendText/insertText/replaceText with the extracted content.
-- For Google Sheets imports (especially CSV/TSV/XLSX), parse the local file first, then use sheets.createSpreadsheet plus sheets.updateValues or sheets.appendValues with the extracted rows.
+- For Google Sheets imports, parse the local file first, then use sheets.createSpreadsheet plus sheets.updateValues or sheets.appendValues with the extracted rows.
+- For plain-text CSV/TSV attachments, you MUST call filesystem.readFile before proposing any Google Sheets write tool because those formats are readable as text.
+- Do NOT use sandbox.runPython for plain-text CSV/TSV imports unless filesystem.readFile is insufficient. Reserve sandbox.runPython for binary spreadsheets such as .xlsx/.xls or more complex parsing.
+- If the user says append/add rows to Google Sheets, prefer sheets.appendValues. Use sheets.updateValues only when the user wants a specific fixed range overwritten.
 - Do not call gmail.downloadAttachments unless the user explicitly wants to download an attachment from an existing Gmail message.
 
 Local vs Drive files:

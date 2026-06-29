@@ -39,3 +39,14 @@
   }
 ]
 ```
+
+## 3. Seeded Sessions
+
+- Nếu cần test khả năng agent nối ngữ cảnh hoặc dùng bộ nhớ từ lịch sử phiên trước, tạo thư mục seed tại `testing-e2e/sessions/<ten-file-usecase-khong-co-.json>/`.
+- Mỗi seed session có thể chứa `memory.json` và `transcript.json`.
+- Khi chạy một usecase có thư mục seed trùng tên, harness sẽ tự copy seed đó sang `data/sessions/<sessionId>/` trước khi bắt đầu step 0.
+- Cách này phù hợp để test:
+  - nhớ sở thích hoặc facts đã lưu trong memory
+  - follow-up question dựa trên tool result ở phiên trước
+  - tham chiếu lại email / lịch / file vừa xử lý mà không gọi lại tool nếu agent đã có đủ context
+  - nhớ nội dung lịch sử chat/transcript của cùng session, ngay cả khi không có tool mới ở turn hiện tại

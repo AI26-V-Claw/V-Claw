@@ -622,6 +622,26 @@ def prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any]
     return prompt.rstrip() + "\n\n" + "\n".join(lines)
 
 
+def attachment_prompt_variables(attachments: list[dict[str, Any]]) -> dict[str, str]:
+    variables: dict[str, str] = {
+        "ATTACHMENT_COUNT": str(len(attachments)),
+    }
+    for index, attachment in enumerate(attachments, start=1):
+        path = str(attachment.get("path") or "").strip()
+        filename = str(attachment.get("filename") or "").strip()
+        source = str(attachment.get("source") or "").strip()
+        if path:
+            variables[f"ATTACHMENT_{index}_PATH"] = path
+            variables["LAST_ATTACHMENT_PATH"] = path
+        if filename:
+            variables[f"ATTACHMENT_{index}_FILENAME"] = filename
+            variables["LAST_ATTACHMENT_FILENAME"] = filename
+        if source:
+            variables[f"ATTACHMENT_{index}_SOURCE"] = source
+            variables["LAST_ATTACHMENT_SOURCE"] = source
+    return variables
+
+
 def str_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -758,10 +778,12 @@ def run_step(
 ) -> dict[str, Any]:
     step = normalize_step(step, variables)
 
-    user_prompt = expand_vars(str(step.get("prompt") or ""), variables).strip()
+    attachments = prepare_step_attachments(step, variables, usecase_path, attachment_used_names)
+    prompt_variables = dict(variables)
+    prompt_variables.update(attachment_prompt_variables(attachments))
+    user_prompt = expand_vars(str(step.get("prompt") or ""), prompt_variables).strip()
     if not user_prompt:
         raise ValueError(f"step {step.get('id')!r} has empty prompt")
-    attachments = prepare_step_attachments(step, variables, usecase_path, attachment_used_names)
     prompt = prompt_with_attachment_context(user_prompt, attachments)
 
     result: dict[str, Any] = {
@@ -770,6 +792,8 @@ def run_step(
         "prompt": user_prompt,
         "messages": [],
     }
+    if attachments:
+        result["attachmentVariables"] = attachment_prompt_variables(attachments)
     if attachments:
         result["attachments"] = attachments
         result["agentPrompt"] = prompt
@@ -1031,6 +1055,10 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
                 variables.pop("LAST_APPROVAL_ID", None)
                 variables.pop("LAST_APPROVAL_TOOL_CALL_ID", None)
                 variables.pop("LAST_APPROVAL_TOOL_NAME", None)
+            attachment_variables = step_result.get("attachmentVariables")
+            if isinstance(attachment_variables, dict):
+                for key, value in attachment_variables.items():
+                    variables[str(key)] = str(value)
             write_json(artifact_path, report)
             if not step_result.get("passed"):
                 report["finishedAt"] = utc_now()
