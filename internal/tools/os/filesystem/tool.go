@@ -207,7 +207,7 @@ func NewReadFileTool(guard PathGuard) ReadFileTool {
 func (ReadFileTool) Name() string { return ToolNameReadFile }
 
 func (ReadFileTool) Description() string {
-	return "Read the text content of a plain-text file (e.g. .txt, .md, .json, .csv, .go, .py). Returns the file content, optionally limited to a line range. For binary files such as PDF, Excel (.xlsx), or Word (.docx), use sandbox.runPython instead (e.g. pdfplumber for PDF, openpyxl for Excel)."
+	return "Read the text content of a plain-text file (e.g. .txt, .md, .json, .csv, .go, .py). Returns the file content, optionally limited to a line range. For PDF files that need preserved structure, use sandbox.extractPDF. For other binary files such as Excel (.xlsx) or Word (.docx), use sandbox.runPython."
 }
 
 func (ReadFileTool) Parameters() tools.ToolSchema {

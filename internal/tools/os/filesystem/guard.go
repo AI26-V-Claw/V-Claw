@@ -28,7 +28,11 @@ func NewPathGuard(roots []string) PathGuard {
 		if err != nil {
 			continue
 		}
-		cleaned = append(cleaned, filepath.Clean(abs))
+		abs = filepath.Clean(abs)
+		if real, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
+			abs = real
+		}
+		cleaned = append(cleaned, abs)
 	}
 	return PathGuard{allowedRoots: cleaned}
 }
@@ -73,7 +77,8 @@ func (g PathGuard) Resolve(path string) (string, error) {
 
 	// Check against allowed roots
 	for _, root := range g.allowedRoots {
-		if strings.HasPrefix(strings.ToLower(real), strings.ToLower(root)) {
+		rel, relErr := filepath.Rel(root, real)
+		if relErr == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return real, nil
 		}
 	}
