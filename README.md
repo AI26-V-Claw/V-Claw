@@ -31,6 +31,7 @@ Start with these documents:
 5. [Canonical Sequence Scenarios](docs/04-sequences.md) — reference flows for implementation review and E2E tests.
 6. [Active Modules & Ownership](ACTIVE_MODULES.md) — current implementation scope and frozen areas.
 7. [Project Structure](PROJECT_STRUCTURE.md) — repository layout and module responsibilities.
+8. [Production Harness Review](docs/production-harness-review.md) — release blockers, harness principles, runtime state machine, and context engineering checklist.
 
 Additional setup guides:
 
@@ -59,11 +60,18 @@ Read-only operations may be allowed directly when policy permits them. Destructi
 
 ## Local setup
 
-Copy the example environment file before running local commands:
+Install the release binary once, then use the global `vclaw` command:
 
 ```powershell
-Copy-Item .env.example .env
+.\dist\vclaw.exe install
+# Open a new terminal after PATH updates.
+vclaw setup
+vclaw doctor
+vclaw google auth  # optional, enables Google tools
+vclaw start
 ```
+
+For an extracted ZIP, run `./vclaw.exe install` from the extracted folder first. For development from source, use `go run ./cmd/vclaw setup`, `go run ./cmd/vclaw doctor`, and `go run ./cmd/vclaw start`. The canonical runtime command remains `vclaw telegram run`; `vclaw start` and `vclaw run` are convenience aliases.
 
 Repo `.env` values for runtime provider config such as `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_BASE_URL` take precedence over inherited shell exports.
 
