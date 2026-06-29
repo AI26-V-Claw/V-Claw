@@ -1146,6 +1146,7 @@ def main() -> int:
     parser.add_argument("--session", default="")
     parser.add_argument("--channel", default="")
     parser.add_argument("--timeout-seconds", type=int, default=300)
+    parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failed use case.")
     args = parser.parse_args()
 
     load_default_env_files()
@@ -1156,16 +1157,58 @@ def main() -> int:
         return 2
 
     runs_completed = 0
+    runs_passed = 0
+    runs_skipped = 0
+    runs_failed = 0
+    first_failure_code = 0
     for usecase_path in usecase_paths:
-        code, _summary = run_one_usecase(args, usecase_path)
+        try:
+            code, summary = run_one_usecase(args, usecase_path)
+        except Exception as exc:
+            code = 1
+            summary = {
+                "passed": False,
+                "failureReason": str(exc),
+                "usecase": str(usecase_path),
+            }
+            log("")
+            log("=" * 72)
+            log(f"Use case : {usecase_path.stem}")
+            log(f"Source   : {display_path(usecase_path)}")
+            log("=" * 72)
+            log(f"RUN FAIL: {exc}")
         runs_completed += 1
+
+        if summary.get("skipped"):
+            runs_skipped += 1
+        elif code == 0 and summary.get("passed") is True:
+            runs_passed += 1
+        else:
+            runs_failed += 1
+
         if code != 0:
+            if first_failure_code == 0:
+                first_failure_code = code
+            if not args.fail_fast:
+                log("")
+                log(f"RUN CONTINUE ({runs_completed}/{len(usecase_paths)} run)")
+                continue
             log("")
             log(f"RUNS FAIL ({runs_completed}/{len(usecase_paths)} run)")
             return code
 
     log("")
-    log(f"RUNS OK ({runs_completed}/{len(usecase_paths)} run)")
+    if runs_failed:
+        log(
+            f"RUNS FAIL ({runs_completed}/{len(usecase_paths)} run, "
+            f"passed={runs_passed}, skipped={runs_skipped}, failed={runs_failed})"
+        )
+        return first_failure_code or 1
+
+    log(
+        f"RUNS OK ({runs_completed}/{len(usecase_paths)} run, "
+        f"passed={runs_passed}, skipped={runs_skipped}, failed={runs_failed})"
+    )
     return 0
 
 
