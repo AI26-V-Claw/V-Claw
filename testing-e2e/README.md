@@ -302,29 +302,8 @@ Mỗi turn trong `conversation` có thể chứa:
 - `uploaded-file-safety-check.json`
 - `read-file-not-found.json`
 
-## Khi nào nên tạo file mới thay vì sửa file cũ
-
-- Muốn thêm `reject/cancel flow` cho một feature đang chỉ có happy path.
-- Muốn giữ một happy case ổn định và tách error/edge sang file riêng.
-- Muốn thêm negative case có `allowed_exit_codes`.
-- Muốn tạo follow-up case có seed session riêng.
-
-## Gợi ý naming
-
-- `*-happy.json`: happy path.
-- `*-reject.json`: reject/cancel flow.
-- `*-edge.json`: edge case nhưng không nhất thiết command fail.
-- `*-not-found.json`: negative case kiểu missing resource.
-- `*-seeded-followup.json`: follow-up dựa trên seed session.
-
-## Ví dụ workflow đang ổn định
-
-- Reject flow pass: [testing-e2e/usecases/calendar-create-event-reject.json](/home/nxhai/V_Claw/testing-e2e/usecases/calendar-create-event-reject.json:1)
-- Negative file-not-found pass nhờ harness mới: [testing-e2e/usecases/read-file-not-found.json](/home/nxhai/V_Claw/testing-e2e/usecases/read-file-not-found.json:1)
-- Periodic workflow cơ bản: [testing-e2e/usecases/calendar-summary-email.json](/home/nxhai/V_Claw/testing-e2e/usecases/calendar-summary-email.json:1)
-
 ## Lưu ý thực tế
 
 - Một số case phụ thuộc provider thật nên có thể flaky nếu token, quyền Drive/Gmail/Calendar, hoặc backend local đang lỗi.
 - Với negative case, ưu tiên test các tình huống deterministic như `not found`, policy block, hoặc attachment/path không hợp lệ.
-- Nếu muốn đánh giá chất lượng ngôn ngữ/cách diễn đạt sau khi run pass, chạy thêm evaluator để có `agent-evaluation-report.json`.
+- Nếu muốn đánh giá chất lượng ngôn ngữ/cách diễn đạt sau khi run pass, chạy evaluator để có `agent-evaluation-report.json`.
