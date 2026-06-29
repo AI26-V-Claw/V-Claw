@@ -612,7 +612,7 @@ func isTelegramCancelCommand(text string) bool {
 	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
 		command = command[:index]
 	}
-	return strings.EqualFold(command, "cancel")
+	return strings.EqualFold(command, "cancel") || strings.EqualFold(command, "stop")
 }
 
 func isTelegramNewCommand(text string) bool {

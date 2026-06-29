@@ -17,6 +17,7 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/app"
 	"vclaw/internal/channels/telegram"
+	"vclaw/internal/localapi/control"
 	"vclaw/internal/monitoring"
 )
 
@@ -105,6 +106,11 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	if err := startMetricsServer(runCtx, logger, bundle, metrics, "telegram"); err != nil {
 		return err
 	}
+	controlServer, err := control.Start(runCtx, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime))
+	if err != nil {
+		return fmt.Errorf("start agent control server: %w", err)
+	}
+	defer controlServer.Close(context.Background())
 	stopPolicyReload := startPolicyReloadWatcher(runCtx, logger, bundle.PolicyStore)
 	defer stopPolicyReload()
 
