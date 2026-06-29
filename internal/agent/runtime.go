@@ -72,6 +72,8 @@ type RuntimeConfig struct {
 	LongMemDir                       string
 	KnowledgeRetriever               knowledge.Retriever
 	DisableReadBeforeWriteValidation bool // skip ValidateReadBeforeWrite; useful for tests that focus on other behavior
+	SkillNudgeInterval               int
+	SkillCacheDir                    string
 }
 
 type Runtime struct {
@@ -117,6 +119,12 @@ type Runtime struct {
 	disableReadBeforeWriteValidation bool
 	cancelMu                         sync.Mutex
 	activeCancels                    map[string]activeRunCancel // sessionID → active run cancel state
+
+	// skill auto-learn fields
+	skillNudgeInterval    int        // 0 = disabled; trigger skill review every N iterations
+	skillCacheDir         string     // path to cache/skills/
+	skillReviewMu         sync.Mutex
+	itersSinceSkillReview int
 }
 
 type activeRunCancel struct {
@@ -264,6 +272,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltLoader = longmem.NewLoader(dir)
 		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
 	}
+	skillCacheDir := strings.TrimSpace(config.SkillCacheDir)
+	if skillCacheDir == "" {
+		skillCacheDir = defaultSkillCacheDir()
+	}
 	return &Runtime{
 		provider:                         provider,
 		registry:                         config.Registry,
@@ -300,11 +312,13 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltMemLoader:                      ltLoader,
 		ltMemFlusher:                     ltFlusher,
 		activeCancels:                    make(map[string]activeRunCancel),
-		knowledgeRetriever:               config.KnowledgeRetriever,
-		disableReadBeforeWriteValidation: config.DisableReadBeforeWriteValidation,
+	knowledgeRetriever:               config.KnowledgeRetriever,
+	disableReadBeforeWriteValidation: config.DisableReadBeforeWriteValidation,
+	skillNudgeInterval:               config.SkillNudgeInterval,
+	skillCacheDir:                    skillCacheDir,
+	itersSinceSkillReview:            0,
 	}
 }
-
 func memoryClassifierModel(config RuntimeConfig) string {
 	if model := strings.TrimSpace(config.MemoryClassifierModel); model != "" {
 		return model
@@ -357,6 +371,14 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	r.activeCancels[message.SessionID] = activeRunCancel{token: runToken, cancel: runCancel}
 	r.cancelMu.Unlock()
 	ctx = runCtx
+
+	// skill auto-learn: count iterations used in this run and maybe trigger background review
+	iterationCountForReview := 0
+	defer func() {
+		if iterationCountForReview > 0 {
+			r.maybeSpawnSkillReview(message.SessionID, iterationCountForReview)
+		}
+	}()
 
 	if r.compactor != nil {
 		sessionID := message.SessionID
@@ -686,6 +708,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 
 	toolResults := []contracts.ToolResult{}
 	iterationBudget := NewIterationBudget(r.iterationBudgetLimit)
+	defer func() { iterationCountForReview = iterationBudget.Used() }()
 	housekeepingRefunds := 0
 	housekeepingRefundLimit := r.iterationBudgetLimit
 	// readBeforeWriteNudged tracks whether we have already nudged the LLM
@@ -1569,3 +1592,5 @@ func (r *Runtime) CancelSession(sessionID string) bool {
 	entry.cancel()
 	return true
 }
+
+
