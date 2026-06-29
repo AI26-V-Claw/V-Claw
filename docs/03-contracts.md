@@ -674,11 +674,17 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | `docs.getDocument` | Integration | `sensitive_read` | No |
 | `docs.createDocument` | Integration | `external_write` | Yes |
 | `docs.appendText` | Integration | `external_write` | Yes |
+| `docs.appendMarkdown` | Integration | `external_write` | Yes |
 | `docs.replaceText` | Integration | `external_write` | Yes |
 | `docs.insertText` | Integration | `external_write` | Yes |
 | `docs.deleteContent` | Integration | `external_write` | Yes |
 
 > `docs.createDocument` accepts an optional `content` (string) parameter: body text to append immediately after the document is created. If the content append fails, the tool returns `PARTIAL_FAILURE` with `Success=false`, but the empty document is still created and its ID is included in the response so the user can manually add content later via `docs.appendText`.
+> When the user only requests a blank or named document, `docs.createDocument` is sufficient. When the user asks to store extracted or structured content, completion additionally requires a successful `docs.appendText`, `docs.appendMarkdown`, or another explicit Docs content mutation unless `content` was provided and appended successfully during creation.
+
+> `docs.appendText` accepts `documentId` plus exactly one content source: inline `text`, or `localPath` for the complete contents of a UTF-8 text file. `localPath` is resolved through the sandbox workspace `PathGuard`, is limited to 1 MiB, and is rejected when it escapes the workspace. Reading a local file does not bypass HITL: `docs.appendText` remains `external_write` and must be approved before the file content is sent to Google Docs.
+
+> `docs.appendMarkdown` accepts `documentId` plus exactly one Markdown source: inline `markdown`, or a UTF-8 workspace `localPath`. It renders headings, bullets, italic notes, fenced code, and Markdown tables into styled Google Docs content. The same 1 MiB `PathGuard` and HITL constraints as `docs.appendText` apply.
 
 ### Google Sheets
 
@@ -778,6 +784,9 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 |---|---|---|---|
 | `sandbox.runPython` | Agent Core | `code_execution` | Yes |
 | `sandbox.runShell` | Agent Core | `code_execution` | Yes |
+| `sandbox.extractPDF` | Agent Core | `local_write` | Yes |
+
+`sandbox.extractPDF` is a deterministic sandboxed extractor for workspace PDFs. It uses PDF table/column geometry, removes repeated page chrome and hidden line-break characters, and writes one UTF-8 Markdown artifact in the workspace. It cannot read outside the workspace and remains approval-gated because it creates a local file.
 
 ### Built-in
 

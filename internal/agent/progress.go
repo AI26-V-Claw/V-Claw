@@ -13,6 +13,8 @@ const (
 	ProgressStageToolCompleted ProgressStage = "tool_completed"
 	ProgressStageToolFailed    ProgressStage = "tool_failed"
 	ProgressStageFinalizing    ProgressStage = "finalizing"
+	ProgressStageCancelled     ProgressStage = "cancelled"
+	ProgressStageBudgetCut     ProgressStage = "budget_cut"
 )
 
 type ProgressEvent struct {
@@ -20,6 +22,7 @@ type ProgressEvent struct {
 	ToolName   string
 	ToolCallID string
 	Message    string
+	Meta       map[string]any
 }
 
 type ProgressSink func(context.Context, ProgressEvent)

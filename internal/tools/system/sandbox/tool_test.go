@@ -17,6 +17,28 @@ type fakeRunner struct {
 	result    *sandboxruntime.JobResult
 }
 
+type extractPDFRunner struct {
+	request *sandboxruntime.RunPythonRequest
+}
+
+func (r *extractPDFRunner) RunPython(_ context.Context, req *sandboxruntime.RunPythonRequest) (*sandboxruntime.JobResult, error) {
+	r.request = req
+	if err := os.WriteFile(filepath.Join(req.WorkspaceDir, "sample_structured.md"), []byte("# Sample\n\n## Table\n"), 0o600); err != nil {
+		return nil, err
+	}
+	return &sandboxruntime.JobResult{
+		RequestID: req.RequestID,
+		JobID:     "job-extract-pdf",
+		Status:    sandboxruntime.JobSuccess,
+		ExitCode:  0,
+		Stdout:    `{"pages":1,"tables":1,"characters":20}`,
+	}, nil
+}
+
+func (r *extractPDFRunner) RunShell(context.Context, *sandboxruntime.RunShellRequest) (*sandboxruntime.JobResult, error) {
+	return nil, nil
+}
+
 func (f *fakeRunner) RunPython(_ context.Context, req *sandboxruntime.RunPythonRequest) (*sandboxruntime.JobResult, error) {
 	f.pythonReq = req
 	if f.result != nil {
@@ -64,6 +86,69 @@ func TestRegisterToolsMetadataRequiresApproval(t *testing.T) {
 		if !definition.RequiresApproval {
 			t.Fatalf("expected %s to require approval", name)
 		}
+	}
+	extract, ok := registry.GetDefinition(ToolNameExtractPDF)
+	if !ok {
+		t.Fatalf("expected tool definition for %s", ToolNameExtractPDF)
+	}
+	if extract.RiskLevel != tools.RiskLevelLocalWrite || !extract.RequiresApproval {
+		t.Fatalf("unexpected extract PDF policy: risk=%s approval=%t", extract.RiskLevel, extract.RequiresApproval)
+	}
+}
+
+func TestExtractPDFToolProducesStructuredMarkdownArtifact(t *testing.T) {
+	workspace := t.TempDir()
+	inputPath := filepath.Join(workspace, "sample.pdf")
+	if err := os.WriteFile(inputPath, []byte("%PDF-test"), 0o600); err != nil {
+		t.Fatalf("write PDF fixture: %v", err)
+	}
+	runner := &extractPDFRunner{}
+	tool := NewExtractPDFTool(Config{Runner: runner, DefaultWorkspaceDir: workspace})
+
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:   "call_extract_pdf",
+		Name: ToolNameExtractPDF,
+		Arguments: map[string]any{
+			"localPath":  inputPath,
+			"outputFile": "sample_structured.md",
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("extract PDF failed: %#v", result.Error)
+	}
+	if runner.request == nil || !strings.Contains(runner.request.Code, "find_tables()") {
+		t.Fatalf("expected deterministic table extraction script, got %#v", runner.request)
+	}
+	if !strings.Contains(runner.request.Code, `/workspace/sample.pdf`) {
+		t.Fatalf("script does not use workspace PDF path:\n%s", runner.request.Code)
+	}
+	if result.ArtifactRef == nil || result.ArtifactRef.Label != "sample_structured.md" {
+		t.Fatalf("unexpected Markdown artifact: %#v", result.ArtifactRef)
+	}
+	if result.Metadata["format"] != "markdown" || result.Metadata["tables"] != float64(1) {
+		t.Fatalf("unexpected extraction metadata: %#v", result.Metadata)
+	}
+}
+
+func TestExtractPDFToolRejectsPathOutsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	outsidePath := filepath.Join(t.TempDir(), "outside.pdf")
+	if err := os.WriteFile(outsidePath, []byte("%PDF-test"), 0o600); err != nil {
+		t.Fatalf("write outside PDF: %v", err)
+	}
+	runner := &extractPDFRunner{}
+	tool := NewExtractPDFTool(Config{Runner: runner, DefaultWorkspaceDir: workspace})
+	result := tool.Execute(context.Background(), tools.ToolCall{
+		ID:        "call_extract_outside",
+		Name:      ToolNameExtractPDF,
+		Arguments: map[string]any{"localPath": outsidePath},
+	})
+	if result.Success || result.Error == nil || result.Error.Code != tools.ErrorInvalidArgument {
+		t.Fatalf("expected outside path rejection, got %#v", result)
+	}
+	if runner.request != nil {
+		t.Fatal("runner must not execute for an outside PDF")
 	}
 }
 

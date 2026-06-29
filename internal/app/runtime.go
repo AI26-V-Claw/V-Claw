@@ -433,7 +433,7 @@ func registerGoogleTools(ctx context.Context, registry *tools.ToolRegistry, conf
 	if err := drivetool.RegisterTools(registry, drivetool.NewService(gdrive.NewClient(httpClient)).WithLocation(gmailLocation), workspaceGuard); err != nil {
 		return skillbuiltin.WorkspaceServices{}, err
 	}
-	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient))); err != nil {
+	if err := docstool.RegisterTools(registry, docstool.NewService(gdocs.NewClient(httpClient)), workspaceGuard); err != nil {
 		return skillbuiltin.WorkspaceServices{}, err
 	}
 	if err := sheetstool.RegisterTools(registry, sheetstool.NewService(gsheets.NewClient(httpClient))); err != nil {

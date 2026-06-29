@@ -248,6 +248,27 @@ func TestPathGuardBlocksOutsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestPathGuardRejectsSiblingWithAllowedRootPrefix(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	sibling := filepath.Join(parent, "workspace-copy")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatalf("create sibling: %v", err)
+	}
+	outsidePath := filepath.Join(sibling, "secret.txt")
+	if err := os.WriteFile(outsidePath, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write sibling file: %v", err)
+	}
+
+	guard := NewPathGuard([]string{root})
+	if _, err := guard.Resolve(outsidePath); err == nil {
+		t.Fatal("expected sibling path sharing the workspace prefix to be rejected")
+	}
+}
+
 func TestRegisterToolsRegistersAllTools(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	if err := RegisterTools(registry, Config{}); err != nil {

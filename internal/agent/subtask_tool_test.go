@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
-	"reflect"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
 	"vclaw/internal/tools"
 )
@@ -17,8 +19,8 @@ func TestSubtaskToolParametersRequireCapabilityAllowlist(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected required to be []string, got %T", schema["required"])
 	}
-	if !reflect.DeepEqual(required, []string{"task"}) {
-		t.Fatalf("expected only task to be required unconditionally, got %v", required)
+	if len(required) != 0 {
+		t.Fatalf("expected no unconditional required fields because task and tasks are mutually exclusive runtime modes, got %v", required)
 	}
 	// anyOf is intentionally absent: OpenAI rejects top-level anyOf/oneOf in tool schemas.
 	// The constraint (allowed_skills OR allowed_tool_groups required) is enforced at runtime
@@ -38,6 +40,136 @@ func TestSubtaskToolParametersRequireCapabilityAllowlist(t *testing.T) {
 		if property["minItems"] != 1 {
 			t.Fatalf("expected %s minItems to be 1, got %v", name, property["minItems"])
 		}
+	}
+	if _, ok := properties["tasks"]; !ok {
+		t.Fatalf("expected tasks batch property")
+	}
+}
+
+func TestSubtaskToolRejectsTaskAndTasksTogether(t *testing.T) {
+	runtime := newSubtaskTestRuntime(t)
+	tool := NewSubtaskTool(runtime)
+
+	result := tool.Execute(withParentRunID(context.Background(), "run_parent"), tools.ToolCall{
+		ID:   "call_1",
+		Name: SubtaskToolName,
+		Arguments: map[string]any{
+			"task":           "single",
+			"allowed_skills": []any{"basic_compute"},
+			"tasks": []any{map[string]any{
+				"task":           "batch",
+				"allowed_skills": []any{"basic_compute"},
+			}},
+		},
+	})
+
+	if result.Success {
+		t.Fatalf("expected mixed task/tasks to fail, got %#v", result)
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Message, "either task or tasks") {
+		t.Fatalf("expected mutually exclusive mode error, got %#v", result.Error)
+	}
+}
+
+func TestSubtaskToolBatchReturnsAllResultsInInputOrder(t *testing.T) {
+	runtime := newSubtaskTestRuntime(t)
+	runtime.provider = subtaskEchoProvider{}
+	tool := NewSubtaskTool(runtime)
+
+	result := tool.Execute(withParentRunID(context.Background(), "run_parent"), tools.ToolCall{
+		ID:   "call_batch",
+		Name: SubtaskToolName,
+		Arguments: map[string]any{
+			"tasks": []any{
+				map[string]any{"task": "first branch", "label": "first", "allowed_skills": []any{"basic_compute"}},
+				map[string]any{"task": "second branch", "label": "second", "allowed_skills": []any{"basic_compute"}},
+			},
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected batch success, got %#v", result)
+	}
+	var payload subtaskBatchResult
+	if err := json.Unmarshal([]byte(result.ContentForLLM), &payload); err != nil {
+		t.Fatalf("unmarshal batch result: %v", err)
+	}
+	if len(payload.Results) != 2 {
+		t.Fatalf("expected two results, got %#v", payload.Results)
+	}
+	if payload.Completed != 2 || payload.Failed != 0 || payload.Timeout != 0 {
+		t.Fatalf("unexpected counters: %#v", payload)
+	}
+	for index, entry := range payload.Results {
+		if entry.TaskIndex != index {
+			t.Fatalf("result %d has task_index %d", index, entry.TaskIndex)
+		}
+	}
+	if payload.Results[0].Label != "first" || !strings.Contains(payload.Results[0].Summary, "first branch") {
+		t.Fatalf("first result not preserved: %#v", payload.Results[0])
+	}
+	if payload.Results[1].Label != "second" || !strings.Contains(payload.Results[1].Summary, "second branch") {
+		t.Fatalf("second result not preserved: %#v", payload.Results[1])
+	}
+}
+
+func TestSubtaskToolBatchKeepsFailedBranchResult(t *testing.T) {
+	runtime := newSubtaskTestRuntime(t)
+	runtime.provider = subtaskEchoProvider{}
+	tool := NewSubtaskTool(runtime)
+
+	result := tool.Execute(withParentRunID(context.Background(), "run_parent"), tools.ToolCall{
+		ID:   "call_batch",
+		Name: SubtaskToolName,
+		Arguments: map[string]any{
+			"tasks": []any{
+				map[string]any{"task": "valid branch", "label": "valid", "allowed_skills": []any{"basic_compute"}},
+				map[string]any{"task": "invalid branch", "label": "invalid", "allowed_skills": []any{"web_research"}},
+			},
+		},
+	})
+
+	if !result.Success {
+		t.Fatalf("expected batch tool success with per-branch failure, got %#v", result)
+	}
+	var payload subtaskBatchResult
+	if err := json.Unmarshal([]byte(result.ContentForLLM), &payload); err != nil {
+		t.Fatalf("unmarshal batch result: %v", err)
+	}
+	if len(payload.Results) != 2 {
+		t.Fatalf("expected two branch results, got %#v", payload.Results)
+	}
+	if payload.Completed != 1 || payload.Failed != 1 {
+		t.Fatalf("expected one completed and one failed branch, got %#v", payload)
+	}
+	if payload.Results[0].Status != string(contracts.AgentStatusCompleted) {
+		t.Fatalf("expected first branch completed, got %#v", payload.Results[0])
+	}
+	if payload.Results[1].Status != "failed" || !strings.Contains(payload.Results[1].Error, "no usable tools") {
+		t.Fatalf("expected second branch failure to be preserved, got %#v", payload.Results[1])
+	}
+}
+func TestSubtaskToolBatchRejectsOverMaxChildren(t *testing.T) {
+	runtime := newSubtaskTestRuntime(t)
+	runtime.subtasks = newSubtaskCoordinator(1)
+	tool := NewSubtaskTool(runtime)
+
+	result := tool.Execute(withParentRunID(context.Background(), "run_parent"), tools.ToolCall{
+		ID:   "call_batch",
+		Name: SubtaskToolName,
+		Arguments: map[string]any{
+			"tasks": []any{
+				map[string]any{"task": "one", "allowed_skills": []any{"basic_compute"}},
+				map[string]any{"task": "two", "allowed_skills": []any{"basic_compute"}},
+			},
+		},
+	})
+
+	if result.Success {
+		t.Fatalf("expected over-limit batch to fail, got %#v", result)
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Message, "too many tasks") {
+		t.Fatalf("expected too many tasks error, got %#v", result.Error)
 	}
 }
 
@@ -259,6 +391,30 @@ type subtaskDummyTool struct {
 	capability tools.Capability
 	risk       tools.RiskLevel
 }
+
+type subtaskEchoProvider struct{}
+
+func (subtaskEchoProvider) Chat(_ context.Context, request providers.ChatRequest) (providers.ChatResponse, error) {
+	content := ""
+	for _, message := range request.Messages {
+		if message.Role == providers.MessageRoleUser {
+			content = message.Content
+		}
+	}
+	return providers.ChatResponse{Message: providers.Message{Role: providers.MessageRoleAssistant, Content: fmt.Sprintf("echo: %s", content)}}, nil
+}
+
+func (p subtaskEchoProvider) Generate(ctx context.Context, request *providers.GenerateRequest) (*providers.GenerateResponse, error) {
+	response, err := p.Chat(ctx, providers.ChatRequest{Model: request.Model, Messages: []providers.Message{{Role: providers.MessageRoleUser, Content: request.UserPrompt}}})
+	if err != nil {
+		return nil, err
+	}
+	return &providers.GenerateResponse{Text: response.Message.Content, Model: request.Model}, nil
+}
+
+func (subtaskEchoProvider) Name() string { return "subtask-echo" }
+
+func (subtaskEchoProvider) Close() error { return nil }
 
 func (t subtaskDummyTool) Name() string        { return t.name }
 func (t subtaskDummyTool) Description() string { return "subtask dummy tool" }
