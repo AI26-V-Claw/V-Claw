@@ -41,35 +41,37 @@ var (
 )
 
 type RuntimeConfig struct {
-	Provider                   providers.Provider
-	Registry                   *tools.ToolRegistry
-	Observer                   RuntimeObserver
-	Telemetry                  RuntimeTelemetry
-	ReferenceResolver          reference.Resolver
-	Policy                     policies.ToolPolicy
-	SessionStore               sessions.Store
-	StateStore                 RuntimeStateStore
-	Logger                     *slog.Logger
-	ToolHooks                  toolhooks.Hooks
-	IterationBudget            int
-	ProviderTimeout            time.Duration
-	ToolTimeout                time.Duration
-	ParallelExecutionEnabled   bool
-	ParallelMaxWorkers         int
-	ParallelToolTimeoutDefault time.Duration
-	SubtaskMaxChildren         int
-	SubtaskMaxDepth            int
-	SubtaskDefaultTimeout      time.Duration
-	SubtaskMaxTimeout          time.Duration
-	Model                      string
-	Now                        func() time.Time
-	LocalLocation              *time.Location // timezone for date calculations; nil falls back to time.Local
-	Compactor                  *sessions.Compactor
-	ContextWindow              int
-	ContextBudget              ContextBudget // zero value = scaled defaults from ContextWindow
-	MemoryClassifierModel      string
-	LongMemDir                 string
-	KnowledgeRetriever         knowledge.Retriever
+	Provider                         providers.Provider
+	Registry                         *tools.ToolRegistry
+	Observer                         RuntimeObserver
+	Telemetry                        RuntimeTelemetry
+	PriceSource                      PriceSource
+	ReferenceResolver                reference.Resolver
+	Policy                           policies.ToolPolicy
+	SessionStore                     sessions.Store
+	StateStore                       RuntimeStateStore
+	Logger                           *slog.Logger
+	ToolHooks                        toolhooks.Hooks
+	IterationBudget                  int
+	ProviderTimeout                  time.Duration
+	ToolTimeout                      time.Duration
+	ParallelExecutionEnabled         bool
+	ParallelMaxWorkers               int
+	ParallelToolTimeoutDefault       time.Duration
+	SubtaskMaxChildren               int
+	SubtaskMaxDepth                  int
+	SubtaskDefaultTimeout            time.Duration
+	SubtaskMaxTimeout                time.Duration
+	Model                            string
+	Now                              func() time.Time
+	LocalLocation                    *time.Location // timezone for date calculations; nil falls back to time.Local
+	Compactor                        *sessions.Compactor
+	ContextWindow                    int
+	ContextBudget                    ContextBudget // zero value = scaled defaults from ContextWindow
+	MemoryClassifierModel            string
+	LongMemDir                       string
+	KnowledgeRetriever               knowledge.Retriever
+	DisableReadBeforeWriteValidation bool // skip ValidateReadBeforeWrite; useful for tests that focus on other behavior
 }
 
 type Runtime struct {
@@ -77,6 +79,7 @@ type Runtime struct {
 	registry                   *tools.ToolRegistry
 	observer                   RuntimeObserver
 	telemetry                  RuntimeTelemetry
+	priceSource                PriceSource
 	referenceResolver          reference.Resolver
 	policy                     policies.ToolPolicy
 	sessionStore               sessions.Store
@@ -105,14 +108,15 @@ type Runtime struct {
 	// promptVersion is the content-hash fingerprint of the effective system
 	// prompt (runtimeSystemPrompt). Computed once when the Runtime
 	// is constructed and stamped onto every record this Runtime produces.
-	promptVersion      string
-	planStore          *PlanStore
-	subtasks           *subtaskCoordinator
-	ltMemLoader        longTermMemoryLoader  // nil = disabled
-	ltMemFlusher       longTermMemoryFlusher // nil = disabled
-	knowledgeRetriever knowledge.Retriever
-	cancelMu           sync.Mutex
-	activeCancels      map[string]activeRunCancel // sessionID → active run cancel state
+	promptVersion                    string
+	planStore                        *PlanStore
+	subtasks                         *subtaskCoordinator
+	ltMemLoader                      longTermMemoryLoader  // nil = disabled
+	ltMemFlusher                     longTermMemoryFlusher // nil = disabled
+	knowledgeRetriever               knowledge.Retriever
+	disableReadBeforeWriteValidation bool
+	cancelMu                         sync.Mutex
+	activeCancels                    map[string]activeRunCancel // sessionID → active run cancel state
 }
 
 type activeRunCancel struct {
@@ -260,41 +264,43 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
 	}
 	return &Runtime{
-		provider:                   provider,
-		registry:                   config.Registry,
-		observer:                   config.Observer,
-		telemetry:                  config.Telemetry,
-		referenceResolver:          referenceResolver,
-		policy:                     config.Policy,
-		sessionStore:               sessionStore,
-		stateStore:                 stateStore,
-		logger:                     logger,
-		toolHooks:                  hooks,
-		pendingApprovals:           make(map[string]pendingApproval),
-		pendingBySession:           make(map[string]string),
-		iterationBudgetLimit:       iterationBudgetLimit,
-		providerTimeout:            providerTimeout,
-		toolTimeout:                toolTimeout,
-		parallelExecutionEnabled:   config.ParallelExecutionEnabled,
-		parallelMaxWorkers:         parallelMaxWorkers,
-		parallelToolTimeoutDefault: parallelToolTimeoutDefault,
-		subtaskMaxDepth:            subtaskMaxDepth,
-		subtaskDefaultTimeout:      subtaskDefaultTimeout,
-		subtaskMaxTimeout:          subtaskMaxTimeout,
-		model:                      config.Model,
-		now:                        now,
-		localLocation:              localLocation,
-		compactor:                  config.Compactor,
-		contextWindow:              contextWindow,
-		contextBudget:              contextBudget,
-		memoryClassifierModel:      memoryClassifierModel(config),
-		promptVersion:              promptVersion,
-		planStore:                  planStore,
-		subtasks:                   subtasks,
-		ltMemLoader:                ltLoader,
-		ltMemFlusher:               ltFlusher,
-		activeCancels:              make(map[string]activeRunCancel),
-		knowledgeRetriever:         config.KnowledgeRetriever,
+		provider:                         provider,
+		registry:                         config.Registry,
+		observer:                         config.Observer,
+		telemetry:                        config.Telemetry,
+		priceSource:                      config.PriceSource,
+		referenceResolver:                referenceResolver,
+		policy:                           config.Policy,
+		sessionStore:                     sessionStore,
+		stateStore:                       stateStore,
+		logger:                           logger,
+		toolHooks:                        hooks,
+		pendingApprovals:                 make(map[string]pendingApproval),
+		pendingBySession:                 make(map[string]string),
+		iterationBudgetLimit:             iterationBudgetLimit,
+		providerTimeout:                  providerTimeout,
+		toolTimeout:                      toolTimeout,
+		parallelExecutionEnabled:         config.ParallelExecutionEnabled,
+		parallelMaxWorkers:               parallelMaxWorkers,
+		parallelToolTimeoutDefault:       parallelToolTimeoutDefault,
+		subtaskMaxDepth:                  subtaskMaxDepth,
+		subtaskDefaultTimeout:            subtaskDefaultTimeout,
+		subtaskMaxTimeout:                subtaskMaxTimeout,
+		model:                            config.Model,
+		now:                              now,
+		localLocation:                    localLocation,
+		compactor:                        config.Compactor,
+		contextWindow:                    contextWindow,
+		contextBudget:                    contextBudget,
+		memoryClassifierModel:            memoryClassifierModel(config),
+		promptVersion:                    promptVersion,
+		planStore:                        planStore,
+		subtasks:                         subtasks,
+		ltMemLoader:                      ltLoader,
+		ltMemFlusher:                     ltFlusher,
+		activeCancels:                    make(map[string]activeRunCancel),
+		knowledgeRetriever:               config.KnowledgeRetriever,
+		disableReadBeforeWriteValidation: config.DisableReadBeforeWriteValidation,
 	}
 }
 
@@ -493,6 +499,25 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 			return failStartedRun(errShape)
 		}
 	}
+	currentVisionAttachments := len(imageAttachmentCandidates(message.Metadata)) > 0
+	visionImages, errShape := r.loadVisionImagesForMessage(ctx, message, sessionMemory)
+	if errShape != nil {
+		return failStartedRun(errShape)
+	}
+	if len(visionImages) > 0 && !providers.ProviderCapabilities(r.provider).ImageInput {
+		return failStartedRun(&contracts.ErrorShape{
+			Code:      contracts.ErrorProviderUnavailable,
+			Message:   "model không hỗ trợ input với ảnh",
+			Source:    contracts.ErrorSourceProvider,
+			Retryable: false,
+		})
+	}
+	if currentVisionAttachments && len(visionImages) > 0 {
+		sessionMemory.ImageRefs = imageRefsFromLoaded(visionImages)
+		if errShape := r.saveSessionMemory(ctx, message.SessionID, sessionMemory); errShape != nil {
+			return failStartedRun(errShape)
+		}
+	}
 	isRevision := isRevisionMessage(message)
 	var turnMeta turnAnalysis
 	if !isRevision {
@@ -627,6 +652,9 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	} else if contextualFollowUp {
 		providerTranscript = transcriptWithLastUserContent(transcript, understandingMessage.Text)
 	}
+	if len(visionImages) > 0 {
+		providerTranscript = attachVisionImagesToLastUser(providerTranscript, visionImages)
+	}
 
 	var providerKnowledge *knowledge.LinkedContext
 	if r.knowledgeRetriever != nil && !freshWorkspaceReadRequest {
@@ -653,6 +681,12 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	iterationBudget := NewIterationBudget(r.iterationBudgetLimit)
 	housekeepingRefunds := 0
 	housekeepingRefundLimit := r.iterationBudgetLimit
+	// readBeforeWriteNudged tracks whether we have already nudged the LLM
+	// to read workspace data before writing.  On the first violation we
+	// inject a system message and retry.  On the second violation we return
+	// failed — unless the write is a "create-from-scratch" that does not
+	// depend on workspace data.
+	readBeforeWriteNudged := false
 agentLoop:
 	for iteration := 1; ; iteration++ {
 		if !iterationBudget.Consume() {
@@ -951,6 +985,79 @@ If required information is missing, ask one concise clarification question inste
 				housekeepingRefunds++
 			}
 			continue agentLoop
+		}
+
+		// Workspace flow validation: nudge the agent to read data before writing.
+		// This only fires when the agent proposes a workspace write without any
+		// prior successful workspace read in this run.
+		//
+		// We skip this check for approval continuations (runs that resume after
+		// the user approved a tool). In those cases the reads already happened
+		// in the run *before* the approval exit, but toolResults is reset to
+		// empty when the new continuation run starts.
+		isContinuation := isRevisionMessage(message)
+		if !isContinuation && !r.disableReadBeforeWriteValidation {
+			if warning, violated := ValidateReadBeforeWrite(assistantMessage.ToolCalls, toolResults, r.registry); violated {
+				// Allow "create-from-scratch" writes that don't reference
+				// existing resource IDs and don't need prior read data.
+				writes := WorkspaceWriteCalls(assistantMessage.ToolCalls, r.registry)
+				if isCreateFromScratch(writes) {
+					r.logger.Info("workspace flow: create-from-scratch write allowed without prior read",
+						"request_id", message.RequestID,
+						"session_id", message.SessionID,
+						"iteration", iteration,
+					)
+				} else if !readBeforeWriteNudged {
+					// First violation: nudge the LLM to read first.
+					readBeforeWriteNudged = true
+					r.logger.Warn("workspace flow order violated: write before read (nudging)",
+						"request_id", message.RequestID,
+						"session_id", message.SessionID,
+						"iteration", iteration,
+					)
+					providerTranscript = append(providerTranscript, providers.Message{
+						Role:    providers.MessageRoleSystem,
+						Content: warning,
+					})
+					continue agentLoop
+				} else {
+					// Second violation: LLM did not comply after nudge → fail.
+					r.logger.Error("workspace flow order violated: write before read (failing)",
+						"request_id", message.RequestID,
+						"session_id", message.SessionID,
+						"iteration", iteration,
+					)
+					updatedState, errShape := r.finishRunState(ctx, runState, RuntimeRunStatusFailed, "write_before_read")
+					if errShape != nil {
+						base.Error = errShape
+						base.Message = errShape.Message
+						return base, nil
+					}
+					base.FailureReason = updatedState.FailureReason
+					base.Status = contracts.AgentStatusFailed
+					base.Message = "Cannot write workspace data without reading first. Please read relevant data before making changes."
+					base.Error = &contracts.ErrorShape{
+						Code:      contracts.ErrorActionBlockedByPolicy,
+						Message:   base.Message,
+						Source:    contracts.ErrorSourcePolicy,
+						Retryable: false,
+					}
+					return base, nil
+				}
+			}
+		}
+
+		deferredWorkspaceToolCalls := []providers.ToolCall{}
+		if readPrefix, deferred, ok := SplitWorkspaceReadPrefix(assistantMessage.ToolCalls, toolResults, r.registry); ok {
+			r.logger.Info("workspace flow: splitting read prefix before deferred write tools",
+				"request_id", message.RequestID,
+				"session_id", message.SessionID,
+				"iteration", iteration,
+				"read_count", len(readPrefix),
+				"deferred_count", len(deferred),
+			)
+			assistantMessage.ToolCalls = readPrefix
+			deferredWorkspaceToolCalls = deferred
 		}
 
 		for index, providerToolCall := range assistantMessage.ToolCalls {
@@ -1313,6 +1420,18 @@ If required information is missing, ask one concise clarification question inste
 				base.FailureReason = updatedState.FailureReason
 				return base, nil
 			}
+		}
+		if len(deferredWorkspaceToolCalls) > 0 {
+			for _, skipped := range skippedToolObservationMessages(deferredWorkspaceToolCalls, "ACTION_BLOCKED_BY_POLICY: deferred until workspace read results are available") {
+				transcript = append(transcript, skipped)
+				providerTranscript = append(providerTranscript, skipped)
+				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, skipped); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+			}
+			continue agentLoop
 		}
 		if onlyPlanToolCalls(assistantMessage.ToolCalls) && housekeepingRefunds < housekeepingRefundLimit {
 			iterationBudget.Refund()

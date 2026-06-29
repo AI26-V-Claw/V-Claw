@@ -2,9 +2,12 @@ package docs
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	gdocs "vclaw/internal/connectors/google/docs"
+	"vclaw/internal/contracts"
 	"vclaw/internal/tools"
 )
 
@@ -44,6 +47,18 @@ func (artifactDocsConnector) GetDocument(context.Context, string) (gdocs.Documen
 
 func (artifactDocsConnector) AppendText(context.Context, string, string) (gdocs.AppendTextOutput, error) {
 	return gdocs.AppendTextOutput{DocumentID: "doc_123", Title: "Plan"}, nil
+}
+
+type partialFailureDocsConnector struct {
+	fakeDocsConnector
+}
+
+func (partialFailureDocsConnector) CreateDocument(context.Context, string) (gdocs.Document, error) {
+	return gdocs.Document{ID: "doc_partial", Title: "Plan"}, nil
+}
+
+func (partialFailureDocsConnector) AppendText(context.Context, string, string) (gdocs.AppendTextOutput, error) {
+	return gdocs.AppendTextOutput{}, errors.New("append failed")
 }
 
 func TestRegisterToolsMetadata(t *testing.T) {
@@ -88,6 +103,34 @@ func TestDocsToolResultIncludesArtifactMetadataAndTruncation(t *testing.T) {
 	}
 	if !result.Truncated {
 		t.Fatal("expected truncated document preview")
+	}
+}
+
+func TestCreateDocumentPartialAppendFailureUsesContractErrorAndArtifact(t *testing.T) {
+	create := NewTool(ToolNameCreateDocument, NewService(partialFailureDocsConnector{}))
+	result := create.Execute(context.Background(), tools.ToolCall{
+		ID:   "call_create_doc",
+		Name: ToolNameCreateDocument,
+		Arguments: map[string]any{
+			"title":   "Plan",
+			"content": "Initial content",
+		},
+	})
+
+	if result.Success {
+		t.Fatalf("expected partial append failure, got success: %#v", result)
+	}
+	if result.Error == nil || result.Error.Code != contracts.ErrorInternal {
+		t.Fatalf("expected INTERNAL_ERROR, got %#v", result.Error)
+	}
+	if result.ArtifactRef == nil {
+		t.Fatal("expected artifact ref for the created document")
+	}
+	if result.ArtifactRef.ID != "doc_partial" {
+		t.Fatalf("unexpected artifact ref: %#v", result.ArtifactRef)
+	}
+	if !strings.Contains(result.ContentForLLM, "doc_partial") {
+		t.Fatalf("expected created document ID in LLM content, got %q", result.ContentForLLM)
 	}
 }
 
