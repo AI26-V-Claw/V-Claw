@@ -85,7 +85,26 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 	cloned := make([]providers.Message, len(messages))
 	for i, message := range messages {
 		cloned[i] = message
+		cloned[i].Parts = cloneProviderContentParts(message.Parts)
 		cloned[i].ToolCalls = cloneProviderToolCalls(message.ToolCalls)
+	}
+	return cloned
+}
+
+func cloneProviderContentParts(parts []providers.ContentPart) []providers.ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	cloned := make([]providers.ContentPart, len(parts))
+	for i, part := range parts {
+		cloned[i] = part
+		if part.Image != nil {
+			image := *part.Image
+			if len(part.Image.Data) > 0 {
+				image.Data = append([]byte(nil), part.Image.Data...)
+			}
+			cloned[i].Image = &image
+		}
 	}
 	return cloned
 }

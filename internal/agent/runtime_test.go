@@ -506,8 +506,18 @@ func TestRuntimeDoesNotReuseOldWriteDetailsForNewRequest(t *testing.T) {
 
 func TestRuntimeClarifiesCalendarCreateEventWhenCurrentRequestIsUnderspecified(t *testing.T) {
 	executions := 0
-	provider := &fakeProvider{responses: []providers.ChatResponse{{
-		Message: providers.Message{
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		// First response: workspace read so ValidateReadBeforeWrite is satisfied.
+		{Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_list_events",
+				Name:      "calendar.listEvents",
+				Arguments: map[string]any{},
+			}},
+		}},
+		// Second response: underspecified write that should trigger clarification.
+		{Message: providers.Message{
 			Role: providers.MessageRoleAssistant,
 			ToolCalls: []providers.ToolCall{{
 				ID:   "call_calendar",
@@ -518,9 +528,12 @@ func TestRuntimeClarifiesCalendarCreateEventWhenCurrentRequestIsUnderspecified(t
 					"end":   "2026-06-04T11:00:00+07:00",
 				},
 			}},
-		},
-	}}}
+		}},
+	}}
 	registry := tools.NewToolRegistry()
+	if err := registry.Register(calendarListRuntimeTool{}); err != nil {
+		t.Fatalf("register calendar list tool: %v", err)
+	}
 	if err := registry.Register(calendarCreateRuntimeTool{executions: &executions}); err != nil {
 		t.Fatalf("register calendar tool: %v", err)
 	}
@@ -649,6 +662,7 @@ func TestRuntimeRemovesStaleAttendeesFromActiveFollowUpApproval(t *testing.T) {
 		Provider:     provider,
 		Registry:     registry,
 		SessionStore: store,
+		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
 	message.Text = "Thời gian từ 10am đến 12am"
@@ -726,6 +740,7 @@ func TestRuntimeClarificationAnswerUsesMergedRequestForCalendarApproval(t *testi
 		Registry:     registry,
 		SessionStore: store,
 		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
 	message.Text = "ngày mai"
@@ -787,6 +802,7 @@ Xin vui lòng xác nhận để tôi tiến hành tạo sự kiện này.`,
 	runtime := NewRuntime(RuntimeConfig{
 		Provider: provider,
 		Registry: registry,
+		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
 	message.Text = "Tạo lịch họp tiêu đề hoàn thành chức năng HITL vào ngày mai từ 10am đến 11am"
@@ -1060,6 +1076,7 @@ func TestRuntimeResolvesNamedChatSpaceBeforeApproval(t *testing.T) {
 		Provider: provider,
 		Registry: registry,
 		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
 	message.Text = "gui tin nhan vao nhom chat VClaw, thong bao ve cuoc hop Demo Sprint1"
@@ -1109,6 +1126,7 @@ func TestRuntimeDownloadAttachmentsApprovalWithRelativeOutputDir(t *testing.T) {
 		Provider: provider,
 		Registry: registry,
 		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		DisableReadBeforeWriteValidation: true,
 	})
 
 	message := runtimeTestMessage()
@@ -1151,6 +1169,7 @@ func TestRuntimeDownloadAttachmentsApprovalWithoutOutputDir(t *testing.T) {
 		Provider: provider,
 		Registry: registry,
 		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		DisableReadBeforeWriteValidation: true,
 	})
 
 	message := runtimeTestMessage()

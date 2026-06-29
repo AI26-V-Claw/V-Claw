@@ -1,0 +1,61 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc sheet 'Sheet1' trong file 'Untitled spreadsheet', tính tổng và trung bình theo từng tháng bằng Python, rồi cập nhật cột 'Tổng hợp' với kết quả."
+    },
+    "agent": {
+      "expectation": "Agent đọc dữ liệu Sheets. Không cần approval cho thao tác đọc.",
+      "requires_approval": false,
+      "expected_tools": [
+        "sheets.getSpreadsheet",
+        "sheets.readValues"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận chạy Python tính toán dữ liệu doanh thu.",
+      "requires_approval": true,
+      "expected_tools": [
+        "sandbox.runPython"
+      ],
+      "expected_approval_tool": "sandbox.runPython",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tính xong, xin xác nhận cập nhật cột Tổng hợp trong Sheets.",
+      "requires_approval": true,
+      "expected_tools": [
+        "sheets.updateValues"
+      ],
+      "expected_approval_tool": "sheets.updateValues",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent cập nhật xong, báo cáo kết quả tính toán.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

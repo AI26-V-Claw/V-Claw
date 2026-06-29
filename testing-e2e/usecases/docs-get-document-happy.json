@@ -1,0 +1,28 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc nội dung tài liệu Google Docs có tên 'Báo cáo Demo Sprint 2 - VClaw'."
+    },
+    "agent": {
+      "expectation": "Agent tìm tài liệu trên Drive rồi xin xác nhận đọc nội dung Google Docs.",
+      "requires_approval": true,
+      "expected_tools": ["drive.listFiles", "docs.getDocument"],
+      "expected_approval_tool": "docs.getDocument",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent đọc nội dung tài liệu thành công và trả về kết quả.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

@@ -614,6 +614,8 @@ def prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any]
     lines = [
         "Current user attachments are available as local files.",
         'If the user says "file này", "ảnh này", or asks to send/upload the attached file, use these paths in tool inputs that accept attachments.',
+        "Tool mapping: gmail.createDraft.attachments for Gmail, drive.uploadFile.localPath for Drive uploads.",
+        "For Google Docs or Google Sheets, first read or parse the local file, then create/update the Docs or Sheets content from that extracted text or table.",
         "Attachment paths:",
     ]
     lines.extend(f"- {path}" for path in paths)
@@ -859,10 +861,54 @@ def usecase_steps_and_config(raw_usecase: Any, usecase_path: Path) -> tuple[list
     raise ValueError(f"{usecase_path.name} must be a list or object")
 
 
+def existing_artifact_report(path: Path) -> dict[str, Any] | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        data = load_json(path)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, dict[str, Any]]:
     raw_usecase = load_json(usecase_path)
     steps, usecase = usecase_steps_and_config(raw_usecase, usecase_path)
     usecase_name = usecase_path.stem
+    artifact_path = args.artifact_dir.resolve() / usecase_path.name
+    existing_report = existing_artifact_report(artifact_path)
+    if existing_report:
+        if args.skip_existing:
+            log("")
+            log("=" * 72)
+            log(f"Use case : {usecase_name}")
+            log(f"Source   : {display_path(usecase_path)}")
+            log(f"Skip     : existing artifact {display_path(artifact_path)}")
+            log("=" * 72)
+            log("RUN SKIP")
+            log(f"Artifact: {display_path(artifact_path)}")
+            return 0, {
+                "passed": bool(existing_report.get("passed")),
+                "artifactPath": str(artifact_path),
+                "skipped": True,
+                "usecase": str(usecase_path),
+            }
+        if args.skip_passed and existing_report.get("passed") is True:
+            log("")
+            log("=" * 72)
+            log(f"Use case : {usecase_name}")
+            log(f"Source   : {display_path(usecase_path)}")
+            log(f"Skip     : existing passed artifact {display_path(artifact_path)}")
+            log("=" * 72)
+            log("RUN SKIP")
+            log(f"Artifact: {display_path(artifact_path)}")
+            return 0, {
+                "passed": True,
+                "artifactPath": str(artifact_path),
+                "skipped": True,
+                "usecase": str(usecase_path),
+            }
+
     run_id = "uc_" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
     session_prefix = str(usecase.get("sessionPrefix") or usecase_name).strip()
     session_id = args.session.strip() or f"{session_prefix}_{run_id}"
@@ -886,7 +932,6 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
         for key, value in usecase_variables.items():
             variables[str(key)] = str(value)
 
-    artifact_path = args.artifact_dir.resolve() / usecase_path.name
     log("")
     log("=" * 72)
     log(f"Use case : {usecase_name}")
@@ -1032,6 +1077,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run real V-Claw agent use cases through cmd/vclaw.")
     parser.add_argument("--usecase", type=Path, default=DEFAULT_USECASE, help="Optional use case JSON file or directory. Defaults to testing-e2e/usecases.")
     parser.add_argument("--artifact-dir", type=Path, default=DEFAULT_ARTIFACT_DIR)
+    parser.add_argument("--skip-passed", action="store_true", help="Skip use cases whose artifact already exists and is marked passed.")
+    parser.add_argument("--skip-existing", action="store_true", help="Skip use cases whose artifact already exists, regardless of pass/fail status.")
     parser.add_argument("--session", default="")
     parser.add_argument("--channel", default="")
     parser.add_argument("--timeout-seconds", type=int, default=300)

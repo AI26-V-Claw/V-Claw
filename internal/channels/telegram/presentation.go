@@ -217,6 +217,12 @@ func telegramTextFromResponse(response contracts.AgentResponse) string {
 		return "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại."
 	}
 
+	if response.Error != nil &&
+		response.Error.Code == contracts.ErrorProviderUnavailable &&
+		strings.EqualFold(strings.TrimSpace(response.Error.Message), "model không hỗ trợ input với ảnh") {
+		return "model không hỗ trợ input với ảnh"
+	}
+
 	switch response.Status {
 	case contracts.AgentStatusBlocked, contracts.AgentStatusIterationBudgetExhausted, contracts.AgentStatusCancelled:
 		if reason := agent.ExitReason(response); reason != "" {

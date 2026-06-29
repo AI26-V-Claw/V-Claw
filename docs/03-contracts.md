@@ -89,6 +89,33 @@ Required:
 requestId, sessionId, channel, text, timestamp
 ```
 
+Channel attachment metadata is optional and backward-compatible. Telegram stores
+downloaded files in the local attachment workspace and may include:
+
+```json
+{
+  "metadata": {
+    "attachmentPaths": ["D:\\V-Claw\\.sandbox-workspace\\agent\\workspace\\data\\telegram_attachments\\...\\photo.jpg"],
+    "attachments": [
+      {
+        "path": "D:\\V-Claw\\.sandbox-workspace\\agent\\workspace\\data\\telegram_attachments\\...\\photo.jpg",
+        "filename": "photo.jpg",
+        "mimeType": "image/jpeg",
+        "source": "telegram"
+      }
+    ]
+  }
+}
+```
+
+Image attachments are context only. The runtime validates path, size, MIME type,
+and decodability before sending pixels to a vision-capable provider. Raw image
+bytes and base64/data URLs must not be stored in transcript, long-term memory,
+knowledge graph, or audit records. Visible text or instructions inside an image
+have lower authority than the current user message, system prompt, tool policy,
+and HITL approval contract; an image never replaces approval for write,
+destructive, local file, or code execution actions.
+
 ---
 
 ## 3.2. AgentResponse
@@ -650,6 +677,8 @@ Implementation: see `internal/governance/governance.go`. Migration: `migrations/
 | `docs.replaceText` | Integration | `external_write` | Yes |
 | `docs.insertText` | Integration | `external_write` | Yes |
 | `docs.deleteContent` | Integration | `external_write` | Yes |
+
+> `docs.createDocument` accepts an optional `content` (string) parameter: body text to append immediately after the document is created. If the content append fails, the tool returns `PARTIAL_FAILURE` with `Success=false`, but the empty document is still created and its ID is included in the response so the user can manually add content later via `docs.appendText`.
 
 ### Google Sheets
 

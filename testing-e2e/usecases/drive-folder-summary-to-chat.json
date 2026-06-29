@@ -1,0 +1,51 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Liệt kê tất cả file trong folder 'con_vit' trên Drive, tóm tắt danh sách và gửi thông báo vào Chat."
+    },
+    "agent": {
+      "expectation": "Agent đọc danh sách file trong folder trước, rồi hỏi lại cần gửi vào space Chat nào vì đích gửi chưa được nêu rõ.",
+      "requires_approval": false,
+      "expected_tools": [
+        "drive.listFiles",
+        "clarify"
+      ],
+      "expected_approval_tool": null,
+      "expected_status": "waiting_clarification",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "Gửi vào space VClaw."
+    },
+    "agent": {
+      "expectation": "Agent tìm đúng space VClaw và xin xác nhận gửi thông báo Chat.",
+      "requires_approval": true,
+      "expected_tools": [
+        "chat.listSpaces",
+        "chat.sendMessage"
+      ],
+      "expected_approval_tool": "chat.sendMessage",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xác nhận đã gửi thông báo tóm tắt vào Chat.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Chat",
+        "gửi"
+      ]
+    }
+  }
+]

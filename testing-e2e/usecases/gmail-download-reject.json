@@ -1,0 +1,34 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Tìm email từ nxhaicr7@gmail.com ngày 2026-06-22 có file báo cáo đính kèm, tải file đó về rồi tóm tắt nội dung cho mình."
+    },
+    "agent": {
+      "expectation": "Agent cần đọc email liên quan rồi xin xác nhận trước khi tải attachment về máy local.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.listEmails",
+        "gmail.getEmail",
+        "gmail.downloadAttachments"
+      ],
+      "expected_approval_tool": "gmail.downloadAttachments",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/reject"
+    },
+    "agent": {
+      "expectation": "Agent hủy proposal tải file, không tải attachment và không tiếp tục workflow.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Đã hủy"
+      ]
+    }
+  }
+]

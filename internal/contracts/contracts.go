@@ -86,6 +86,7 @@ const (
 	ErrorProviderError            = "PROVIDER_ERROR"
 	ErrorProviderTimeout          = "PROVIDER_TIMEOUT"
 	ErrorProviderUnavailable      = "PROVIDER_UNAVAILABLE"
+	ErrorFileAccessDenied         = "FILE_ACCESS_DENIED"
 	ErrorActionRequiresApproval   = "ACTION_REQUIRES_APPROVAL"
 	ErrorActionBlockedByPolicy    = "ACTION_BLOCKED_BY_POLICY"
 	ErrorApprovalNotFound         = "APPROVAL_NOT_FOUND"

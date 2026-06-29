@@ -1,0 +1,47 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Đọc email mới nhất từ baolnc@vclaw.site, tìm thông tin liên lạc của những người được đề cập trong email đó, rồi tạo lịch họp tên 'Stakeholder Sync' với họ vào thứ Sáu tuần này lúc 2 giờ chiều, kéo dài 1 tiếng."
+    },
+    "agent": {
+      "expectation": "Agent đọc email, trích xuất tên người, tìm thông tin qua People directory. Không cần approval cho thao tác đọc.",
+      "requires_approval": false,
+      "expected_tools": [
+        "gmail.listEmails",
+        "gmail.getEmail",
+        "people.searchDirectory"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tìm xong email các stakeholders, xin xác nhận tạo Calendar event với danh sách attendees.",
+      "requires_approval": true,
+      "expected_tools": [
+        "calendar.createEvent"
+      ],
+      "expected_approval_tool": "calendar.createEvent",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo lịch thành công, báo cáo danh sách attendees và thời gian.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]
