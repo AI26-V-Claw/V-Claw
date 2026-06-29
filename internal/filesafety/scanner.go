@@ -96,6 +96,18 @@ func (r Result) Allowed() bool {
 	return r.Decision == DecisionAllow
 }
 
+func (r Result) PromptInjectionSuspected() bool {
+	return hasFlag(r.Flags, FlagPromptInjectionSuspected)
+}
+
+func (r Result) ReadOnlyAllowed() bool {
+	return r.Allowed() || (r.Decision == DecisionRequiresApproval && r.PromptInjectionSuspected())
+}
+
+func (r Result) TransferAllowed() bool {
+	return r.ReadOnlyAllowed()
+}
+
 func ScanPath(path string, input Input) (Result, error) {
 	info, err := os.Stat(path)
 	if err != nil {

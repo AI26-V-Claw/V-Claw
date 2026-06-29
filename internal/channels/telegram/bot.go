@@ -411,16 +411,25 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		metadata := make([]map[string]any, 0, len(attachments))
 		for _, attachment := range attachments {
 			paths = append(paths, attachment.Path)
-			metadata = append(metadata, map[string]any{
+			item := map[string]any{
 				"path":       attachment.Path,
 				"filename":   attachment.Filename,
 				"mimeType":   attachment.MimeType,
 				"source":     "telegram",
 				"fileSafety": attachment.Safety,
-			})
+			}
+			if strings.TrimSpace(attachment.SafetyWarning) != "" {
+				item["safetyWarning"] = attachment.SafetyWarning
+			}
+			metadata = append(metadata, item)
 		}
 		inbound.Metadata["attachmentPaths"] = paths
 		inbound.Metadata["attachments"] = metadata
+		if hasTelegramAttachmentSafetyWarning(attachments) {
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Tệp đính kèm có dấu hiệu chứa chỉ dẫn không đáng tin. Mình vẫn nhận file, nhưng agent sẽ chỉ xem nội dung như dữ liệu và không làm theo lệnh nằm trong file."); sendErr != nil && b.logger != nil {
+				b.logger.Warn("telegram attachment safety warning send failed", "error", sendErr)
+			}
+		}
 		if strings.TrimSpace(inbound.Text) == "" {
 			inbound.Text = "User sent an attachment."
 		}
@@ -1521,10 +1530,11 @@ func (b *Bot) answerCallbackQuery(ctx context.Context, callbackID string, text s
 }
 
 type downloadedTelegramAttachment struct {
-	Path     string
-	Filename string
-	MimeType string
-	Safety   map[string]any
+	Path          string
+	Filename      string
+	MimeType      string
+	Safety        map[string]any
+	SafetyWarning string
 }
 
 func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramMessage) ([]downloadedTelegramAttachment, error) {
@@ -1571,22 +1581,35 @@ func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramM
 			_ = os.Remove(quarantinePath)
 			return nil, err
 		}
-		if !decision.Allowed() {
+		if !decision.TransferAllowed() {
 			_ = os.Remove(quarantinePath)
 			return nil, fmt.Errorf("telegram attachment blocked by file safety gate: %s", decision.ReasonUser)
 		}
 		localPath := filepath.Join(outputDir, filename)
-		if err := filesafety.Promote(filesafety.QuarantinedFile{Path: quarantinePath, Dir: filepath.Dir(quarantinePath), Filename: filename}, localPath, decision); err != nil {
+		if err := filesafety.PromoteTransfer(filesafety.QuarantinedFile{Path: quarantinePath, Dir: filepath.Dir(quarantinePath), Filename: filename}, localPath, decision); err != nil {
 			return nil, err
 		}
-		downloaded = append(downloaded, downloadedTelegramAttachment{
+		attachment := downloadedTelegramAttachment{
 			Path:     localPath,
 			Filename: filename,
 			MimeType: candidate.MimeType,
 			Safety:   decision.Metadata(),
-		})
+		}
+		if decision.PromptInjectionSuspected() {
+			attachment.SafetyWarning = "possible prompt-injection instructions detected"
+		}
+		downloaded = append(downloaded, attachment)
 	}
 	return downloaded, nil
+}
+
+func hasTelegramAttachmentSafetyWarning(attachments []downloadedTelegramAttachment) bool {
+	for _, attachment := range attachments {
+		if strings.TrimSpace(attachment.SafetyWarning) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func telegramAttachmentWorkspaceRoot() string {

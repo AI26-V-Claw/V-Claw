@@ -85,11 +85,13 @@ type PermissionSummary struct {
 }
 
 type FileContentOutput struct {
-	File      FileSummary
-	MimeType  string
-	Content   string
-	Size      int64
-	Truncated bool
+	File          FileSummary
+	MimeType      string
+	Content       string
+	Size          int64
+	Truncated     bool
+	FileSafety    map[string]any `json:"file_safety,omitempty"`
+	SafetyWarning string         `json:"safety_warning,omitempty"`
 }
 
 func (c *Client) ListFiles(ctx context.Context, query, mimeType string, maxResults int64, pageToken string) (ListFilesOutput, error) {

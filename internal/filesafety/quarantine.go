@@ -43,6 +43,17 @@ func Promote(q QuarantinedFile, destPath string, decision Result) error {
 	if !decision.Allowed() {
 		return fmt.Errorf("file safety decision is %s: %s", decision.Decision, decision.ReasonUser)
 	}
+	return promote(q, destPath)
+}
+
+func PromoteTransfer(q QuarantinedFile, destPath string, decision Result) error {
+	if !decision.TransferAllowed() {
+		return fmt.Errorf("file safety decision is %s: %s", decision.Decision, decision.ReasonUser)
+	}
+	return promote(q, destPath)
+}
+
+func promote(q QuarantinedFile, destPath string) error {
 	if strings.TrimSpace(q.Path) == "" {
 		return fmt.Errorf("quarantine path is required")
 	}
