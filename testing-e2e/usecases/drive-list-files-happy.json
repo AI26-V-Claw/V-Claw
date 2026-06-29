@@ -1,0 +1,15 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Liệt kê các file trong Google Drive của tôi."
+    },
+    "agent": {
+      "expectation": "Agent gọi drive.listFiles không cần approval, trả về danh sách file.",
+      "requires_approval": false,
+      "expected_tools": ["drive.listFiles"],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

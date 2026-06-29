@@ -1,0 +1,61 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Gửi email chúc buổi sáng cho baolnc@vclaw.site."
+    },
+    "agent": {
+      "expectation": "Agent cần hỏi lại nội dung email vì yêu cầu chưa có body cụ thể.",
+      "requires_approval": false,
+      "expected_tools": [
+        "clarify"
+      ],
+      "expected_approval_tool": null,
+      "expected_status": "waiting_clarification",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "Nội dung là: Chào buổi sáng, chúc bạn một ngày làm việc hiệu quả."
+    },
+    "agent": {
+      "expectation": "Agent tạo draft email rồi xin xác nhận trước khi gửi.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.createDraft"
+      ],
+      "expected_approval_tool": "gmail.createDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận lần nữa trước khi sendDraft.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.sendDraft"
+      ],
+      "expected_approval_tool": "gmail.sendDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xác nhận đã gửi email thành công.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

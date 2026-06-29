@@ -1,0 +1,32 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Tạo lịch họp tên 'Sprint Review' vào ngày mai lúc 10 giờ sáng, kéo dài 1 tiếng."
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận trước khi tạo event trên Calendar.",
+      "requires_approval": true,
+      "expected_tools": [
+        "calendar.createEvent"
+      ],
+      "expected_approval_tool": "calendar.createEvent",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo event thành công và xác nhận với user.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Sprint Review"
+      ]
+    }
+  }
+]

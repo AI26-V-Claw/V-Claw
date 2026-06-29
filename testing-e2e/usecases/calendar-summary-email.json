@@ -1,0 +1,46 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Liệt kê tất cả sự kiện tuần này trên Calendar, tóm tắt lại và gửi email báo cáo lịch tuần cho baolnc@vclaw.site."
+    },
+    "agent": {
+      "expectation": "Agent đọc danh sách events tuần này, tóm tắt lại và xin xác nhận tạo draft email báo cáo.",
+      "requires_approval": true,
+      "expected_tools": [
+        "calendar.listEvents",
+        "gmail.createDraft"
+      ],
+      "expected_approval_tool": "gmail.createDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận gửi email.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.sendDraft"
+      ],
+      "expected_approval_tool": "gmail.sendDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent gửi email thành công.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

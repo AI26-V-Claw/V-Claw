@@ -1,0 +1,93 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Onboard thành viên mới tên Nguyễn Văn A: tìm thông tin trong directory, tạo lịch buổi intro tên 'Intro Nguyễn Văn A' vào thứ Hai tuần sau lúc 10 giờ sáng, kéo dài 1 tiếng, thêm vào space VClaw trên Chat và tạo Docs checklist onboarding cho họ."
+    },
+    "agent": {
+      "expectation": "Agent tìm thông tin Nguyễn Văn A trong People directory và space VClaw. Không cần approval.",
+      "requires_approval": false,
+      "expected_tools": [
+        "people.searchDirectory",
+        "chat.listSpaces"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tìm xong, xin xác nhận tạo lịch buổi intro.",
+      "requires_approval": true,
+      "expected_tools": [
+        "calendar.createEvent"
+      ],
+      "expected_approval_tool": "calendar.createEvent",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo lịch xong, xin xác nhận thêm thành viên vào space Chat.",
+      "requires_approval": true,
+      "expected_tools": [
+        "chat.addMember"
+      ],
+      "expected_approval_tool": "chat.addMember",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent thêm member xong, xin xác nhận tạo Docs checklist onboarding.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.createDocument"
+      ],
+      "expected_approval_tool": "docs.createDocument",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 4,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo Docs xong, xin xác nhận điền checklist onboarding.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.appendText"
+      ],
+      "expected_approval_tool": "docs.appendText",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 5,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành onboarding flow.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Nguyễn Văn A"
+      ]
+    }
+  }
+]

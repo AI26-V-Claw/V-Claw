@@ -1,0 +1,48 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Chạy script phân tích log hệ thống, xuất kết quả ra file report.txt và lưu lên Drive trong folder 'System Reports'."
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận chạy lệnh shell phân tích log.",
+      "requires_approval": true,
+      "expected_tools": [
+        "sandbox.runShell"
+      ],
+      "expected_approval_tool": "sandbox.runShell",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent chạy xong, tìm folder System Reports, xin xác nhận upload file lên Drive.",
+      "requires_approval": true,
+      "expected_tools": [
+        "drive.listFiles",
+        "drive.uploadFile"
+      ],
+      "expected_approval_tool": "drive.uploadFile",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent upload thành công, trả link file trên Drive.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "report.txt"
+      ]
+    }
+  }
+]
