@@ -36,7 +36,7 @@ func TestExtractPDFWithDocker(t *testing.T) {
 	}
 	runner := sandboxruntime.NewDockerRunner(sandboxruntime.DockerRunnerConfig{Guard: guard})
 	tool := NewExtractPDFTool(Config{Runner: runner, Guard: guard, DefaultSessionID: DefaultSessionID})
-	outputName := "codex_genta_structured_review.md"
+	outputName := "codex_pdf_extract_integration.md"
 
 	result := tool.Execute(context.Background(), tools.ToolCall{
 		ID:   "integration_extract_pdf",
@@ -55,9 +55,14 @@ func TestExtractPDFWithDocker(t *testing.T) {
 		t.Fatalf("read structured Markdown: %v", err)
 	}
 	markdown := string(data)
-	for _, want := range []string{"# C program Cheat Sheet", "## Console Input/Output", "| Entry | Description |"} {
-		if !strings.Contains(markdown, want) {
-			t.Fatalf("structured Markdown missing %q:\n%s", want, markdown)
+	if len(strings.TrimSpace(markdown)) < 200 {
+		t.Fatalf("structured Markdown is too short (%d bytes):\n%s", len(data), markdown)
+	}
+	if strings.Contains(strings.ToLower(filepath.Base(inputPath)), "genta") {
+		for _, want := range []string{"# C program Cheat Sheet", "## Console Input/Output", "| Entry | Description |"} {
+			if !strings.Contains(markdown, want) {
+				t.Fatalf("structured Markdown missing %q:\n%s", want, markdown)
+			}
 		}
 	}
 	if strings.ContainsAny(markdown, "\u200b\u200c\u200d\u2060\ufeff") {

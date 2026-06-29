@@ -120,6 +120,11 @@ func TestExtractPDFToolProducesStructuredMarkdownArtifact(t *testing.T) {
 	if runner.request == nil || !strings.Contains(runner.request.Code, "find_tables()") {
 		t.Fatalf("expected deterministic table extraction script, got %#v", runner.request)
 	}
+	for _, want := range []string{"fallback_text_lines", `page.get_text("text", sort=True)`, "fallback_used"} {
+		if !strings.Contains(runner.request.Code, want) {
+			t.Fatalf("expected extraction script to include fallback %q:\n%s", want, runner.request.Code)
+		}
+	}
 	if !strings.Contains(runner.request.Code, `/workspace/sample.pdf`) {
 		t.Fatalf("script does not use workspace PDF path:\n%s", runner.request.Code)
 	}

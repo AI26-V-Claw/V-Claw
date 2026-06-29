@@ -121,8 +121,8 @@ type Runtime struct {
 	activeCancels                    map[string]activeRunCancel // sessionID → active run cancel state
 
 	// skill auto-learn fields
-	skillNudgeInterval    int        // 0 = disabled; trigger skill review every N iterations
-	skillCacheDir         string     // path to cache/skills/
+	skillNudgeInterval    int    // 0 = disabled; trigger skill review every N iterations
+	skillCacheDir         string // path to cache/skills/
 	skillReviewMu         sync.Mutex
 	itersSinceSkillReview int
 }
@@ -312,11 +312,11 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltMemLoader:                      ltLoader,
 		ltMemFlusher:                     ltFlusher,
 		activeCancels:                    make(map[string]activeRunCancel),
-	knowledgeRetriever:               config.KnowledgeRetriever,
-	disableReadBeforeWriteValidation: config.DisableReadBeforeWriteValidation,
-	skillNudgeInterval:               config.SkillNudgeInterval,
-	skillCacheDir:                    skillCacheDir,
-	itersSinceSkillReview:            0,
+		knowledgeRetriever:               config.KnowledgeRetriever,
+		disableReadBeforeWriteValidation: config.DisableReadBeforeWriteValidation,
+		skillNudgeInterval:               config.SkillNudgeInterval,
+		skillCacheDir:                    skillCacheDir,
+		itersSinceSkillReview:            0,
 	}
 }
 func memoryClassifierModel(config RuntimeConfig) string {
@@ -1235,6 +1235,31 @@ If required information is missing, ask one concise clarification question inste
 				}
 				return *clarification, nil
 			}
+			if observation := sandboxExtractPDFLocalPathObservation(providerToolCall); observation != "" {
+				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusSkipped, observation, ""); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				toolMessage := providers.Message{
+					Role:       providers.MessageRoleTool,
+					ToolCallID: providerToolCall.ID,
+					Content:    truncateToolContentForLLM(observation),
+				}
+				transcript = append(transcript, toolMessage)
+				providerTranscript = append(providerTranscript, toolMessage)
+				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, toolMessage); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				if err := r.appendSkippedToolObservationsForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because sandbox.extractPDF needs an existing local PDF path first"); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				continue agentLoop
+			}
 			decision := r.stampPolicyRef(runState.RunID, providerToolCall.ID, r.decideToolCall(ctx, providerToolCall, definition, found))
 			r.logger.Info("agent tool call proposed",
 				"request_id", message.RequestID,
@@ -1592,5 +1617,3 @@ func (r *Runtime) CancelSession(sessionID string) bool {
 	entry.cancel()
 	return true
 }
-
-
