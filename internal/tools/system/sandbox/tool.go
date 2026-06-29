@@ -151,6 +151,14 @@ func RegisterTools(registry *tools.ToolRegistry) error {
 }
 
 func RegisterToolsWithConfig(registry *tools.ToolRegistry, cfg Config) error {
+	if err := registry.RegisterWithEntry(NewExtractPDFTool(cfg), tools.ToolRegistryEntry{
+		Owner:            "agent_core",
+		Group:            "sandbox",
+		RequiresApproval: true,
+		Timeout:          2 * time.Minute,
+	}); err != nil {
+		return err
+	}
 	if err := registry.RegisterWithEntry(NewRunPythonTool(cfg), registryEntry(2*time.Minute)); err != nil {
 		return err
 	}

@@ -148,6 +148,8 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 			kind = contracts.UserOutputKindClarify
 		case contracts.AgentStatusFailed, contracts.AgentStatusBlocked, contracts.AgentStatusIterationBudgetExhausted:
 			kind = contracts.UserOutputKindError
+		case contracts.AgentStatusCancelled:
+			kind = contracts.UserOutputKindError
 		}
 		return &contracts.UserOutput{
 			Kind: kind,

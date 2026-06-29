@@ -91,6 +91,62 @@ func TestContinuationMessageFullTextReachesProvider(t *testing.T) {
 	}
 }
 
+func TestDocsCreateContinuationRequiresAppendOnlyForContentRequests(t *testing.T) {
+	result := tools.ToolResult{Success: true, ContentForLLM: `{"ID":"doc_123","Title":"Probability Cheat Sheet"}`}
+	base := pendingApproval{
+		message: contracts.UserMessage{
+			RequestID: "req_docs",
+			SessionID: "sess_docs",
+			Channel:   "telegram",
+			Timestamp: fixedTestTime(),
+		},
+		toolCall: providers.ToolCall{Name: docstool.ToolNameCreateDocument},
+		request:  contracts.ApprovalRequest{ApprovalID: "appr_docs"},
+	}
+
+	contentRequest := base
+	contentRequest.message.Text = "Trích xuất nội dung file PDF và lưu vào file Docs"
+	contentContinuation := buildApprovalContinuationMessage(contentRequest, result, fixedTestTime())
+	for _, want := range []string{"MANDATORY", "docs.appendMarkdown", "localPath", "task is NOT complete"} {
+		if !strings.Contains(contentContinuation.Text, want) {
+			t.Fatalf("content continuation missing %q:\n%s", want, contentContinuation.Text)
+		}
+	}
+	if contentContinuation.Metadata["originalRequest"] != contentRequest.message.Text {
+		t.Fatalf("original request was not preserved: %#v", contentContinuation.Metadata)
+	}
+
+	blankRequest := base
+	blankRequest.message.Text = "Tạo một file Docs tên Probability Cheat Sheet"
+	blankContinuation := buildApprovalContinuationMessage(blankRequest, result, fixedTestTime())
+	if strings.Contains(blankContinuation.Text, "MANDATORY") {
+		t.Fatalf("blank document request must not require append:\n%s", blankContinuation.Text)
+	}
+}
+
+func TestApprovalContinuationPreservesOriginalRequestAcrossTools(t *testing.T) {
+	original := "Trích xuất PDF và lưu nội dung vào Docs"
+	first := pendingApproval{
+		message:  contracts.UserMessage{Text: original, Metadata: map[string]any{}},
+		toolCall: providers.ToolCall{Name: sandboxtool.ToolNameRunPython},
+		request:  contracts.ApprovalRequest{ApprovalID: "appr_python"},
+	}
+	afterPython := buildApprovalContinuationMessage(first, tools.ToolResult{Success: true, ContentForLLM: "extracted.txt"}, fixedTestTime())
+	second := pendingApproval{
+		message:  afterPython,
+		toolCall: providers.ToolCall{Name: docstool.ToolNameCreateDocument},
+		request:  contracts.ApprovalRequest{ApprovalID: "appr_create"},
+	}
+	afterCreate := buildApprovalContinuationMessage(second, tools.ToolResult{Success: true, ContentForLLM: `{"ID":"doc_123"}`}, fixedTestTime())
+
+	if afterCreate.Metadata["originalRequest"] != original {
+		t.Fatalf("nested continuation lost original request: %#v", afterCreate.Metadata)
+	}
+	if !strings.Contains(afterCreate.Text, "docs.appendMarkdown") {
+		t.Fatalf("expected docs append obligation after chained approvals:\n%s", afterCreate.Text)
+	}
+}
+
 func TestApprovalSummariesCoverProductionTools(t *testing.T) {
 	fallback := approvalSummary("unknown.tool", contracts.RiskLevelExternalWrite, nil)
 	legacyFallback := legacyApprovalSummary("unknown.tool", contracts.RiskLevelExternalWrite)
@@ -116,6 +172,7 @@ func productionToolNames() []string {
 		fstool.ToolNameWriteFile,
 		sandboxtool.ToolNameRunPython,
 		sandboxtool.ToolNameRunShell,
+		sandboxtool.ToolNameExtractPDF,
 	}
 	for _, entry := range gmailtool.RegistryEntries {
 		names = append(names, entry.Name)
@@ -433,6 +490,16 @@ func TestApprovalReviseCreatesReplacementApprovalWithoutExecutingOriginal(t *tes
 
 func newApprovalLifecycleTestRuntime(t *testing.T, executions *int, provider *fakeProvider, now func() time.Time) *Runtime {
 	t.Helper()
+	// The mock provider returns a workspace read (chat.listSpaces) first so
+	// that ValidateReadBeforeWrite is satisfied before the write tool call.
+	readResponse := providers.ChatResponse{Message: providers.Message{
+		Role: providers.MessageRoleAssistant,
+		ToolCalls: []providers.ToolCall{{
+			ID:        "call_list_spaces",
+			Name:      "chat.listSpaces",
+			Arguments: map[string]any{},
+		}},
+	}}
 	initialApprovalResponse := providers.ChatResponse{Message: providers.Message{
 		Role: providers.MessageRoleAssistant,
 		ToolCalls: []providers.ToolCall{{
@@ -447,8 +514,12 @@ func newApprovalLifecycleTestRuntime(t *testing.T, executions *int, provider *fa
 	if provider == nil {
 		provider = &fakeProvider{}
 	}
-	provider.responses = append([]providers.ChatResponse{initialApprovalResponse}, provider.responses...)
+	provider.responses = append([]providers.ChatResponse{readResponse, initialApprovalResponse}, provider.responses...)
 	registry := tools.NewToolRegistry()
+	// Register a read tool so chat.listSpaces executes successfully.
+	if err := registry.Register(chatListSpacesRuntimeTool{}); err != nil {
+		t.Fatalf("register chat.listSpaces tool: %v", err)
+	}
 	if err := registry.Register(chatSendRuntimeTool{executions: executions}); err != nil {
 		t.Fatalf("register calendar tool: %v", err)
 	}

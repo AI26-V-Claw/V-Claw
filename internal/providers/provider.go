@@ -31,6 +31,25 @@ type Provider interface {
 	Close() error
 }
 
+type Capabilities struct {
+	ImageInput bool
+}
+
+type CapabilityProvider interface {
+	Capabilities() Capabilities
+}
+
+func ProviderCapabilities(provider Provider) Capabilities {
+	if provider == nil {
+		return Capabilities{}
+	}
+	capabilityProvider, ok := provider.(CapabilityProvider)
+	if !ok {
+		return Capabilities{}
+	}
+	return capabilityProvider.Capabilities()
+}
+
 type ChatRequest struct {
 	Model      string
 	Messages   []Message
@@ -46,8 +65,26 @@ type ChatResponse struct {
 type Message struct {
 	Role       MessageRole
 	Content    string
+	Parts      []ContentPart
 	ToolCallID string
 	ToolCalls  []ToolCall
+}
+
+type ContentPart struct {
+	Type  string
+	Text  string
+	Image *ImageContent
+}
+
+type ImageContent struct {
+	MIMEType  string
+	Data      []byte
+	Detail    string
+	SourceRef string
+	Filename  string
+	SizeBytes int64
+	Width     int
+	Height    int
 }
 
 type ToolDefinition struct {

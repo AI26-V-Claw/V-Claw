@@ -17,6 +17,7 @@ import (
 	googleconnector "vclaw/internal/connectors/google"
 	driveconnector "vclaw/internal/connectors/google/drive"
 	gmailconnector "vclaw/internal/connectors/google/gmail"
+	"vclaw/internal/filesafety"
 	"vclaw/internal/tools"
 	"vclaw/internal/tools/office"
 
@@ -295,7 +296,9 @@ type DraftInput struct {
 }
 
 type CreateDraftOutput struct {
-	Draft gmailconnector.DraftSummary
+	Draft         gmailconnector.DraftSummary
+	Safety        []any    `json:"file_safety,omitempty"`
+	SafetyWarning []string `json:"safety_warnings,omitempty"`
 }
 
 type UpdateDraftInput struct {
@@ -339,10 +342,12 @@ type DownloadAttachmentsInput struct {
 }
 
 type DownloadedAttachment struct {
-	Filename string `json:"filename"`
-	Path     string `json:"path"`
-	MimeType string `json:"mimeType"`
-	Size     int64  `json:"size"`
+	Filename      string `json:"filename"`
+	Path          string `json:"path"`
+	MimeType      string `json:"mimeType"`
+	Size          int64  `json:"size"`
+	Safety        any    `json:"file_safety,omitempty"`
+	SafetyWarning string `json:"safety_warning,omitempty"`
 }
 
 type DownloadAttachmentsOutput struct {
@@ -595,20 +600,22 @@ func (s *Service) CreateDraft(ctx context.Context, input DraftInput) (CreateDraf
 	if errShape := s.validateConnector(); errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
-	draftInput, errShape := buildDraftMessageInput(input, true, true)
+	draftInput, safety, warnings, errShape := buildDraftMessageInput(input, true, true)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
-	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DriveAttachments)
+	driveAttachments, driveSafety, driveWarnings, errShape := s.loadDriveAttachments(ctx, input.DriveAttachments)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
 	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
+	safety = append(safety, driveSafety...)
+	warnings = append(warnings, driveWarnings...)
 	draft, err := s.connector.CreateDraft(ctx, normalizeUserID(input.UserID), draftInput)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
 	}
-	return CreateDraftOutput{Draft: draft}, nil
+	return CreateDraftOutput{Draft: draft, Safety: safety, SafetyWarning: warnings}, nil
 }
 
 func (s *Service) UpdateDraft(ctx context.Context, input UpdateDraftInput) (CreateDraftOutput, *ErrorShape) {
@@ -618,20 +625,22 @@ func (s *Service) UpdateDraft(ctx context.Context, input UpdateDraftInput) (Crea
 	if strings.TrimSpace(input.DraftID) == "" {
 		return CreateDraftOutput{}, invalidInput("draftId is required")
 	}
-	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true, true)
+	draftInput, safety, warnings, errShape := buildDraftMessageInput(input.DraftInput, true, true)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
-	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	driveAttachments, driveSafety, driveWarnings, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
 	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
+	safety = append(safety, driveSafety...)
+	warnings = append(warnings, driveWarnings...)
 	draft, err := s.connector.UpdateDraft(ctx, normalizeUserID(input.UserID), input.DraftID, draftInput)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
 	}
-	return CreateDraftOutput{Draft: draft}, nil
+	return CreateDraftOutput{Draft: draft, Safety: safety, SafetyWarning: warnings}, nil
 }
 
 func (s *Service) SendDraft(ctx context.Context, input SendDraftInput) (SendDraftOutput, *ErrorShape) {
@@ -666,15 +675,17 @@ func (s *Service) ReplyDraft(ctx context.Context, input ReplyDraftInput) (Create
 		return CreateDraftOutput{}, errShape
 	}
 	requireSubject := strings.TrimSpace(input.MessageID) == ""
-	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true, requireSubject)
+	draftInput, safety, warnings, errShape := buildDraftMessageInput(input.DraftInput, true, requireSubject)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
-	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	driveAttachments, driveSafety, driveWarnings, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
 	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
+	safety = append(safety, driveSafety...)
+	warnings = append(warnings, driveWarnings...)
 	var draft gmailconnector.DraftSummary
 	var err error
 	if strings.TrimSpace(input.MessageID) != "" {
@@ -693,7 +704,7 @@ func (s *Service) ReplyDraft(ctx context.Context, input ReplyDraftInput) (Create
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
 	}
-	return CreateDraftOutput{Draft: draft}, nil
+	return CreateDraftOutput{Draft: draft, Safety: safety, SafetyWarning: warnings}, nil
 }
 
 func (s *Service) ForwardDraft(ctx context.Context, input ForwardDraftInput) (CreateDraftOutput, *ErrorShape) {
@@ -703,15 +714,17 @@ func (s *Service) ForwardDraft(ctx context.Context, input ForwardDraftInput) (Cr
 	if strings.TrimSpace(input.MessageID) == "" {
 		return CreateDraftOutput{}, invalidInput("messageId is required")
 	}
-	draftInput, errShape := buildDraftMessageInput(input.DraftInput, true, false)
+	draftInput, safety, warnings, errShape := buildDraftMessageInput(input.DraftInput, true, false)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
-	driveAttachments, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
+	driveAttachments, driveSafety, driveWarnings, errShape := s.loadDriveAttachments(ctx, input.DraftInput.DriveAttachments)
 	if errShape != nil {
 		return CreateDraftOutput{}, errShape
 	}
 	draftInput.Attachments = append(draftInput.Attachments, driveAttachments...)
+	safety = append(safety, driveSafety...)
+	warnings = append(warnings, driveWarnings...)
 	original, err := s.connector.GetMessage(ctx, normalizeUserID(input.UserID), input.MessageID)
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
@@ -721,7 +734,7 @@ func (s *Service) ForwardDraft(ctx context.Context, input ForwardDraftInput) (Cr
 	if err != nil {
 		return CreateDraftOutput{}, MapError(err)
 	}
-	return CreateDraftOutput{Draft: draft}, nil
+	return CreateDraftOutput{Draft: draft, Safety: safety, SafetyWarning: warnings}, nil
 }
 
 func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachmentsInput) (DownloadAttachmentsOutput, *ErrorShape) {
@@ -754,16 +767,41 @@ func (s *Service) DownloadAttachments(ctx context.Context, input DownloadAttachm
 			return DownloadAttachmentsOutput{}, MapError(err)
 		}
 		filename := safeAttachmentFilename(attachment)
-		path := filepath.Join(outputDir, filename)
-		if err := os.WriteFile(path, data.Data, 0600); err != nil {
-			return DownloadAttachmentsOutput{}, internalError("write attachment: " + err.Error())
+		quarantined, err := filesafety.QuarantineBytes(outputDir, filename, data.Data)
+		if err != nil {
+			return DownloadAttachmentsOutput{}, internalError("quarantine attachment: " + err.Error())
 		}
-		output.Files = append(output.Files, DownloadedAttachment{
+		decision, err := filesafety.ScanPath(quarantined.Path, filesafety.Input{
+			Filename:             filename,
+			ClaimedMIME:          attachment.MimeType,
+			Origin:               "gmail_attachment",
+			SourceTool:           ToolNameDownloadAttachments,
+			MaxSizeBytes:         maxDraftAttachmentRaw,
+			AllowInertExecutable: true,
+		})
+		if err != nil {
+			_ = os.Remove(quarantined.Path)
+			return DownloadAttachmentsOutput{}, internalError("scan attachment: " + err.Error())
+		}
+		if !decision.TransferAllowed() {
+			_ = os.Remove(quarantined.Path)
+			return DownloadAttachmentsOutput{}, invalidInput("attachment blocked by file safety gate: " + decision.ReasonUser)
+		}
+		path := filepath.Join(outputDir, filename)
+		if err := filesafety.PromoteTransfer(quarantined, path, decision); err != nil {
+			return DownloadAttachmentsOutput{}, internalError("promote attachment: " + err.Error())
+		}
+		downloaded := DownloadedAttachment{
 			Filename: filename,
 			Path:     path,
 			MimeType: attachment.MimeType,
 			Size:     int64(len(data.Data)),
-		})
+			Safety:   decision.Metadata(),
+		}
+		if decision.PromptInjectionSuspected() {
+			downloaded.SafetyWarning = "possible prompt-injection instructions detected"
+		}
+		output.Files = append(output.Files, downloaded)
 	}
 	return output, nil
 }
@@ -954,19 +992,19 @@ func listMaxResultsArg(args map[string]any) int64 {
 	return boundedInt64Arg(args, "maxResults", defaultMaxResults, maxAllowedResults)
 }
 
-func buildDraftMessageInput(input DraftInput, requireRecipient bool, requireSubject bool) (gmailconnector.DraftMessageInput, *ErrorShape) {
+func buildDraftMessageInput(input DraftInput, requireRecipient bool, requireSubject bool) (gmailconnector.DraftMessageInput, []any, []string, *ErrorShape) {
 	if requireRecipient && len(cleanStringSlice(append(append(input.To, input.Cc...), input.Bcc...))) == 0 {
-		return gmailconnector.DraftMessageInput{}, invalidInput("at least one recipient is required")
+		return gmailconnector.DraftMessageInput{}, nil, nil, invalidInput("at least one recipient is required")
 	}
 	if requireSubject && strings.TrimSpace(input.Subject) == "" {
-		return gmailconnector.DraftMessageInput{}, invalidInput("subject is required")
+		return gmailconnector.DraftMessageInput{}, nil, nil, invalidInput("subject is required")
 	}
 	if strings.TrimSpace(input.TextBody) == "" && strings.TrimSpace(input.HTMLBody) == "" {
-		return gmailconnector.DraftMessageInput{}, invalidInput("textBody or htmlBody is required")
+		return gmailconnector.DraftMessageInput{}, nil, nil, invalidInput("textBody or htmlBody is required")
 	}
-	attachments, errShape := loadDraftAttachments(input.Attachments)
+	attachments, safety, warnings, errShape := loadDraftAttachments(input.Attachments)
 	if errShape != nil {
-		return gmailconnector.DraftMessageInput{}, errShape
+		return gmailconnector.DraftMessageInput{}, nil, nil, errShape
 	}
 	return gmailconnector.DraftMessageInput{
 		To:          cleanStringSlice(input.To),
@@ -977,36 +1015,55 @@ func buildDraftMessageInput(input DraftInput, requireRecipient bool, requireSubj
 		HTMLBody:    input.HTMLBody,
 		ThreadID:    input.ThreadID,
 		Attachments: attachments,
-	}, nil
+	}, safety, warnings, nil
 }
 
-func loadDraftAttachments(paths []string) ([]gmailconnector.DraftAttachmentInput, *ErrorShape) {
+func loadDraftAttachments(paths []string) ([]gmailconnector.DraftAttachmentInput, []any, []string, *ErrorShape) {
 	cleaned := cleanStringSlice(paths)
 	if len(cleaned) == 0 {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	if len(cleaned) > maxDraftAttachments {
-		return nil, invalidInput(fmt.Sprintf("attachments must contain at most %d files", maxDraftAttachments))
+		return nil, nil, nil, invalidInput(fmt.Sprintf("attachments must contain at most %d files", maxDraftAttachments))
 	}
 
 	totalSize := int64(0)
 	attachments := make([]gmailconnector.DraftAttachmentInput, 0, len(cleaned))
+	var safety []any
+	var warnings []string
 	for _, path := range cleaned {
 		info, err := os.Stat(path)
 		if err != nil {
-			return nil, invalidInput("attachment not found: " + path)
+			return nil, nil, nil, invalidInput("attachment not found: " + path)
 		}
 		if info.IsDir() {
-			return nil, invalidInput("attachment must be a file: " + path)
+			return nil, nil, nil, invalidInput("attachment must be a file: " + path)
 		}
 		totalSize += info.Size()
 		if totalSize > maxDraftAttachmentRaw {
-			return nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
+			return nil, nil, nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
+		}
+		decision, err := filesafety.ScanPath(path, filesafety.Input{
+			Filename:             filepath.Base(path),
+			Origin:               "local_workspace",
+			SourceTool:           "gmail.draftAttachment",
+			MaxSizeBytes:         maxDraftAttachmentRaw,
+			AllowInertExecutable: true,
+		})
+		if err != nil {
+			return nil, nil, nil, internalError("scan attachment: " + err.Error())
+		}
+		if !decision.TransferAllowed() {
+			return nil, nil, nil, invalidInput("attachment blocked by file safety gate: " + decision.ReasonUser)
+		}
+		safety = append(safety, decision.Metadata())
+		if decision.PromptInjectionSuspected() {
+			warnings = append(warnings, "possible prompt-injection instructions detected")
 		}
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, internalError("read attachment: " + err.Error())
+			return nil, nil, nil, internalError("read attachment: " + err.Error())
 		}
 		filename := safeDraftAttachmentFilename(path)
 		mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
@@ -1019,30 +1076,32 @@ func loadDraftAttachments(paths []string) ([]gmailconnector.DraftAttachmentInput
 			Data:     data,
 		})
 	}
-	return attachments, nil
+	return attachments, safety, warnings, nil
 }
 
-func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([]gmailconnector.DraftAttachmentInput, *ErrorShape) {
+func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([]gmailconnector.DraftAttachmentInput, []any, []string, *ErrorShape) {
 	cleaned := cleanStringSlice(fileIDs)
 	if len(cleaned) == 0 || s.driveSource == nil {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	if len(cleaned) > maxDraftAttachments {
-		return nil, invalidInput(fmt.Sprintf("driveAttachments must contain at most %d files", maxDraftAttachments))
+		return nil, nil, nil, invalidInput(fmt.Sprintf("driveAttachments must contain at most %d files", maxDraftAttachments))
 	}
 	attachments := make([]gmailconnector.DraftAttachmentInput, 0, len(cleaned))
+	var safety []any
+	var warnings []string
 	totalSize := int64(0)
 	for _, fileID := range cleaned {
 		meta, err := s.driveSource.GetFile(ctx, fileID)
 		if err != nil {
-			return nil, MapError(err)
+			return nil, nil, nil, MapError(err)
 		}
 		var output driveconnector.FileContentOutput
 		if isGoogleAppsFile(meta.MimeType) {
 			exportMIME, ext := googleAppsExportFormat(meta.MimeType)
 			output, err = s.driveSource.ExportFile(ctx, fileID, exportMIME, maxDraftAttachmentRaw)
 			if err != nil {
-				return nil, MapError(err)
+				return nil, nil, nil, MapError(err)
 			}
 			if output.File.Name != "" && !strings.Contains(output.File.Name, ".") {
 				output.File.Name = output.File.Name + ext
@@ -1051,16 +1110,31 @@ func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([
 		} else {
 			output, err = s.driveSource.DownloadFile(ctx, fileID, maxDraftAttachmentRaw)
 			if err != nil {
-				return nil, MapError(err)
+				return nil, nil, nil, MapError(err)
 			}
 		}
 		totalSize += output.Size
 		if totalSize > maxDraftAttachmentRaw {
-			return nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
+			return nil, nil, nil, invalidInput(fmt.Sprintf("total attachment size must be at most %d bytes", maxDraftAttachmentRaw))
 		}
 		mimeType := output.MimeType
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
+		}
+		decision := filesafety.ScanBytes([]byte(output.Content), filesafety.Input{
+			Filename:             output.File.Name,
+			ClaimedMIME:          mimeType,
+			Origin:               "drive_file",
+			SourceTool:           "gmail.driveAttachment",
+			MaxSizeBytes:         maxDraftAttachmentRaw,
+			AllowInertExecutable: true,
+		})
+		if !decision.TransferAllowed() {
+			return nil, nil, nil, invalidInput("drive attachment blocked by file safety gate: " + decision.ReasonUser)
+		}
+		safety = append(safety, decision.Metadata())
+		if decision.PromptInjectionSuspected() {
+			warnings = append(warnings, "possible prompt-injection instructions detected")
 		}
 		attachments = append(attachments, gmailconnector.DraftAttachmentInput{
 			Filename: output.File.Name,
@@ -1068,7 +1142,7 @@ func (s *Service) loadDriveAttachments(ctx context.Context, fileIDs []string) ([
 			Data:     []byte(output.Content),
 		})
 	}
-	return attachments, nil
+	return attachments, safety, warnings, nil
 }
 
 func replyDraftMessageInput(input gmailconnector.DraftMessageInput, original gmailconnector.MessageDetail) gmailconnector.DraftMessageInput {
@@ -1536,7 +1610,52 @@ func outputToolResult(call tools.ToolCall, output any, errShape *ErrorShape, loc
 		userContent = formatJSON(output)
 	}
 	llmContent := formatJSON(compactOutputForLLM(call.Name, output, location))
-	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent, ArtifactRef: gmailArtifactRef(call.Name, output)}
+	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: llmContent, ContentForUser: userContent, ArtifactRef: gmailArtifactRef(call.Name, output), Metadata: gmailResultMetadata(call.Name, output)}
+}
+
+func gmailResultMetadata(toolName string, output any) map[string]any {
+	switch toolName {
+	case ToolNameDownloadAttachments:
+		out, ok := output.(DownloadAttachmentsOutput)
+		if !ok {
+			return nil
+		}
+		meta := map[string]any{"attachment_count": len(out.Files)}
+		var warnings []string
+		var safety []any
+		for _, file := range out.Files {
+			if file.Safety != nil {
+				safety = append(safety, file.Safety)
+			}
+			if strings.TrimSpace(file.SafetyWarning) != "" {
+				warnings = append(warnings, file.SafetyWarning)
+			}
+		}
+		addGmailSafetyMetadata(meta, safety, warnings)
+		return meta
+	case ToolNameCreateDraft, ToolNameUpdateDraft, ToolNameReplyDraft, ToolNameForwardDraft:
+		out, ok := output.(CreateDraftOutput)
+		if !ok {
+			return nil
+		}
+		meta := map[string]any{}
+		addGmailSafetyMetadata(meta, out.Safety, out.SafetyWarning)
+		if len(meta) == 0 {
+			return nil
+		}
+		return meta
+	default:
+		return nil
+	}
+}
+
+func addGmailSafetyMetadata(meta map[string]any, safety []any, warnings []string) {
+	if len(safety) > 0 {
+		meta["file_safety"] = safety
+	}
+	if len(warnings) > 0 {
+		meta["safety_warnings"] = warnings
+	}
 }
 
 func gmailUserSummary(toolName string, output any, location *time.Location) string {

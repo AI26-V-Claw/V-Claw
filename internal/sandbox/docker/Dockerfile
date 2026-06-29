@@ -46,7 +46,7 @@ RUN groupadd --gid 1000 sandbox \
 
 # ─── Cài Python dependencies ──────────────────────────────────────────────────
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+RUN pip install --no-cache-dir --default-timeout=120 --retries=10 -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
 # ─── Workspace ────────────────────────────────────────────────────────────────

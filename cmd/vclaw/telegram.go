@@ -17,6 +17,7 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/app"
 	"vclaw/internal/channels/telegram"
+	"vclaw/internal/localapi/control"
 	"vclaw/internal/monitoring"
 )
 
@@ -94,6 +95,8 @@ func runTelegramRun(ctx context.Context, args []string) error {
 		Observer:                   metrics,
 		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
 		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
+		SkillNudgeInterval:         envIntOrDefault("VCLAW_SKILL_NUDGE_INTERVAL", 0),
+		SkillCacheDir:              envOrDefault("VCLAW_SKILL_CACHE_DIR", "./cache/skills"),
 		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),
 	})
 	if err != nil {
@@ -105,11 +108,17 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	if err := startMetricsServer(runCtx, logger, bundle, metrics, "telegram"); err != nil {
 		return err
 	}
+	controlServer, err := control.Start(runCtx, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime))
+	if err != nil {
+		return fmt.Errorf("start agent control server: %w", err)
+	}
+	defer controlServer.Close(context.Background())
 	stopPolicyReload := startPolicyReloadWatcher(runCtx, logger, bundle.PolicyStore)
 	defer stopPolicyReload()
 
 	logger.Info("starting vclaw telegram runtime", "model", bundle.Model, "google_tools", *googleToolsMode, "web_tools", *webToolsMode)
 	bot := telegram.New(*botToken, *allowedUserID, *dataDir, bundle.PolicyStore, agent.NewRuntimeMessenger(bundle.Runtime), logger)
+	bot.SetRegistry(bundle.Registry)
 	if err := bot.Run(runCtx); err != nil && err != context.Canceled {
 		return fmt.Errorf("telegram bot stopped: %w", err)
 	}

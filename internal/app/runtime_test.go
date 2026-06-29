@@ -156,6 +156,9 @@ func TestNewAgentToolRegistryRegistersSandboxToolsWhenEnabled(t *testing.T) {
 	if _, ok := registry.GetTool("sandbox.runShell"); !ok {
 		t.Fatal("expected sandbox.runShell tool")
 	}
+	if _, ok := registry.GetTool("sandbox.extractPDF"); !ok {
+		t.Fatal("expected sandbox.extractPDF tool")
+	}
 }
 
 func TestNewAgentToolRegistryWebToolModes(t *testing.T) {

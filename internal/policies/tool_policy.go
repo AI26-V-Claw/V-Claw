@@ -92,6 +92,15 @@ func (p ToolPolicy) DecideToolCall(toolCallID string, definition tools.ToolDefin
 	}
 	userConfig := p.currentUserConfig()
 	if policyDecision, matched := userPolicyDecision(userConfig, contracts.RiskLevel(definition.RiskLevel)); matched {
+		// User auto-allow must not override tool-level RequiresApproval for
+		// high-risk tools (external_write, destructive). These tools need HITL
+		// regardless of user preference.
+		if policyDecision == contracts.RiskDecisionAllow && definition.RequiresApproval && !isLowRiskLevel(contracts.RiskLevel(definition.RiskLevel)) {
+			decision.Decision = contracts.RiskDecisionRequiresApproval
+			decision.RequiresApproval = true
+			decision.Reason = fmt.Sprintf("tool %s requires approval for risk %s (user auto-allow overridden)", definition.Name, definition.RiskLevel)
+			return decision
+		}
 		decision.Decision = policyDecision
 		decision.RequiresApproval = policyDecision == contracts.RiskDecisionRequiresApproval
 		decision.Reason = userPolicyReason(definition.Name, definition.RiskLevel, policyDecision)
@@ -152,7 +161,11 @@ func userPolicyDecision(cfg UserPolicyConfig, riskLevel contracts.RiskLevel) (co
 	if containsRiskLevel(riskLevel, cfg.RequireApproval) {
 		return contracts.RiskDecisionRequiresApproval, true
 	}
-	if isLowRiskLevel(riskLevel) && containsRiskLevel(riskLevel, cfg.AutoAllow) {
+	// Honour the user's explicit auto_allow list for any risk level, not
+	// just low-risk ones. If the user chose to auto-allow sensitive_read,
+	// that decision should be respected so batch read operations (e.g.
+	// reading 10 emails) don't require per-call approval.
+	if containsRiskLevel(riskLevel, cfg.AutoAllow) {
 		return contracts.RiskDecisionAllow, true
 	}
 	return "", false

@@ -22,8 +22,10 @@ import (
 	"vclaw/internal/agent"
 	"vclaw/internal/channels/formatting"
 	"vclaw/internal/contracts"
+	"vclaw/internal/filesafety"
 	"vclaw/internal/monitoring"
 	"vclaw/internal/policies"
+	"vclaw/internal/tools"
 	sandboxtool "vclaw/internal/tools/system/sandbox"
 )
 
@@ -49,6 +51,7 @@ type Bot struct {
 	policyDrafts  map[int64]map[contracts.RiskLevel]policies.PolicyGroup
 	sessionIndex  *telegramSessionIndexStore
 	state         *telegramChannelState
+	registry      *tools.ToolRegistry
 	workCh        chan telegramUpdate
 	busySessions  sync.Map // chat ID (int64) → struct{} while a message is being processed
 	pendingMu     sync.Mutex
@@ -107,6 +110,7 @@ func New(token string, allowedUserID int64, dataDir string, args ...any) *Bot {
 		policyDrafts:  make(map[int64]map[contracts.RiskLevel]policies.PolicyGroup),
 		sessionIndex:  newTelegramSessionIndexStore(dataDir),
 		state:         newTelegramChannelState(),
+		registry:      nil,
 		pendingByChat: make(map[int64][]telegramUpdate),
 	}
 }
@@ -383,6 +387,15 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+	if isTelegramSkillsCommand(messageText) {
+		if err := b.sendSkillsMenu(ctx, update.Message.Chat.ID); err != nil {
+			b.logger.Error("telegram skills menu failed", "error", err)
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Khong the hien thi danh sach skill luc nay. Vui long thu lai sau."); sendErr != nil {
+				return false, sendErr
+			}
+		}
+		return true, nil
+	}
 	activeSession, err := b.sessionIndex.Active(ctx, update.Message.Chat.ID, time.Now().UTC())
 	if err != nil {
 		b.logger.Error("telegram active session resolve failed", "error", err)
@@ -397,6 +410,12 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		if b.handler != nil {
 			b.handler.FinalizeAudit(inbound, err)
 		}
+		if strings.Contains(err.Error(), "file safety gate") {
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Tệp đính kèm bị chặn bởi lớp kiểm tra an toàn file: "+strings.TrimPrefix(err.Error(), "telegram attachment blocked by file safety gate: ")); sendErr != nil {
+				return false, sendErr
+			}
+			return true, nil
+		}
 		return false, err
 	}
 	if len(attachments) > 0 {
@@ -404,15 +423,25 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		metadata := make([]map[string]any, 0, len(attachments))
 		for _, attachment := range attachments {
 			paths = append(paths, attachment.Path)
-			metadata = append(metadata, map[string]any{
-				"path":     attachment.Path,
-				"filename": attachment.Filename,
-				"mimeType": attachment.MimeType,
-				"source":   "telegram",
-			})
+			item := map[string]any{
+				"path":       attachment.Path,
+				"filename":   attachment.Filename,
+				"mimeType":   attachment.MimeType,
+				"source":     "telegram",
+				"fileSafety": attachment.Safety,
+			}
+			if strings.TrimSpace(attachment.SafetyWarning) != "" {
+				item["safetyWarning"] = attachment.SafetyWarning
+			}
+			metadata = append(metadata, item)
 		}
 		inbound.Metadata["attachmentPaths"] = paths
 		inbound.Metadata["attachments"] = metadata
+		if hasTelegramAttachmentSafetyWarning(attachments) {
+			if _, sendErr := b.sendMessage(ctx, update.Message.Chat.ID, "Tệp đính kèm có dấu hiệu chứa chỉ dẫn không đáng tin. Mình vẫn nhận file, nhưng agent sẽ chỉ xem nội dung như dữ liệu và không làm theo lệnh nằm trong file."); sendErr != nil && b.logger != nil {
+				b.logger.Warn("telegram attachment safety warning send failed", "error", sendErr)
+			}
+		}
 		if strings.TrimSpace(inbound.Text) == "" {
 			inbound.Text = "User sent an attachment."
 		}
@@ -612,7 +641,7 @@ func isTelegramCancelCommand(text string) bool {
 	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
 		command = command[:index]
 	}
-	return strings.EqualFold(command, "cancel")
+	return strings.EqualFold(command, "cancel") || strings.EqualFold(command, "stop")
 }
 
 func isTelegramNewCommand(text string) bool {
@@ -1054,6 +1083,7 @@ func (b *Bot) setMyCommands(ctx context.Context) error {
 			{"command": "history", "description": "Xem lịch sử gần đây"},
 			{"command": "cancel", "description": "Hủy lệnh đang chạy"},
 			{"command": "policy", "description": "Mở menu chính sách"},
+			{"command": "skills", "description": "Xem danh sách skill đang hoạt động"},
 		},
 	}
 	var response struct {
@@ -1119,6 +1149,7 @@ func (b *Bot) sendMessageWithReplyMarkup(ctx context.Context, chatID int64, text
 }
 
 func (b *Bot) sendMessagePayload(ctx context.Context, payload map[string]any) (telegramSentMessage, error) {
+	disableTelegramLinkPreview(payload)
 	var response struct {
 		OK     bool                `json:"ok"`
 		Result telegramSentMessage `json:"result"`
@@ -1131,6 +1162,13 @@ func (b *Bot) sendMessagePayload(ctx context.Context, payload map[string]any) (t
 		return telegramSentMessage{}, fmt.Errorf("telegram sendMessage returned not ok")
 	}
 	return response.Result, nil
+}
+
+func disableTelegramLinkPreview(payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	payload["disable_web_page_preview"] = true
 }
 
 func (b *Bot) editMessageText(ctx context.Context, chatID int64, messageID int, text string) error {
@@ -1470,6 +1508,7 @@ func telegramEscapeHTMLPreservingSpaces(text string) string {
 }
 
 func (b *Bot) editMessageTextPayload(ctx context.Context, payload map[string]any) error {
+	disableTelegramLinkPreview(payload)
 	var response struct {
 		OK bool `json:"ok"`
 	}
@@ -1504,9 +1543,11 @@ func (b *Bot) answerCallbackQuery(ctx context.Context, callbackID string, text s
 }
 
 type downloadedTelegramAttachment struct {
-	Path     string
-	Filename string
-	MimeType string
+	Path          string
+	Filename      string
+	MimeType      string
+	Safety        map[string]any
+	SafetyWarning string
 }
 
 func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramMessage) ([]downloadedTelegramAttachment, error) {
@@ -1534,17 +1575,54 @@ func (b *Bot) downloadMessageAttachments(ctx context.Context, message *telegramM
 		if filepath.Ext(filename) == "" && candidate.Extension != "" {
 			filename += candidate.Extension
 		}
-		localPath := filepath.Join(outputDir, filename)
-		if err := b.downloadTelegramFile(ctx, filePath, localPath); err != nil {
+		quarantinePath := filepath.Join(filesafety.QuarantineDir(outputDir), filename)
+		if err := os.MkdirAll(filepath.Dir(quarantinePath), 0o700); err != nil {
 			return nil, err
 		}
-		downloaded = append(downloaded, downloadedTelegramAttachment{
+		if err := b.downloadTelegramFile(ctx, filePath, quarantinePath); err != nil {
+			return nil, err
+		}
+		decision, err := filesafety.ScanPath(quarantinePath, filesafety.Input{
+			Filename:             filename,
+			ClaimedMIME:          candidate.MimeType,
+			Origin:               "telegram_attachment",
+			SourceTool:           "telegram.downloadAttachment",
+			MaxSizeBytes:         filesafety.DefaultMaxSizeBytes,
+			AllowInertExecutable: true,
+		})
+		if err != nil {
+			_ = os.Remove(quarantinePath)
+			return nil, err
+		}
+		if !decision.TransferAllowed() {
+			_ = os.Remove(quarantinePath)
+			return nil, fmt.Errorf("telegram attachment blocked by file safety gate: %s", decision.ReasonUser)
+		}
+		localPath := filepath.Join(outputDir, filename)
+		if err := filesafety.PromoteTransfer(filesafety.QuarantinedFile{Path: quarantinePath, Dir: filepath.Dir(quarantinePath), Filename: filename}, localPath, decision); err != nil {
+			return nil, err
+		}
+		attachment := downloadedTelegramAttachment{
 			Path:     localPath,
 			Filename: filename,
 			MimeType: candidate.MimeType,
-		})
+			Safety:   decision.Metadata(),
+		}
+		if decision.PromptInjectionSuspected() {
+			attachment.SafetyWarning = "possible prompt-injection instructions detected"
+		}
+		downloaded = append(downloaded, attachment)
 	}
 	return downloaded, nil
+}
+
+func hasTelegramAttachmentSafetyWarning(attachments []downloadedTelegramAttachment) bool {
+	for _, attachment := range attachments {
+		if strings.TrimSpace(attachment.SafetyWarning) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func telegramAttachmentWorkspaceRoot() string {
@@ -2154,4 +2232,56 @@ func cloneTelegramPolicyAssignments(assignments map[contracts.RiskLevel]policies
 		clone[level] = group
 	}
 	return clone
+}
+
+func (b *Bot) SetRegistry(registry *tools.ToolRegistry) {
+	b.registry = registry
+}
+
+func isTelegramSkillsCommand(text string) bool {
+	if !strings.HasPrefix(text, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(text, "/")
+	if index := strings.IndexAny(command, " \t\n@"); index >= 0 {
+		command = command[:index]
+	}
+	return strings.EqualFold(command, "skills")
+}
+
+func (b *Bot) sendSkillsMenu(ctx context.Context, chatID int64) error {
+	if b.registry == nil {
+		_, err := b.sendMessage(ctx, chatID, "Khong co skill nao duoc dang ky.")
+		return err
+	}
+	skillDefs := b.registry.ListToolsByGroup("skill")
+	if len(skillDefs) == 0 {
+		_, err := b.sendMessage(ctx, chatID, "Khong co skill nao duoc dang ky.")
+		return err
+	}
+	var sb strings.Builder
+	sb.WriteString("<b>Skills dang ky:</b>\n\n")
+	for _, def := range skillDefs {
+		status := "✅ ON"
+		if !def.Enabled {
+			status = "❌ OFF"
+		}
+		sb.WriteString(fmt.Sprintf("<b>%s</b> [%s]\n", html.EscapeString(def.Name), status))
+		if def.Description != "" {
+			desc := def.Description
+			if len(desc) > 80 {
+				desc = desc[:80] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("  %s\n", html.EscapeString(desc)))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf("<i>Tong cong: %d skill</i>", len(skillDefs)))
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"text":       sb.String(),
+		"parse_mode": "HTML",
+	}
+	_, err := b.sendMessagePayload(ctx, payload)
+	return err
 }

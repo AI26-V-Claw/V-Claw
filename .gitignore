@@ -63,7 +63,10 @@ testing-e2e/**/*.log
 .gomodcache/
 docs/superpowers/
 
+.gocache2/
+.gocache/
 # Runtime CSV logs
 logs/*.csv
 
 __pycache__
+cache/skills/

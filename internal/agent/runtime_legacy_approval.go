@@ -135,58 +135,7 @@ func (r *Runtime) legacyPeekPendingApproval(sessionID string, approvalID string)
 }
 
 func legacyBuildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
-	var text string
-	resultContent := truncateToolContentForLLM(result.ContentForLLM)
-	if len(pending.remainingToolCalls) > 0 {
-		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
-		for _, tc := range pending.remainingToolCalls {
-			remainingNames = append(remainingNames, tc.Name)
-		}
-		text = strings.TrimSpace(fmt.Sprintf(`Continuing the original multi-step request after an approved tool completed.
-Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.
-Do not repeat the tool that was just executed.
-
-Original request:
-%s
-
-Completed tool: %s
-Result: %s
-
-Continue by calling the remaining tools in the original plan: %s
-Use any resource IDs or names returned by the completed tool's result when they are needed as input for the next tool.`,
-			pending.message.Text,
-			pending.toolCall.Name,
-			resultContent,
-			strings.Join(remainingNames, ", "),
-		))
-	} else {
-		text = strings.TrimSpace(fmt.Sprintf(`An approved tool just completed as part of the user's original request.
-Luôn trả lời bằng tiếng Việt nếu người dùng đang nói tiếng Việt.
-
-Original request:
-%s
-
-Completed tool: %s
-Result: %s
-
-Check whether the original request contained additional tasks that have not yet been done.
-If yes, call the necessary tool(s) now — do NOT ask the user again for information already given in the original request.
-If all tasks are already complete, respond with a short Vietnamese summary of what was accomplished.
-Do not repeat the tool that was just executed.`,
-			pending.message.Text,
-			pending.toolCall.Name,
-			resultContent,
-		))
-	}
-	msg := pending.message
-	msg.Text = text
-	msg.Timestamp = now
-	if msg.Metadata == nil {
-		msg.Metadata = map[string]any{}
-	}
-	msg.Metadata["continuationOf"] = pending.request.ApprovalID
-	msg.Metadata["completedTool"] = pending.toolCall.Name
-	return msg
+	return buildApprovalContinuationMessage(pending, result, now)
 }
 
 func legacyBuildRevisionRequest(pending pendingApproval, comment string) string {
@@ -332,7 +281,7 @@ func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) strin
 		return "Cho phép tôi đọc nội dung Google Docs document nhé?"
 	case "docs.createDocument":
 		return "Tôi cần bạn xác nhận trước khi tạo Google Docs document."
-	case "docs.appendText", "docs.replaceText", "docs.insertText":
+	case "docs.appendText", "docs.appendMarkdown", "docs.replaceText", "docs.insertText":
 		return "Tôi cần bạn xác nhận trước khi sửa nội dung Google Docs document."
 	case "docs.deleteContent":
 		return "Tôi cần bạn xác nhận trước khi xóa nội dung trong Google Docs document."
@@ -350,6 +299,8 @@ func legacyApprovalSummary(toolName string, riskLevel contracts.RiskLevel) strin
 		return "Tôi cần bạn xác nhận trước khi xóa tab trong Google Sheets."
 	case "sandbox.runPython":
 		return "Tôi cần bạn xác nhận trước khi xử lý yêu cầu này bằng mã Python."
+	case "sandbox.extractPDF":
+		return "Tôi cần bạn xác nhận trước khi trích xuất PDF thành Markdown có cấu trúc."
 	case "sandbox.runShell":
 		return "Tôi cần bạn xác nhận trước khi xử lý yêu cầu này bằng lệnh shell."
 	default:

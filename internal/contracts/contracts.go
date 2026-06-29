@@ -14,6 +14,7 @@ const (
 	AgentStatusFailed                   AgentStatus = "failed"
 	AgentStatusBlocked                  AgentStatus = "blocked"
 	AgentStatusIterationBudgetExhausted AgentStatus = "iteration_budget_exhausted"
+	AgentStatusCancelled                AgentStatus = "cancelled"
 )
 
 type UserOutputKind string
@@ -85,12 +86,14 @@ const (
 	ErrorProviderError            = "PROVIDER_ERROR"
 	ErrorProviderTimeout          = "PROVIDER_TIMEOUT"
 	ErrorProviderUnavailable      = "PROVIDER_UNAVAILABLE"
+	ErrorFileAccessDenied         = "FILE_ACCESS_DENIED"
 	ErrorActionRequiresApproval   = "ACTION_REQUIRES_APPROVAL"
 	ErrorActionBlockedByPolicy    = "ACTION_BLOCKED_BY_POLICY"
 	ErrorApprovalNotFound         = "APPROVAL_NOT_FOUND"
 	ErrorApprovalExpired          = "APPROVAL_EXPIRED"
 	ErrorInternal                 = "INTERNAL_ERROR"
 	ErrorIterationBudgetExhausted = "ITERATION_BUDGET_EXHAUSTED"
+	ErrorCancelled                = "CANCELLED"
 )
 
 // GovernanceMetadata captures the provenance fields that must be attached to

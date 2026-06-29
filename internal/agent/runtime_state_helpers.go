@@ -387,7 +387,17 @@ func (r *Runtime) recordLLMUsageCost(ctx context.Context, runState *RunState, us
 	if r == nil || r.stateStore == nil || usage == nil || runState == nil {
 		return
 	}
-	cost := float64(usage.PromptTokens)*0.000003 + float64(usage.CompletionTokens)*0.000015
+	price := ModelPrice{}
+	if r.priceSource != nil {
+		price = r.priceSource.PriceFor(ctx, r.model)
+	}
+	if !price.Found {
+		if r.logger != nil {
+			r.logger.Warn("no model price available; recording zero cost", "model", r.model)
+		}
+		return
+	}
+	cost := float64(usage.PromptTokens)*price.InputPricePerToken + float64(usage.CompletionTokens)*price.OutputPricePerToken
 	if cost <= 0 {
 		return
 	}

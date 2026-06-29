@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
+
 	"vclaw/internal/agent/reference"
 	"vclaw/internal/contracts"
 	"vclaw/internal/longmem"
@@ -747,16 +749,40 @@ func textWithAttachmentContext(text string, metadata map[string]any) string {
 		"If the user says \"file này\", \"ảnh này\", or asks to send/upload the attached file, use these paths in tool inputs that accept attachments.",
 		"Tool mapping: gmail.createDraft.attachments for Gmail, drive.uploadFile.localPath for Drive uploads.",
 		"For Google Docs or Google Sheets, first read or parse the local file, then create/update the Docs or Sheets content from that extracted text or table.",
+		"Use the host path for tools that accept local file paths. For sandbox.runPython or sandbox.runShell, use the exact sandbox path and preserve every subdirectory.",
 		"Attachment paths:",
 	}
 	for _, path := range paths {
-		lines = append(lines, "- "+path)
+		lines = append(lines, "- Host path: "+path)
+		if sandboxPath, ok := sandboxPathForAttachment(path); ok {
+			lines = append(lines, "  Sandbox path: "+sandboxPath)
+		}
 	}
 	context := strings.Join(lines, "\n")
 	if text == "" {
 		return context
 	}
 	return text + "\n\n" + context
+}
+
+func sandboxPathForAttachment(hostPath string) (string, bool) {
+	hostPath = strings.TrimSpace(hostPath)
+	if hostPath == "" {
+		return "", false
+	}
+	workspaceRoot, errShape := visionWorkspaceRoot()
+	if errShape != nil {
+		return "", false
+	}
+	absPath, err := filepath.Abs(hostPath)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(workspaceRoot, absPath)
+	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return "/workspace/" + filepath.ToSlash(rel), true
 }
 
 func attachmentPathsFromMetadata(metadata map[string]any) []string {
