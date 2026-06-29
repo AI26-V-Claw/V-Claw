@@ -432,6 +432,24 @@ func TestUpdateMetadataDescriptionRejectsMoveUse(t *testing.T) {
 	}
 }
 
+func TestDownloadFileDescriptionRejectsLocalPathUse(t *testing.T) {
+	description := NewTool(ToolNameDownloadFile, NewService(fakeDriveConnector{}), nil).Description()
+	for _, want := range []string{"does not write local files", "sandbox.extractPDF", "use drive.saveFile instead"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("expected download description to contain %q, got %q", want, description)
+		}
+	}
+}
+
+func TestSaveFileDescriptionAdvertisesLocalPathUse(t *testing.T) {
+	description := NewTool(ToolNameSaveFile, NewService(fakeDriveConnector{}), nil).Description()
+	for _, want := range []string{"return the host Path", "before sandbox.extractPDF", "do not invent workspace paths"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("expected save description to contain %q, got %q", want, description)
+		}
+	}
+}
+
 func TestDriveToolResultIncludesArtifactMetadataAndTruncation(t *testing.T) {
 	download := NewTool(ToolNameDownloadFile, NewService(artifactDriveConnector{}), nil)
 	result := download.Execute(context.Background(), tools.ToolCall{

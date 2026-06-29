@@ -273,6 +273,7 @@ Listing emails or files completely:
 
 Google Docs creation and editing:
 - When the user asks to create a Google Docs document (e.g. "tạo docs", "tạo tài liệu", "viết báo cáo lên Google Docs"), ALWAYS use docs.createDocument — NEVER sandbox.runPython or sandbox.runShell.
+- For each new user request that asks to create, save, write, copy, or extract content into Google Docs, create a fresh docs.createDocument for that request unless the current request explicitly says to use an existing/current/previous document. Never reuse a Google Docs ID/link from older transcript, memory, previous tool results, or a previous request as the write target or as proof that the current request is complete.
 - docs.createDocument accepts a title and an optional content parameter. Use content to write the full document body in one call.
 - To add more content to an existing document, use docs.appendText with the documentId returned by docs.createDocument.
 - To edit content, use docs.replaceText, docs.insertText, or docs.deleteContent.
@@ -291,6 +292,7 @@ Downloading email attachments:
 - If the email has no attachments, tell the user and stop — do not call gmail.downloadAttachments.
 - NEVER pass a Gmail message ID or Gmail attachment ID to drive.downloadFile or any drive.* tool — those IDs only work with gmail.* tools. drive.downloadFile requires a Google Drive file ID, which looks completely different. Passing a Gmail ID to any drive.* tool will always fail with 404.
 - After gmail.downloadAttachments succeeds and the next step is sandbox.extractPDF, sandbox.runPython, or sandbox.runShell, use the exact downloaded path from that tool result. If multiple files already exist in the workspace, prefer the file that was just downloaded over older workspace files with unrelated names.
+- For Google Drive files that must be processed by sandbox.extractPDF, sandbox.runPython, sandbox.runShell, or any tool requiring localPath, call drive.saveFile first and use the returned Path. Do NOT use drive.downloadFile for this; it only returns content in the tool response and does not create a local file path.
 
 sandbox approval wording:
 - Before calling sandbox.runPython: describe the Python outcome in plain Vietnamese.
@@ -313,9 +315,11 @@ sandbox.runPython — file paths inside Python code:
 - For PDF summarization specifically: extract text page-by-page with fitz/PyMuPDF or pdfplumber, split it into small chunks/snippets, and print only the chunks needed for the next summarization step. Do not do text += page_text for every page followed by print(text).
 
 PDF or local document content -> Google Docs:
-- docs.createDocument creates an empty document only; it never stores body content.
+- docs.createDocument creates an empty document when content is omitted; if content is provided and the tool succeeds, that initial body content has been written.
 - If the user only asks to create a blank/named Docs document, docs.createDocument is sufficient and you must not append invented content.
-- If the user asks to extract, save, write, or copy PDF content into Docs, use sandbox.extractPDF to produce structured Markdown, then call docs.createDocument and docs.appendMarkdown. Do not report completion until docs.appendMarkdown succeeds.
+- If the user asks to extract, save, write, or copy PDF content into Docs, use sandbox.extractPDF to produce structured Markdown, then call docs.createDocument and docs.appendMarkdown. Do not report completion until docs.appendMarkdown succeeds on the document created for the current request.
+- After sandbox.extractPDF succeeds, the task is not complete until the current request's Google Docs document has been created and docs.appendMarkdown succeeds. Do not claim the content was saved to Docs using a Docs link or documentId from a previous request.
+- If the PDF is on Google Drive, first call drive.saveFile to save it into the sandbox workspace, then pass the returned host Path to sandbox.extractPDF. Never invent a local path from the Drive filename and never pass drive.downloadFile output to sandbox.extractPDF as localPath.
 - Pass docs.appendMarkdown the exact absolute HOST path returned by sandbox.extractPDF as localPath. Do not call filesystem.readFile first; it truncates long files. Do not use a /workspace container path as localPath.
 - Use sandbox.runPython plus docs.appendText only when structured PDF extraction is unavailable or when the user explicitly requests plain text.
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"vclaw/internal/contracts"
@@ -61,6 +62,61 @@ func (f flowStubTool) Capability() tools.Capability { return f.cap }
 func (f flowStubTool) RiskLevel() tools.RiskLevel   { return f.risk }
 func (f flowStubTool) Execute(_ context.Context, call tools.ToolCall) tools.ToolResult {
 	return tools.ToolResult{ToolCallID: call.ID, ToolName: call.Name, Success: true, ContentForLLM: f.name + " ok"}
+}
+
+func TestRuntimeRedirectsMissingDrivePDFLocalPathBeforeApproval(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	for _, stub := range []flowStubTool{
+		{name: "sandbox.extractPDF", cap: tools.CapabilityMutating, risk: tools.RiskLevelLocalWrite},
+		{name: "drive.saveFile", cap: tools.CapabilityMutating, risk: tools.RiskLevelLocalWrite},
+	} {
+		if err := registry.Register(stub); err != nil {
+			t.Fatalf("register %s: %v", stub.name, err)
+		}
+	}
+	provider := &fakeProvider{responses: []providers.ChatResponse{
+		{Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_bad_extract",
+				Name:      "sandbox.extractPDF",
+				Arguments: map[string]any{"localPath": "Weekly_Report_V-Claw_Demo.pdf", "outputFile": "weekly_report_structured.md"},
+			}},
+		}},
+		{Message: providers.Message{
+			Role: providers.MessageRoleAssistant,
+			ToolCalls: []providers.ToolCall{{
+				ID:        "call_save_drive_pdf",
+				Name:      "drive.saveFile",
+				Arguments: map[string]any{"fileId": "drive_pdf_123"},
+			}},
+		}},
+	}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:                         provider,
+		Registry:                         registry,
+		DisableReadBeforeWriteValidation: true,
+	})
+
+	response, err := runtime.Run(context.Background(), runtimeTestMessage())
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusApprovalRequired {
+		t.Fatalf("expected approval for drive.saveFile after preflight redirect, got %#v", response)
+	}
+	if response.ApprovalRequest == nil || response.ApprovalRequest.ToolCall.ToolName != "drive.saveFile" {
+		t.Fatalf("expected approval to be for drive.saveFile, got %#v", response.ApprovalRequest)
+	}
+	if len(provider.calls) < 2 {
+		t.Fatalf("expected provider retry after localPath observation, got %d calls", len(provider.calls))
+	}
+	retryContext := providerMessagesContent(provider.calls[1].Messages)
+	for _, want := range []string{"NEEDS_LOCAL_PDF_FILE", "drive.saveFile", "Do not invent a local path"} {
+		if !strings.Contains(retryContext, want) {
+			t.Fatalf("expected retry context to contain %q, got:\n%s", want, retryContext)
+		}
+	}
 }
 
 // TestFlowReadBeforeWriteBlocksWriteOnly verifies that a pure write

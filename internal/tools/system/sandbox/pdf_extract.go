@@ -263,9 +263,32 @@ def table_lines(rows):
     flush()
     return lines
 
+def fallback_text_lines(doc):
+    lines = []
+    for page_number, page in enumerate(doc, 1):
+        page_values = []
+        text = page.get_text("text", sort=True)
+        for raw_line in text.splitlines():
+            value = clean(raw_line)
+            if value:
+                page_values.append(value)
+        if not page_values:
+            continue
+        if lines and len(doc) > 1:
+            lines.extend([f"## Page {page_number}", ""])
+        for value in page_values:
+            if not lines:
+                lines.extend(["# " + value, ""])
+            else:
+                lines.append(value)
+        if lines and lines[-1] != "":
+            lines.append("")
+    return lines
+
 doc = fitz.open(INPUT_PATH)
 out = []
 table_count = 0
+fallback_used = False
 
 if len(doc):
     top = doc[0].get_text("text", clip=(0, 0, doc[0].rect.width, 82))
@@ -293,6 +316,12 @@ for page_number, page in enumerate(doc, 1):
         table_count += 1
 
 markdown = "\n".join(out).strip() + "\n"
+if table_count == 0 or len(markdown.strip()) < 200:
+    fallback = fallback_text_lines(doc)
+    fallback_markdown = "\n".join(fallback).strip() + "\n" if fallback else markdown
+    if len(fallback_markdown.strip()) > len(markdown.strip()):
+        markdown = fallback_markdown
+        fallback_used = True
 Path(OUTPUT_PATH).write_text(markdown, encoding="utf-8")
-print(json.dumps({"pages": len(doc), "tables": table_count, "characters": len(markdown), "output": OUTPUT_PATH}))
+print(json.dumps({"pages": len(doc), "tables": table_count, "fallback_used": fallback_used, "characters": len(markdown), "output": OUTPUT_PATH}))
 `
