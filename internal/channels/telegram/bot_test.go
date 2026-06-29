@@ -1160,6 +1160,42 @@ func jsonResponse(statusCode int, body string) *http.Response {
 	}
 }
 
+func TestTelegramMessagesDisableLinkPreview(t *testing.T) {
+	var calls []map[string]any
+	bot := New("token", 123, t.TempDir(), &fakeHandler{}, nil)
+	bot.client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		calls = append(calls, payload)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			return jsonResponse(http.StatusOK, `{"ok":true,"result":{"message_id":42}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			return jsonResponse(http.StatusOK, `{"ok":true}`), nil
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	if _, err := bot.sendMessage(context.Background(), 55, "Link: https://meet.google.com/abc-defg-hij"); err != nil {
+		t.Fatalf("sendMessage() error = %v", err)
+	}
+	if err := bot.editMessageText(context.Background(), 55, 42, "Link: https://meet.google.com/abc-defg-hij"); err != nil {
+		t.Fatalf("editMessageText() error = %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 Telegram calls, got %d", len(calls))
+	}
+	for _, payload := range calls {
+		if got, ok := payload["disable_web_page_preview"].(bool); !ok || !got {
+			t.Fatalf("expected disable_web_page_preview=true, got %#v in %#v", payload["disable_web_page_preview"], payload)
+		}
+	}
+}
+
 func TestProcessUpdateIgnoresUnauthorizedUser(t *testing.T) {
 	handler := &fakeHandler{}
 	bot := New("token", 123, t.TempDir(), nil, handler, nil)
@@ -1535,6 +1571,21 @@ func TestTelegramTextFromApprovalExpiredResponseShowsExpiredMessage(t *testing.T
 	})
 	if text != "Yêu cầu xác nhận đã hết hạn. Vui lòng thử lại." {
 		t.Fatalf("unexpected approval expired text: %q", text)
+	}
+}
+
+func TestTelegramTextFromVisionUnsupportedShowsSpecificMessage(t *testing.T) {
+	text := telegramTextFromResponse(contracts.AgentResponse{
+		Status: contracts.AgentStatusFailed,
+		Error: &contracts.ErrorShape{
+			Code:      contracts.ErrorProviderUnavailable,
+			Message:   "model không hỗ trợ input với ảnh",
+			Source:    contracts.ErrorSourceProvider,
+			Retryable: false,
+		},
+	})
+	if text != "model không hỗ trợ input với ảnh" {
+		t.Fatalf("unexpected vision unsupported text: %q", text)
 	}
 }
 

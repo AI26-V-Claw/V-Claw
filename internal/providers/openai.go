@@ -3,6 +3,7 @@ package providers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	DefaultOpenAIModel   = "gpt-4o"
+	DefaultOpenAIModel   = "gpt-4.1-mini"
 	defaultOpenAIBaseURL = "https://api.openai.com/v1"
 	openAIMaxAttempts    = 3
 )
@@ -230,6 +231,10 @@ func (c *OpenAIClient) Name() string {
 	return "openai"
 }
 
+func (c *OpenAIClient) Capabilities() Capabilities {
+	return Capabilities{ImageInput: true}
+}
+
 func (c *OpenAIClient) Close() error {
 	// OpenAI client is stateless; no resources to release.
 	return nil
@@ -244,9 +249,20 @@ type openAIChatRequest struct {
 
 type openAIMessage struct {
 	Role       string           `json:"role"`
-	Content    string           `json:"content,omitempty"`
+	Content    any              `json:"content,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+}
+
+type openAIContentPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *openAIImageURL `json:"image_url,omitempty"`
+}
+
+type openAIImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type openAITool struct {
@@ -298,7 +314,7 @@ func openAIUsageFromResponse(usage openAIUsage) *Usage {
 func openAIMessageFromProvider(message Message, safeName func(string) string) openAIMessage {
 	wire := openAIMessage{
 		Role:       string(message.Role),
-		Content:    message.Content,
+		Content:    openAIContentFromProviderMessage(message),
 		ToolCallID: message.ToolCallID,
 	}
 	for _, toolCall := range message.ToolCalls {
@@ -315,10 +331,47 @@ func openAIMessageFromProvider(message Message, safeName func(string) string) op
 	return wire
 }
 
+func openAIContentFromProviderMessage(message Message) any {
+	if len(message.Parts) == 0 {
+		return message.Content
+	}
+	parts := make([]openAIContentPart, 0, len(message.Parts)+1)
+	hasTextPart := false
+	for _, part := range message.Parts {
+		switch strings.TrimSpace(part.Type) {
+		case "text":
+			text := strings.TrimSpace(part.Text)
+			if text == "" {
+				continue
+			}
+			hasTextPart = true
+			parts = append(parts, openAIContentPart{Type: "text", Text: text})
+		case "image":
+			if part.Image == nil || len(part.Image.Data) == 0 || strings.TrimSpace(part.Image.MIMEType) == "" {
+				continue
+			}
+			parts = append(parts, openAIContentPart{
+				Type: "image_url",
+				ImageURL: &openAIImageURL{
+					URL:    "data:" + strings.TrimSpace(part.Image.MIMEType) + ";base64," + base64.StdEncoding.EncodeToString(part.Image.Data),
+					Detail: strings.TrimSpace(part.Image.Detail),
+				},
+			})
+		}
+	}
+	if !hasTextPart && strings.TrimSpace(message.Content) != "" {
+		parts = append([]openAIContentPart{{Type: "text", Text: strings.TrimSpace(message.Content)}}, parts...)
+	}
+	if len(parts) == 0 {
+		return message.Content
+	}
+	return parts
+}
+
 func providerMessageFromOpenAI(message openAIMessage, contractName func(string) string) Message {
 	providerMessage := Message{
 		Role:       MessageRole(message.Role),
-		Content:    message.Content,
+		Content:    openAITextContent(message.Content),
 		ToolCallID: message.ToolCallID,
 	}
 	for _, toolCall := range message.ToolCalls {
@@ -335,6 +388,29 @@ func providerMessageFromOpenAI(message openAIMessage, contractName func(string) 
 		})
 	}
 	return providerMessage
+}
+
+func openAITextContent(content any) string {
+	switch value := content.(type) {
+	case string:
+		return value
+	case []any:
+		var parts []string
+		for _, item := range value {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if itemMap["type"] == "text" {
+				if text, ok := itemMap["text"].(string); ok {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	default:
+		return ""
+	}
 }
 
 type openAIToolNameMap struct {

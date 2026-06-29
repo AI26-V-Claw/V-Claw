@@ -1132,6 +1132,7 @@ func (b *Bot) sendMessageWithReplyMarkup(ctx context.Context, chatID int64, text
 }
 
 func (b *Bot) sendMessagePayload(ctx context.Context, payload map[string]any) (telegramSentMessage, error) {
+	disableTelegramLinkPreview(payload)
 	var response struct {
 		OK     bool                `json:"ok"`
 		Result telegramSentMessage `json:"result"`
@@ -1144,6 +1145,13 @@ func (b *Bot) sendMessagePayload(ctx context.Context, payload map[string]any) (t
 		return telegramSentMessage{}, fmt.Errorf("telegram sendMessage returned not ok")
 	}
 	return response.Result, nil
+}
+
+func disableTelegramLinkPreview(payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	payload["disable_web_page_preview"] = true
 }
 
 func (b *Bot) editMessageText(ctx context.Context, chatID int64, messageID int, text string) error {
@@ -1483,6 +1491,7 @@ func telegramEscapeHTMLPreservingSpaces(text string) string {
 }
 
 func (b *Bot) editMessageTextPayload(ctx context.Context, payload map[string]any) error {
+	disableTelegramLinkPreview(payload)
 	var response struct {
 		OK bool `json:"ok"`
 	}
