@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_USECASE_DIR = REPO_ROOT / "testing-e2e" / "usecases"
 DEFAULT_ARTIFACT_DIR = REPO_ROOT / "testing-e2e" / "artifacts" / "usecases"
 DEFAULT_SUMMARY_PATH = DEFAULT_ARTIFACT_DIR / "agent-evaluation-report.json"
-DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_MODEL = "gpt-5.4"
 DEFAULT_ENV_FILES = [
     REPO_ROOT / ".env",
     REPO_ROOT / "testing-e2e" / ".env",
@@ -176,29 +176,25 @@ def evaluate_agent_expectations(
         raise ValueError("artifact JSON must be an object")
 
     usecase_name = str(report.get("usecase") or artifact_path.stem).strip()
+    usecase_path = Path(usecase_dir) / f"{usecase_name}.json"
+    total_steps = len(usecase_steps(usecase_path))
+    expected_by_step = expected_agents_by_step(usecase_path)
     summary: dict[str, Any] = {
         "usecase": usecase_name,
         "sourcePassed": report.get("passed") is True,
         "status": "passed" if report.get("passed") is True else "failed",
-        "steps": step_summaries_from_report(report, {}),
+        "steps": step_summaries_from_report(report, expected_by_step),
     }
-    if report.get("passed") is not True:
-        failed_step = failed_step_from_report(report)
-        if failed_step not in (None, ""):
-            summary["failedStep"] = failed_step
-        if reason := str(report.get("failureReason") or "").strip():
-            summary["failureReason"] = reason
-        summary["evaluationSkipped"] = "source artifact did not pass"
-        return summary
 
-    usecase_path = Path(usecase_dir) / f"{usecase_name}.json"
-    expected_by_step = expected_agents_by_step(usecase_path)
-    summary["steps"] = step_summaries_from_report(report, expected_by_step)
+    steps = summary["steps"]
+    if not steps:
+        summary["failedSteps"] = failed_steps_from_steps(steps)
+        summary["score"] = score_from_steps(steps, total_steps)
+        return summary
 
     load_default_env_files()
     model = os.getenv("OPENAI_EVAL_MODEL", model).strip() or DEFAULT_MODEL
     client = openai_client_from_env()
-    steps = summary["steps"]
     jobs = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -218,13 +214,14 @@ def evaluate_agent_expectations(
                 reason = str(result.get("reason") or "LLM evaluation failed").strip()
                 step["failureReason"] = reason
                 if summary.get("status") == "passed":
-                    step_id = str(step.get("step", "")).strip()
                     summary["status"] = "failed"
-                    summary["failedStep"] = step_id
-                    summary["failureReason"] = f"llm evaluation failed: step {step_id}: {reason}"
 
     for step in steps:
         step.pop("agentTextForJudge", None)
+    summary["failedSteps"] = failed_steps_from_steps(steps)
+    summary["score"] = score_from_steps(steps, total_steps)
+    for step in steps:
+        step.pop("_sourceStepPassed", None)
     return summary
 
 
@@ -250,6 +247,7 @@ def step_summaries_from_report(
         user = turn.get("user") if isinstance(turn.get("user"), dict) else {}
         step: dict[str, Any] = {
             "step": turn.get("step"),
+            "_sourceStepPassed": turn.get("passed") is True,
         }
         if message := str(user.get("message") or "").strip():
             step["userMessage"] = message
@@ -270,11 +268,38 @@ def step_summaries_from_report(
     return steps
 
 
+def score_from_steps(steps: list[dict[str, Any]], total_steps: int) -> float:
+    if total_steps <= 0:
+        return 0.0
+
+    passed_steps = 0
+    for step in steps:
+        if step.get("_sourceStepPassed") is not True:
+            continue
+        llm_evaluation = step.get("llmEvaluation")
+        if isinstance(llm_evaluation, dict) and llm_evaluation.get("passed") is True:
+            passed_steps += 1
+
+    return round(passed_steps / total_steps, 4)
+
+
+def failed_steps_from_steps(steps: list[dict[str, Any]]) -> list[Any]:
+    failed_steps: list[Any] = []
+    for step in steps:
+        source_failed = step.get("_sourceStepPassed") is False
+        llm_evaluation = step.get("llmEvaluation")
+        llm_failed = isinstance(llm_evaluation, dict) and llm_evaluation.get("passed") is False
+        if source_failed or llm_failed:
+            failed_steps.append(step.get("step"))
+    return failed_steps
+
+
 def build_evaluation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     passed_count = sum(1 for item in items if item.get("status") == "passed")
     failed_count = len(items) - passed_count
     return {
         "total": len(items),
+        "totalScore": round(sum(float(item.get("score") or 0.0) for item in items), 4),
         "passed": passed_count,
         "failed": failed_count,
         "usecases": items,
@@ -284,15 +309,18 @@ def build_evaluation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
 def print_evaluation_summary(summary: dict[str, Any], summary_path: Path) -> None:
     print("")
     print("Evaluation summary")
-    print(f"Total: {summary.get('total', 0)} | Passed: {summary.get('passed', 0)} | Failed: {summary.get('failed', 0)}")
+    print(
+        f"Total: {summary.get('total', 0)} | Passed: {summary.get('passed', 0)} | "
+        f"Failed: {summary.get('failed', 0)} | Score: {summary.get('totalScore', 0)}"
+    )
     for item in summary.get("usecases") or []:
         if not isinstance(item, dict):
             continue
         line = f"- {item.get('usecase', '(unknown)')}: {str(item.get('status') or 'failed').upper()}"
-        if item.get("failedStep") not in (None, ""):
-            line += f" at step {item.get('failedStep')}"
-        if reason := str(item.get("failureReason") or "").strip():
-            line += f" - {reason}"
+        line += f" score={item.get('score', 0)}"
+        failed_steps = item.get("failedSteps")
+        if isinstance(failed_steps, list) and failed_steps:
+            line += f" failedSteps={failed_steps}"
         print(line)
     print(f"Summary: {display_path(summary_path)}")
 
