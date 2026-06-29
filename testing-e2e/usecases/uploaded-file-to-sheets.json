@@ -1,0 +1,64 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "attachments": [
+        {
+          "path": "../fixtures/uploaded-to-sheets/demo-import.csv",
+          "mimeType": "text/csv"
+        }
+      ]
+    },
+    "agent": {
+      "expectation": "Agent cần xác nhận đã nhận được file CSV đính kèm và chờ người dùng yêu cầu tiếp theo.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "Đọc file CSV này, tạo Google Sheets tên 'Demo CSV Import', rồi append toàn bộ dữ liệu vào sheet đầu tiên."
+    },
+    "agent": {
+      "expectation": "Agent đọc hoặc parse file CSV trước rồi xin xác nhận tạo Google Sheets.",
+      "requires_approval": true,
+      "expected_tools": [
+        "filesystem.readFile",
+        "sheets.createSpreadsheet"
+      ],
+      "expected_approval_tool": "sheets.createSpreadsheet",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận append dữ liệu CSV vào sheet vừa tạo.",
+      "requires_approval": true,
+      "expected_tools": [
+        "sheets.appendValues"
+      ],
+      "expected_approval_tool": "sheets.appendValues",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xác nhận đã import dữ liệu CSV vào Google Sheets.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

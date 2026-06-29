@@ -14,6 +14,7 @@ const (
 	AgentStatusFailed                   AgentStatus = "failed"
 	AgentStatusBlocked                  AgentStatus = "blocked"
 	AgentStatusIterationBudgetExhausted AgentStatus = "iteration_budget_exhausted"
+	AgentStatusCancelled                AgentStatus = "cancelled"
 )
 
 type UserOutputKind string
@@ -92,6 +93,7 @@ const (
 	ErrorApprovalExpired          = "APPROVAL_EXPIRED"
 	ErrorInternal                 = "INTERNAL_ERROR"
 	ErrorIterationBudgetExhausted = "ITERATION_BUDGET_EXHAUSTED"
+	ErrorCancelled                = "CANCELLED"
 )
 
 // GovernanceMetadata captures the provenance fields that must be attached to

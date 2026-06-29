@@ -140,7 +140,7 @@ func NewSubtaskTool(parent *Runtime) *SubtaskTool {
 func (*SubtaskTool) Name() string { return SubtaskToolName }
 
 func (*SubtaskTool) Description() string {
-	return "Spawn a temporary task-scoped subagent with isolated context and explicit allowed_skills or allowed_tool_groups. Defaults to sync leaf mode."
+	return "Spawn one or more temporary task-scoped subagents with isolated context and explicit allowed_skills or allowed_tool_groups. Use tasks for independent parallel branches; parent must synthesize every result. Defaults to sync leaf mode."
 }
 
 func (*SubtaskTool) Parameters() tools.ToolSchema {
@@ -148,6 +148,25 @@ func (*SubtaskTool) Parameters() tools.ToolSchema {
 		"type": "object",
 		"properties": map[string]any{
 			"task": map[string]any{"type": "string", "description": "Specific subtask for the temporary child agent."},
+			"tasks": map[string]any{
+				"type":        "array",
+				"description": "Batch mode: independent subtasks to run in parallel. Each task object uses the same fields as single mode. Results are returned in input order; every branch must be included in the final synthesis.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"task":                map[string]any{"type": "string", "description": "Specific subtask for this child agent."},
+						"context":             map[string]any{"type": "string", "description": "Task-specific context. Subagents do not see parent conversation history."},
+						"allowed_skills":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1},
+						"allowed_tool_groups": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1},
+						"timeout_seconds":     map[string]any{"type": "integer", "description": "Child deadline in seconds. Defaults to 300 and is capped at 600."},
+						"label":               map[string]any{"type": "string", "description": "Optional human-readable subtask label."},
+						"model":               map[string]any{"type": "string", "description": "Optional model override for this child runtime."},
+						"role":                map[string]any{"type": "string", "enum": []string{subtaskRoleLeaf, subtaskRoleOrchestrator}, "description": "Child role. leaf cannot delegate; orchestrator may delegate while depth budget remains."},
+					},
+					"required":             []string{"task"},
+					"additionalProperties": false,
+				},
+			},
 			"allowed_skills": map[string]any{
 				"type":        "array",
 				"description": "High-level skill profile names to grant to the child agent. At least one of allowed_skills or allowed_tool_groups is required.",
@@ -167,7 +186,7 @@ func (*SubtaskTool) Parameters() tools.ToolSchema {
 			"role":            map[string]any{"type": "string", "enum": []string{subtaskRoleLeaf, subtaskRoleOrchestrator}, "description": "Child role. leaf cannot delegate; orchestrator may delegate while depth budget remains."},
 			"context":         map[string]any{"type": "string", "description": "Optional parent-provided context for the isolated child prompt."},
 		},
-		"required":             []string{"task"},
+		"required":             []string{},
 		"additionalProperties": false,
 	}
 }
@@ -180,7 +199,7 @@ func (t *SubtaskTool) Execute(ctx context.Context, call tools.ToolCall) tools.To
 	if t == nil || t.parent == nil || t.parent.registry == nil || t.parent.provider == nil {
 		return subtaskErrorResult(call, "runtime_unavailable", "parent runtime is not available", startedAt)
 	}
-	request, err := parseSubtaskRequestWithLimits(call.Arguments, t.parent.subtaskDefaultTimeout, t.parent.subtaskMaxTimeout)
+	requests, batchMode, err := parseSubtaskRequestsWithLimits(call.Arguments, t.parent.subtaskDefaultTimeout, t.parent.subtaskMaxTimeout)
 	if err != nil {
 		return subtaskErrorResult(call, "invalid_request", err.Error(), startedAt)
 	}
@@ -193,6 +212,14 @@ func (t *SubtaskTool) Execute(ctx context.Context, call tools.ToolCall) tools.To
 	if childDepth > t.parent.subtaskMaxDepth {
 		return subtaskErrorResult(call, "max_depth_exceeded", fmt.Sprintf("max subtask depth exceeded: %d", t.parent.subtaskMaxDepth), startedAt)
 	}
+	if batchMode {
+		if len(requests) > t.parent.subtasks.maxChildrenPerRun {
+			return subtaskErrorResult(call, "max_children_exceeded", fmt.Sprintf("too many tasks: %d provided, but max children per parent run is %d", len(requests), t.parent.subtasks.maxChildrenPerRun), startedAt)
+		}
+		batchResult := t.executeBatch(ctx, parentRunID, childDepth, requests, startedAt)
+		return subtaskBatchSuccessResult(call, batchResult, startedAt)
+	}
+	request := requests[0]
 	childRegistry, effectiveTools, err := buildSubtaskRegistry(t.parent, request, childDepth)
 	if err != nil {
 		return subtaskErrorResult(call, "capability_rejected", err.Error(), startedAt)
@@ -242,6 +269,7 @@ type subtaskRequest struct {
 }
 
 type subtaskResult struct {
+	TaskIndex  int            `json:"task_index"`
 	TaskID     string         `json:"task_id"`
 	Label      string         `json:"label,omitempty"`
 	Status     string         `json:"status"`
@@ -254,8 +282,47 @@ type subtaskResult struct {
 	Metadata   map[string]any `json:"metadata,omitempty"`
 }
 
+type subtaskBatchResult struct {
+	Results        []subtaskResult `json:"results"`
+	TotalRuntimeMS int64           `json:"total_runtime_ms"`
+	Completed      int             `json:"completed"`
+	Failed         int             `json:"failed"`
+	Timeout        int             `json:"timeout"`
+}
+
 func parseSubtaskRequest(args map[string]any) (subtaskRequest, error) {
 	return parseSubtaskRequestWithLimits(args, defaultSubtaskTimeout, maxSubtaskTimeout)
+}
+
+func parseSubtaskRequestsWithLimits(args map[string]any, defaultTimeout time.Duration, maxTimeout time.Duration) ([]subtaskRequest, bool, error) {
+	hasTask := strings.TrimSpace(subtaskStringArg(args, "task")) != ""
+	rawTasks, hasTasks := args["tasks"]
+	if hasTask && hasTasks {
+		return nil, false, fmt.Errorf("provide either task or tasks, not both")
+	}
+	if hasTasks {
+		taskArgs, err := subtaskTaskArgs(rawTasks)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(taskArgs) == 0 {
+			return nil, false, fmt.Errorf("tasks must contain at least one task")
+		}
+		requests := make([]subtaskRequest, 0, len(taskArgs))
+		for index, taskArg := range taskArgs {
+			request, err := parseSubtaskRequestWithLimits(taskArg, defaultTimeout, maxTimeout)
+			if err != nil {
+				return nil, false, fmt.Errorf("task %d: %w", index, err)
+			}
+			requests = append(requests, request)
+		}
+		return requests, true, nil
+	}
+	request, err := parseSubtaskRequestWithLimits(args, defaultTimeout, maxTimeout)
+	if err != nil {
+		return nil, false, err
+	}
+	return []subtaskRequest{request}, false, nil
 }
 
 func parseSubtaskRequestWithLimits(args map[string]any, defaultTimeout time.Duration, maxTimeout time.Duration) (subtaskRequest, error) {
@@ -384,6 +451,111 @@ func (t *SubtaskTool) runChild(ctx context.Context, taskID string, parentRunID s
 	return result
 }
 
+func (t *SubtaskTool) executeBatch(ctx context.Context, parentRunID string, childDepth int, requests []subtaskRequest, startedAt time.Time) subtaskBatchResult {
+	batchStartedAt := time.Now()
+	results := make([]subtaskResult, len(requests))
+	if len(requests) == 0 {
+		return subtaskBatchResult{Results: results}
+	}
+	maxChildren := t.parent.subtasks.maxChildrenPerRun
+	t.parent.appendRunEvent(ctx, parentRunID, "subtask.batch.started", map[string]any{
+		"task_count": len(requests),
+		"depth":      childDepth,
+	})
+	sem := make(chan struct{}, maxChildren)
+	var wg sync.WaitGroup
+	for index, request := range requests {
+		index := index
+		request := request
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[index] = t.executeBatchChild(ctx, parentRunID, childDepth, index, request, batchStartedAt)
+		}()
+	}
+	wg.Wait()
+	batchResult := summarizeSubtaskBatch(results, startedAt)
+	t.parent.appendRunEvent(ctx, parentRunID, "subtask.batch.completed", map[string]any{
+		"task_count":       len(results),
+		"completed":        batchResult.Completed,
+		"failed":           batchResult.Failed,
+		"timeout":          batchResult.Timeout,
+		"total_runtime_ms": batchResult.TotalRuntimeMS,
+	})
+	return batchResult
+}
+
+func (t *SubtaskTool) executeBatchChild(ctx context.Context, parentRunID string, childDepth int, taskIndex int, request subtaskRequest, startedAt time.Time) subtaskResult {
+	childRegistry, effectiveTools, err := buildSubtaskRegistry(t.parent, request, childDepth)
+	if err != nil {
+		return subtaskBranchErrorResult(taskIndex, request.Label, "capability_rejected", err.Error(), startedAt)
+	}
+	childNumber, err := t.parent.subtasks.reserve(parentRunID)
+	if err != nil {
+		return subtaskBranchErrorResult(taskIndex, request.Label, "max_children_exceeded", err.Error(), startedAt)
+	}
+	taskID := fmt.Sprintf("subtask_%s_%d", safeID(parentRunID), childNumber)
+	t.parent.appendRunEvent(ctx, parentRunID, "subtask.started", map[string]any{
+		"task_id":         taskID,
+		"task_index":      taskIndex,
+		"label":           request.Label,
+		"role":            request.Role,
+		"depth":           childDepth,
+		"timeout_seconds": int(request.Timeout.Seconds()),
+		"effective_tools": effectiveTools,
+	})
+	result := t.runChild(ctx, taskID, parentRunID, childDepth, request, childRegistry, effectiveTools, startedAt)
+	result.TaskIndex = taskIndex
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	result.Metadata["task_index"] = taskIndex
+	eventType := "subtask.completed"
+	if result.Status == "timeout" {
+		eventType = "subtask.timeout"
+	} else if result.Status == "failed" || result.Error != "" {
+		eventType = "subtask.failed"
+	}
+	t.parent.appendRunEvent(ctx, parentRunID, eventType, map[string]any{
+		"task_id":      taskID,
+		"task_index":   taskIndex,
+		"label":        request.Label,
+		"status":       result.Status,
+		"runtime_ms":   result.RuntimeMS,
+		"timed_out":    result.TimedOut,
+		"error":        result.Error,
+		"child_run_id": "run_" + safeID(taskID),
+	})
+	return result
+}
+
+func subtaskBranchErrorResult(taskIndex int, label string, code string, message string, startedAt time.Time) subtaskResult {
+	return subtaskResult{
+		TaskIndex: taskIndex,
+		Label:     label,
+		Status:    "failed",
+		Error:     code + ": " + message,
+		RuntimeMS: time.Since(startedAt).Milliseconds(),
+	}
+}
+
+func summarizeSubtaskBatch(results []subtaskResult, startedAt time.Time) subtaskBatchResult {
+	batch := subtaskBatchResult{Results: results, TotalRuntimeMS: time.Since(startedAt).Milliseconds()}
+	for _, result := range results {
+		switch result.Status {
+		case "timeout":
+			batch.Timeout++
+		case string(contracts.AgentStatusCompleted):
+			batch.Completed++
+		default:
+			batch.Failed++
+		}
+	}
+	return batch
+}
+
 func childPrompt(request subtaskRequest) string {
 	roleInstruction := "Do not delegate, spawn other agents, message teams, or perform actions outside your visible tools."
 	if request.Role == subtaskRoleOrchestrator {
@@ -395,7 +567,7 @@ func childPrompt(request subtaskRequest) string {
 	}
 	return strings.TrimSpace(`You are a temporary ` + request.Role + ` subagent. Complete only the delegated task below.
 ` + roleInstruction + `
-Return a concise summary/result for the parent agent.
+Return a concise summary/result for the parent agent, including what you found, sources or files inspected, and any issues encountered.
 ` + contextBlock + `
 
 Delegated task:
@@ -512,6 +684,7 @@ func concreteSubtaskDenyTools() map[string]bool {
 		"chat.removeMember":         true,
 		"sandbox.runPython":         true,
 		"sandbox.runShell":          true,
+		"sandbox.extractPDF":        true,
 		"filesystem.writeFile":      true,
 		"gmail.createDraft":         true,
 		"gmail.updateDraft":         true,
@@ -540,6 +713,7 @@ func concreteSubtaskDenyTools() map[string]bool {
 		"drive.untrashFile":         true,
 		"docs.createDocument":       true,
 		"docs.appendText":           true,
+		"docs.appendMarkdown":       true,
 		"docs.replaceText":          true,
 		"docs.insertText":           true,
 		"docs.deleteContent":        true,
@@ -584,6 +758,26 @@ func subtaskSuccessResult(call tools.ToolCall, result subtaskResult, startedAt t
 	}
 }
 
+func subtaskBatchSuccessResult(call tools.ToolCall, result subtaskBatchResult, startedAt time.Time) tools.ToolResult {
+	result.TotalRuntimeMS = time.Since(startedAt).Milliseconds()
+	data, _ := json.Marshal(result)
+	return tools.ToolResult{
+		ToolCallID:     call.ID,
+		ToolName:       call.Name,
+		Success:        true,
+		ContentForLLM:  string(data),
+		ContentForUser: string(data),
+		Metadata: map[string]any{
+			"status":           "completed",
+			"task_count":       len(result.Results),
+			"completed":        result.Completed,
+			"failed":           result.Failed,
+			"timeout":          result.Timeout,
+			"total_runtime_ms": result.TotalRuntimeMS,
+		},
+	}
+}
+
 func subtaskErrorResult(call tools.ToolCall, code string, message string, startedAt time.Time) tools.ToolResult {
 	result := subtaskResult{Status: "failed", Error: message, RuntimeMS: time.Since(startedAt).Milliseconds()}
 	data, _ := json.Marshal(result)
@@ -608,6 +802,25 @@ func subtaskStringArg(args map[string]any, key string) string {
 	}
 	text, _ := value.(string)
 	return text
+}
+
+func subtaskTaskArgs(raw any) ([]map[string]any, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		if typed, ok := raw.([]map[string]any); ok {
+			return typed, nil
+		}
+		return nil, fmt.Errorf("tasks must be an array of task objects")
+	}
+	result := make([]map[string]any, 0, len(items))
+	for index, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("task %d must be an object", index)
+		}
+		result = append(result, object)
+	}
+	return result, nil
 }
 
 func subtaskIntArg(args map[string]any, key string) int {

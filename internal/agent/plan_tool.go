@@ -234,6 +234,25 @@ func (t *PlanTool) Execute(ctx context.Context, call tools.ToolCall) tools.ToolR
 	}
 
 	response := planToolResponse{Plan: plan, Summary: summarizePlan(plan), RunID: scope.RunID, Revision: meta.Revision}
+	if len(plan.Steps) > 0 {
+		activeStep := ""
+		for _, step := range plan.Steps {
+			if strings.EqualFold(strings.TrimSpace(step.Status), "in_progress") {
+				activeStep = strings.TrimSpace(step.Description)
+				break
+			}
+		}
+		emitProgress(ctx, ProgressEvent{
+			Stage:    ProgressStagePlanned,
+			Message:  response.Summary,
+			ToolName: PlanToolName,
+			Meta: map[string]any{
+				"revision":    meta.Revision,
+				"step_count":  len(plan.Steps),
+				"active_step": activeStep,
+			},
+		})
+	}
 	content, err := json.Marshal(response)
 	if err != nil {
 		return planToolError(call, tools.ErrorExecutionFailed, err.Error())

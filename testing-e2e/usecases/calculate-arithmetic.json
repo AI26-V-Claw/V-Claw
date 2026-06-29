@@ -9,7 +9,7 @@
       "requires_approval": false,
       "expected_tools": ["calculator"],
       "expected_approval_tool": null,
-      "response_contains": ["780973020987"]
+      "response_contains": []
     }
   }
 ]

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +148,24 @@ func TestRuntimeIncludesAttachmentPathsInProviderUserMessage(t *testing.T) {
 	joined := providerMessagesContent(provider.calls[0].Messages)
 	if !strings.Contains(joined, "Attachment paths") || !strings.Contains(joined, `D:\tmp\demo.png`) {
 		t.Fatalf("expected attachment context in provider messages, got %s", joined)
+	}
+}
+
+func TestRuntimeIncludesExactNestedSandboxAttachmentPath(t *testing.T) {
+	workspaceBase := t.TempDir()
+	t.Setenv("VCLAW_SANDBOX_WORKSPACE_DIR", workspaceBase)
+	hostPath := filepath.Join(workspaceBase, "agent", "workspace", "data", "telegram_attachments", "8563069511", "2495", "probability_cheatsheet.pdf")
+
+	context := textWithAttachmentContext("extract this PDF", map[string]any{
+		"attachmentPaths": []string{hostPath},
+	})
+
+	if !strings.Contains(context, "Host path: "+hostPath) {
+		t.Fatalf("expected exact host path in attachment context, got %s", context)
+	}
+	wantSandboxPath := "Sandbox path: /workspace/data/telegram_attachments/8563069511/2495/probability_cheatsheet.pdf"
+	if !strings.Contains(context, wantSandboxPath) {
+		t.Fatalf("expected exact nested sandbox path %q, got %s", wantSandboxPath, context)
 	}
 }
 

@@ -1,0 +1,48 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "attachments": [
+        {
+          "path": "../fixtures/read-uploaded-file/chair-description.txt",
+          "mimeType": "text/plain"
+        }
+      ]
+    },
+    "agent": {
+      "expectation": "Agent cần xác nhận đã nhận được file đính kèm và chờ người dùng yêu cầu tiếp theo.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "Soạn draft Gmail gửi file này cho baolnc@vclaw.site, tiêu đề 'Chair description', nội dung nói đây là file mô tả cái ghế."
+    },
+    "agent": {
+      "expectation": "Agent dùng file người dùng vừa upload làm Gmail attachment và xin xác nhận tạo draft.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.createDraft"
+      ],
+      "expected_approval_tool": "gmail.createDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xác nhận đã tạo Gmail draft với file đính kèm.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

@@ -1,0 +1,94 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Email từ nxhaicr7@gmail.com ngày 2026-06-22 có file dữ liệu đính kèm. Tải về, xử lý bằng Python, cập nhật vào Sheets 'Daily Data', lưu báo cáo lên Drive và thông báo kết quả vào Chat."
+    },
+    "agent": {
+      "expectation": "Agent tìm email từ nxhaicr7@gmail.com, xin xác nhận tải file đính kèm.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.listEmails",
+        "gmail.getEmail",
+        "gmail.downloadAttachments"
+      ],
+      "expected_approval_tool": "gmail.downloadAttachments",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tải file xong, xin xác nhận xử lý dữ liệu CSV bằng mã Python.",
+      "requires_approval": true,
+      "expected_tools": [
+        "sandbox.runPython"
+      ],
+      "expected_approval_tool": "sandbox.runPython",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xử lý xong, tìm Sheets Daily Data, xin xác nhận cập nhật dữ liệu.",
+      "requires_approval": true,
+      "expected_tools": [
+        "sheets.getSpreadsheet",
+        "sheets.appendValues"
+      ],
+      "expected_approval_tool": "sheets.appendValues",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent cập nhật Sheets xong, xin xác nhận lưu báo cáo lên Drive.",
+      "requires_approval": true,
+      "expected_tools": [
+        "drive.uploadFile"
+      ],
+      "expected_approval_tool": "drive.uploadFile",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 4,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent lưu Drive xong, tìm space, xin xác nhận gửi thông báo Chat.",
+      "requires_approval": true,
+      "expected_tools": [
+        "chat.listSpaces",
+        "chat.sendMessage"
+      ],
+      "expected_approval_tool": "chat.sendMessage",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 5,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành pipeline, báo cáo toàn bộ kết quả.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

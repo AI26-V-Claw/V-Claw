@@ -1,0 +1,63 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Tìm tất cả email chưa đọc từ tuần trước, gắn nhãn 'Cần xử lý' và lưu trữ các email đã đọc hơn 7 ngày."
+    },
+    "agent": {
+      "expectation": "Agent liệt kê email và nhãn hiện có. Không cần approval cho thao tác đọc.",
+      "requires_approval": false,
+      "expected_tools": [
+        "gmail.listEmails",
+        "gmail.listLabels"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận gắn nhãn hàng loạt email chưa đọc.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.batchModifyMessages"
+      ],
+      "expected_approval_tool": "gmail.batchModifyMessages",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent gắn nhãn xong, xin xác nhận lưu trữ email cũ.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.batchModifyMessages"
+      ],
+      "expected_approval_tool": "gmail.batchModifyMessages",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành, báo số email đã gắn nhãn và lưu trữ.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Cần xử lý"
+      ]
+    }
+  }
+]

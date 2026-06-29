@@ -6,16 +6,22 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"vclaw/internal/agent"
 	"vclaw/internal/app"
 	"vclaw/internal/contracts"
+	"vclaw/internal/localapi/control"
 )
 
 func runAgent(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "cancel" {
+		return runAgentCancel(ctx, args[1:])
+	}
 	if len(args) > 0 && args[0] == "chat" {
 		return runAgentChat(ctx, args[1:])
 	}
@@ -68,6 +74,11 @@ func runAgent(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	controlServer, err := control.Start(ctx, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime))
+	if err != nil {
+		return fmt.Errorf("start agent control server: %w", err)
+	}
+	defer controlServer.Close(context.Background())
 
 	response, err := agent.NewRuntimeMessenger(bundle.Runtime).HandleMessage(ctx, contracts.UserMessage{
 		RequestID: "req_" + time.Now().UTC().Format("20060102T150405.000000000"),
@@ -133,44 +144,181 @@ func runAgentChat(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	controlServer, err := control.Start(ctx, *dataDir, agent.NewRuntimeMessenger(bundle.Runtime))
+	if err != nil {
+		return fmt.Errorf("start agent control server: %w", err)
+	}
+	defer controlServer.Close(context.Background())
 
 	fmt.Fprintf(os.Stderr, "V-Claw interactive chat (model: %s, session: %s)\n", bundle.Model, *sessionID)
-	fmt.Fprintln(os.Stderr, "Type /exit to quit, /new to start a new session.")
-	messenger := agent.NewRuntimeMessenger(bundle.Runtime)
-	scanner := bufio.NewScanner(os.Stdin)
-	for {
-		fmt.Fprint(os.Stderr, "\nYou> ")
-		if !scanner.Scan() {
-			break
-		}
-		text := strings.TrimSpace(scanner.Text())
-		if text == "" {
-			continue
-		}
-		switch text {
-		case "/exit", "/quit":
-			return nil
-		case "/new":
-			*sessionID = "dev_" + time.Now().UTC().Format("20060102T150405")
-			fmt.Fprintf(os.Stderr, "Session: %s\n", *sessionID)
-			continue
-		}
+	fmt.Fprintln(os.Stderr, "Type /exit to quit, /new to start a new session, /stop to cancel the current run.")
+	return runAgentChatLoop(ctx, os.Stdin, os.Stderr, agent.NewRuntimeMessenger(bundle.Runtime), sessionID, *channel, *jsonOutput, *trace, time.Now)
+}
 
-		response, err := messenger.HandleMessage(ctx, contracts.UserMessage{
-			RequestID: "req_" + time.Now().UTC().Format("20060102T150405.000000000"),
-			SessionID: *sessionID,
-			Channel:   *channel,
-			Text:      text,
-			Timestamp: time.Now(),
-			Metadata:  map[string]any{"source": "vclaw agent chat"},
-		})
-		if err != nil {
-			return err
-		}
-		fmt.Println()
-		printAgentResponse(response, *jsonOutput, *trace)
+func runAgentCancel(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("vclaw agent cancel", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	sessionID := fs.String("session", "dev", "session id")
+	dataDir := fs.String("data-dir", envOrDefault("DATA_DIR", "./data"), "runtime data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
-	return scanner.Err()
+	response, err := control.Cancel(ctx, *dataDir, *sessionID)
+	if err != nil {
+		return err
+	}
+	switch response.Status {
+	case "cancelled":
+		fmt.Fprintf(os.Stdout, "Đã gửi yêu cầu hủy session %s.\n", response.SessionID)
+	case "no_active_run":
+		fmt.Fprintf(os.Stdout, "Không có lệnh nào đang chạy cho session %s.\n", response.SessionID)
+	default:
+		fmt.Fprintf(os.Stdout, "%s: %s\n", response.SessionID, response.Status)
+	}
+	return nil
+}
+
+type agentChatMessenger interface {
+	HandleMessage(context.Context, contracts.UserMessage) (contracts.AgentResponse, error)
+	CancelSession(string) bool
+}
+
+type chatRunResult struct {
+	response contracts.AgentResponse
+	err      error
+}
+
+type chatLineResult struct {
+	text string
+	err  error
+}
+
+func runAgentChatLoop(ctx context.Context, input io.Reader, prompt io.Writer, messenger agentChatMessenger, sessionID *string, channel string, jsonOutput bool, trace bool, now func() time.Time) error {
+	scanner := bufio.NewScanner(input)
+	lines := make(chan chatLineResult)
+	results := make(chan chatRunResult, 1)
+	var activeCancel context.CancelFunc
+	var activeMu sync.Mutex
+
+	go func() {
+		defer close(lines)
+		for scanner.Scan() {
+			lines <- chatLineResult{text: scanner.Text()}
+		}
+		if err := scanner.Err(); err != nil {
+			lines <- chatLineResult{err: err}
+		}
+	}()
+
+	cancelActive := func() bool {
+		activeMu.Lock()
+		cancel := activeCancel
+		activeMu.Unlock()
+		if cancel == nil {
+			return false
+		}
+		cancel()
+		messenger.CancelSession(*sessionID)
+		return true
+	}
+
+	setActiveCancel := func(cancel context.CancelFunc) {
+		activeMu.Lock()
+		activeCancel = cancel
+		activeMu.Unlock()
+	}
+
+	clearActiveCancel := func() {
+		activeMu.Lock()
+		activeCancel = nil
+		activeMu.Unlock()
+	}
+
+	fmt.Fprint(prompt, "\nYou> ")
+	for {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				return result.err
+			}
+			fmt.Println()
+			printAgentResponse(result.response, jsonOutput, trace)
+			fmt.Fprint(prompt, "\nYou> ")
+			continue
+		case line, ok := <-lines:
+			if !ok {
+				cancelActive()
+				return nil
+			}
+			if line.err != nil {
+				cancelActive()
+				return line.err
+			}
+			text := strings.TrimSpace(line.text)
+			if err := handleAgentChatLine(ctx, text, prompt, messenger, sessionID, channel, jsonOutput, trace, now, results, cancelActive, setActiveCancel, func() bool {
+				activeMu.Lock()
+				busy := activeCancel != nil
+				activeMu.Unlock()
+				return busy
+			}, clearActiveCancel); err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return err
+			}
+		}
+	}
+}
+
+func handleAgentChatLine(ctx context.Context, text string, prompt io.Writer, messenger agentChatMessenger, sessionID *string, channel string, jsonOutput bool, trace bool, now func() time.Time, results chan<- chatRunResult, cancelActive func() bool, setActiveCancel func(context.CancelFunc), isBusy func() bool, clearActiveCancel func()) error {
+	if text == "" {
+		fmt.Fprint(prompt, "\nYou> ")
+		return nil
+	}
+	switch text {
+	case "/exit", "/quit":
+		cancelActive()
+		return io.EOF
+	case "/new":
+		if cancelActive() {
+			fmt.Fprintln(prompt, "Đã hủy lệnh đang chạy.")
+		}
+		*sessionID = "dev_" + now().UTC().Format("20060102T150405")
+		fmt.Fprintf(prompt, "Session: %s\n", *sessionID)
+		fmt.Fprint(prompt, "\nYou> ")
+		return nil
+	case "/stop", "/cancel":
+		if cancelActive() {
+			fmt.Fprintln(prompt, "Đã hủy lệnh đang chạy.")
+		} else {
+			fmt.Fprintln(prompt, "Không có lệnh nào đang chạy.")
+		}
+		fmt.Fprint(prompt, "\nYou> ")
+		return nil
+	}
+
+	if isBusy() {
+		fmt.Fprintln(prompt, "Đang có lệnh chạy. Dùng /stop để hủy trước khi gửi lệnh mới.")
+		fmt.Fprint(prompt, "\nYou> ")
+		return nil
+	}
+
+	runCtx, runCancel := context.WithCancel(ctx)
+	setActiveCancel(runCancel)
+	message := contracts.UserMessage{
+		RequestID: "req_" + now().UTC().Format("20060102T150405.000000000"),
+		SessionID: *sessionID,
+		Channel:   channel,
+		Text:      text,
+		Timestamp: now(),
+		Metadata:  map[string]any{"source": "vclaw agent chat"},
+	}
+	go func() {
+		response, err := messenger.HandleMessage(runCtx, message)
+		clearActiveCancel()
+		results <- chatRunResult{response: response, err: err}
+	}()
+	return nil
 }
 
 func printAgentResponse(response contracts.AgentResponse, jsonOutput bool, trace bool) {
@@ -219,6 +367,26 @@ func printAgentResponse(response contracts.AgentResponse, jsonOutput bool, trace
 
 	if response.Error != nil && response.Status == contracts.AgentStatusFailed {
 		fmt.Fprintln(os.Stderr, response.Error.Message)
+	}
+
+	if reason := agent.ExitReason(response); reason != "" {
+		fmt.Fprintf(os.Stderr, "\n[exit] %s\n", reason)
+	}
+
+	if response.Plan != nil && len(response.Plan.Steps) > 0 {
+		fmt.Fprintln(os.Stderr, "\n[plan]")
+		for _, step := range response.Plan.Steps {
+			marker := "  "
+			switch step.Status {
+			case "completed":
+				marker = "✓ "
+			case "in_progress":
+				marker = "▶ "
+			case "pending":
+				marker = "· "
+			}
+			fmt.Fprintf(os.Stderr, "  %s%s\n", marker, step.Description)
+		}
 	}
 }
 
