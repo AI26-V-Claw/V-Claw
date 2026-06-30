@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"vclaw/internal/connectors/google"
 	"vclaw/internal/connectors/google/calendar"
