@@ -1,0 +1,17 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Sử dụng công cụ calendar.listEvents để lấy lịch trình của tôi trong tuần tới. Tóm tắt các sự kiện, đặc biệt chú ý các cuộc họp quan trọng và trả lời kết quả lại cho tôi."
+    },
+    "agent": {
+      "expectation": "Agent đọc calendar, lấy sự kiện và tóm tắt cuộc họp",
+      "requires_approval": false,
+      "expected_tools": [
+        "calendar.listEvents"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

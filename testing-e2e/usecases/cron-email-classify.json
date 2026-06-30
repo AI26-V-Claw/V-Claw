@@ -1,0 +1,17 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Sử dụng công cụ gmail.listEmails để lấy danh sách email chưa đọc trong INBOX. Dựa vào trường Subject và Snippet trong kết quả trả về, bạn hãy tự phân tích và phân loại các email đó thành 3 nhóm: 1. Quan trọng, 2. Quảng cáo/Spam, 3. Khác. Tóm tắt các email quan trọng và gửi kết quả vào khung chat này cho tôi. Tuyệt đối không dùng công cụ gmail.getEmail để mở đọc nội dung chi tiết của bất kỳ email nào."
+    },
+    "agent": {
+      "expectation": "Agent phân loại email bằng Snippet và tóm tắt thành công",
+      "requires_approval": false,
+      "expected_tools": [
+        "gmail.listEmails"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

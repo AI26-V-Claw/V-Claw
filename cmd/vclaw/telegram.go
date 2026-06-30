@@ -19,6 +19,7 @@ import (
 	"vclaw/internal/channels/telegram"
 	"vclaw/internal/localapi/control"
 	"vclaw/internal/monitoring"
+	"vclaw/internal/scheduler"
 )
 
 func runTelegram(ctx context.Context, args []string) error {
@@ -119,6 +120,15 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	logger.Info("starting vclaw telegram runtime", "model", bundle.Model, "google_tools", *googleToolsMode, "web_tools", *webToolsMode)
 	bot := telegram.New(*botToken, *allowedUserID, *dataDir, bundle.PolicyStore, agent.NewRuntimeMessenger(bundle.Runtime), logger)
 	bot.SetRegistry(bundle.Registry)
+
+	cronRunner := scheduler.NewCronRunner(bot, logger, os.Getenv)
+	for _, wf := range scheduler.GetDefaultWorkflows(os.Getenv) {
+		cmd := "/run_" + strings.TrimPrefix(wf.ID, "workflow_")
+		bot.RegisterWorkflowCommand(cmd, wf.Prompt)
+	}
+	cronRunner.Start()
+	defer cronRunner.Stop()
+
 	if err := bot.Run(runCtx); err != nil && err != context.Canceled {
 		return fmt.Errorf("telegram bot stopped: %w", err)
 	}

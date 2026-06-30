@@ -350,7 +350,7 @@ func providerRelativeDateRange(now time.Time, userText string) (time.Time, time.
 	}
 
 	switch {
-	case containsAnyText(text, "tuan sau", "next week"):
+	case containsAnyText(text, "tuan sau", "tuan toi", "next week"):
 		start := startOfWeekMonday(now).AddDate(0, 0, 7)
 		return start, start.AddDate(0, 0, 7), true
 	case containsAnyText(text, "tuan nay", "this week", "trong tuan"):
