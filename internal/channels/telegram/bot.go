@@ -56,6 +56,7 @@ type Bot struct {
 	busySessions  sync.Map // chat ID (int64) → struct{} while a message is being processed
 	pendingMu     sync.Mutex
 	pendingByChat map[int64][]telegramUpdate
+	workflowCmds  map[string]string
 }
 
 const maxPendingTelegramUpdatesPerChat = 8
@@ -112,6 +113,7 @@ func New(token string, allowedUserID int64, dataDir string, args ...any) *Bot {
 		state:         newTelegramChannelState(),
 		registry:      nil,
 		pendingByChat: make(map[int64][]telegramUpdate),
+		workflowCmds:  make(map[string]string),
 	}
 }
 
@@ -387,6 +389,7 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+
 	if isTelegramSkillsCommand(messageText) {
 		if err := b.sendSkillsMenu(ctx, update.Message.Chat.ID); err != nil {
 			b.logger.Error("telegram skills menu failed", "error", err)
@@ -396,6 +399,17 @@ func (b *Bot) processUpdate(ctx context.Context, update telegramUpdate) (bool, e
 		}
 		return true, nil
 	}
+
+	b.pendingMu.Lock()
+	wfPrompt, isWfCmd := b.workflowCmds[messageText]
+	b.pendingMu.Unlock()
+	if isWfCmd {
+		inbound.Text = wfPrompt
+		if _, err := b.sendMessage(ctx, update.Message.Chat.ID, "Bắt đầu chạy workflow: "+messageText); err != nil {
+			return false, err
+		}
+	}
+
 	activeSession, err := b.sessionIndex.Active(ctx, update.Message.Chat.ID, time.Now().UTC())
 	if err != nil {
 		b.logger.Error("telegram active session resolve failed", "error", err)
@@ -2284,4 +2298,34 @@ func (b *Bot) sendSkillsMenu(ctx context.Context, chatID int64) error {
 	}
 	_, err := b.sendMessagePayload(ctx, payload)
 	return err
+}
+
+func (b *Bot) RegisterWorkflowCommand(command string, prompt string) {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	b.workflowCmds[command] = prompt
+}
+
+func (b *Bot) TriggerWorkflow(prompt string) {
+	fakeUpdate := telegramUpdate{
+		UpdateID: int(time.Now().UnixNano() % 1000000000),
+		Message: &telegramMessage{
+			MessageID: 0,
+			From: &telegramUser{
+				ID: b.allowedUserID,
+			},
+			Chat: telegramChat{
+				ID: b.allowedUserID,
+			},
+			Text: prompt,
+		},
+	}
+	select {
+	case b.workCh <- fakeUpdate:
+	default:
+		if b.logger != nil {
+			b.logger.Warn("telegram work channel full, dropping workflow trigger")
+		}
+	}
+
 }
