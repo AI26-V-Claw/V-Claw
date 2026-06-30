@@ -1,0 +1,127 @@
+{
+  "runId": "uc_20260629T113537Z_ffd11c96",
+  "usecase": "uploaded-file-safety-check",
+  "sessionId": "uploaded-file-safety-check_uc_20260629T113537Z_ffd11c96",
+  "startedAt": "2026-06-29T11:35:37.022100Z",
+  "finishedAt": "2026-06-29T11:35:59.275077Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "User sent an attachment.",
+        "attachments": [
+          {
+            "path": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-safety-check/fake-report.pdf",
+            "filename": "fake-report.pdf",
+            "mimeType": "application/pdf",
+            "source": "testing-e2e/fixtures/uploaded-file-safety/fake-report.pdf"
+          }
+        ]
+      },
+      "agent": {
+        "message": "Mình đã nhận file đính kèm:\n- fake-report.pdf\n\nNếu bạn muốn, mình có thể:\n- đọc/tóm tắt nội dung PDF\n- trích xuất sang Google Docs\n- tải lên Google Drive\n- gửi email kèm file này",
+        "status": "completed",
+        "trace": {
+          "model": "gpt-5.4-mini",
+          "reference": {
+            "confidence": 0,
+            "hasReference": false,
+            "needsClarification": false,
+            "referenceId": "",
+            "referenceType": "none",
+            "source": "none"
+          }
+        }
+      }
+    },
+    {
+      "step": 1,
+      "passed": false,
+      "failureReason": "agent command exited with 1",
+      "user": {
+        "message": "Kiểm tra file này có phải PDF hợp lệ không. Nếu thực ra chỉ là text hoặc HTML thì nói rõ dấu hiệu và đừng cố xử lý tiếp như PDF thật."
+      },
+      "agent": {
+        "message": "File type is unknown or unsupported and needs approval.",
+        "status": "failed",
+        "artifact": {
+          "kind": "file",
+          "label": "fake-report.pdf",
+          "uri": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-safety-check/fake-report.pdf"
+        },
+        "tools": [
+          "filesystem.fileInfo",
+          "filesystem.readFile"
+        ],
+        "toolTrace": [
+          {
+            "phase": "completed",
+            "toolName": "filesystem.fileInfo",
+            "toolCallId": "call_E5hOg0R9nOWMVb89xsKkGAUs",
+            "success": true,
+            "data": {
+              "contentForLLM": "Path: /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-safety-check/fake-report.pdf\nType: file\nSize: 359B\nModified: 2026-06-29T17:22:48+07:00\nPermissions: -rw-r--r--\nExtension: .pdf",
+              "contentForUser": "Path: /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-safety-check/fake-report.pdf\nType: file\nSize: 359B\nModified: 2026-06-29T17:22:48+07:00\nPermissions: -rw-r--r--\nExtension: .pdf"
+            },
+            "artifactRef": {
+              "kind": "file",
+              "label": "fake-report.pdf",
+              "uri": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-safety-check/fake-report.pdf"
+            },
+            "metadata": {
+              "extension": ".pdf",
+              "modified_at": "2026-06-29T17:22:48+07:00",
+              "permissions": "-rw-r--r--",
+              "size_bytes": 359,
+              "type": "file"
+            }
+          },
+          {
+            "phase": "completed",
+            "toolName": "filesystem.readFile",
+            "toolCallId": "call_0MOrlXhhr587eOclT7KGh1Vu",
+            "success": false,
+            "data": {
+              "contentForLLM": "File blocked by safety gate: File type is unknown or unsupported and needs approval.",
+              "contentForUser": "File type is unknown or unsupported and needs approval."
+            },
+            "error": {
+              "code": "ACTION_BLOCKED_BY_POLICY",
+              "message": "File type is unknown or unsupported and needs approval.",
+              "source": "tool",
+              "retryable": false
+            },
+            "metadata": {
+              "file_safety": {
+                "claimed_mime": "",
+                "decision": "requires_approval",
+                "detected_type": "html",
+                "extension": ".pdf",
+                "filename": "fake-report.pdf",
+                "flags": [
+                  "type_mismatch",
+                  "unsupported_type"
+                ],
+                "origin": "local_workspace",
+                "policy_version": "file-safety-policy/1",
+                "reason_audit": "unsupported or unknown type",
+                "reason_user": "File type is unknown or unsupported and needs approval.",
+                "scanner_version": "file-safety-scanner/1",
+                "sha256": "db5fcaabd9e974c5bf0aa7027a9ebd2d73b148df2c3854956b2fa6d9357aa914",
+                "size_bytes": 359,
+                "source_tool": "filesystem.readFile"
+              }
+            }
+          }
+        ],
+        "trace": {
+          "trace_id": "67da0556e8eae626c3d860a06a28486e"
+        }
+      }
+    }
+  ],
+  "passed": false,
+  "failureReason": "step failed: 1",
+  "failedStep": "1"
+}

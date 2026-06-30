@@ -1,0 +1,54 @@
+{
+  "runId": "uc_20260629T105034Z_0251dba9",
+  "usecase": "drive-folder-summary-chat-seeded-followup",
+  "sessionId": "drive-folder-summary-chat-seeded-followup_uc_20260629T105034Z_0251dba9",
+  "startedAt": "2026-06-29T10:50:34.361770Z",
+  "finishedAt": "2026-06-29T10:50:47.397016Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "Trong folder Sprint 2 mà bạn vừa tóm tắt trước đó có file nào?"
+      },
+      "agent": {
+        "message": "Trong folder Sprint 2 hiện có 2 file:\n\n- Biên bản cuộc thảo luận về 'Demo Day Sprint 2' — Google Document — cập nhật 2026-06-26 12:36\n- Báo cáo Demo Sprint 2 - VClaw — Google Document — cập nhật 2026-06-24 10:49",
+        "status": "completed",
+        "tools": [
+          "drive.listFiles"
+        ],
+        "toolTrace": [
+          {
+            "phase": "completed",
+            "toolName": "drive.listFiles",
+            "toolCallId": "call_543SKmxUaEfc9yP0rrso0YKB",
+            "success": true,
+            "data": {
+              "contentForLLM": "{\"Files\":[{\"id\":\"1XApQogOVbrjGkosW3yxaDLHeOR9CTJ0wqJLpn9T4LfU\",\"name\":\"Biên bản cuộc thảo luận về 'Demo Day Sprint 2'\",\"mimeType\":\"application/vnd.google-apps.document\",\"webViewLink\":\"https://docs.google.com/document/d/1XApQogOVbrjGkosW3yxaDLHeOR9CTJ0wqJLpn9T4LfU/edit?usp=drivesdk\",\"parents\":[\"0AJzu2m2g7l13Uk9PVA\"],\"modifiedTime\":\"2026-06-26T12:36:13+07:00\"},{\"id\":\"1JSODr18vxZUrQ2TJQTCX4woaIcG-FbjokJqCKl8XtxU\",\"name\":\"Báo cáo Demo Sprint 2 - VClaw\",\"mimeType\":\"application/vnd.google-apps.document\",\"webViewLink\":\"https://docs.google.com/document/d/1JSODr18vxZUrQ2TJQTCX4woaIcG-FbjokJqCKl8XtxU/edit?usp=drivesdk\",\"parents\":[\"0AJzu2m2g7l13Uk9PVA\"],\"modifiedTime\":\"2026-06-24T10:49:29+07:00\"}]}",
+              "contentForUser": "Tìm thấy 2 file"
+            },
+            "metadata": {
+              "file_count": 2
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini",
+          "reference": {
+            "confidence": 0.96,
+            "hasReference": true,
+            "needsClarification": false,
+            "referenceId": "",
+            "referenceType": "conversation_topic",
+            "source": "recent_history"
+          }
+        }
+      }
+    }
+  ],
+  "passed": true,
+  "seedSession": {
+    "source": "testing-e2e/sessions/drive-folder-summary-chat-seeded-followup",
+    "destination": "data/sessions/drive-folder-summary-chat-seeded-followup_uc_20260629T105034Z_0251dba9"
+  }
+}

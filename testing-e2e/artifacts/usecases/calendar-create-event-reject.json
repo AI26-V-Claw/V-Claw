@@ -1,0 +1,57 @@
+{
+  "runId": "uc_20260629T112921Z_93ed918a",
+  "usecase": "calendar-create-event-reject",
+  "sessionId": "calendar-create-event-reject_uc_20260629T112921Z_93ed918a",
+  "startedAt": "2026-06-29T11:29:21.672388Z",
+  "finishedAt": "2026-06-29T11:29:32.291369Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "Tạo lịch họp tên 'Sprint Review' vào ngày 15/07/2026 lúc 10:00 sáng, kéo dài 1 tiếng."
+      },
+      "agent": {
+        "message": "Cần xác nhận trước khi thực hiện.\n\nMình sẽ tạo sự kiện Calendar. Xác nhận không?\n\nTiêu đề: Sprint Review\nBắt đầu: 2026-07-15T10:00:00+07:00\nKết thúc: 2026-07-15T11:00:00+07:00\n\nTrả lời một trong các lệnh:\n- approve\n- reject\n- revise <nội dung muốn chỉnh>",
+        "status": "approval_required",
+        "approvalId": "appr_call_L1Pb0GNK9phZuHmuNqGqe23Q",
+        "approvalTool": "calendar.createEvent",
+        "tools": [
+          "calendar.createEvent"
+        ],
+        "toolTrace": [
+          {
+            "phase": "approval_requested",
+            "toolName": "calendar.createEvent",
+            "toolCallId": "call_L1Pb0GNK9phZuHmuNqGqe23Q",
+            "approvalId": "appr_call_L1Pb0GNK9phZuHmuNqGqe23Q",
+            "riskLevel": "external_write",
+            "input": {
+              "end": "2026-07-15T11:00:00+07:00",
+              "start": "2026-07-15T10:00:00+07:00",
+              "title": "Sprint Review"
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    },
+    {
+      "step": 1,
+      "passed": true,
+      "user": {
+        "message": "/reject"
+      },
+      "agent": {
+        "message": "Đã hủy thao tác. Tôi chưa thực hiện tool nào.",
+        "status": "blocked",
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    }
+  ],
+  "passed": true
+}
