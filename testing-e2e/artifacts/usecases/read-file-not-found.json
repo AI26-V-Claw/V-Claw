@@ -1,0 +1,45 @@
+{
+  "runId": "uc_20260629T113428Z_45a494d7",
+  "usecase": "read-file-not-found",
+  "sessionId": "read-file-not-found_uc_20260629T113428Z_45a494d7",
+  "startedAt": "2026-06-29T11:34:28.589169Z",
+  "finishedAt": "2026-06-29T11:34:35.974241Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "Đọc giúp mình file `khong_ton_tai.txt`."
+      },
+      "agent": {
+        "message": "not found: khong_ton_tai.txt",
+        "status": "failed",
+        "tools": [
+          "filesystem.fileInfo"
+        ],
+        "toolTrace": [
+          {
+            "phase": "completed",
+            "toolName": "filesystem.fileInfo",
+            "toolCallId": "call_Iyu106wQlJe2rVETCOjpVtnG",
+            "success": false,
+            "data": {
+              "contentForLLM": "Invalid input: not found: khong_ton_tai.txt",
+              "contentForUser": "not found: khong_ton_tai.txt"
+            },
+            "error": {
+              "code": "TOOL_INPUT_INVALID",
+              "message": "not found: khong_ton_tai.txt",
+              "source": "tool",
+              "retryable": false
+            }
+          }
+        ],
+        "trace": {
+          "trace_id": "f51d2d7e3c5b65a3c07287e4602c11c6"
+        }
+      }
+    }
+  ],
+  "passed": true
+}

@@ -1,0 +1,129 @@
+{
+  "runId": "uc_20260629T105539Z_458b0c84",
+  "usecase": "uploaded-file-to-drive",
+  "sessionId": "uploaded-file-to-drive_uc_20260629T105539Z_458b0c84",
+  "startedAt": "2026-06-29T10:55:39.926333Z",
+  "finishedAt": "2026-06-29T10:56:04.984595Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "User sent an attachment.",
+        "attachments": [
+          {
+            "path": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-drive/chair-description.txt",
+            "filename": "chair-description.txt",
+            "mimeType": "text/plain",
+            "source": "testing-e2e/fixtures/read-uploaded-file/chair-description.txt"
+          }
+        ]
+      },
+      "agent": {
+        "message": "Mình đã nhận file đính kèm: chair-description.txt\n\nBạn muốn mình làm gì với file này? Ví dụ:\n- đọc và tóm tắt\n- tạo Google Docs\n- gửi email kèm file\n- tải lên Drive",
+        "status": "completed",
+        "trace": {
+          "model": "gpt-5.4-mini",
+          "reference": {
+            "confidence": 0,
+            "hasReference": false,
+            "needsClarification": false,
+            "referenceId": "",
+            "referenceType": "none",
+            "source": "none"
+          }
+        }
+      }
+    },
+    {
+      "step": 1,
+      "passed": true,
+      "user": {
+        "message": "Upload file này lên Google Drive."
+      },
+      "agent": {
+        "message": "Cần xác nhận trước khi thực hiện.\n\nMình sẽ tạo hoặc tải file lên Google Drive. Xác nhận không?\n\nTrả lời một trong các lệnh:\n- approve\n- reject\n- revise <nội dung muốn chỉnh>",
+        "status": "approval_required",
+        "approvalId": "appr_call_7ZrdgEadIQGavj1NZhs4HuSN",
+        "approvalTool": "drive.uploadFile",
+        "tools": [
+          "drive.uploadFile"
+        ],
+        "toolTrace": [
+          {
+            "phase": "approval_requested",
+            "toolName": "drive.uploadFile",
+            "toolCallId": "call_7ZrdgEadIQGavj1NZhs4HuSN",
+            "approvalId": "appr_call_7ZrdgEadIQGavj1NZhs4HuSN",
+            "riskLevel": "external_write",
+            "input": {
+              "localPath": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-drive/chair-description.txt"
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    },
+    {
+      "step": 2,
+      "passed": true,
+      "user": {
+        "message": "/approve"
+      },
+      "agent": {
+        "message": "Đã tải file chair-description.txt lên Google Drive thành công.",
+        "status": "completed",
+        "artifact": {
+          "kind": "google.drive.file",
+          "label": "chair-description.txt",
+          "uri": "https://drive.google.com/file/d/1RpRUojiheWZYJYLJmK-X96oIA0zaZ7Zn/view?usp=drivesdk",
+          "id": "1RpRUojiheWZYJYLJmK-X96oIA0zaZ7Zn"
+        },
+        "toolTrace": [
+          {
+            "phase": "completed",
+            "toolName": "drive.uploadFile",
+            "toolCallId": "call_7ZrdgEadIQGavj1NZhs4HuSN",
+            "success": true,
+            "data": {
+              "contentForLLM": "{\"File\":{\"ID\":\"1RpRUojiheWZYJYLJmK-X96oIA0zaZ7Zn\",\"Name\":\"chair-description.txt\",\"MimeType\":\"text/plain\",\"Description\":\"\",\"WebViewLink\":\"https://drive.google.com/file/d/1RpRUojiheWZYJYLJmK-X96oIA0zaZ7Zn/view?usp=drivesdk\",\"IconLink\":\"https://drive-thirdparty.googleusercontent.com/16/type/text/plain\",\"Owners\":[\"hainx@vclaw.site\"],\"ModifiedTime\":\"2026-06-29T10:56:00.592Z\",\"Size\":862,\"Parents\":[\"0AJzu2m2g7l13Uk9PVA\"],\"Starred\":false,\"Trashed\":false},\"FileSafety\":{\"claimed_mime\":\"\",\"decision\":\"allow\",\"detected_type\":\"text\",\"extension\":\".txt\",\"filename\":\"chair-description.txt\",\"flags\":[\"type_match\"],\"origin\":\"local_workspace\",\"policy_version\":\"file-safety-policy/1\",\"reason_audit\":\"allowed\",\"reason_user\":\"File passed safety checks.\",\"scanner_version\":\"file-safety-scanner/1\",\"sha256\":\"79d174aa327cd99c181d0f0626b028030df67209363ffd89350398248c39e380\",\"size_bytes\":862,\"source_tool\":\"drive.uploadFile\"}}",
+              "contentForUser": "Đã tải lên file chair-description.txt"
+            },
+            "artifactRef": {
+              "kind": "google.drive.file",
+              "label": "chair-description.txt",
+              "uri": "https://drive.google.com/file/d/1RpRUojiheWZYJYLJmK-X96oIA0zaZ7Zn/view?usp=drivesdk",
+              "id": "1RpRUojiheWZYJYLJmK-X96oIA0zaZ7Zn"
+            },
+            "metadata": {
+              "file_safety": {
+                "claimed_mime": "",
+                "decision": "allow",
+                "detected_type": "text",
+                "extension": ".txt",
+                "filename": "chair-description.txt",
+                "flags": [
+                  "type_match"
+                ],
+                "origin": "local_workspace",
+                "policy_version": "file-safety-policy/1",
+                "reason_audit": "allowed",
+                "reason_user": "File passed safety checks.",
+                "scanner_version": "file-safety-scanner/1",
+                "sha256": "79d174aa327cd99c181d0f0626b028030df67209363ffd89350398248c39e380",
+                "size_bytes": 862,
+                "source_tool": "drive.uploadFile"
+              }
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    }
+  ],
+  "passed": true
+}

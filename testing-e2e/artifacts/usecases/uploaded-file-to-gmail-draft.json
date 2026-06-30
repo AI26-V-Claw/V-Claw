@@ -1,0 +1,129 @@
+{
+  "runId": "uc_20260629T113649Z_3e2f2670",
+  "usecase": "uploaded-file-to-gmail-draft",
+  "sessionId": "uploaded-file-to-gmail-draft_uc_20260629T113649Z_3e2f2670",
+  "startedAt": "2026-06-29T11:36:49.662326Z",
+  "finishedAt": "2026-06-29T11:37:14.046221Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "User sent an attachment.",
+        "attachments": [
+          {
+            "path": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-gmail-draft/chair-description.txt",
+            "filename": "chair-description.txt",
+            "mimeType": "text/plain",
+            "source": "testing-e2e/fixtures/read-uploaded-file/chair-description.txt"
+          }
+        ]
+      },
+      "agent": {
+        "message": "Mình đã nhận file đính kèm: chair-description.txt.\n\nBạn muốn mình làm gì với file này?\n- Gửi email kèm file\n- Tải lên Drive\n- Tạo Google Docs từ nội dung file\n- Đọc/tóm tắt nội dung file",
+        "status": "completed",
+        "trace": {
+          "model": "gpt-5.4-mini",
+          "reference": {
+            "confidence": 0,
+            "hasReference": false,
+            "needsClarification": false,
+            "referenceId": "",
+            "referenceType": "none",
+            "source": "none"
+          }
+        }
+      }
+    },
+    {
+      "step": 1,
+      "passed": true,
+      "user": {
+        "message": "Soạn draft Gmail gửi file này cho baolnc@vclaw.site, tiêu đề 'Chair description', nội dung nói đây là file mô tả cái ghế."
+      },
+      "agent": {
+        "message": "Cần xác nhận trước khi thực hiện.\n\nMình sẽ tạo hoặc sửa Gmail draft. Xác nhận không?\n\nTiêu đề: Chair description\nNgười nhận: baolnc@vclaw.site\nNội dung: Chào anh/chị,\n\nĐây là file mô tả cái ghế.\n\nTrân trọng,\nĐính kèm: /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-gmail-draft/chair-description.txt\n\nTrả lời một trong các lệnh:\n- approve\n- reject\n- revise <nội dung muốn chỉnh>",
+        "status": "approval_required",
+        "approvalId": "appr_call_wrjdZBTO8LPCmOO15S6QRY75",
+        "approvalTool": "gmail.createDraft",
+        "tools": [
+          "gmail.createDraft"
+        ],
+        "toolTrace": [
+          {
+            "phase": "approval_requested",
+            "toolName": "gmail.createDraft",
+            "toolCallId": "call_wrjdZBTO8LPCmOO15S6QRY75",
+            "approvalId": "appr_call_wrjdZBTO8LPCmOO15S6QRY75",
+            "riskLevel": "external_write",
+            "input": {
+              "attachments": [
+                "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-gmail-draft/chair-description.txt"
+              ],
+              "subject": "Chair description",
+              "textBody": "Chào anh/chị,\n\nĐây là file mô tả cái ghế.\n\nTrân trọng,",
+              "to": [
+                "baolnc@vclaw.site"
+              ]
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    },
+    {
+      "step": 2,
+      "passed": false,
+      "failureReason": "expected approval_required status, got 'completed'",
+      "user": {
+        "message": "/approve"
+      },
+      "agent": {
+        "message": "Mình đã soạn xong draft Gmail gửi tới baolnc@vclaw.site với tiêu đề “Chair description” và nội dung nói đây là file mô tả cái ghế.",
+        "status": "completed",
+        "toolTrace": [
+          {
+            "phase": "completed",
+            "toolName": "gmail.createDraft",
+            "toolCallId": "call_wrjdZBTO8LPCmOO15S6QRY75",
+            "success": true,
+            "data": {
+              "contentForLLM": "{\"Draft\":{\"ID\":\"r2595943216460866202\",\"MessageID\":\"19f132b410f8c2f5\",\"ThreadID\":\"19f132b410f8c2f5\"},\"file_safety\":[{\"claimed_mime\":\"\",\"decision\":\"allow\",\"detected_type\":\"text\",\"extension\":\".txt\",\"filename\":\"chair-description.txt\",\"flags\":[\"type_match\"],\"origin\":\"local_workspace\",\"policy_version\":\"file-safety-policy/1\",\"reason_audit\":\"allowed\",\"reason_user\":\"File passed safety checks.\",\"scanner_version\":\"file-safety-scanner/1\",\"sha256\":\"79d174aa327cd99c181d0f0626b028030df67209363ffd89350398248c39e380\",\"size_bytes\":862,\"source_tool\":\"gmail.draftAttachment\"}]}",
+              "contentForUser": "Đã tạo bản nháp email"
+            },
+            "metadata": {
+              "file_safety": [
+                {
+                  "claimed_mime": "",
+                  "decision": "allow",
+                  "detected_type": "text",
+                  "extension": ".txt",
+                  "filename": "chair-description.txt",
+                  "flags": [
+                    "type_match"
+                  ],
+                  "origin": "local_workspace",
+                  "policy_version": "file-safety-policy/1",
+                  "reason_audit": "allowed",
+                  "reason_user": "File passed safety checks.",
+                  "scanner_version": "file-safety-scanner/1",
+                  "sha256": "79d174aa327cd99c181d0f0626b028030df67209363ffd89350398248c39e380",
+                  "size_bytes": 862,
+                  "source_tool": "gmail.draftAttachment"
+                }
+              ]
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    }
+  ],
+  "passed": false,
+  "failureReason": "step failed: 2",
+  "failedStep": "2"
+}
