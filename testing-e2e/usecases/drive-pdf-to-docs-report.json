@@ -9,9 +9,9 @@
       "requires_approval": true,
       "expected_tools": [
         "drive.listFiles",
-        "drive.downloadFile"
+        "drive.saveFile"
       ],
-      "expected_approval_tool": "drive.downloadFile",
+      "expected_approval_tool": "drive.saveFile",
       "response_contains": []
     }
   },

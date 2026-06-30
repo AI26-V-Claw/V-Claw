@@ -340,10 +340,20 @@ def summarize_run(
 ) -> dict[str, Any]:
     response = run.get("response")
     tool_trace = tool_trace_from_response(response)
+    status = response_status(response)
+    agent_text = user_text_from_response(response)
+    if not agent_text:
+        stderr = str(run.get("stderr") or "").strip()
+        stdout = str(run.get("stdout") or "").strip()
+        fallback_text = stderr or stdout
+        if fallback_text:
+            agent_text = fallback_text[-2000:]
+    if not status and run.get("exitCode") not in (0, None):
+        status = "failed"
     summary: dict[str, Any] = {
         "user": user_message,
-        "status": response_status(response),
-        "agent": user_text_from_response(response),
+        "status": status,
+        "agent": agent_text,
         "durationMs": run.get("durationMs"),
         "exitCode": run.get("exitCode"),
     }
@@ -622,6 +632,26 @@ def prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any]
     return prompt.rstrip() + "\n\n" + "\n".join(lines)
 
 
+def attachment_prompt_variables(attachments: list[dict[str, Any]]) -> dict[str, str]:
+    variables: dict[str, str] = {
+        "ATTACHMENT_COUNT": str(len(attachments)),
+    }
+    for index, attachment in enumerate(attachments, start=1):
+        path = str(attachment.get("path") or "").strip()
+        filename = str(attachment.get("filename") or "").strip()
+        source = str(attachment.get("source") or "").strip()
+        if path:
+            variables[f"ATTACHMENT_{index}_PATH"] = path
+            variables["LAST_ATTACHMENT_PATH"] = path
+        if filename:
+            variables[f"ATTACHMENT_{index}_FILENAME"] = filename
+            variables["LAST_ATTACHMENT_FILENAME"] = filename
+        if source:
+            variables[f"ATTACHMENT_{index}_SOURCE"] = source
+            variables["LAST_ATTACHMENT_SOURCE"] = source
+    return variables
+
+
 def str_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -629,6 +659,19 @@ def str_list(value: Any) -> list[str]:
         return [str(item).strip() for item in value if str(item).strip()]
     text = str(value).strip()
     return [text] if text else []
+
+
+def int_list(value: Any) -> list[int]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    result: list[int] = []
+    for item in values:
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
 def agent_expectations_for_step(step: Any) -> dict[str, Any]:
@@ -649,7 +692,7 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
     summary = final_run.get("summary")
     if not isinstance(summary, dict):
         summary = {}
-    status = response_status(response)
+    status = response_status(response) or str(summary.get("status") or "").strip()
     supported = {
         "expectation",
         "requires_approval",
@@ -699,12 +742,25 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
 
 
 def step_passed(step: dict[str, Any], final_run: dict[str, Any]) -> tuple[bool, str]:
+    allowed_exit_codes = int_list(step.get("allowed_exit_codes"))
     if final_run.get("timedOut"):
         return False, "agent command timed out"
-    if final_run.get("parseError"):
+    if final_run.get("parseError") and not allowed_exit_codes:
         return False, str(final_run["parseError"])
-    if final_run.get("exitCode") not in (0, None):
-        return False, f"agent command exited with {final_run.get('exitCode')}"
+    if final_run.get("parseError") and allowed_exit_codes:
+        stderr = str(final_run.get("stderr") or "").strip()
+        stdout = str(final_run.get("stdout") or "").strip()
+        if not stderr and not stdout:
+            return False, str(final_run["parseError"])
+    exit_code = final_run.get("exitCode")
+    if allowed_exit_codes:
+        if exit_code is None:
+            if 0 not in allowed_exit_codes:
+                return False, f"agent command exited with {exit_code}, expected one of {allowed_exit_codes!r}"
+        elif exit_code not in allowed_exit_codes:
+            return False, f"agent command exited with {exit_code}, expected one of {allowed_exit_codes!r}"
+    elif exit_code not in (0, None):
+        return False, f"agent command exited with {exit_code}"
 
     expected = step.get("expectStatusIn")
     if isinstance(expected, list) and expected:
@@ -758,10 +814,12 @@ def run_step(
 ) -> dict[str, Any]:
     step = normalize_step(step, variables)
 
-    user_prompt = expand_vars(str(step.get("prompt") or ""), variables).strip()
+    attachments = prepare_step_attachments(step, variables, usecase_path, attachment_used_names)
+    prompt_variables = dict(variables)
+    prompt_variables.update(attachment_prompt_variables(attachments))
+    user_prompt = expand_vars(str(step.get("prompt") or ""), prompt_variables).strip()
     if not user_prompt:
         raise ValueError(f"step {step.get('id')!r} has empty prompt")
-    attachments = prepare_step_attachments(step, variables, usecase_path, attachment_used_names)
     prompt = prompt_with_attachment_context(user_prompt, attachments)
 
     result: dict[str, Any] = {
@@ -770,6 +828,8 @@ def run_step(
         "prompt": user_prompt,
         "messages": [],
     }
+    if attachments:
+        result["attachmentVariables"] = attachment_prompt_variables(attachments)
     if attachments:
         result["attachments"] = attachments
         result["agentPrompt"] = prompt
@@ -1031,6 +1091,10 @@ def run_one_usecase(args: argparse.Namespace, usecase_path: Path) -> tuple[int, 
                 variables.pop("LAST_APPROVAL_ID", None)
                 variables.pop("LAST_APPROVAL_TOOL_CALL_ID", None)
                 variables.pop("LAST_APPROVAL_TOOL_NAME", None)
+            attachment_variables = step_result.get("attachmentVariables")
+            if isinstance(attachment_variables, dict):
+                for key, value in attachment_variables.items():
+                    variables[str(key)] = str(value)
             write_json(artifact_path, report)
             if not step_result.get("passed"):
                 report["finishedAt"] = utc_now()

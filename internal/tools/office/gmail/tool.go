@@ -75,7 +75,7 @@ type ToolRegistryEntry struct {
 }
 
 var RegistryEntries = []ToolRegistryEntry{
-	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria. after/before must be date-only YYYY-MM-DD strings (not RFC3339). To list sent mail to a recipient, use query \"in:sent to:<email>\" with labelIds=[\"SENT\"]. Returns message summaries only; call gmail.getEmail to inspect attachments.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
+	{Name: ToolNameListEmails, Owner: "integration", Description: "List emails by search criteria. after/before must be date-only YYYY-MM-DD strings (not RFC3339). For general recent-email or \"has anyone mentioned X\" requests, search the received/all mailbox with topic keywords and do not add in:sent/from:<user>/to:<user> unless the user explicitly asks for sent mail or names a sender/recipient. To list sent mail to a recipient, use query \"in:sent to:<email>\" with labelIds=[\"SENT\"]. Returns message summaries only; call gmail.getEmail to inspect attachments.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetEmail, Owner: "integration", Description: "Read one email in detail, including attachment metadata and message content. This is a sensitive read and requires approval.", DefaultRiskLevel: "sensitive_read", RequiresApproval: true},
 	{Name: ToolNameListLabels, Owner: "integration", Description: "List Gmail labels.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
 	{Name: ToolNameGetProfile, Owner: "integration", Description: "Read the Gmail account profile.", DefaultRiskLevel: "safe_read", RequiresApproval: false},
@@ -1397,7 +1397,7 @@ func (t GmailTool) Name() string { return t.name }
 func (t GmailTool) Description() string {
 	switch t.name {
 	case ToolNameListEmails:
-		return "List Gmail messages by search criteria. This returns message summaries only and does not include attachment information; call gmail.getEmail to inspect attachments."
+		return "List Gmail messages by search criteria. For general recent-email or \"has anyone mentioned X\" requests, search the received/all mailbox with topic keywords and do not add in:sent/from:<user>/to:<user> unless the user explicitly asks for sent mail or names a sender/recipient. This returns message summaries only and does not include attachment information; call gmail.getEmail to inspect attachments."
 	case ToolNameGetEmail:
 		return "Read one Gmail message in detail, including attachment metadata and message content. This is a sensitive read and requires approval."
 	case ToolNameListLabels:

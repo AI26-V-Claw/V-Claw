@@ -1,0 +1,17 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Email báo cáo lịch tuần mà bạn vừa gửi trước đó đã gửi cho ai?"
+    },
+    "agent": {
+      "expectation": "Agent dùng lịch sử phiên đã seed để trả lời người nhận email báo cáo lịch tuần mà không gọi lại Calendar hay Gmail.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "baolnc@vclaw.site"
+      ]
+    }
+  }
+]

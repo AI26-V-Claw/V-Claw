@@ -2,18 +2,16 @@
   {
     "step": 0,
     "user": {
-      "message": "Đọc email '[Sprint 2] Wrap-up Report & Chuẩn bị Demo Day' từ baolnc@vclaw.site ngày 2026-06-19, tìm file Docs 'Báo cáo tổng hợp Sprint' trên Drive và cập nhật phần 'Cập nhật mới nhất' với nội dung từ email đó."
+      "message": "Đọc email '[Sprint 2] Wrap-up Report & Chuẩn bị Demo Day' từ baolnc@vclaw.site ngày 2026-06-19, rồi thêm mục 'Cập nhật mới nhất' vào cuối Google Docs này bằng nội dung tóm tắt từ email: https://docs.google.com/document/d/1T8dRIIp3-nTxy-cfGSrGVvHN0-rHmQ9tf67IS1il_Cc/edit?usp=drivesdk"
     },
     "agent": {
-      "expectation": "Agent đọc email và tìm Docs trên Drive. Không cần approval.",
-      "requires_approval": false,
+      "expectation": "Agent đọc đúng tài liệu Google Docs đích trước khi tiếp tục lấy nội dung email để cập nhật.",
+      "requires_approval": true,
       "expected_tools": [
         "gmail.listEmails",
-        "gmail.getEmail",
-        "drive.listFiles",
         "docs.getDocument"
       ],
-      "expected_approval_tool": null,
+      "expected_approval_tool": "docs.getDocument",
       "response_contains": []
     }
   },
@@ -23,12 +21,12 @@
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent xin xác nhận cập nhật nội dung Docs.",
+      "expectation": "Sau khi đã đọc Docs đích, agent xin xác nhận đọc nội dung email để lấy phần tóm tắt cần chèn.",
       "requires_approval": true,
       "expected_tools": [
-        "docs.replaceText"
+        "gmail.getEmail"
       ],
-      "expected_approval_tool": "docs.replaceText",
+      "expected_approval_tool": "gmail.getEmail",
       "response_contains": []
     }
   },
@@ -38,13 +36,24 @@
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent cập nhật thành công, báo cáo đã cập nhật.",
+      "expectation": "Sau khi đã đọc email, agent xin xác nhận chèn mục Cập nhật mới nhất vào Google Docs.",
+      "requires_approval": true,
+      "expected_tools": [
+        "docs.appendText"
+      ],
+      "expected_approval_tool": "docs.appendText",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent xác nhận đã cập nhật Google Docs từ nội dung email.",
       "requires_approval": false,
-      "expected_tools": [],
-      "expected_approval_tool": null,
-      "response_contains": [
-        "Báo cáo tổng hợp Sprint"
-      ]
+      "response_contains": []
     }
   }
 ]

@@ -678,9 +678,9 @@ func TestRuntimeRemovesStaleAttendeesFromActiveFollowUpApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:     provider,
-		Registry:     registry,
-		SessionStore: store,
+		Provider:                         provider,
+		Registry:                         registry,
+		SessionStore:                     store,
 		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
@@ -755,10 +755,10 @@ func TestRuntimeClarificationAnswerUsesMergedRequestForCalendarApproval(t *testi
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider:     provider,
-		Registry:     registry,
-		SessionStore: store,
-		Now:          func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider:                         provider,
+		Registry:                         registry,
+		SessionStore:                     store,
+		Now:                              func() time.Time { return runtimeTestMessage().Timestamp },
 		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
@@ -819,8 +819,8 @@ Xin vui lòng xác nhận để tôi tiến hành tạo sự kiện này.`,
 		t.Fatalf("register calendar tool: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
+		Provider:                         provider,
+		Registry:                         registry,
 		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
@@ -1092,9 +1092,9 @@ func TestRuntimeResolvesNamedChatSpaceBeforeApproval(t *testing.T) {
 		t.Fatalf("register chat send: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider:                         provider,
+		Registry:                         registry,
+		Now:                              func() time.Time { return runtimeTestMessage().Timestamp },
 		DisableReadBeforeWriteValidation: true,
 	})
 	message := runtimeTestMessage()
@@ -1142,9 +1142,9 @@ func TestRuntimeDownloadAttachmentsApprovalWithRelativeOutputDir(t *testing.T) {
 		t.Fatalf("register gmail download: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider:                         provider,
+		Registry:                         registry,
+		Now:                              func() time.Time { return runtimeTestMessage().Timestamp },
 		DisableReadBeforeWriteValidation: true,
 	})
 
@@ -1185,9 +1185,9 @@ func TestRuntimeDownloadAttachmentsApprovalWithoutOutputDir(t *testing.T) {
 		t.Fatalf("register gmail download: %v", err)
 	}
 	runtime := NewRuntime(RuntimeConfig{
-		Provider: provider,
-		Registry: registry,
-		Now:      func() time.Time { return runtimeTestMessage().Timestamp },
+		Provider:                         provider,
+		Registry:                         registry,
+		Now:                              func() time.Time { return runtimeTestMessage().Timestamp },
 		DisableReadBeforeWriteValidation: true,
 	})
 
@@ -1239,11 +1239,20 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	if !strings.Contains(prompt, "Tệp đính kèm: Có") {
 		t.Fatalf("expected Gmail attachment guidance in prompt, got: %s", prompt)
 	}
+	if !strings.Contains(prompt, "For plain-text CSV/TSV attachments, you MUST call filesystem.readFile before proposing any Google Sheets write tool") {
+		t.Fatalf("expected CSV attachment guidance in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Do NOT use sandbox.runPython for plain-text CSV/TSV imports unless filesystem.readFile is insufficient") {
+		t.Fatalf("expected CSV sandbox avoidance guidance in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "If the user says append/add rows to Google Sheets, prefer sheets.appendValues") {
+		t.Fatalf("expected sheets append guidance in prompt, got: %s", prompt)
+	}
 }
 
 func TestGmailToolDescriptionsCarryDateAndAttachmentRules(t *testing.T) {
 	want := map[string][]string{
-		gmtool.ToolNameListEmails:  {"date-only YYYY-MM-DD", "in:sent", "SENT"},
+		gmtool.ToolNameListEmails:  {"date-only YYYY-MM-DD", "has anyone mentioned X", "do not add in:sent", "in:sent", "SENT"},
 		gmtool.ToolNameListThreads: {"date-only YYYY-MM-DD"},
 		gmtool.ToolNameCreateDraft: {"driveAttachments", "Drive file ID"},
 		gmtool.ToolNameSendDraft:   {"draftId", "createDraft alone does not send"},

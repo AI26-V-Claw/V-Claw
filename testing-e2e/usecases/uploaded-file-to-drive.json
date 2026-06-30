@@ -20,13 +20,12 @@
   {
     "step": 1,
     "user": {
-      "message": "Upload file này lên Google Drive trong folder 'System Reports'."
+      "message": "Upload file này lên Google Drive."
     },
     "agent": {
-      "expectation": "Agent tìm folder đích và xin xác nhận upload file user vừa gửi lên Drive.",
+      "expectation": "Agent xin xác nhận upload file user vừa gửi lên Drive.",
       "requires_approval": true,
       "expected_tools": [
-        "drive.listFiles",
         "drive.uploadFile"
       ],
       "expected_approval_tool": "drive.uploadFile",
