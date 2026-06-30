@@ -18,20 +18,20 @@ Before testing Telegram with Google Workspace tools:
 3. Run Google OAuth once:
 
 ```powershell
-go run ./cmd/vclaw google auth
+vclaw google auth
 ```
 
 4. Test the same agent flow from CLI before testing a bot:
 
 ```powershell
-go run ./cmd/vclaw agent -google-tools required -session gmail-cli-test -prompt "liệt kê 10 email gần đây"
-go run ./cmd/vclaw agent -google-tools required -session calendar-cli-test -prompt "hôm nay tôi có lịch gì"
+vclaw agent -google-tools required -session gmail-cli-test -prompt "liệt kê 10 email gần đây"
+vclaw agent -google-tools required -session calendar-cli-test -prompt "hôm nay tôi có lịch gì"
 ```
 
 Use `--google-tools required` when startup should fail if Google OAuth is not ready. Use `--google-tools auto` during local development when Google tools should be registered only if credentials and token files exist.
 
 
-Session memory is kept in-process (no external server required). The transcript and pending clarification state are keyed by `sessionId`, so follow-ups like `11am`, `17h00`, or a natural answer to a previous clarification are interpreted in the same chat session. Sessions are lost on process restart, which is acceptable for a personal local assistant. File-based persistence is planned for Sprint 3.
+Conversation state is keyed by `sessionId`, so follow-ups like `11am`, `17h00`, or a natural answer to a previous clarification are interpreted in the same chat session. Telegram keeps the per-chat session index under `data/telegram_sessions/`; runtime transcript/memory state uses the configured local data directory. No external channel server is required.
 
 ## Telegram Setup
 
@@ -72,13 +72,13 @@ VCLAW_TELEGRAM_ALLOWED_USER_IDS=
 ### Start Telegram Bot
 
 ```powershell
-go run ./cmd/vclaw telegram run --google-tools auto
+vclaw telegram run --google-tools auto
 ```
 
 Use strict Google startup checks:
 
 ```powershell
-go run ./cmd/vclaw telegram run --google-tools required
+vclaw telegram run --google-tools required
 ```
 
 ### Test In Telegram
@@ -116,7 +116,7 @@ Send `/policy` in the same chat to open the policy menu.
 Telegram:
 
 ```powershell
-go run ./cmd/vclaw telegram run --google-tools auto
+vclaw telegram run --google-tools auto
 ```
 
 ## HITL Approval Commands
