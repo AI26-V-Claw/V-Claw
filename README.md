@@ -36,6 +36,11 @@ Additional setup guides:
 
 - [Google Workspace Setup](configs/google/README.md) - Google Cloud OAuth, credentials, auth, and Google API smoke tests.
 - [Telegram Channel Setup](internal/channels/README.md) - Telegram bot setup, HITL approval, and channel runtime commands.
+- [Pre-release Guide](docs/pre-release-guide.md) - simple release/demo prep for non-technical teammates.
+- [Release Readiness](docs/release-readiness.md) - which features are ready, partial, or not ready yet.
+- [Release Checklist](docs/release-checklist.md) - practical go/no-go checklist before release.
+- [Demo Checklist](docs/demo-checklist.md) - easy demo script and fallback plan.
+- [Safety Guide](docs/safety-guide.md) - plain-language safety notes for users and presenters.
 
 When documents and code differ, treat `docs/03-contracts.md` and `ACTIVE_MODULES.md` as the intended design baseline for new work, then update code or docs explicitly as part of the task.
 

@@ -13,6 +13,11 @@ This directory contains the shared V-Claw documentation used by the team and by 
 - `testing-e2e/`: Telegram-first manual E2E testing plan, feature discovery, demo stories, and readiness checklist.
 - `TEST_MATRIX.md`: current V-Claw behavior-to-proof matrix.
 - `runbook.md`: local operation and troubleshooting notes.
+- `pre-release-guide.md`: simple start-here guide for release/demo prep.
+- `release-readiness.md`: plain-language readiness view by feature.
+- `release-checklist.md`: go/no-go checklist before release or demo.
+- `demo-checklist.md`: simple demo flow and fallback checklist.
+- `safety-guide.md`: end-user-friendly safety notes and warnings.
 - `../ACTIVE_MODULES.md`: current implementation scope, ownership, and frozen areas.
 - `../PROJECT_STRUCTURE.md`: repository layout and module boundaries.
 

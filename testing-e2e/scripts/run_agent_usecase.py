@@ -697,7 +697,9 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
         "expectation",
         "requires_approval",
         "expected_tools",
+        "expected_any_tools",
         "expected_approval_tool",
+        "expected_approval_tool_any_of",
         "expected_status",
         "response_contains",
     }
@@ -724,12 +726,24 @@ def check_agent_expectations(step: dict[str, Any], final_run: dict[str, Any]) ->
         if missing_tools:
             return False, f"missing expected tools {missing_tools!r}, got {observed_tools!r}"
 
+    if "expected_any_tools" in agent:
+        expected_any_tools = str_list(agent.get("expected_any_tools"))
+        observed_tools = str_list(summary.get("tools"))
+        if expected_any_tools and not any(tool in observed_tools for tool in expected_any_tools):
+            return False, f"expected at least one of tools {expected_any_tools!r}, got {observed_tools!r}"
+
     if "expected_approval_tool" in agent:
         expected_approval_tool = agent.get("expected_approval_tool")
         expected_approval_tool = "" if expected_approval_tool is None else str(expected_approval_tool).strip()
         observed_approval_tool = str(summary.get("approvalTool") or "").strip()
         if observed_approval_tool != expected_approval_tool:
             return False, f"expected approvalTool {expected_approval_tool!r}, got {observed_approval_tool!r}"
+
+    if "expected_approval_tool_any_of" in agent:
+        expected_approval_tools = str_list(agent.get("expected_approval_tool_any_of"))
+        observed_approval_tool = str(summary.get("approvalTool") or "").strip()
+        if expected_approval_tools and observed_approval_tool not in expected_approval_tools:
+            return False, f"expected approvalTool to be one of {expected_approval_tools!r}, got {observed_approval_tool!r}"
 
     response_contains = str_list(agent.get("response_contains"))
     if response_contains:

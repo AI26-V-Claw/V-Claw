@@ -1248,6 +1248,12 @@ func TestRuntimeSystemPromptIncludesCurrentTimeAndCalendarRangeRules(t *testing.
 	if !strings.Contains(prompt, "If the user says append/add rows to Google Sheets, prefer sheets.appendValues") {
 		t.Fatalf("expected sheets append guidance in prompt, got: %s", prompt)
 	}
+	if !strings.Contains(prompt, "Approval matrix:") || !strings.Contains(prompt, "finish the no-approval reads first") {
+		t.Fatalf("expected approval matrix guidance in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "prefer drive.exportFile") {
+		t.Fatalf("expected Drive export vs download guidance in prompt, got: %s", prompt)
+	}
 }
 
 func TestGmailToolDescriptionsCarryDateAndAttachmentRules(t *testing.T) {

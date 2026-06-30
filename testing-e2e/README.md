@@ -107,13 +107,15 @@ Runner chấp nhận 2 dạng:
     "user": {
       "message": "..."
     },
-    "agent": {
-      "expectation": "...",
-      "requires_approval": false,
-      "expected_tools": [],
-      "expected_approval_tool": null,
-      "response_contains": []
-    }
+      "agent": {
+        "expectation": "...",
+        "requires_approval": false,
+        "expected_tools": [],
+        "expected_any_tools": [],
+        "expected_approval_tool": null,
+        "expected_approval_tool_any_of": [],
+        "response_contains": []
+      }
   }
 ]
 ```
@@ -140,7 +142,9 @@ Runner chấp nhận 2 dạng:
         "expectation": "...",
         "requires_approval": true,
         "expected_tools": ["calendar.createEvent"],
+        "expected_any_tools": [],
         "expected_approval_tool": "calendar.createEvent",
+        "expected_approval_tool_any_of": [],
         "response_contains": []
       }
     }
@@ -172,7 +176,9 @@ Các field top-level runner hiện dùng hoặc cho phép mang metadata:
 - `agent.expectation`: mô tả ngắn kỳ vọng nghiệp vụ ở step.
 - `agent.requires_approval`: step này có phải dừng ở approval không.
 - `agent.expected_tools`: các tool phải xuất hiện trong trace.
+- `agent.expected_any_tools`: ít nhất một tool trong danh sách phải xuất hiện trong trace.
 - `agent.expected_approval_tool`: tool đang chờ approve/reject ở step.
+- `agent.expected_approval_tool_any_of`: approval tool có thể là một trong nhiều lựa chọn hợp lệ.
 - `agent.expected_status`: ép status cụ thể như `need_clarification` hoặc `failed`.
 - `agent.response_contains`: chuỗi phải có trong câu trả lời user-facing hoặc fallback error text.
 
