@@ -1,3 +1,5 @@
+<!-- Historical demo note: this file records Sprint 2 manual/demo scenarios. Prefer the top-level README, docs/README.md, docs/runbook.md, and SMOKE_TEST_GUIDE.md for current install/start commands. -->
+
 # Demo: Short-term & Long-term Memory — Sprint 2 (Quang)
 
 Kịch bản này kiểm chứng hai tính năng memory đã triển khai trong Sprint 2:
@@ -11,7 +13,7 @@ Tất cả bước đều chạy tay trên Telegram bot thực tế. Không cầ
 
 ## Prerequisites
 
-- Bot đang chạy: `go run ./cmd/vclaw telegram run --google-tools auto`
+- Bot đang chạy: `vclaw telegram run --google-tools auto`
 - Google OAuth đã xong (`configs/google/token.json` tồn tại).
 - PostgreSQL đang chạy và đã apply migration `migrations/003_governance_metadata.sql`.
 - File `cache/memory/USER.md` tồn tại và có ít nhất tên hoặc email của user.
@@ -83,7 +85,7 @@ level=INFO msg="tool execution started" tool_name=gmail.listLabels
 3. Mở file `data/sessions/telegram_chat_{your_id}/memory.json` và kiểm tra field `summary` không rỗng.
 4. Start bot lại:
    ```powershell
-   go run ./cmd/vclaw telegram run --google-tools auto
+   vclaw telegram run --google-tools auto
    ```
 5. Nhắn:
    ```

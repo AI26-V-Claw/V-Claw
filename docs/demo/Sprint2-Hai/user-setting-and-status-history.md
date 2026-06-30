@@ -1,3 +1,5 @@
+<!-- Historical demo note: this file records Sprint 2 manual/demo scenarios. Prefer the top-level README, docs/README.md, docs/runbook.md, and SMOKE_TEST_GUIDE.md for current install/start commands. -->
+
 # Demo Telegram: User Setting, `/status`, `/history` - Sprint 2 (Hai)
 
 Kịch bản này mô tả luồng thao tác ngay trên Telegram cho 3 phần đã có trong Sprint 2:
@@ -19,7 +21,7 @@ Ngoài ba luồng trên, kịch bản này còn kèm một bảng risk matrix ng
 
 ## Prerequisites
 
-- Bot đang chạy: `go run ./cmd/vclaw telegram run --google-tools required`
+- Bot đang chạy: `vclaw telegram run --google-tools required`
 - Google OAuth đã sẵn sàng nếu demo có dùng Google Workspace tools.
 - PostgreSQL đang chạy.
 - User đang dùng đúng Telegram account đã được allow.

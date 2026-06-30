@@ -1,4 +1,4 @@
-﻿# V-Claw Runbook
+# V-Claw Runbook
 
 Practical steps for starting, checking, and debugging V-Claw with monitoring enabled.
 
@@ -41,7 +41,7 @@ psql "$DATABASE_URL" -f migrations/001_init_vclaw_schema.sql
 ### Start Telegram runtime
 
 ```bash
-go run ./cmd/vclaw telegram run --google-tools auto --web-tools auto
+vclaw telegram run --google-tools auto --web-tools auto
 ```
 
 Exact startup behavior:
@@ -65,7 +65,7 @@ Useful flag overrides:
 ### Start CLI runtime for local debugging
 
 ```bash
-go run ./cmd/vclaw agent --prompt "ping" --session dev --channel dev-cli
+vclaw agent --prompt "ping" --session dev --channel dev-cli
 ```
 
 This runs one agent turn. It does not start Telegram or the monitoring HTTP server.
@@ -128,7 +128,7 @@ Behavior:
 Prepare OAuth once with:
 
 ```bash
-go run ./cmd/vclaw google auth --credentials configs/google/credentials.json --token configs/google/token.json
+vclaw google auth --credentials configs/google/credentials.json --token configs/google/token.json
 ```
 
 #### Telegram
@@ -146,7 +146,7 @@ VCLAW_TELEGRAM_ALLOWED_USER_IDS=123456789
 ```
 
 Behavior:
-- required for `go run ./cmd/vclaw telegram run`
+- required for `vclaw telegram run`
 - if missing, Telegram runtime exits immediately with validation error
 - optional for CLI-only usage
 
@@ -188,7 +188,7 @@ Behavior:
 Run:
 
 ```bash
-go run ./cmd/vclaw status
+vclaw status
 ```
 
 Important: this command always tries `GET http://127.0.0.1:${METRICS_PORT:-8080}/health`.
@@ -197,7 +197,7 @@ If monitoring server is not running, it returns unreachable error telling you to
 When status says monitoring server is unreachable:
 1. Start Telegram runtime first.
 2. Confirm `METRICS_PORT` matches runtime environment.
-3. Run `go run ./cmd/vclaw status` again.
+3. Run `vclaw status` again.
 
 ### Health fields
 
@@ -250,20 +250,20 @@ Latest run trace: https://cloud.langfuse.com/project/<project-id>/traces/<trace-
 Start with recent error logs:
 
 ```bash
-go run ./cmd/vclaw logs --level error
+vclaw logs --level error
 ```
 
 Useful filters:
 
 ```bash
-go run ./cmd/vclaw logs --level error --limit 100
-go run ./cmd/vclaw logs --level error --since 15m
-go run ./cmd/vclaw logs --level error --since 2h
-go run ./cmd/vclaw logs --level error --since 7d
-go run ./cmd/vclaw logs --level error --since 2026-06-01
-go run ./cmd/vclaw logs --level error --since 2026-06-01T15:04:05
-go run ./cmd/vclaw logs --level error --since 2026-06-01T15:04:05Z
-go run ./cmd/vclaw logs --level error --tool gmail.createDraft
+vclaw logs --level error --limit 100
+vclaw logs --level error --since 15m
+vclaw logs --level error --since 2h
+vclaw logs --level error --since 7d
+vclaw logs --level error --since 2026-06-01
+vclaw logs --level error --since 2026-06-01T15:04:05
+vclaw logs --level error --since 2026-06-01T15:04:05Z
+vclaw logs --level error --tool gmail.createDraft
 ```
 
 `--since` supports:
@@ -286,8 +286,8 @@ Logs may include fields like:
 Use full output and match `sessionId=` manually:
 
 ```bash
-go run ./cmd/vclaw logs --level error --since 24h
-go run ./cmd/vclaw logs --since 24h --tool gmail.createDraft
+vclaw logs --level error --since 24h
+vclaw logs --since 24h --tool gmail.createDraft
 ```
 
 Then inspect lines containing target `sessionId=<value>`.
@@ -320,12 +320,12 @@ Pending approvals often explain runs that appear stalled.
 Check approval queue with:
 
 ```bash
-go run ./cmd/vclaw approvals --status pending
-go run ./cmd/vclaw approvals --status rejected
-go run ./cmd/vclaw approvals --status revised
-go run ./cmd/vclaw approvals --since 24h
-go run ./cmd/vclaw approvals --tool gmail.createDraft
-go run ./cmd/vclaw approvals --limit 50
+vclaw approvals --status pending
+vclaw approvals --status rejected
+vclaw approvals --status revised
+vclaw approvals --since 24h
+vclaw approvals --tool gmail.createDraft
+vclaw approvals --limit 50
 ```
 
 `vclaw approvals` supports:
@@ -347,7 +347,7 @@ Record fields printed:
 ### Monitoring server unreachable
 
 Symptom:
-- `go run ./cmd/vclaw status` returns unreachable error
+- `vclaw status` returns unreachable error
 - `/health` cannot be reached on `127.0.0.1:${METRICS_PORT:-8080}`
 
 Likely cause:
@@ -356,9 +356,9 @@ Likely cause:
 - port already occupied and monitoring server did not bind correctly
 
 Fix:
-- start runtime with `go run ./cmd/vclaw telegram run ...`
+- start runtime with `vclaw telegram run ...`
 - verify same `METRICS_PORT` in shell used for `status`
-- retry `go run ./cmd/vclaw status`
+- retry `vclaw status`
 
 ### Langfuse trace URL missing from logs or Telegram
 
@@ -396,23 +396,23 @@ Fix:
 docker compose up -d postgres
 
 # Start Telegram runtime + monitoring
-go run ./cmd/vclaw telegram run --google-tools auto --web-tools auto
+vclaw telegram run --google-tools auto --web-tools auto
 
 # Health check
-go run ./cmd/vclaw status
+vclaw status
 curl http://127.0.0.1:${METRICS_PORT:-8080}/health
 
 # Logs
-go run ./cmd/vclaw logs
-go run ./cmd/vclaw logs --level error
-go run ./cmd/vclaw logs --since 15m --level error
-go run ./cmd/vclaw logs --since 2026-06-01 --tool gmail.createDraft
+vclaw logs
+vclaw logs --level error
+vclaw logs --since 15m --level error
+vclaw logs --since 2026-06-01 --tool gmail.createDraft
 
 # Approvals
-go run ./cmd/vclaw approvals
-go run ./cmd/vclaw approvals --status pending
-go run ./cmd/vclaw approvals --status rejected
-go run ./cmd/vclaw approvals --since 24h --tool gmail.createDraft
+vclaw approvals
+vclaw approvals --status pending
+vclaw approvals --status rejected
+vclaw approvals --since 24h --tool gmail.createDraft
 ```
 
 ## 6. User policy config
@@ -484,14 +484,14 @@ Meaning:
 Fix:
 
 ```bash
-go run ./cmd/vclaw google auth
+vclaw google auth
 ```
 
 If scopes changed, remove the old token first:
 
 ```bash
 rm -f configs/google/token.json
-go run ./cmd/vclaw google auth
+vclaw google auth
 ```
 
 Also verify:
@@ -508,7 +508,7 @@ Meaning:
 
 Fix:
 
-- re-run `go run ./cmd/vclaw google auth`
+- re-run `vclaw google auth`
 - if needed, delete `configs/google/token.json` first so consent is re-issued
 - verify the required Google APIs are enabled in the Cloud project
 
@@ -593,4 +593,3 @@ Useful targeted test commands:
 go test ./cmd/vclaw ./internal/monitoring
 go test ./internal/agent ./internal/app
 ```
-

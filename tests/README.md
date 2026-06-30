@@ -1,12 +1,21 @@
 # tests
 
-Future verification assets for V-Claw.
+Cross-package verification assets for V-Claw.
 
-Planned test groups:
+## Current State
 
-- Contract tests for HTTP and WebSocket APIs.
-- Provider tests with mocked Anthropic, OpenAI, OpenAI-compatible, and local model endpoints.
-- Connector tests with mocked Google Workspace APIs.
-- Safety tests for policy, approval, and audit.
-- PostgreSQL-backed local runtime integration tests.
-- End-to-end workflows for office and OS automation.
+Most executable tests live beside Go packages under `cmd/` and `internal/`. This top-level directory currently hosts shared contract tests and is reserved for broader integration/E2E suites.
+
+Implemented today:
+
+- `tests/contracts/`: cross-package contract checks.
+- Package-local unit/integration tests under `internal/**` and `cmd/vclaw`.
+
+Planned as the product matures:
+
+- Safety/HITL scenario tests.
+- Telegram E2E smoke tests.
+- Google Workspace fake-backed integration tests.
+- Release smoke fixtures tied to `docs/TEST_MATRIX.md`.
+
+Use `go test ./...` as the default regression command.
