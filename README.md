@@ -178,6 +178,37 @@ See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for boundary rules.
 ---
 
 ## Development
+- [Google Workspace Setup](configs/google/README.md) - Google Cloud OAuth, credentials, auth, and Google API smoke tests.
+- [Telegram Channel Setup](internal/channels/README.md) - Telegram bot setup, HITL approval, and channel runtime commands.
+- [Pre-release Guide](docs/pre-release-guide.md) - simple release/demo prep for non-technical teammates.
+- [Release Readiness](docs/release-readiness.md) - which features are ready, partial, or not ready yet.
+- [Release Checklist](docs/release-checklist.md) - practical go/no-go checklist before release.
+- [Demo Checklist](docs/demo-checklist.md) - easy demo script and fallback plan.
+- [Safety Guide](docs/safety-guide.md) - plain-language safety notes for users and presenters.
+
+When documents and code differ, treat `docs/03-contracts.md` and `ACTIVE_MODULES.md` as the intended design baseline for new work, then update code or docs explicitly as part of the task.
+
+## Repository layout
+
+See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for the repository layout and module boundaries.
+
+At a high level:
+
+- `cmd/` contains CLI entrypoints.
+- `configs/` contains local configuration examples and provider setup notes.
+- `docs/` contains product, architecture, contract, and scenario documentation.
+- `internal/` contains private Go application packages.
+- `migrations/`, `scripts/`, `skills/`, and `tests/` contain supporting project assets.
+
+## Safety principle
+
+Any action with side effects should pass through one safety/approval boundary before execution. This includes sending email or chat messages, creating or changing calendar events, modifying local files, or running Python/shell commands.
+
+Read-only operations may be allowed directly when policy permits them. Destructive, external-write, local-write, or code-execution actions must be reviewed through the approved HITL flow once that flow is implemented.
+
+## Local setup
+
+Copy the example environment file before running local commands:
 
 ```powershell
 go test ./...

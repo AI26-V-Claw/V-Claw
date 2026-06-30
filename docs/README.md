@@ -4,6 +4,24 @@ This directory contains the shared V-Claw documentation. It mixes product intent
 
 ## Read First
 
+<<<<<<< HEAD
+- `00-project-brief.md`: product problem, safety model, roadmap, and team split.
+- `01-system-design.md`: high-level system diagrams and component relationships.
+- `02-usecase-diagram.md`: user-facing capabilities and risk categories.
+- `03-contracts.md`: intended runtime contracts between channel, agent, safety, and tools.
+- `04-sequences.md`: canonical sequence scenarios for review and E2E planning.
+- `scenarios/05-drive-docs-sheets-hitl.md`: canonical Drive/Docs/Sheets read-before-write + HITL sequence.
+- `testing-e2e/`: Telegram-first manual E2E testing plan, feature discovery, demo stories, and readiness checklist.
+- `TEST_MATRIX.md`: current V-Claw behavior-to-proof matrix.
+- `runbook.md`: local operation and troubleshooting notes.
+- `pre-release-guide.md`: simple start-here guide for release/demo prep.
+- `release-readiness.md`: plain-language readiness view by feature.
+- `release-checklist.md`: go/no-go checklist before release or demo.
+- `demo-checklist.md`: simple demo flow and fallback checklist.
+- `safety-guide.md`: end-user-friendly safety notes and warnings.
+- `../ACTIVE_MODULES.md`: current implementation scope, ownership, and frozen areas.
+- `../PROJECT_STRUCTURE.md`: repository layout and module boundaries.
+=======
 | Order | Document | Use for | Status |
 |---:|---|---|---|
 | 1 | [Project Brief](00-project-brief.md) | Product goal, HITL model, sprint roadmap, team split | Living product baseline |
@@ -12,6 +30,7 @@ This directory contains the shared V-Claw documentation. It mixes product intent
 | 4 | [Canonical Sequences](04-sequences.md) | Request, tool, approval, and sandbox flows | Review/E2E baseline |
 | 5 | [Runbook](runbook.md) | Startup, health, logs, debugging, operations | Operator guide |
 | 6 | [Test Matrix](TEST_MATRIX.md) | Behavior proof, implemented/planned matrix | Release readiness input |
+>>>>>>> d20ae96ecfd80b21043d7780d2d31b3c76885da7
 
 ## Setup Guides
 

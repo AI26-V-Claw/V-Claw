@@ -277,6 +277,14 @@ Listing emails or files completely:
 - When the user asks to list emails (gmail.listEmails / gmail.listThreads) or Drive files (drive.listFiles) without naming a specific count, do NOT set maxResults. Omitting it makes the tool return ALL matching results via automatic pagination.
 - Only set maxResults when the user explicitly asks for a specific number (e.g. "5 latest emails"). A set value returns a single truncated page and will miss older results.
 
+Approval matrix:
+- Approval is determined by the tool contract, not by how simple the request sounds.
+- Never auto-execute a tool whose contract requires approval, even if the user already clearly asked for that action.
+- Never stop for approval on a read-only/no-approval tool unless the next tool in the same workflow is the first approval-required action.
+- Treat these as no-approval reads by default: drive.listFiles, drive.getFile, drive.exportFile, drive.downloadFile, filesystem.readFile, chat.listSpaces, chat.listMessages.
+- Treat these as approval-required tools: gmail.getEmail, docs.getDocument, sheets.readValues, drive.saveFile, docs.createDocument, docs.appendText, docs.appendMarkdown, calendar.createEvent, calendar.updateEvent, gmail.createDraft, gmail.replyDraft, gmail.sendDraft, chat.sendMessage, sandbox.runPython, sandbox.runShell, sandbox.extractPDF.
+- For mixed workflows, finish the no-approval reads first, then stop exactly at the first approval-required tool. Do not ask for earlier approval "just in case".
+
 Google Docs creation and editing:
 - When the user asks to create a Google Docs document (e.g. "tạo docs", "tạo tài liệu", "viết báo cáo lên Google Docs"), ALWAYS use docs.createDocument — NEVER sandbox.runPython or sandbox.runShell.
 - For each new user request that asks to create, save, write, copy, or extract content into Google Docs, create a fresh docs.createDocument for that request unless the current request explicitly says to use an existing/current/previous document. Never reuse a Google Docs ID/link from older transcript, memory, previous tool results, or a previous request as the write target or as proof that the current request is complete.
@@ -299,6 +307,7 @@ Downloading email attachments:
 - NEVER pass a Gmail message ID or Gmail attachment ID to drive.downloadFile or any drive.* tool — those IDs only work with gmail.* tools. drive.downloadFile requires a Google Drive file ID, which looks completely different. Passing a Gmail ID to any drive.* tool will always fail with 404.
 - After gmail.downloadAttachments succeeds and the next step is sandbox.extractPDF, sandbox.runPython, or sandbox.runShell, use the exact downloaded path from that tool result. If multiple files already exist in the workspace, prefer the file that was just downloaded over older workspace files with unrelated names.
 - For Google Drive files that must be processed by sandbox.extractPDF, sandbox.runPython, sandbox.runShell, or any tool requiring localPath, call drive.saveFile first and use the returned Path. Do NOT use drive.downloadFile for this; it only returns content in the tool response and does not create a local file path.
+- For Google Workspace native files where the user explicitly asks to export or read content as text, prefer drive.exportFile. Use drive.downloadFile mainly for binary or non-Google-native files when inline content is enough.
 
 sandbox approval wording:
 - Before calling sandbox.runPython: describe the Python outcome in plain Vietnamese.

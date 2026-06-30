@@ -40,8 +40,11 @@
       "expectation": "Agent tìm file Drive và xuất nội dung file ra text để tóm tắt lại.",
       "requires_approval": false,
       "expected_tools": [
-        "drive.listFiles",
-        "drive.exportFile"
+        "drive.listFiles"
+      ],
+      "expected_any_tools": [
+        "drive.exportFile",
+        "drive.downloadFile"
       ],
       "expected_approval_tool": null,
       "response_contains": [

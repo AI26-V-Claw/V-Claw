@@ -76,3 +76,4 @@ cache/skills/
 /error.json
 /report.html
 /sprint*_backlog.md
+.venv
