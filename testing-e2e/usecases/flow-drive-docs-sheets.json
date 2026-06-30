@@ -1,0 +1,61 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Sử dụng công cụ drive.listFiles để tìm file 'Project Alpha Report' trên Drive (nếu không tìm thấy, hãy tự bịa ra một đoạn nội dung báo cáo giả lập). Sau đó, xin quyền tạo một Google Docs mới tên là 'Alpha Executive Summary' và ghi nội dung đó vào. Tiếp theo, tạo mới một bảng tính Google Sheets tên là 'Project Tracking' và cập nhật trạng thái 'Completed' vào."
+    },
+    "agent": {
+      "expectation": "Agent đọc Drive, chuẩn bị tạo Docs và xin quyền",
+      "requires_approval": true,
+      "expected_tools": [
+        "drive.listFiles",
+        "docs.createDocument"
+      ],
+      "expected_approval_tool": "docs.createDocument",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo Docs, chuẩn bị tạo Sheets và xin quyền",
+      "requires_approval": true,
+      "expected_tools": [
+        "sheets.createSpreadsheet"
+      ],
+      "expected_approval_tool": "sheets.createSpreadsheet",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent chuẩn bị ghi vào Sheets và xin quyền",
+      "requires_approval": true,
+      "expected_tools": [
+        "sheets.updateValues"
+      ],
+      "expected_approval_tool": "sheets.updateValues",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent hoàn thành ghi Sheets và báo cáo",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]

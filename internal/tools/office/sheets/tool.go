@@ -372,7 +372,7 @@ func (t SheetsTool) Description() string {
 	case ToolNameBatchGetValues:
 		return "Read cell values from multiple Google Sheets ranges."
 	case ToolNameCreateSpreadsheet:
-		return "Create a Google Sheets spreadsheet. Requires human approval before execution."
+		return "Create a Google Sheets spreadsheet. Returns a SpreadsheetSummary containing the new spreadsheetId. Use this tool if you need to create a new sheet and use the returned ID in subsequent tools like sheets.appendValues. Do NOT hallucinate IDs. Requires human approval before execution."
 	case ToolNameUpdateValues:
 		return "Overwrite values in a specific Google Sheets range. Prefer sheets.appendValues when the user asks to append/add rows. Requires human approval before execution."
 	case ToolNameBatchUpdateValues:

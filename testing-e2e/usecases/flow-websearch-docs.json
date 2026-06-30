@@ -1,0 +1,31 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Tìm kiếm trên mạng về 'Xu hướng AI 2026'. Tóm tắt các ý chính và ghi vào một file Google Docs mới tên là 'AI Trends 2026'."
+    },
+    "agent": {
+      "expectation": "Agent tìm kiếm web và xin quyền tạo Docs",
+      "requires_approval": true,
+      "expected_tools": [
+        "web.search",
+        "docs.createDocument"
+      ],
+      "expected_approval_tool": "docs.createDocument",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 1,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent tạo file và báo thành công",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": []
+    }
+  }
+]
