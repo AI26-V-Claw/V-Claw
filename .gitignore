@@ -76,3 +76,4 @@ cache/skills/
 /report.html
 /sprint*_backlog.md
 .venv
+release/
