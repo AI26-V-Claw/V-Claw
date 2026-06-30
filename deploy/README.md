@@ -1,10 +1,21 @@
 # deploy
 
-Local deployment and runtime setup assets live here.
+Local deployment and runtime support assets live here.
 
-V-Claw is local-first, but Docker is still useful for reproducible setup, sandboxed command execution, isolated Python runtimes, and optional local services.
+V-Claw is local-first. Deployment assets exist to make local development reproducible, not to imply a hosted production service.
 
-Planned areas:
+## Current Assets
 
-- `docker`: local Docker Compose files, sandbox runtime, and helper containers.
+- `docker-compose.yml` at repo root starts local PostgreSQL.
+- `deploy/docker/` documents Docker-oriented local runtime plans.
+- `internal/sandbox/docker/` contains the sandbox image profile for Python execution.
 
+## Typical Local Services
+
+```powershell
+docker compose up -d postgres
+vclaw doctor
+vclaw start
+```
+
+Keep user data, secrets, Google tokens, and runtime logs local and ignored by git.

@@ -70,3 +70,9 @@ logs/*.csv
 
 __pycache__
 cache/skills/
+
+# Local release/build artifacts
+/dist/
+/error.json
+/report.html
+/sprint*_backlog.md

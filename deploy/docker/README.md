@@ -1,20 +1,22 @@
 # docker
 
-Local Docker setup for V-Claw.
+Local Docker setup notes for V-Claw.
 
-This folder is for assets that make a cloned repo easy to run on a user's machine. It is not intended as a public server or cloud deployment target.
+This folder is for assets that make a cloned repo easy to run on a user's machine. It is not a public server or cloud deployment target.
 
-Planned assets:
+## Implemented Today
 
-- `docker-compose.local.yml`: local V-Claw runtime, PostgreSQL, and optional helper services.
-- `Dockerfile.local`: reproducible local runtime image.
-- `sandbox/`: isolated container profile for shell/Python tool execution.
-- `volumes/`: documented local data mounts for PostgreSQL data, logs, workspace, and cache.
+The repo root `docker-compose.yml` provides local PostgreSQL used by audit, monitoring, approvals, and runtime persistence paths when `DATABASE_URL` is configured.
 
-## Local Runtime Responsibilities
+```powershell
+docker compose up -d postgres
+```
 
-- Run the V-Claw CLI/runtime in a predictable environment when the user chooses Docker.
-- Run PostgreSQL locally as the primary database.
-- Provide isolated execution for risky shell/Python tasks.
-- Keep user data mounted locally.
-- Avoid exposing remote ports unless explicitly configured.
+## Related Docker Assets
+
+- `internal/sandbox/docker/`: Python sandbox image and manual runner examples.
+- `migrations/`: SQL migrations for PostgreSQL.
+
+## Planned / Optional
+
+Future local Docker assets may include a fully containerized V-Claw runtime, helper volumes, and sandbox profiles. Keep these local-first and avoid exposing remote ports unless explicitly configured.

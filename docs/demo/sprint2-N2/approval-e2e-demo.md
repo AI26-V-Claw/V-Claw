@@ -1,4 +1,6 @@
-﻿# Demo: Sprint 2 N2 Production Stress E2E
+<!-- Historical demo note: this file records Sprint 2 manual/demo scenarios. Prefer the top-level README, docs/README.md, docs/runbook.md, and SMOKE_TEST_GUIDE.md for current install/start commands. -->
+
+# Demo: Sprint 2 N2 Production Stress E2E
 
 Bộ E2E N2 đã được viết lại theo hướng ít scenario hơn nhưng sâu hơn. Thay vì nhiều case nhỏ như approve/reject/cancel rời rạc, Sprint 2 hiện tập trung vào 2 stress test lớn mô phỏng agent production: nhiều bước, nhiều tool, nhiều approval, nhiều artifact, nhiều fallback.
 
@@ -151,4 +153,3 @@ Không claim pass nếu:
 - `objects_written` ít hơn minimum của scenario.
 - Object không có `run_id` khi read-back.
 - Cleanup không pass.
-

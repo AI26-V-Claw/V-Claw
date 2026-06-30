@@ -13,6 +13,14 @@ go build -o vclaw.exe ./cmd/vclaw
 
 # Verify app khởi động được
 .\vclaw.exe help
+
+# Release terminal setup flow
+.\dist\vclaw.exe install
+# Open a new terminal after PATH updates.
+vclaw setup
+vclaw doctor
+vclaw google auth
+vclaw start
 ```
 
 ---

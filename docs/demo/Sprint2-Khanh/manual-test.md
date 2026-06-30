@@ -1,3 +1,5 @@
+<!-- Historical demo note: this file records Sprint 2 manual/demo scenarios. Prefer the top-level README, docs/README.md, docs/runbook.md, and SMOKE_TEST_GUIDE.md for current install/start commands. -->
+
 Dưới đây là tài liệu hướng dẫn **Manual Test (Kiểm thử thủ công)** chi tiết giúp bạn xác nhận toàn bộ hệ thống tích hợp Google Workspace (Drive, Docs, Sheets), cơ chế kiểm soát rủi ro HITL (Human-in-the-Loop) và định dạng dữ liệu (ToolResult) hoạt động chuẩn xác theo thiết kế.
 
 ---
@@ -7,7 +9,7 @@ Dưới đây là tài liệu hướng dẫn **Manual Test (Kiểm thử thủ c
 1. **Khởi chạy bot (Telegram):**
    Đảm bảo bạn đã cấu hình đầy đủ token trong file `.env` hoặc truyền tham số khi chạy:
    ```bash
-   go run ./cmd/vclaw telegram run
+   vclaw telegram run
    ```
 2. **Cấu hình Policy (`data/user-policy.json`):**
    Đảm bảo file cấu hình policy của bạn đang thiết lập đúng phân nhóm rủi ro:

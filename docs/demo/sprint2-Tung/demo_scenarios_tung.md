@@ -1,3 +1,5 @@
+<!-- Historical demo note: this file records Sprint 2 manual/demo scenarios. Prefer the top-level README, docs/README.md, docs/runbook.md, and SMOKE_TEST_GUIDE.md for current install/start commands. -->
+
 # Kịch Bản Demo Test Thật — Tùng (self-creation98)
 
 > Ngày: 2026-06-17
@@ -66,7 +68,7 @@ VCLAW_GOOGLE_CREDENTIALS_PATH=configs/google/credentials.json
 VCLAW_GOOGLE_TOKEN_PATH=configs/google/token.json
 
 # Chạy auth nếu chưa có token
-go run ./cmd/vclaw google auth
+vclaw google auth
 ```
 
 ### Cho Web Search test
@@ -91,7 +93,7 @@ ALLOWED_TELEGRAM_USER_ID=...
 
 **1.1. Chạy CLI liệt kê tools:**
 ```bash
-go run ./cmd/vclaw tools list
+vclaw tools list
 ```
 
 **Kỳ vọng**: Hiện danh sách tất cả tools, mỗi tool có:
@@ -102,11 +104,11 @@ go run ./cmd/vclaw tools list
 
 **1.2. Lọc theo group:**
 ```bash
-go run ./cmd/vclaw tools list --group filesystem
-go run ./cmd/vclaw tools list --group google_workspace
-go run ./cmd/vclaw tools list --group web
-go run ./cmd/vclaw tools list --group sandbox
-go run ./cmd/vclaw tools list --group builtin
+vclaw tools list --group filesystem
+vclaw tools list --group google_workspace
+vclaw tools list --group web
+vclaw tools list --group sandbox
+vclaw tools list --group builtin
 ```
 
 ### Checklist
@@ -131,7 +133,7 @@ go run ./cmd/vclaw tools list --group builtin
 
 Khởi động bot:
 ```bash
-go run ./cmd/vclaw telegram run 
+vclaw telegram run
 ```
 
 **2.1. listDir — Liệt kê thư mục**
@@ -225,16 +227,16 @@ Gửi:
 
 **3.1. Liệt kê sự kiện:**
 ```bash
-go run ./cmd/vclaw google drive list-files
+vclaw google drive list
 # Nếu có calendar CLI:
-go run ./cmd/vclaw agent -prompt "Liệt kê lịch của tôi trong tuần này"
+vclaw agent -prompt "Liệt kê lịch của tôi trong tuần này"
 ```
 
 ### Test qua Telegram (full flow)
 
 Khởi động bot:
 ```bash
-go run ./cmd/vclaw telegram run --google-tools auto --web-tools auto
+vclaw telegram run --google-tools auto --web-tools auto
 ```
 
 **3.2. listEvents — Đọc lịch (safe_read)**
@@ -325,7 +327,7 @@ Xóa lịch họp "V-Claw Demo Test" vừa tạo
 ### Test qua Telegram
 
 ```bash
-go run ./cmd/vclaw telegram run --google-tools auto --web-tools auto
+vclaw telegram run --google-tools auto --web-tools auto
 ```
 
 **4.1. web.search — Tìm kiếm web**
@@ -384,7 +386,7 @@ Tắt `TAVILY_API_KEY`, khởi động lại với `--web-tools auto`:
 ### Test qua Telegram
 
 ```bash
-go run ./cmd/vclaw telegram run --google-tools auto --web-tools auto
+vclaw telegram run --google-tools auto --web-tools auto
 ```
 
 **5.1. runShell — Chạy lệnh đơn giản (APPROVAL)**
