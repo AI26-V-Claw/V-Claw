@@ -2,18 +2,16 @@
   {
     "step": 0,
     "user": {
-      "message": "Đọc email '[Sprint 2] Wrap-up Report & Chuẩn bị Demo Day' từ baolnc@vclaw.site ngày 2026-06-19, sau đó tìm file 'Notes - Demo Day Invite' trên Drive và soạn reply đính kèm thông tin từ file đó."
+      "message": "Tìm email '[Sprint 2] Wrap-up Report & Chuẩn bị Demo Day' từ baolnc@vclaw.site ngày 2026-06-19 và đọc nội dung email đó."
     },
     "agent": {
-      "expectation": "Agent đọc email và tìm file trên Drive. Không cần approval cho thao tác đọc.",
-      "requires_approval": false,
+      "expectation": "Agent tìm email rồi xin xác nhận đọc nội dung email.",
+      "requires_approval": true,
       "expected_tools": [
         "gmail.listEmails",
-        "gmail.getEmail",
-        "drive.listFiles",
-        "drive.getFile"
+        "gmail.getEmail"
       ],
-      "expected_approval_tool": null,
+      "expected_approval_tool": "gmail.getEmail",
       "response_contains": []
     }
   },
@@ -23,22 +21,75 @@
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent soạn draft reply có nội dung từ file Notes - Demo Day Invite, xin xác nhận tạo draft.",
-      "requires_approval": true,
-      "expected_tools": [
-        "gmail.createDraft"
-      ],
-      "expected_approval_tool": "gmail.createDraft",
-      "response_contains": []
+      "expectation": "Sau khi được duyệt, agent đọc email và tóm tắt nội dung.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Sprint 2",
+        "Demo Day"
+      ]
     }
   },
   {
     "step": 2,
     "user": {
+      "message": "Tiếp theo, tìm file 'Notes - Demo Day Invite' trên Drive và xuất nội dung file đó ra text cho mình."
+    },
+    "agent": {
+      "expectation": "Agent tìm file Drive và xuất nội dung file ra text để tóm tắt lại.",
+      "requires_approval": false,
+      "expected_tools": [
+        "drive.listFiles"
+      ],
+      "expected_any_tools": [
+        "drive.exportFile",
+        "drive.downloadFile"
+      ],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Demo Day Invite",
+        "Action items"
+      ]
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "Dựa trên email đó và file đó, soạn reply giúp mình, chỉ tạo draft thôi, chưa gửi."
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận tạo draft reply dựa trên cả email và file.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.replyDraft"
+      ],
+      "expected_approval_tool": "gmail.replyDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 4,
+    "user": {
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent tạo draft xong, xin xác nhận gửi email.",
+      "expectation": "Sau khi tạo draft, agent xác nhận đã soạn xong và chờ người dùng yêu cầu gửi.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "bản nháp reply"
+      ]
+    }
+  },
+  {
+    "step": 5,
+    "user": {
+      "message": "Gửi luôn giúp mình."
+    },
+    "agent": {
+      "expectation": "Agent xin xác nhận gửi email từ bản nháp vừa tạo.",
       "requires_approval": true,
       "expected_tools": [
         "gmail.sendDraft"
@@ -48,16 +99,18 @@
     }
   },
   {
-    "step": 3,
+    "step": 6,
     "user": {
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent gửi email thành công, xác nhận với user.",
+      "expectation": "Agent gửi email thành công.",
       "requires_approval": false,
       "expected_tools": [],
       "expected_approval_tool": null,
-      "response_contains": []
+      "response_contains": [
+        "Email đã được chuyển cho Gmail để gửi"
+      ]
     }
   }
 ]

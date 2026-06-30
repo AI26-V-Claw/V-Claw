@@ -647,10 +647,20 @@ func TestRuntimePromptBoundsSandboxPDFExtractionOutput(t *testing.T) {
 		"use that exact path in Python and preserve every subdirectory",
 		"/workspace/data/telegram_attachments/",
 		"Do not reduce a nested file to its basename",
-		"docs.createDocument creates an empty document only",
+		"docs.createDocument creates an empty document when content is omitted",
+		"if content is provided and the tool succeeds",
+		"create a fresh docs.createDocument for that request",
+		"Never reuse a Google Docs ID/link from older transcript",
 		"use sandbox.extractPDF to produce structured Markdown",
+		"document created for the current request",
+		"Do not claim the content was saved to Docs using a Docs link or documentId from a previous request",
+		"call drive.saveFile first and use the returned Path",
+		"Never invent a local path from the Drive filename",
 		"docs.createDocument and docs.appendMarkdown",
 		"Do not call filesystem.readFile first",
+		"check recent emails",
+		"Do not add in:sent, label:sent, from:<user>, or to:<user>",
+		"include that topic keyword/phrase in gmail.listEmails.query",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("runtime prompt missing sandbox output guidance %q", want)

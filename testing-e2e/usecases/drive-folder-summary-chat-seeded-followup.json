@@ -1,0 +1,17 @@
+[
+  {
+    "step": 0,
+    "user": {
+      "message": "Trong folder Sprint 2 mà bạn vừa tóm tắt trước đó có file nào?"
+    },
+    "agent": {
+      "expectation": "Agent dùng lịch sử phiên đã seed để nhắc lại file đã thấy trong folder Sprint 2 mà không cần gọi lại Drive hay Chat.",
+      "requires_approval": false,
+      "expected_tools": [],
+      "expected_approval_tool": null,
+      "response_contains": [
+        "Báo cáo Demo Sprint 2 - VClaw"
+      ]
+    }
+  }
+]

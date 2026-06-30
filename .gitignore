@@ -58,12 +58,21 @@ scripts/bin/harness-cli.exe
 # Personal harnesses
 docs/khang-harness/
 docs/testing-e2e/
-testing-e2e/artifacts/
 testing-e2e/**/*.log
 .gomodcache/
 docs/superpowers/
 
+.gocache2/
+.gocache/
 # Runtime CSV logs
 logs/*.csv
 
 __pycache__
+cache/skills/
+
+# Local release/build artifacts
+/dist/
+/error.json
+/report.html
+/sprint*_backlog.md
+.venv

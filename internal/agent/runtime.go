@@ -72,6 +72,8 @@ type RuntimeConfig struct {
 	LongMemDir                       string
 	KnowledgeRetriever               knowledge.Retriever
 	DisableReadBeforeWriteValidation bool // skip ValidateReadBeforeWrite; useful for tests that focus on other behavior
+	SkillNudgeInterval               int
+	SkillCacheDir                    string
 }
 
 type Runtime struct {
@@ -117,6 +119,12 @@ type Runtime struct {
 	disableReadBeforeWriteValidation bool
 	cancelMu                         sync.Mutex
 	activeCancels                    map[string]activeRunCancel // sessionID → active run cancel state
+
+	// skill auto-learn fields
+	skillNudgeInterval    int    // 0 = disabled; trigger skill review every N iterations
+	skillCacheDir         string // path to cache/skills/
+	skillReviewMu         sync.Mutex
+	itersSinceSkillReview int
 }
 
 type activeRunCancel struct {
@@ -264,6 +272,10 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		ltLoader = longmem.NewLoader(dir)
 		ltFlusher = longmem.NewFlusher(dir, config.Provider, memoryClassifierModel(config))
 	}
+	skillCacheDir := strings.TrimSpace(config.SkillCacheDir)
+	if skillCacheDir == "" {
+		skillCacheDir = defaultSkillCacheDir()
+	}
 	return &Runtime{
 		provider:                         provider,
 		registry:                         config.Registry,
@@ -302,9 +314,11 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		activeCancels:                    make(map[string]activeRunCancel),
 		knowledgeRetriever:               config.KnowledgeRetriever,
 		disableReadBeforeWriteValidation: config.DisableReadBeforeWriteValidation,
+		skillNudgeInterval:               config.SkillNudgeInterval,
+		skillCacheDir:                    skillCacheDir,
+		itersSinceSkillReview:            0,
 	}
 }
-
 func memoryClassifierModel(config RuntimeConfig) string {
 	if model := strings.TrimSpace(config.MemoryClassifierModel); model != "" {
 		return model
@@ -357,6 +371,14 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 	r.activeCancels[message.SessionID] = activeRunCancel{token: runToken, cancel: runCancel}
 	r.cancelMu.Unlock()
 	ctx = runCtx
+
+	// skill auto-learn: count iterations used in this run and maybe trigger background review
+	iterationCountForReview := 0
+	defer func() {
+		if iterationCountForReview > 0 {
+			r.maybeSpawnSkillReview(message.SessionID, iterationCountForReview)
+		}
+	}()
 
 	if r.compactor != nil {
 		sessionID := message.SessionID
@@ -686,6 +708,7 @@ func (r *Runtime) Run(ctx context.Context, message contracts.UserMessage) (respo
 
 	toolResults := []contracts.ToolResult{}
 	iterationBudget := NewIterationBudget(r.iterationBudgetLimit)
+	defer func() { iterationCountForReview = iterationBudget.Used() }()
 	housekeepingRefunds := 0
 	housekeepingRefundLimit := r.iterationBudgetLimit
 	// readBeforeWriteNudged tracks whether we have already nudged the LLM
@@ -1211,6 +1234,31 @@ If required information is missing, ask one concise clarification question inste
 					clarification.Status = contracts.AgentStatusFailed
 				}
 				return *clarification, nil
+			}
+			if observation := sandboxExtractPDFLocalPathObservation(providerToolCall); observation != "" {
+				if errShape := r.recordRuntimeToolCallStatus(ctx, runState, providerToolCall, ToolCallStatusSkipped, observation, ""); errShape != nil {
+					base.Error = errShape
+					base.Message = errShape.Message
+					return base, nil
+				}
+				toolMessage := providers.Message{
+					Role:       providers.MessageRoleTool,
+					ToolCallID: providerToolCall.ID,
+					Content:    truncateToolContentForLLM(observation),
+				}
+				transcript = append(transcript, toolMessage)
+				providerTranscript = append(providerTranscript, toolMessage)
+				if err := r.appendToolObservationForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, toolMessage); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				if err := r.appendSkippedToolObservationsForRun(ctx, message.SessionID, runState.RunID, runState.RequestID, assistantMessage.ToolCalls[index+1:], "ACTION_BLOCKED_BY_POLICY: skipped because sandbox.extractPDF needs an existing local PDF path first"); err != nil {
+					base.Error = err
+					base.Message = err.Message
+					return base, nil
+				}
+				continue agentLoop
 			}
 			decision := r.stampPolicyRef(runState.RunID, providerToolCall.ID, r.decideToolCall(ctx, providerToolCall, definition, found))
 			r.logger.Info("agent tool call proposed",

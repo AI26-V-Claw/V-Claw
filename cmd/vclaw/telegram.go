@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -40,8 +41,8 @@ func runTelegram(ctx context.Context, args []string) error {
 func runTelegramRun(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("vclaw telegram run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	botToken := fs.String("token", envFirst("TELEGRAM_BOT_TOKEN", "VCLAW_TELEGRAM_BOT_TOKEN"), "Telegram bot token")
-	allowedUserID := fs.Int64("allowed-user", envInt64FirstOrDefault(0, "ALLOWED_TELEGRAM_USER_ID", "VCLAW_TELEGRAM_ALLOWED_USER_IDS"), "allowed Telegram user id")
+	botToken := fs.String("token", "", "Telegram bot token")
+	allowedUserID := fs.Int64("allowed-user", 0, "allowed Telegram user id")
 	dataDir := fs.String("data-dir", envOrDefault("DATA_DIR", "./data"), "runtime data directory")
 	iterationBudget := fs.Int("iteration-budget", agent.DefaultIterationBudget, "maximum agent iteration budget")
 	googleToolsMode := fs.String("google-tools", envOrDefault("VCLAW_GOOGLE_TOOLS_MODE", app.ToolModeAuto), "Google Workspace tool mode: auto, required, or off")
@@ -49,7 +50,16 @@ func runTelegramRun(ctx context.Context, args []string) error {
 	credentialsPath := fs.String("credentials", envOrDefault("VCLAW_GOOGLE_CREDENTIALS_PATH", defaultCredentialsPath), "Google OAuth desktop client credentials JSON")
 	googleTokenPath := fs.String("google-token", envOrDefault("VCLAW_GOOGLE_TOKEN_PATH", defaultTokenPath), "Google OAuth token cache path")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
+	}
+	if strings.TrimSpace(*botToken) == "" {
+		*botToken = envFirst("TELEGRAM_BOT_TOKEN", "VCLAW_TELEGRAM_BOT_TOKEN")
+	}
+	if *allowedUserID == 0 {
+		*allowedUserID = envInt64FirstOrDefault(0, "ALLOWED_TELEGRAM_USER_ID", "VCLAW_TELEGRAM_ALLOWED_USER_IDS")
 	}
 	if strings.TrimSpace(*botToken) == "" {
 		return fmt.Errorf("TELEGRAM_BOT_TOKEN or VCLAW_TELEGRAM_BOT_TOKEN is required")
@@ -95,6 +105,8 @@ func runTelegramRun(ctx context.Context, args []string) error {
 		Observer:                   metrics,
 		ParallelExecutionEnabled:   os.Getenv("VCLAW_PARALLEL_ENABLED") == "true",
 		ParallelMaxWorkers:         envIntOrDefault("VCLAW_PARALLEL_MAX_WORKERS", 4),
+		SkillNudgeInterval:         envIntOrDefault("VCLAW_SKILL_NUDGE_INTERVAL", 0),
+		SkillCacheDir:              envOrDefault("VCLAW_SKILL_CACHE_DIR", "./cache/skills"),
 		ParallelToolTimeoutDefault: envDurationOrDefault("VCLAW_PARALLEL_TOOL_TIMEOUT", 30*time.Second),
 	})
 	if err != nil {
@@ -116,6 +128,7 @@ func runTelegramRun(ctx context.Context, args []string) error {
 
 	logger.Info("starting vclaw telegram runtime", "model", bundle.Model, "google_tools", *googleToolsMode, "web_tools", *webToolsMode)
 	bot := telegram.New(*botToken, *allowedUserID, *dataDir, bundle.PolicyStore, agent.NewRuntimeMessenger(bundle.Runtime), logger)
+	bot.SetRegistry(bundle.Registry)
 	if err := bot.Run(runCtx); err != nil && err != context.Canceled {
 		return fmt.Errorf("telegram bot stopped: %w", err)
 	}

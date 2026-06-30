@@ -55,6 +55,11 @@ Luồng này là processing flow cho lõi AI Agent. Nó bổ sung cho component 
 trong `01-system-design.md` và bám vào boundary contract trong
 `03-contracts.md`.
 
+For production release review, also use
+[`production-harness-review.md`](production-harness-review.md). It defines the
+harness principles, release blockers, runtime state machine, context
+engineering model, and adoption filter for Claude Code-inspired patterns.
+
 ```mermaid
 sequenceDiagram
     participant User as Người dùng

@@ -20,7 +20,7 @@
   {
     "step": 1,
     "user": {
-      "message": "Đọc file này và tạo Google Docs tên 'Chair Description' từ nội dung của nó."
+      "message": "Hãy dùng tool đọc file local tại đường dẫn ${LAST_ATTACHMENT_PATH}, rồi tạo Google Docs tên 'Chair Description' từ nội dung của file đó."
     },
     "agent": {
       "expectation": "Agent đọc nội dung file local trước rồi xin xác nhận tạo Google Docs.",

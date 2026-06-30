@@ -122,6 +122,54 @@ func TestDocsCreateContinuationRequiresAppendOnlyForContentRequests(t *testing.T
 	if strings.Contains(blankContinuation.Text, "MANDATORY") {
 		t.Fatalf("blank document request must not require append:\n%s", blankContinuation.Text)
 	}
+
+	initialContentRequest := base
+	initialContentRequest.message.Text = "Tìm web rồi tạo Google Docs gồm phần tóm tắt và key findings"
+	initialContentRequest.toolCall.Arguments = map[string]any{
+		"title":   "AI Agent Research Brief",
+		"content": "Tóm tắt\n\n- Key finding\n\nNguồn: https://example.com",
+	}
+	initialContentContinuation := buildApprovalContinuationMessage(initialContentRequest, result, fixedTestTime())
+	if strings.Contains(initialContentContinuation.Text, "task is NOT complete") || strings.Contains(initialContentContinuation.Text, "MANDATORY") {
+		t.Fatalf("createDocument with initial content must not require another append:\n%s", initialContentContinuation.Text)
+	}
+	if !strings.Contains(initialContentContinuation.Text, "initial content") {
+		t.Fatalf("expected initial content guidance, got:\n%s", initialContentContinuation.Text)
+	}
+}
+
+func TestSandboxExtractPDFContinuationRequiresFreshDocsAppend(t *testing.T) {
+	result := tools.ToolResult{
+		Success:       true,
+		ContentForLLM: `{"markdownPath":"D:\\Wan_Document\\VinUni\\VSF\\V-Claw\\.sandbox-workspace\\agent\\workspace\\second_pdf_structured.md"}`,
+	}
+	pending := pendingApproval{
+		message: contracts.UserMessage{
+			RequestID: "req_extract_docs",
+			SessionID: "sess_extract_docs",
+			Channel:   "telegram",
+			Timestamp: fixedTestTime(),
+			Text:      "Doc file PDF nay va luu vao mot Google Docs moi ten la Second PDF Demo",
+		},
+		toolCall: providers.ToolCall{Name: sandboxtool.ToolNameExtractPDF},
+		request:  contracts.ApprovalRequest{ApprovalID: "appr_extract"},
+	}
+
+	continuation := buildApprovalContinuationMessage(pending, result, fixedTestTime())
+	for _, want := range []string{
+		"MANDATORY",
+		"docs.createDocument",
+		"docs.appendMarkdown",
+		"Do not reuse an older Google Docs document ID/link",
+		"docs.appendMarkdown succeeds",
+	} {
+		if !strings.Contains(continuation.Text, want) {
+			t.Fatalf("extractPDF continuation missing %q:\n%s", want, continuation.Text)
+		}
+	}
+	if continuation.Metadata["originalRequest"] != pending.message.Text {
+		t.Fatalf("original request was not preserved: %#v", continuation.Metadata)
+	}
 }
 
 func TestApprovalContinuationPreservesOriginalRequestAcrossTools(t *testing.T) {

@@ -38,7 +38,22 @@
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent xác nhận đã tạo Gmail draft với file đính kèm.",
+      "expectation": "Sau khi tạo draft, agent xin xác nhận gửi email.",
+      "requires_approval": true,
+      "expected_tools": [
+        "gmail.sendDraft"
+      ],
+      "expected_approval_tool": "gmail.sendDraft",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 3,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Agent gửi email thành công.",
       "requires_approval": false,
       "expected_tools": [],
       "expected_approval_tool": null,

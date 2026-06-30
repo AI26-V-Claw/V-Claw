@@ -1,0 +1,51 @@
+{
+  "runId": "uc_20260629T112932Z_770ab260",
+  "usecase": "calendar-summary-email-seeded-followup",
+  "sessionId": "calendar-summary-email-seeded-followup_uc_20260629T112932Z_770ab260",
+  "startedAt": "2026-06-29T11:29:32.300135Z",
+  "finishedAt": "2026-06-29T11:29:41.709690Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": false,
+      "failureReason": "expected no approval request, got approval_required",
+      "user": {
+        "message": "Email báo cáo lịch tuần mà bạn vừa gửi trước đó đã gửi cho ai?"
+      },
+      "agent": {
+        "message": "Cần xác nhận trước khi thực hiện.\n\nMình sẽ đọc nội dung email này. Xác nhận không?\n\nrenderMode: text\n\nTrả lời một trong các lệnh:\n- approve\n- reject\n- revise <nội dung muốn chỉnh>",
+        "status": "approval_required",
+        "approvalId": "appr_call_62X8x6LRldnsraUSxyqkTJvF",
+        "approvalTool": "gmail.getEmail",
+        "tools": [
+          "gmail.getEmail"
+        ],
+        "toolTrace": [
+          {
+            "phase": "approval_requested",
+            "toolName": "gmail.getEmail",
+            "toolCallId": "call_62X8x6LRldnsraUSxyqkTJvF",
+            "approvalId": "appr_call_62X8x6LRldnsraUSxyqkTJvF",
+            "riskLevel": "sensitive_read",
+            "input": {
+              "full": true,
+              "messageId": "19f112f41dee055d",
+              "previewChars": 500,
+              "renderMode": "text"
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    }
+  ],
+  "passed": false,
+  "seedSession": {
+    "source": "testing-e2e/sessions/calendar-summary-email-seeded-followup",
+    "destination": "data/sessions/calendar-summary-email-seeded-followup_uc_20260629T112932Z_770ab260"
+  },
+  "failureReason": "step failed: 0",
+  "failedStep": "0"
+}

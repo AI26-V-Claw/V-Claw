@@ -1,0 +1,242 @@
+{
+  "runId": "uc_20260629T105637Z_e8972340",
+  "usecase": "uploaded-file-to-sheets",
+  "sessionId": "uploaded-file-to-sheets_uc_20260629T105637Z_e8972340",
+  "startedAt": "2026-06-29T10:56:37.740659Z",
+  "finishedAt": "2026-06-29T10:57:10.948181Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "User sent an attachment.",
+        "attachments": [
+          {
+            "path": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-sheets/demo-import.csv",
+            "filename": "demo-import.csv",
+            "mimeType": "text/csv",
+            "source": "testing-e2e/fixtures/uploaded-to-sheets/demo-import.csv"
+          }
+        ]
+      },
+      "agent": {
+        "message": "Bạn muốn mình làm gì với file CSV này: tạo Google Sheets, thêm dữ liệu vào sheet hiện có, hay chỉ đọc/tóm tắt nội dung?",
+        "status": "completed",
+        "trace": {
+          "model": "gpt-5.4-mini",
+          "reference": {
+            "confidence": 0,
+            "hasReference": false,
+            "needsClarification": false,
+            "referenceId": "",
+            "referenceType": "none",
+            "source": "none"
+          }
+        }
+      }
+    },
+    {
+      "step": 1,
+      "passed": true,
+      "user": {
+        "message": "Đọc file CSV này, tạo Google Sheets tên 'Demo CSV Import', rồi append toàn bộ dữ liệu vào sheet đầu tiên."
+      },
+      "agent": {
+        "message": "Cần xác nhận trước khi thực hiện.\n\nMình sẽ tạo Google Sheets spreadsheet. Xác nhận không?\n\nTiêu đề: Demo CSV Import\nsheetTitles: Sheet1\n\nTrả lời một trong các lệnh:\n- approve\n- reject\n- revise <nội dung muốn chỉnh>",
+        "status": "approval_required",
+        "approvalId": "appr_call_eBLxAueJxHPbo3SBFQ5h74JC",
+        "approvalTool": "sheets.createSpreadsheet",
+        "artifact": {
+          "kind": "file",
+          "label": "demo-import.csv",
+          "uri": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-sheets/demo-import.csv"
+        },
+        "tools": [
+          "sheets.createSpreadsheet",
+          "filesystem.readFile"
+        ],
+        "toolTrace": [
+          {
+            "phase": "approval_requested",
+            "toolName": "sheets.createSpreadsheet",
+            "toolCallId": "call_eBLxAueJxHPbo3SBFQ5h74JC",
+            "approvalId": "appr_call_eBLxAueJxHPbo3SBFQ5h74JC",
+            "riskLevel": "external_write",
+            "input": {
+              "sheetTitles": [
+                "Sheet1"
+              ],
+              "title": "Demo CSV Import"
+            }
+          },
+          {
+            "phase": "completed",
+            "toolName": "filesystem.readFile",
+            "toolCallId": "call_o2bwx5MeZfSb07hrde3drSUx",
+            "success": true,
+            "data": {
+              "contentForLLM": "File: /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-sheets/demo-import.csv (5 lines)\nmonth,revenue,cost\n2026-04,1200,700\n2026-05,1350,760\n2026-06,1425,810\n",
+              "contentForUser": "File: /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-sheets/demo-import.csv (5 lines)\nmonth,revenue,cost\n2026-04,1200,700\n2026-05,1350,760\n2026-06,1425,810\n"
+            },
+            "artifactRef": {
+              "kind": "file",
+              "label": "demo-import.csv",
+              "uri": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-to-sheets/demo-import.csv"
+            },
+            "metadata": {
+              "file_safety": {
+                "claimed_mime": "",
+                "decision": "allow",
+                "detected_type": "text",
+                "extension": ".csv",
+                "filename": "demo-import.csv",
+                "flags": [
+                  "type_match"
+                ],
+                "origin": "local_workspace",
+                "policy_version": "file-safety-policy/1",
+                "reason_audit": "allowed",
+                "reason_user": "File passed safety checks.",
+                "scanner_version": "file-safety-scanner/1",
+                "sha256": "b1856011ba5e87a4c8c57c4e5462bf80935230810fcad7fa5315ef778d5a6d93",
+                "size_bytes": 70,
+                "source_tool": "filesystem.readFile"
+              },
+              "size_bytes": 70,
+              "total_lines": 5
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    },
+    {
+      "step": 2,
+      "passed": true,
+      "user": {
+        "message": "/approve"
+      },
+      "agent": {
+        "message": "Cần xác nhận trước khi thực hiện.\n\nMình sẽ thay đổi dữ liệu trong Google Sheets. Xác nhận không?\n\nGiá trị: [month revenue cost], [2026-04 1200 700], [2026-05 1350 760], [2026-06 1425 810]\nVùng dữ liệu: Sheet1!A1\nSpreadsheet ID: 19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8\nvalueInputOption: USER_ENTERED\n\nTrả lời một trong các lệnh:\n- approve\n- reject\n- revise <nội dung muốn chỉnh>",
+        "status": "approval_required",
+        "approvalId": "appr_call_LRBlcDwOagfUWVXlVO0on0vp",
+        "approvalTool": "sheets.appendValues",
+        "artifact": {
+          "kind": "google.sheets.spreadsheet",
+          "label": "Demo CSV Import",
+          "uri": "https://docs.google.com/spreadsheets/d/19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8/edit?ouid=106445755375981872759",
+          "id": "19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8"
+        },
+        "tools": [
+          "sheets.appendValues"
+        ],
+        "toolTrace": [
+          {
+            "phase": "approval_requested",
+            "toolName": "sheets.appendValues",
+            "toolCallId": "call_LRBlcDwOagfUWVXlVO0on0vp",
+            "approvalId": "appr_call_LRBlcDwOagfUWVXlVO0on0vp",
+            "riskLevel": "external_write",
+            "input": {
+              "range": "Sheet1!A1",
+              "spreadsheetId": "19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8",
+              "valueInputOption": "USER_ENTERED",
+              "values": [
+                [
+                  "month",
+                  "revenue",
+                  "cost"
+                ],
+                [
+                  "2026-04",
+                  1200,
+                  700
+                ],
+                [
+                  "2026-05",
+                  1350,
+                  760
+                ],
+                [
+                  "2026-06",
+                  1425,
+                  810
+                ]
+              ]
+            }
+          },
+          {
+            "phase": "completed",
+            "toolName": "sheets.createSpreadsheet",
+            "toolCallId": "call_eBLxAueJxHPbo3SBFQ5h74JC",
+            "success": true,
+            "data": {
+              "contentForLLM": "{\"ID\":\"19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8\",\"Title\":\"Demo CSV Import\",\"SpreadsheetURL\":\"https://docs.google.com/spreadsheets/d/19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8/edit?ouid=106445755375981872759\",\"Sheets\":[{\"ID\":950785803,\"Title\":\"Sheet1\",\"Index\":0}]}",
+              "contentForUser": "Đã tạo bảng tính Demo CSV Import"
+            },
+            "artifactRef": {
+              "kind": "google.sheets.spreadsheet",
+              "label": "Demo CSV Import",
+              "uri": "https://docs.google.com/spreadsheets/d/19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8/edit?ouid=106445755375981872759",
+              "id": "19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8"
+            },
+            "metadata": {
+              "sheet_count": 1
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    },
+    {
+      "step": 3,
+      "passed": true,
+      "user": {
+        "message": "/approve"
+      },
+      "agent": {
+        "message": "Đã tạo Google Sheets Demo CSV Import và thêm xong toàn bộ dữ liệu CSV vào sheet đầu tiên (Sheet1).",
+        "status": "completed",
+        "artifact": {
+          "kind": "google.sheets.spreadsheet",
+          "label": "Google Sheets spreadsheet",
+          "uri": "https://docs.google.com/spreadsheets/d/19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8/edit",
+          "id": "19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8"
+        },
+        "toolTrace": [
+          {
+            "phase": "completed",
+            "toolName": "sheets.appendValues",
+            "toolCallId": "call_LRBlcDwOagfUWVXlVO0on0vp",
+            "success": true,
+            "data": {
+              "contentForLLM": "{\"SpreadsheetID\":\"19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8\",\"TableRange\":\"\",\"UpdatedRange\":\"Sheet1!A1:C4\",\"UpdatedRows\":4,\"UpdatedColumns\":3,\"UpdatedCells\":12}",
+              "contentForUser": "Đã thêm dữ liệu vào bảng tính"
+            },
+            "artifactRef": {
+              "kind": "google.sheets.spreadsheet",
+              "label": "Google Sheets spreadsheet",
+              "uri": "https://docs.google.com/spreadsheets/d/19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8/edit",
+              "id": "19p8XrfT6aA-gx546e-VLJBXg0-VCKQCF8pxjRvoosc8"
+            },
+            "metadata": {
+              "table_range": "",
+              "updated_cells": 12,
+              "updated_columns": 3,
+              "updated_range": "Sheet1!A1:C4",
+              "updated_rows": 4
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    }
+  ],
+  "passed": true
+}

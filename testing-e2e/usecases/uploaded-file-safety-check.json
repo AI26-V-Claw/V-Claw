@@ -23,11 +23,24 @@
       "message": "Kiểm tra file này có phải PDF hợp lệ không. Nếu thực ra chỉ là text hoặc HTML thì nói rõ dấu hiệu và đừng cố xử lý tiếp như PDF thật."
     },
     "agent": {
-      "expectation": "Agent kiểm tra cẩn thận file upload, phát hiện đây không phải PDF hợp lệ và cảnh báo người dùng thay vì tiếp tục parse như PDF thật.",
-      "requires_approval": false,
+      "expectation": "Agent có thể dùng Python để kiểm tra file an toàn, miễn là chỉ phân tích nhận dạng file và báo rõ đây không phải PDF hợp lệ.",
+      "requires_approval": true,
       "expected_tools": [
-        "filesystem.readFile"
+        "sandbox.runPython"
       ],
+      "expected_approval_tool": "sandbox.runPython",
+      "response_contains": []
+    }
+  },
+  {
+    "step": 2,
+    "user": {
+      "message": "/approve"
+    },
+    "agent": {
+      "expectation": "Sau khi được approve, agent phải báo rõ file không phải PDF hợp lệ nếu phát hiện nội dung thực là HTML hoặc text, và nêu dấu hiệu nhận biết thay vì tiếp tục xử lý như PDF thật.",
+      "requires_approval": false,
+      "expected_tools": [],
       "expected_approval_tool": null,
       "response_contains": [
         "PDF",

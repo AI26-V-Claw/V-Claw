@@ -1062,7 +1062,7 @@ func (r *Runtime) responseForUnclaimedApprovedAction(record ActionRecord, pendin
 func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
 	originalRequest := approvalOriginalRequest(pending.message)
-	resultNote := approvalContinuationResultNote(pending.toolCall.Name, docsContentWriteRequested(originalRequest))
+	resultNote := approvalContinuationResultNote(pending.toolCall.Name, docsContentWriteRequested(originalRequest), docsCreateDocumentHasInitialContent(pending.toolCall))
 	resultContent := truncateToolContentForLLM(result.ContentForLLM)
 	if len(pending.remainingToolCalls) > 0 {
 		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
@@ -1152,6 +1152,7 @@ func docsContentWriteRequested(text string) bool {
 	)
 	writeIntent := containsAnyText(lower,
 		"lưu", "luu", "save", "ghi", "write", "đưa vào", "dua vao", "put into", "append", "chèn", "chen", "insert",
+		"gồm", "gom", "bao gồm", "bao gom", "include", "includes", "including",
 	)
 	return contentSource && writeIntent
 }
@@ -1165,12 +1166,25 @@ func isDraftCreationTool(toolName string) bool {
 	}
 }
 
-func approvalContinuationResultNote(toolName string, docsContentRequired bool) string {
+func docsCreateDocumentHasInitialContent(toolCall providers.ToolCall) bool {
+	if strings.TrimSpace(toolCall.Name) != "docs.createDocument" {
+		return false
+	}
+	return strings.TrimSpace(stringArgument(toolCall.Arguments, "content")) != ""
+}
+
+func approvalContinuationResultNote(toolName string, docsContentRequired bool, docsCreateHasInitialContent bool) string {
 	if strings.TrimSpace(toolName) == "gmail.sendDraft" {
 		return "Important delivery wording: gmail.sendDraft means the email was handed to Gmail for sending. Do not say the recipient received the email, do not say delivery succeeded, and avoid wording like 'sent successfully'. In Vietnamese, prefer 'Email da duoc chuyen cho Gmail de gui'."
 	}
+	if strings.TrimSpace(toolName) == "sandbox.extractPDF" && docsContentRequired {
+		return "MANDATORY: sandbox.extractPDF only created a local Markdown file. The original request requires content to be stored in Google Docs, so the task is NOT complete. Create a fresh docs.createDocument for this request unless the current user request explicitly names an existing document, then call docs.appendMarkdown using that document ID and the exact absolute host workspace path returned by sandbox.extractPDF as localPath. Do not reuse an older Google Docs document ID/link from memory, transcript, previous tool results, or previous requests. Do not answer with a completion message before docs.appendMarkdown succeeds."
+	}
 	if strings.TrimSpace(toolName) == "docs.createDocument" && docsContentRequired {
-		return "MANDATORY: docs.createDocument created an empty document only. The original request requires content to be stored, so the task is NOT complete. If sandbox.extractPDF produced structured Markdown, call docs.appendMarkdown using the new document ID and the exact absolute host workspace path as localPath. Use docs.appendText only for plain text sources. Do not call filesystem.readFile and do not put /workspace container paths in localPath. Do not answer with a completion message before the content-write tool succeeds."
+		if docsCreateHasInitialContent {
+			return "IMPORTANT: docs.createDocument included initial content for this request. If the tool result is successful, treat the document content as already written and do not claim that another append step is still required. Only call docs.appendText or docs.appendMarkdown if the user asked to add more content that was not included in this createDocument call."
+		}
+		return "MANDATORY: docs.createDocument created an empty document only. The original request requires content to be stored, so the task is NOT complete. If sandbox.extractPDF produced structured Markdown, call docs.appendMarkdown using the new document ID from this docs.createDocument result and the exact absolute host workspace path as localPath. Use docs.appendText only for plain text sources. Do not reuse an older Google Docs document ID/link from memory, transcript, previous tool results, or previous requests. Do not call filesystem.readFile and do not put /workspace container paths in localPath. Do not answer with a completion message before the content-write tool succeeds."
 	}
 	return ""
 }

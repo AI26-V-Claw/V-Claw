@@ -1,0 +1,8 @@
+[
+  {
+    "name": "skill.gmail_weekly_email_summary",
+    "version": "1.0.0",
+    "content": "---\nname: skill.gmail_weekly_email_summary\ndescription: \"Use this skill to find and summarize all emails from the user's Gmail received during the current week when the user requests weekly email summaries. Triggered by phrases like 'tìm tất cả email trong Gmail tuần này và tóm tắt từng cái'. Automates fetching, listing, and summarizing emails by date and sender.\"\nversion: 1.0.1\ntags: [gmail, email, summary, week, automation]\n---\n\n# Gmail Weekly Email Summary\n\n## Workflow\n1. Query Gmail for all emails received during the current week.\n2. Extract key metadata for each email: sender, date/time, subject.\n3. Summarize the content of each email briefly.\n4. Present a list with numbered emails and their corresponding summaries.\n\n## Edge cases\n- Handle emails with no subject or empty content by providing a placeholder summary.\n- Manage large volumes of emails by limiting to the top 20 recent emails.\n- Respect user language preference (Vietnamese), replying consistently in Vietnamese.\n",
+    "updated_at": "2026-06-26T07:33:32Z"
+  }
+]

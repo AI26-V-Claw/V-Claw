@@ -1,0 +1,100 @@
+{
+  "runId": "uc_20260629T105440Z_fb508e42",
+  "usecase": "uploaded-file-safety-check",
+  "sessionId": "uploaded-file-safety-check_uc_20260629T105440Z_fb508e42",
+  "startedAt": "2026-06-29T10:54:40.580128Z",
+  "finishedAt": "2026-06-29T10:55:11.030553Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "User sent an attachment.",
+        "attachments": [
+          {
+            "path": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/uploaded-file-safety-check/fake-report.pdf",
+            "filename": "fake-report.pdf",
+            "mimeType": "application/pdf",
+            "source": "testing-e2e/fixtures/uploaded-file-safety/fake-report.pdf"
+          }
+        ]
+      },
+      "agent": {
+        "message": "Mình đã nhận được file đính kèm: fake-report.pdf\n\nNếu bạn muốn, mình có thể:\n- đọc và tóm tắt file\n- trích xuất nội dung sang Google Docs\n- tải file lên Drive\n- gửi file qua Gmail\n\nChỉ cần nói rõ bạn muốn làm gì với file này.",
+        "status": "completed",
+        "trace": {
+          "model": "gpt-5.4-mini",
+          "reference": {
+            "confidence": 0,
+            "hasReference": false,
+            "needsClarification": false,
+            "referenceId": "",
+            "referenceType": "none",
+            "source": "none"
+          }
+        }
+      }
+    },
+    {
+      "step": 1,
+      "passed": true,
+      "user": {
+        "message": "Kiểm tra file này có phải PDF hợp lệ không. Nếu thực ra chỉ là text hoặc HTML thì nói rõ dấu hiệu và đừng cố xử lý tiếp như PDF thật."
+      },
+      "agent": {
+        "message": "Cần xác nhận trước khi thực hiện.\n\nMình sẽ đọc nội dung file PDF bằng mã Python. Xác nhận không?\n\ncode: from pathlib import Path\np = Path('/workspace/data/e2e_attachments/uploaded-file-safety-check/fake-report.pdf')\nraw = p.read_bytes()\nprint('size_bytes=', len(raw))\nprint('first_64_hex=', raw[:64].hex())\nprint('starts_with_pdf_magic=', raw.startswith(b'%PDF-'))\n# Heuristic text/html detection\nsample ...\ntimeout_seconds: 120\nworkingDir: /workspace\nworkspace_dir: /workspace\n\nTrả lời một trong các lệnh:\n- approve\n- reject\n- revise <nội dung muốn chỉnh>",
+        "status": "approval_required",
+        "approvalId": "appr_call_kNDtHlx9t7oQBaqsVBH53AFN",
+        "approvalTool": "sandbox.runPython",
+        "tools": [
+          "sandbox.runPython"
+        ],
+        "toolTrace": [
+          {
+            "phase": "approval_requested",
+            "toolName": "sandbox.runPython",
+            "toolCallId": "call_kNDtHlx9t7oQBaqsVBH53AFN",
+            "approvalId": "appr_call_kNDtHlx9t7oQBaqsVBH53AFN",
+            "riskLevel": "code_execution",
+            "input": {
+              "code": "from pathlib import Path\np = Path('/workspace/data/e2e_attachments/uploaded-file-safety-check/fake-report.pdf')\nraw = p.read_bytes()\nprint('size_bytes=', len(raw))\nprint('first_64_hex=', raw[:64].hex())\nprint('starts_with_pdf_magic=', raw.startswith(b'%PDF-'))\n# Heuristic text/html detection\nsample = raw[:2000].lstrip()\ntext_prefix = sample[:200].lower()\nprint('looks_like_html=', text_prefix.startswith(b'<!doctype html') or text_prefix.startswith(b'<html') or b'<html' in text_prefix or b'<body' in text_prefix)\nprint('ascii_ratio_first_2k=', sum(1 for b in sample if b in b'\\t\\n\\r\\f\\v' or 32 <= b <= 126) / max(1, len(sample)))\n# Try opening as PDF\ntry:\n    import fitz\n    doc = fitz.open(stream=raw, filetype='pdf')\n    print('pdf_open_ok=', True)\n    print('page_count=', doc.page_count)\n    page0 = doc.load_page(0).get_text('text')[:500] if doc.page_count else ''\n    print('page0_preview=', repr(page0))\n    doc.close()\nexcept Exception as e:\n    print('pdf_open_ok=', False)\n    print('pdf_open_error=', type(e).__name__, str(e))\n# More hints for disguised text files\nfor marker in [b'<!DOCTYPE', b'<html', b'<head', b'<body', b'</html>', b'<script', b'<meta']:\n    if marker.lower() in raw[:5000].lower():\n        print('found_marker=', marker.decode('ascii', 'ignore'))\n",
+              "timeout_seconds": 120,
+              "workingDir": "/workspace",
+              "workspace_dir": "/workspace"
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    },
+    {
+      "step": 2,
+      "passed": true,
+      "user": {
+        "message": "/approve"
+      },
+      "agent": {
+        "message": "Mình đã kiểm tra file. Đây không phải PDF hợp lệ.\n\nDấu hiệu rõ ràng:\n- Không có chữ ký PDF chuẩn: starts_with_pdf_magic = False\n- Nội dung bắt đầu bằng HTML: thấy <!DOCTYPE, <html>, <head>, <body>, </html>, <meta\n- ASCII ratio rất cao: 1.0, giống file text/HTML hơn file nhị phân PDF\n- Thử mở như PDF thất bại: FileDataError Failed to open stream\n\nKết luận: file này nhiều khả năng chỉ là HTML/text được đặt tên .pdf, nên mình sẽ không xử lý nó như PDF thật.",
+        "status": "completed",
+        "toolTrace": [
+          {
+            "phase": "completed",
+            "toolName": "sandbox.runPython",
+            "toolCallId": "call_kNDtHlx9t7oQBaqsVBH53AFN",
+            "success": true,
+            "data": {
+              "contentForLLM": "{\"request_id\":\"call_kNDtHlx9t7oQBaqsVBH53AFN\",\"job_id\":\"1782730506055-0001\",\"status\":\"success\",\"exit_code\":0,\"stdout\":\"size_bytes= 359\\nfirst_64_hex= 3c21444f43545950452068746d6c3e0a3c68746d6c3e0a3c686561643e0a20203c6d65746120636861727365743d227574662d38223e0a20203c7469746c653e\\nstarts_with_pdf_magic= False\\nlooks_like_html= True\\nascii_ratio_first_2k= 1.0\\npdf_open_ok= False\\npdf_open_error= FileDataError Failed to open stream\\nfound_marker= \\u003c!DOCTYPE\\nfound_marker= \\u003chtml\\nfound_marker= \\u003chead\\nfound_marker= \\u003cbody\\nfound_marker= \\u003c/html\\u003e\\nfound_marker= \\u003cmeta\\n\",\"stderr\":\"\",\"duration_ms\":670,\"artifacts\":[],\"workspace_dir\":\"/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace\",\"workspace_files\":[\"/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/[Description]_Extra_RAG_LangChain.pdf\",\"/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/kế hoạch sprint 3.pdf\",\"/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/sprint_report.pdf\"]}\n\nFiles in workspace (use these exact absolute paths for attachments or other tools — do not modify them):\n  /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/[Description]_Extra_RAG_LangChain.pdf\n  /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/kế hoạch sprint 3.pdf\n  /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/sprint_report.pdf\n",
+              "contentForUser": "sandbox status: success\nstdout:\nsize_bytes= 359\nfirst_64_hex= 3c21444f43545950452068746d6c3e0a3c68746d6c3e0a3c686561643e0a20203c6d65746120636861727365743d227574662d38223e0a20203c7469746c653e\nstarts_with_pdf_magic= False\nlooks_like_html= True\nascii_ratio_first_2k= 1.0\npdf_open_ok= False\npdf_open_error= FileDataError Failed to open stream\nfound_marker= <!DOCTYPE\nfound_marker= <html\nfound_marker= <head\nfound_marker= <body\nfound_marker= </html>\nfound_marker= <meta\n"
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    }
+  ],
+  "passed": true
+}

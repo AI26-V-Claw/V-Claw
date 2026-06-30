@@ -1,0 +1,101 @@
+{
+  "runId": "uc_20260629T113435Z_7c9d6d56",
+  "usecase": "read-uploaded-file",
+  "sessionId": "read-uploaded-file_uc_20260629T113435Z_7c9d6d56",
+  "startedAt": "2026-06-29T11:34:35.983236Z",
+  "finishedAt": "2026-06-29T11:34:57.853643Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "User sent an attachment.",
+        "attachments": [
+          {
+            "path": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/read-uploaded-file/chair-description.txt",
+            "filename": "chair-description.txt",
+            "mimeType": "text/plain",
+            "source": "testing-e2e/fixtures/read-uploaded-file/chair-description.txt"
+          }
+        ]
+      },
+      "agent": {
+        "message": "Mình đã nhận được file đính kèm: chair-description.txt\n\nNếu bạn muốn, mình có thể:\n- đọc/tóm tắt nội dung\n- tạo Google Docs từ file này\n- tải lên Google Drive\n- gửi email kèm file\n\nBạn muốn mình làm gì tiếp?",
+        "status": "completed",
+        "trace": {
+          "model": "gpt-5.4-mini",
+          "reference": {
+            "confidence": 0,
+            "hasReference": false,
+            "needsClarification": false,
+            "referenceId": "",
+            "referenceType": "none",
+            "source": "none"
+          }
+        }
+      }
+    },
+    {
+      "step": 1,
+      "passed": true,
+      "user": {
+        "message": "đọc cho mình file này có gì"
+      },
+      "agent": {
+        "message": "File này là một bài văn tả cái ghế.\n\nNội dung chính:\n- Trong góc phòng học có một cái ghế gỗ nhỏ.\n- Ghế không mới nhưng sạch sẽ và chắc chắn.\n- Mặt ghế phẳng, màu nâu nhạt, có vài vết xước nhỏ.\n- Bốn chân ghế vững, dùng để ngồi học, đọc sách, vẽ tranh.\n- Tựa lưng hơi cong, ngồi tựa thấy đỡ mỏi.\n- Mỗi tối em kéo ghế sát bàn học để làm bài tập.\n- Chiếc ghế được ví như một người bạn thân thiết.\n- Cuối cùng, người viết bày tỏ tình cảm và hứa giữ gìn ghế cẩn thận.\n\nNếu bạn muốn, mình có thể tóm tắt ngắn hơn hoặc sửa lại thành bài văn hay hơn.",
+        "status": "completed",
+        "artifact": {
+          "kind": "file",
+          "label": "chair-description.txt",
+          "uri": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/read-uploaded-file/chair-description.txt"
+        },
+        "tools": [
+          "filesystem.readFile"
+        ],
+        "toolTrace": [
+          {
+            "phase": "completed",
+            "toolName": "filesystem.readFile",
+            "toolCallId": "call_wZwklF3Vbi5XDDf7nRWwjLiz",
+            "success": true,
+            "data": {
+              "contentForLLM": "File: /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/read-uploaded-file/chair-description.txt (8 lines)\nBài văn tả cái ghế\n\nTrong góc phòng học của em có một cái ghế gỗ nhỏ. Chiếc ghế không mới, nhưng lúc nào cũng sạch sẽ và chắc chắn. Mặt ghế phẳng, màu nâu nhạt, có vài vết xước nhỏ do em dùng hằng ngày. Bốn chân ghế đứng vững trên sàn, giúp em ngồi học bài, đọc sách và vẽ tranh.\n\nTựa lưng của ghế hơi cong, vừa đủ để em dựa lưng khi thấy mỏi. Mỗi buổi tối, em thường kéo ghế sát bàn học, bật đèn lên và ngồi vào đó để làm bài tập. Chiếc ghế im lặng nhưng giống như một người bạn thân thiết, luôn ở bên cạnh em trong những giờ học tập.\n\nEm rất quý cái ghế của mình. Em sẽ giữ gìn ghế cẩn thận, lau bụi thường xuyên và không nghịch làm hỏng ghế.\n",
+              "contentForUser": "File: /home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/read-uploaded-file/chair-description.txt (8 lines)\nBài văn tả cái ghế\n\nTrong góc phòng học của em có một cái ghế gỗ nhỏ. Chiếc ghế không mới, nhưng lúc nào cũng sạch sẽ và chắc chắn. Mặt ghế phẳng, màu nâu nhạt, có vài vết xước nhỏ do em dùng hằng ngày. Bốn chân ghế đứng vững trên sàn, giúp em ngồi học bài, đọc sách và vẽ tranh.\n\nTựa lưng của ghế hơi cong, vừa đủ để em dựa lưng khi thấy mỏi. Mỗi buổi tối, em thường kéo ghế sát bàn học, bật đèn lên và ngồi vào đó để làm bài tập. Chiếc ghế im lặng nhưng giống như một người bạn thân thiết, luôn ở bên cạnh em trong những giờ học tập.\n\nEm rất quý cái ghế của mình. Em sẽ giữ gìn ghế cẩn thận, lau bụi thường xuyên và không nghịch làm hỏng ghế.\n"
+            },
+            "artifactRef": {
+              "kind": "file",
+              "label": "chair-description.txt",
+              "uri": "/home/nxhai/V_Claw/.sandbox-workspace/agent/workspace/data/e2e_attachments/read-uploaded-file/chair-description.txt"
+            },
+            "metadata": {
+              "file_safety": {
+                "claimed_mime": "",
+                "decision": "allow",
+                "detected_type": "text",
+                "extension": ".txt",
+                "filename": "chair-description.txt",
+                "flags": [
+                  "type_match"
+                ],
+                "origin": "local_workspace",
+                "policy_version": "file-safety-policy/1",
+                "reason_audit": "allowed",
+                "reason_user": "File passed safety checks.",
+                "scanner_version": "file-safety-scanner/1",
+                "sha256": "79d174aa327cd99c181d0f0626b028030df67209363ffd89350398248c39e380",
+                "size_bytes": 862,
+                "source_tool": "filesystem.readFile"
+              },
+              "size_bytes": 862,
+              "total_lines": 8
+            }
+          }
+        ],
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    }
+  ],
+  "passed": true
+}

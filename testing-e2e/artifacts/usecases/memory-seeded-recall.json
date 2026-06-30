@@ -1,0 +1,28 @@
+{
+  "runId": "uc_20260629T113421Z_8916fda2",
+  "usecase": "memory-seeded-recall",
+  "sessionId": "memory-seeded-recall_uc_20260629T113421Z_8916fda2",
+  "startedAt": "2026-06-29T11:34:21.822962Z",
+  "finishedAt": "2026-06-29T11:34:28.579931Z",
+  "conversation": [
+    {
+      "step": 0,
+      "passed": true,
+      "user": {
+        "message": "Bạn nhớ sở thích làm việc nào của mình không?"
+      },
+      "agent": {
+        "message": "Có: bạn thích câu trả lời ngắn gọn bằng tiếng Việt.",
+        "status": "completed",
+        "trace": {
+          "model": "gpt-5.4-mini"
+        }
+      }
+    }
+  ],
+  "passed": true,
+  "seedSession": {
+    "source": "testing-e2e/sessions/memory-seeded-recall",
+    "destination": "data/sessions/memory-seeded-recall_uc_20260629T113421Z_8916fda2"
+  }
+}

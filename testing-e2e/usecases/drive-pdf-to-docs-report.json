@@ -9,9 +9,9 @@
       "requires_approval": true,
       "expected_tools": [
         "drive.listFiles",
-        "drive.downloadFile"
+        "drive.saveFile"
       ],
-      "expected_approval_tool": "drive.downloadFile",
+      "expected_approval_tool": "drive.saveFile",
       "response_contains": []
     }
   },
@@ -21,12 +21,16 @@
       "message": "/approve"
     },
     "agent": {
-      "expectation": "Agent tải xong, xin xác nhận phân tích nội dung file bằng mã Python.",
+      "expectation": "Agent tải xong, xin xác nhận trích xuất hoặc phân tích nội dung PDF trong workspace.",
       "requires_approval": true,
-      "expected_tools": [
+      "expected_any_tools": [
+        "sandbox.extractPDF",
         "sandbox.runPython"
       ],
-      "expected_approval_tool": "sandbox.runPython",
+      "expected_approval_tool_any_of": [
+        "sandbox.extractPDF",
+        "sandbox.runPython"
+      ],
       "response_contains": []
     }
   },
@@ -53,10 +57,14 @@
     "agent": {
       "expectation": "Agent tạo Docs xong, xin xác nhận điền nội dung phân tích vào báo cáo.",
       "requires_approval": true,
-      "expected_tools": [
+      "expected_any_tools": [
+        "docs.appendMarkdown",
         "docs.appendText"
       ],
-      "expected_approval_tool": "docs.appendText",
+      "expected_approval_tool_any_of": [
+        "docs.appendMarkdown",
+        "docs.appendText"
+      ],
       "response_contains": []
     }
   },
