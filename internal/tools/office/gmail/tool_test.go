@@ -1132,6 +1132,15 @@ func TestGmailListSchemasBoundMaxResults(t *testing.T) {
 	}
 }
 
+func TestGmailListDescriptionAvoidsSentFilterForGeneralRecentSearch(t *testing.T) {
+	description := NewTool(ToolNameListEmails, nil).Description()
+	for _, want := range []string{"has anyone mentioned X", "topic keywords", "do not add in:sent"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("list emails description missing %q: %q", want, description)
+		}
+	}
+}
+
 func TestDownloadAttachmentsWritesFiles(t *testing.T) {
 	service := NewService(&mockConnector{
 		getMessage: func(ctx context.Context, userID string, messageID string) (gmailconnector.MessageDetail, error) {

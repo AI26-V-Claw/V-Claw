@@ -84,7 +84,7 @@ configs/google/credentials.json
 
 ## Environment
 
-V-Claw automatically loads local environment variables from `.env` when the CLI starts. Existing shell environment variables take precedence over `.env`.
+V-Claw automatically loads local environment variables from `.env` when the CLI starts. Most `.env` keys fill missing shell values. Provider keys and `TELEGRAM_BOT_TOKEN` are intentionally allowed to override stale global exports so the current project config wins; Telegram owner ID keys still follow normal shell-env precedence.
 
 Recommended `.env` values for Google:
 
@@ -108,7 +108,7 @@ off      expose built-in and sandbox approval tools only
 Run:
 
 ```powershell
-go run ./cmd/vclaw google auth
+vclaw google auth
 ```
 
 The auth command creates:
@@ -124,9 +124,9 @@ During auth, V-Claw starts a temporary local callback server on `127.0.0.1`, so 
 Additional command-specific help is available under:
 
 ```powershell
-go run ./cmd/vclaw google people help
-go run ./cmd/vclaw google chat help
-go run ./cmd/vclaw google gmail help
+vclaw google people help
+vclaw google chat help
+vclaw google gmail help
 ```
 
 Mutating Chat commands are available for manual CLI testing. Agent-triggered Chat write/destructive tools such as `chat.sendMessage`, `chat.updateMessage`, `chat.deleteMessage`, `chat.createSpace`, `chat.addMember`, and `chat.removeMember` must pass the approval boundary before execution.
@@ -138,7 +138,7 @@ If OAuth scopes change, delete the old token and auth again:
 
 ```powershell
 Remove-Item configs/google/token.json
-go run ./cmd/vclaw google auth
+vclaw google auth
 ```
 
 ## Smoke Tests
@@ -146,22 +146,22 @@ go run ./cmd/vclaw google auth
 Run a basic Google smoke test:
 
 ```powershell
-go run ./cmd/vclaw google smoke
+vclaw google smoke
 ```
 
 Optional Google API checks:
 
 ```powershell
-go run ./cmd/vclaw google people search-directory -query "Bao"
-go run ./cmd/vclaw google people search-directory -query "tung@yourdomain.com" -max-results 5
-go run ./cmd/vclaw google chat list-spaces
-go run ./cmd/vclaw google chat list-members -space spaces/AAAA...
-go run ./cmd/vclaw google chat list-messages -space spaces/AAAA...
-go run ./cmd/vclaw google gmail list -max-results 10
-go run ./cmd/vclaw google gmail list-threads -max-results 10
-go run ./cmd/vclaw google drive list -max-results 10
-go run ./cmd/vclaw google docs get -id DOCUMENT_ID
-go run ./cmd/vclaw google sheets get -id SPREADSHEET_ID
+vclaw google people search-directory -query "Bao"
+vclaw google people search-directory -query "tung@yourdomain.com" -max-results 5
+vclaw google chat list-spaces
+vclaw google chat list-members -space spaces/AAAA...
+vclaw google chat list-messages -space spaces/AAAA...
+vclaw google gmail list -max-results 10
+vclaw google gmail list-threads -max-results 10
+vclaw google drive list -max-results 10
+vclaw google docs get -id DOCUMENT_ID
+vclaw google sheets get -id SPREADSHEET_ID
 ```
 
 Use the `Candidate Chat users` values from the output to compare with `google chat list-members`. You can also pass a candidate `users/...` value directly to `google chat find-spaces-by-members` before listing messages.
@@ -171,52 +171,52 @@ Use the `Candidate Chat users` values from the output to compare with `google ch
 List labels and show the signed-in account profile:
 
 ```powershell
-go run ./cmd/vclaw google gmail labels
-go run ./cmd/vclaw google gmail profile
+vclaw google gmail labels
+vclaw google gmail profile
 ```
 
 List messages and threads:
 
 ```powershell
-go run ./cmd/vclaw google gmail list -query "is:unread" -max-results 10
-go run ./cmd/vclaw google gmail list-threads -query "from:alice@example.com" -max-results 10
+vclaw google gmail list -query "is:unread" -max-results 10
+vclaw google gmail list-threads -query "from:alice@example.com" -max-results 10
 ```
 
 Read one message or thread:
 
 ```powershell
-go run ./cmd/vclaw google gmail get -id MESSAGE_ID -full
-go run ./cmd/vclaw google gmail get-thread -id THREAD_ID -full
+vclaw google gmail get -id MESSAGE_ID -full
+vclaw google gmail get-thread -id THREAD_ID -full
 ```
 
 List, read, create, update, send, and delete drafts:
 
 ```powershell
-go run ./cmd/vclaw google gmail list-drafts
-go run ./cmd/vclaw google gmail get-draft -id DRAFT_ID -full
-go run ./cmd/vclaw google gmail create-draft -to alice@example.com -subject "Hello" -text "Draft body" -attachments "C:\tmp\report.pdf"
-go run ./cmd/vclaw google gmail update-draft -id DRAFT_ID -to alice@example.com -subject "Hello" -text "Updated body" -attachments "C:\tmp\report.pdf,C:\tmp\notes.txt"
-go run ./cmd/vclaw google gmail send-draft -id DRAFT_ID
-go run ./cmd/vclaw google gmail delete-draft -id DRAFT_ID
+vclaw google gmail list-drafts
+vclaw google gmail get-draft -id DRAFT_ID -full
+vclaw google gmail create-draft -to alice@example.com -subject "Hello" -text "Draft body" -attachments "C:\tmp\report.pdf"
+vclaw google gmail update-draft -id DRAFT_ID -to alice@example.com -subject "Hello" -text "Updated body" -attachments "C:\tmp\report.pdf,C:\tmp\notes.txt"
+vclaw google gmail send-draft -id DRAFT_ID
+vclaw google gmail delete-draft -id DRAFT_ID
 ```
 
 Create reply or forward drafts:
 
 ```powershell
-go run ./cmd/vclaw google gmail reply-draft -id MESSAGE_ID -to alice@example.com -text "Reply body" -attachments "C:\tmp\reply-context.pdf"
-go run ./cmd/vclaw google gmail forward-draft -id MESSAGE_ID -to alice@example.com -text "Forward note" -attachments "C:\tmp\extra.pdf"
+vclaw google gmail reply-draft -id MESSAGE_ID -to alice@example.com -text "Reply body" -attachments "C:\tmp\reply-context.pdf"
+vclaw google gmail forward-draft -id MESSAGE_ID -to alice@example.com -text "Forward note" -attachments "C:\tmp\extra.pdf"
 ```
 
 Download attachments, modify labels, and move messages to or from trash:
 
 ```powershell
-go run ./cmd/vclaw google gmail download-attachments -id MESSAGE_ID -output-dir C:\tmp\vclaw-gmail
-go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action markRead
-go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action archive
-go run ./cmd/vclaw google gmail modify-message -id MESSAGE_ID -action addLabels -labels LABEL_ID
-go run ./cmd/vclaw google gmail batch-modify -ids MESSAGE_ID_1,MESSAGE_ID_2 -action markRead
-go run ./cmd/vclaw google gmail trash-message -id MESSAGE_ID
-go run ./cmd/vclaw google gmail untrash-message -id MESSAGE_ID
+vclaw google gmail download-attachments -id MESSAGE_ID -output-dir C:\tmp\vclaw-gmail
+vclaw google gmail modify-message -id MESSAGE_ID -action markRead
+vclaw google gmail modify-message -id MESSAGE_ID -action archive
+vclaw google gmail modify-message -id MESSAGE_ID -action addLabels -labels LABEL_ID
+vclaw google gmail batch-modify -ids MESSAGE_ID_1,MESSAGE_ID_2 -action markRead
+vclaw google gmail trash-message -id MESSAGE_ID
+vclaw google gmail untrash-message -id MESSAGE_ID
 ```
 
 Draft attachments are local file paths. V-Claw supports up to 10 files per draft operation and up to 20 MiB total raw attachment data in the current MVP.
@@ -226,17 +226,17 @@ Draft attachments are local file paths. V-Claw supports up to 10 files per draft
 List spaces that the signed-in user can access:
 
 ```powershell
-go run ./cmd/vclaw google chat list-spaces
-go run ./cmd/vclaw google chat list-members -space spaces/AAAA...
-go run ./cmd/vclaw google chat list-messages -space spaces/AAAA...
+vclaw google chat list-spaces
+vclaw google chat list-members -space spaces/AAAA...
+vclaw google chat list-messages -space spaces/AAAA...
 ```
 
 Command-specific help:
 
 ```powershell
-go run ./cmd/vclaw google people help
-go run ./cmd/vclaw google chat help
-go run ./cmd/vclaw google gmail help
+vclaw google people help
+vclaw google chat help
+vclaw google gmail help
 ```
 
 ## Drive / Docs / Sheets manual test commands
@@ -244,28 +244,28 @@ go run ./cmd/vclaw google gmail help
 Read-first checks:
 
 ```powershell
-go run ./cmd/vclaw google drive list -query "trashed = false" -max-results 10
-go run ./cmd/vclaw google drive get -id FILE_ID
-go run ./cmd/vclaw google drive export -id GOOGLE_DOC_FILE_ID -mime-type text/plain
-go run ./cmd/vclaw google drive permissions -id FILE_ID
-go run ./cmd/vclaw google docs get -id DOCUMENT_ID
-go run ./cmd/vclaw google sheets get -id SPREADSHEET_ID
-go run ./cmd/vclaw google sheets read -id SPREADSHEET_ID -range "Sheet1!A1:D10"
+vclaw google drive list -query "trashed = false" -max-results 10
+vclaw google drive get -id FILE_ID
+vclaw google drive export -id GOOGLE_DOC_FILE_ID -mime-type text/plain
+vclaw google drive permissions -id FILE_ID
+vclaw google docs get -id DOCUMENT_ID
+vclaw google sheets get -id SPREADSHEET_ID
+vclaw google sheets read -id SPREADSHEET_ID -range "Sheet1!A1:D10"
 ```
 
 Manual write checks, for developer testing only:
 
 ```powershell
-go run ./cmd/vclaw google drive create-folder -name "V-Claw Smoke"
-go run ./cmd/vclaw google drive create-file -name "vclaw-smoke.txt" -content "hello"
-go run ./cmd/vclaw google drive move-files -ids "FILE_ID_1,FILE_ID_2" -target-parent FOLDER_ID
-go run ./cmd/vclaw google docs create -title "V-Claw Smoke Doc"
-go run ./cmd/vclaw google docs append -id DOCUMENT_ID -text "Smoke text"
-go run ./cmd/vclaw google docs replace -id DOCUMENT_ID -old "Smoke" -new "Verified"
-go run ./cmd/vclaw google sheets create -title "V-Claw Smoke Sheet" -sheets "Data"
-go run ./cmd/vclaw google sheets update -id SPREADSHEET_ID -range "Data!A1:B1" -values '[[\"Name\",\"Value\"]]'
-go run ./cmd/vclaw google sheets append -id SPREADSHEET_ID -range "Data!A:B" -values '[[\"Smoke\",\"OK\"]]'
-go run ./cmd/vclaw google sheets clear -id SPREADSHEET_ID -range "Data!A1:B2"
+vclaw google drive create-folder -name "V-Claw Smoke"
+vclaw google drive create-file -name "vclaw-smoke.txt" -content "hello"
+vclaw google drive move-files -ids "FILE_ID_1,FILE_ID_2" -target-parent FOLDER_ID
+vclaw google docs create -title "V-Claw Smoke Doc"
+vclaw google docs append -id DOCUMENT_ID -text "Smoke text"
+vclaw google docs replace -id DOCUMENT_ID -old "Smoke" -new "Verified"
+vclaw google sheets create -title "V-Claw Smoke Sheet" -sheets "Data"
+vclaw google sheets update -id SPREADSHEET_ID -range "Data!A1:B1" -values '[[\"Name\",\"Value\"]]'
+vclaw google sheets append -id SPREADSHEET_ID -range "Data!A:B" -values '[[\"Smoke\",\"OK\"]]'
+vclaw google sheets clear -id SPREADSHEET_ID -range "Data!A1:B2"
 ```
 
 Agent-triggered Drive/Docs/Sheets mutating tools must pass HITL approval before execution. CLI write commands are direct developer smoke checks and do not represent the agent safety boundary.

@@ -235,6 +235,12 @@ Convert relative dates and ranges to concrete values before calling tools.
 - Keep relative date words out of any tool's query parameter. Use query only for title, subject, sender, body, labels, or other content keywords — never for date phrases.
 </date-interpretation>
 
+<gmail-search>
+- For requests like "check recent emails", "kiểm tra email gần đây", "có ai nhắc đến...", or "has anyone mentioned...", search the user's received/all mailbox by the requested topic keywords first. Do not add in:sent, label:sent, from:<user>, or to:<user> unless the current user explicitly asks for sent mail or names a sender/recipient.
+- If the user asks whether anyone mentioned a topic such as "project sync", include that topic keyword/phrase in gmail.listEmails.query. Do not replace the topic with the user's own email address.
+- If a focused Gmail query returns no useful results and the task depends on finding an email, broaden the Gmail search once by removing sender/recipient/sent-mail filters before concluding that no matching email exists.
+</gmail-search>
+
 <workflows>
 Drafting emails about scheduled meetings:
 - Applies ONLY when the user asks to notify or invite someone about an event that should exist in Google Calendar (e.g. "thông báo tham gia cuộc họp ngày mai", "mời họp lúc 10h", "email về sự kiện tuần sau").

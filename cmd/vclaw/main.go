@@ -27,11 +27,18 @@ const (
 )
 
 func main() {
-	if err := loadDotEnv(defaultEnvPath); err != nil {
-		fmt.Fprintf(os.Stderr, "vclaw: load .env: %v\n", err)
-		os.Exit(1)
+	args := os.Args[1:]
+	if len(args) == 0 {
+		printUsage()
+		return
 	}
-	if err := run(context.Background(), os.Args[1:]); err != nil {
+	if args[0] != "setup" && args[0] != "doctor" && args[0] != "install" {
+		if err := loadDotEnv(defaultEnvPath); err != nil {
+			fmt.Fprintf(os.Stderr, "vclaw: load .env: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if err := run(context.Background(), args); err != nil {
 		fmt.Fprintf(os.Stderr, "vclaw: %v\n", err)
 		os.Exit(1)
 	}
@@ -44,6 +51,14 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "install":
+		return runInstall()
+	case "setup":
+		return runSetup()
+	case "doctor":
+		return runDoctor(defaultEnvPath)
+	case "start", "run":
+		return runTelegramRun(ctx, args[1:])
 	case "agent":
 		return runAgent(ctx, args[1:])
 	case "approvals":
@@ -351,6 +366,11 @@ func splitCSV(value string) []string {
 
 func printUsage() {
 	fmt.Println(`Usage:
+  vclaw install
+  vclaw setup
+  vclaw doctor
+  vclaw start
+  vclaw run
   vclaw agent -prompt "..."
   vclaw agent chat
   vclaw agent cancel [-session dev]
@@ -370,7 +390,13 @@ func printUsage() {
 
 Agent runtime env:
   VCLAW_WEB_TOOLS_MODE=auto|required|off
-  TAVILY_API_KEY=...`)
+  TAVILY_API_KEY=...
+
+Quick start:
+  vclaw install
+  vclaw setup
+  vclaw doctor
+  vclaw start`)
 }
 
 func printGoogleUsage() {
