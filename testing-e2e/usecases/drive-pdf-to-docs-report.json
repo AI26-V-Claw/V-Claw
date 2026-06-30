@@ -23,14 +23,10 @@
     "agent": {
       "expectation": "Agent tải xong, xin xác nhận trích xuất hoặc phân tích nội dung PDF trong workspace.",
       "requires_approval": true,
-      "expected_any_tools": [
-        "sandbox.extractPDF",
-        "sandbox.runPython"
+      "expected_tools": [
+        "sandbox.extractPDF"
       ],
-      "expected_approval_tool_any_of": [
-        "sandbox.extractPDF",
-        "sandbox.runPython"
-      ],
+      "expected_approval_tool": "sandbox.extractPDF",
       "response_contains": []
     }
   },
