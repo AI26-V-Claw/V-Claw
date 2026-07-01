@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"vclaw/internal/providers"
 	"vclaw/internal/tools"
 )
+
+var gmailDateOperatorPattern = regexp.MustCompile(`\b(?:after|before):\d{4}[-/]\d{1,2}[-/]\d{1,2}\b`)
 
 func (r *Runtime) appendToolObservation(ctx context.Context, sessionID string, _ []providers.Message, message providers.Message) *contracts.ErrorShape {
 	return r.appendToolObservationForRun(ctx, sessionID, "", "", message)
@@ -226,7 +229,7 @@ func normalizeProviderToolCall(now time.Time, toolCall providers.ToolCall, userT
 }
 
 func normalizeCalendarListEventsArgs(now time.Time, args map[string]any, userText string) map[string]any {
-	start, end, ok := providerRelativeDateRange(now, userText)
+	start, end, ok := calendarRelativeDateRange(now, userText)
 	if !ok {
 		return nil
 	}
@@ -241,6 +244,46 @@ func normalizeCalendarListEventsArgs(now time.Time, args map[string]any, userTex
 		normalized["query"] = normalizeRelativeProviderQuery(query, userText, calendarQueryPurposeTerms())
 	}
 	return normalized
+}
+
+func calendarRelativeDateRange(now time.Time, userText string) (time.Time, time.Time, bool) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	text := foldVietnameseSearchText(strings.ToLower(strings.TrimSpace(userText)))
+	if text == "" {
+		return time.Time{}, time.Time{}, false
+	}
+
+	switch {
+	case containsAnyText(text, "tuan sau", "next week"):
+		start := startOfWeekMonday(now).AddDate(0, 0, 7)
+		return start, start.AddDate(0, 0, 7), true
+	case containsAnyText(text, "tuan nay", "this week", "trong tuan"):
+		start := startOfWeekMonday(now)
+		return start, start.AddDate(0, 0, 7), true
+	case containsAnyText(text, "thang toi", "thang sau", "next month"):
+		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		start := thisMonth.AddDate(0, 1, 0)
+		return start, start.AddDate(0, 1, 0), true
+	case containsAnyText(text, "thang nay", "this month"):
+		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		return start, start.AddDate(0, 1, 0), true
+	case containsAnyText(text, "ngay mai", "tomorrow"):
+		start := startOfDay(now).AddDate(0, 0, 1)
+		return start, start.AddDate(0, 0, 1), true
+	case containsAnyText(text, "hom kia", "day before yesterday", "two days ago"):
+		start := startOfDay(now).AddDate(0, 0, -2)
+		return start, start.AddDate(0, 0, 1), true
+	case containsAnyText(text, "hom qua", "yesterday"):
+		start := startOfDay(now).AddDate(0, 0, -1)
+		return start, start.AddDate(0, 0, 1), true
+	case containsAnyText(text, "hom nay", "today"):
+		start := startOfDay(now)
+		return start, start.AddDate(0, 0, 1), true
+	default:
+		return time.Time{}, time.Time{}, false
+	}
 }
 
 func normalizeGmailListArgs(now time.Time, args map[string]any, userText string) map[string]any {
@@ -270,6 +313,7 @@ func normalizeGmailListArgs(now time.Time, args map[string]any, userText string)
 		return normalized
 	}
 	if ok {
+		baseQuery = stripGmailDateOperators(baseQuery)
 		normalized["after"] = start.Format("2006-01-02")
 		normalized["before"] = end.Format("2006-01-02")
 	}
@@ -281,6 +325,11 @@ func normalizeGmailListArgs(now time.Time, args map[string]any, userText string)
 		normalized["query"] = baseQuery
 	}
 	return normalized
+}
+
+func stripGmailDateOperators(query string) string {
+	stripped := gmailDateOperatorPattern.ReplaceAllString(strings.TrimSpace(query), "")
+	return strings.Join(strings.Fields(stripped), " ")
 }
 
 func gmailDisjointDateQuery(now time.Time, userText string) (string, bool) {
@@ -350,6 +399,9 @@ func providerRelativeDateRange(now time.Time, userText string) (time.Time, time.
 	}
 
 	switch {
+	case containsAnyText(text, "gan day", "recent", "recently", "lately"):
+		start := startOfDay(now).AddDate(0, 0, -7)
+		return start, start.AddDate(0, 0, 8), true
 	case containsAnyText(text, "tuan sau", "next week"):
 		start := startOfWeekMonday(now).AddDate(0, 0, 7)
 		return start, start.AddDate(0, 0, 7), true
@@ -573,4 +625,3 @@ func containsAnyText(text string, needles ...string) bool {
 	}
 	return false
 }
-

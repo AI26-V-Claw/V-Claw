@@ -1062,11 +1062,13 @@ func (r *Runtime) responseForUnclaimedApprovedAction(record ActionRecord, pendin
 func buildApprovalContinuationMessage(pending pendingApproval, result tools.ToolResult, now time.Time) contracts.UserMessage {
 	var text string
 	originalRequest := approvalOriginalRequest(pending.message)
-	resultNote := approvalContinuationResultNote(pending.toolCall.Name, docsContentWriteRequested(originalRequest), docsCreateDocumentHasInitialContent(pending.toolCall))
+	docsContentRequired := docsContentWriteRequested(originalRequest)
+	resultNote := approvalContinuationResultNote(pending.toolCall.Name, docsContentRequired, docsCreateDocumentHasInitialContent(pending.toolCall))
+	remainingToolCalls := approvalContinuationRemainingToolCalls(pending.remainingToolCalls, pending.toolCall.Name, docsContentRequired)
 	resultContent := truncateToolContentForLLM(result.ContentForLLM)
-	if len(pending.remainingToolCalls) > 0 {
-		remainingNames := make([]string, 0, len(pending.remainingToolCalls))
-		for _, tc := range pending.remainingToolCalls {
+	if len(remainingToolCalls) > 0 {
+		remainingNames := make([]string, 0, len(remainingToolCalls))
+		for _, tc := range remainingToolCalls {
 			remainingNames = append(remainingNames, tc.Name)
 		}
 		text = strings.TrimSpace(fmt.Sprintf(`Continuing the original multi-step request after an approved tool completed.
@@ -1135,9 +1137,31 @@ func approvalOriginalRequest(message contracts.UserMessage) string {
 	return strings.TrimSpace(message.Text)
 }
 
+func approvalContinuationRemainingToolCalls(toolCalls []providers.ToolCall, completedToolName string, docsContentRequired bool) []providers.ToolCall {
+	remaining := cloneProviderToolCalls(toolCalls)
+	if strings.TrimSpace(completedToolName) != "sandbox.extractPDF" || docsContentRequired {
+		return remaining
+	}
+	filtered := remaining[:0]
+	for _, call := range remaining {
+		if strings.HasPrefix(strings.TrimSpace(call.Name), "docs.") {
+			continue
+		}
+		filtered = append(filtered, call)
+	}
+	return filtered
+}
+
 func docsContentWriteRequested(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	if lower == "" {
+		return false
+	}
+	docsTarget := containsAnyText(lower,
+		"docs", "google docs", "google document", "document",
+		"tài liệu", "tai lieu", "file doc",
+	)
+	if !docsTarget {
 		return false
 	}
 	if containsAnyText(lower,
@@ -1153,6 +1177,7 @@ func docsContentWriteRequested(text string) bool {
 	writeIntent := containsAnyText(lower,
 		"lưu", "luu", "save", "ghi", "write", "đưa vào", "dua vao", "put into", "append", "chèn", "chen", "insert",
 		"gồm", "gom", "bao gồm", "bao gom", "include", "includes", "including",
+		"tạo", "tao", "create",
 	)
 	return contentSource && writeIntent
 }
@@ -1179,6 +1204,9 @@ func approvalContinuationResultNote(toolName string, docsContentRequired bool, d
 	}
 	if strings.TrimSpace(toolName) == "sandbox.extractPDF" && docsContentRequired {
 		return "MANDATORY: sandbox.extractPDF only created a local Markdown file. The original request requires content to be stored in Google Docs, so the task is NOT complete. Create a fresh docs.createDocument for this request unless the current user request explicitly names an existing document, then call docs.appendMarkdown using that document ID and the exact absolute host workspace path returned by sandbox.extractPDF as localPath. Do not reuse an older Google Docs document ID/link from memory, transcript, previous tool results, or previous requests. Do not answer with a completion message before docs.appendMarkdown succeeds."
+	}
+	if strings.TrimSpace(toolName) == "sandbox.extractPDF" && !docsContentRequired {
+		return "IMPORTANT: the original request did not ask to create, save, or write a Google Docs document. Do not call docs.createDocument, docs.appendText, or docs.appendMarkdown just because PDF extraction produced a Markdown file. Summarize the extracted content in chat unless another explicitly requested non-Docs task remains."
 	}
 	if strings.TrimSpace(toolName) == "docs.createDocument" && docsContentRequired {
 		if docsCreateHasInitialContent {

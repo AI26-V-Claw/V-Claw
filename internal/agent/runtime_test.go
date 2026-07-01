@@ -151,6 +151,50 @@ func TestRuntimeIncludesAttachmentPathsInProviderUserMessage(t *testing.T) {
 	}
 }
 
+func TestAttachmentContextUsesScannedAttachmentMetadata(t *testing.T) {
+	safePath := `D:\tmp\safe.pdf`
+	unsafePath := `D:\tmp\unsafe.pdf`
+	context := textWithAttachmentContext("read attached file", map[string]any{
+		"attachments": []map[string]any{
+			{
+				"path":       safePath,
+				"filename":   "safe.pdf",
+				"mimeType":   "application/pdf",
+				"fileSafety": map[string]any{"decision": "allow", "flags": []any{"type_match"}},
+			},
+			{
+				"path":       unsafePath,
+				"filename":   "unsafe.pdf",
+				"mimeType":   "application/pdf",
+				"fileSafety": map[string]any{"decision": "block", "flags": []any{"dangerous_type"}},
+			},
+		},
+	})
+
+	if !strings.Contains(context, safePath) {
+		t.Fatalf("expected scanned attachment path in context, got %s", context)
+	}
+	if strings.Contains(context, unsafePath) {
+		t.Fatalf("unsafe attachment path must not be exposed to provider context, got %s", context)
+	}
+}
+
+func TestAttachmentContextAllowsPromptInjectionWarningMetadata(t *testing.T) {
+	path := `D:\tmp\note.txt`
+	context := textWithAttachmentContext("read attached file", map[string]any{
+		"attachments": []map[string]any{{
+			"path":       path,
+			"filename":   "note.txt",
+			"mimeType":   "text/plain",
+			"fileSafety": map[string]any{"decision": "requires_approval", "flags": []any{"prompt_injection_suspected"}},
+		}},
+	})
+
+	if !strings.Contains(context, path) {
+		t.Fatalf("expected prompt-injection-warning attachment to remain available as untrusted data, got %s", context)
+	}
+}
+
 func TestRuntimeIncludesExactNestedSandboxAttachmentPath(t *testing.T) {
 	workspaceBase := t.TempDir()
 	t.Setenv("VCLAW_SANDBOX_WORKSPACE_DIR", workspaceBase)
@@ -1324,6 +1368,41 @@ func TestNormalizeCalendarListEventsThisWeekOverridesWrongModelRange(t *testing.
 	}
 }
 
+func TestNormalizeCalendarListEventsThisWeekOnJuneThirty(t *testing.T) {
+	now := time.Date(2026, 6, 30, 12, 16, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "calendar.listEvents",
+		Arguments: map[string]any{
+			"timeMin": "2026-06-23T00:00:00+07:00",
+			"timeMax": "2026-07-01T00:00:00+07:00",
+			"query":   "lịch tuần này",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "tôi có lịch gì trong tuần này")
+
+	if normalized.Arguments["timeMin"] != "2026-06-29T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMin: %#v", normalized.Arguments["timeMin"])
+	}
+	if normalized.Arguments["timeMax"] != "2026-07-06T00:00:00+07:00" {
+		t.Fatalf("unexpected timeMax: %#v", normalized.Arguments["timeMax"])
+	}
+}
+
+func TestNormalizeCalendarListEventsDoesNotUseRecentGmailWindow(t *testing.T) {
+	now := time.Date(2026, 6, 30, 12, 16, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{Name: "calendar.listEvents", Arguments: map[string]any{}}
+
+	normalized := normalizeProviderToolCall(now, call, "kiểm tra lịch gần đây")
+
+	if _, ok := normalized.Arguments["timeMin"]; ok {
+		t.Fatalf("calendar should not reuse Gmail recent window: %#v", normalized.Arguments)
+	}
+	if _, ok := normalized.Arguments["timeMax"]; ok {
+		t.Fatalf("calendar should not reuse Gmail recent window: %#v", normalized.Arguments)
+	}
+}
+
 func TestNormalizeCalendarListEventsNextMonth(t *testing.T) {
 	now := time.Date(2026, 6, 3, 17, 39, 0, 0, time.FixedZone("ICT", 7*60*60))
 	call := providers.ToolCall{Name: "calendar.listEvents", Arguments: map[string]any{}}
@@ -1387,6 +1466,28 @@ func TestNormalizeGmailListEmailsDayBeforeYesterdayUsesDateOnlyRange(t *testing.
 		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
 	}
 	if normalized.Arguments["before"] != "2026-06-09" {
+		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
+	}
+}
+
+func TestNormalizeGmailListEmailsRecentStripsEmbeddedDateOperators(t *testing.T) {
+	now := time.Date(2026, 6, 30, 10, 22, 0, 0, time.FixedZone("ICT", 7*60*60))
+	call := providers.ToolCall{
+		Name: "gmail.listEmails",
+		Arguments: map[string]any{
+			"query": "project sync after:2026/06/29 before:2026/06/30",
+		},
+	}
+
+	normalized := normalizeProviderToolCall(now, call, "ki\u1ec3m tra c\u00e1c email g\u1ea7n \u0111\u00e2y xem c\u00f3 ai nh\u1eafc project sync kh\u00f4ng")
+
+	if normalized.Arguments["query"] != "project sync" {
+		t.Fatalf("unexpected query: %#v", normalized.Arguments["query"])
+	}
+	if normalized.Arguments["after"] != "2026-06-23" {
+		t.Fatalf("unexpected after: %#v", normalized.Arguments["after"])
+	}
+	if normalized.Arguments["before"] != "2026-07-01" {
 		t.Fatalf("unexpected before: %#v", normalized.Arguments["before"])
 	}
 }

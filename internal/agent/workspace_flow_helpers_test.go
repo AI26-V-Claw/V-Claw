@@ -6,6 +6,7 @@ import (
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
+	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 )
 
@@ -41,6 +42,7 @@ func newTestRegistry() *tools.ToolRegistry {
 		{"docs.getDocument", tools.CapabilityReadOnly, tools.RiskLevelSensitiveRead},
 		{"docs.createDocument", tools.CapabilityMutating, tools.RiskLevelExternalWrite},
 		{"docs.appendText", tools.CapabilityMutating, tools.RiskLevelExternalWrite},
+		{"docs.appendMarkdown", tools.CapabilityMutating, tools.RiskLevelExternalWrite},
 		{"docs.deleteContent", tools.CapabilityMutating, tools.RiskLevelExternalWrite},
 		// Sheets
 		{"sheets.getSpreadsheet", tools.CapabilityReadOnly, tools.RiskLevelSafeRead},
@@ -152,6 +154,7 @@ func TestIsWorkspaceWriteTool(t *testing.T) {
 		{"drive trash", "drive.trashFile", true},
 		{"docs create", "docs.createDocument", true},
 		{"docs append", "docs.appendText", true},
+		{"docs append markdown", "docs.appendMarkdown", true},
 		{"docs delete", "docs.deleteContent", true},
 		{"sheets create", "sheets.createSpreadsheet", true},
 		{"sheets update", "sheets.updateValues", true},
@@ -305,6 +308,92 @@ func TestValidateReadBeforeWrite_MixedBatchGmailCalendarChat(t *testing.T) {
 	warning, violated := ValidateReadBeforeWrite(proposed, previousResults, registry)
 	if violated {
 		t.Fatalf("expected batch with read+write to pass, got warning=%q", warning)
+	}
+}
+
+func TestPriorSessionContextAllowsWorkspaceWrite_DocsAppendMarkdownFromExtractedFile(t *testing.T) {
+	registry := newTestRegistry()
+	localPath := `D:\Wan_Document\VinUni\VSF\V-Claw\.sandbox-workspace\agent\workspace\plain-pdf-source_extracted.md`
+	memory := sessions.SessionMemory{
+		LastActionResults: []sessions.ActionResult{
+			{
+				ToolName: "sandbox.extractPDF",
+				Content:  "Structured PDF Markdown created at host path " + localPath,
+				Artifact: &sessions.ActionArtifact{
+					Kind:  "file",
+					Label: "plain-pdf-source_extracted.md",
+					URI:   localPath,
+				},
+			},
+			{
+				ToolName: "docs.createDocument",
+				Content:  `{"id":"doc_123","title":"Tóm Tắt PDF Thường"}`,
+				Artifact: &sessions.ActionArtifact{
+					Kind:  "google.docs.document",
+					Label: "Tóm Tắt PDF Thường",
+					ID:    "doc_123",
+				},
+			},
+		},
+		FileRefs: map[string]sessions.FileRef{
+			"plain-pdf-source_extracted.md": {
+				Source: "local",
+				Path:   localPath,
+			},
+		},
+	}
+	proposed := []providers.ToolCall{
+		{
+			ID:   "call_1",
+			Name: "docs.appendMarkdown",
+			Arguments: map[string]any{
+				"documentId": "doc_123",
+				"localPath":  localPath,
+			},
+		},
+	}
+
+	if !PriorSessionContextAllowsWorkspaceWrite(proposed, memory, registry) {
+		t.Fatal("expected prior docs and extracted file context to allow docs.appendMarkdown")
+	}
+}
+
+func TestPriorSessionContextAllowsWorkspaceWrite_RejectsUnknownDocument(t *testing.T) {
+	registry := newTestRegistry()
+	proposed := []providers.ToolCall{
+		{
+			ID:   "call_1",
+			Name: "docs.appendMarkdown",
+			Arguments: map[string]any{
+				"documentId": "doc_missing",
+				"markdown":   "# Content",
+			},
+		},
+	}
+
+	if PriorSessionContextAllowsWorkspaceWrite(proposed, sessions.SessionMemory{}, registry) {
+		t.Fatal("expected write to unknown document to require a current-run read")
+	}
+}
+
+func TestPriorSessionContextAllowsWorkspaceWrite_RejectsNonDocsWrite(t *testing.T) {
+	registry := newTestRegistry()
+	memory := sessions.SessionMemory{
+		LastActionResults: []sessions.ActionResult{{
+			ToolName: "docs.createDocument",
+			Content:  `{"id":"doc_123"}`,
+			Artifact: &sessions.ActionArtifact{
+				Kind: "google.docs.document",
+				ID:   "doc_123",
+			},
+		}},
+	}
+	proposed := []providers.ToolCall{
+		{ID: "call_1", Name: "chat.sendMessage", Arguments: map[string]any{"space": "spaces/AAA", "text": "Done"}},
+	}
+
+	if PriorSessionContextAllowsWorkspaceWrite(proposed, memory, registry) {
+		t.Fatal("expected unrelated workspace writes to keep normal read-before-write protection")
 	}
 }
 

@@ -172,6 +172,38 @@ func TestSandboxExtractPDFContinuationRequiresFreshDocsAppend(t *testing.T) {
 	}
 }
 
+func TestSandboxExtractPDFContinuationDoesNotCreateDocsForSummaryOnlyRequest(t *testing.T) {
+	result := tools.ToolResult{
+		Success:       true,
+		ContentForLLM: `{"markdownPath":"D:\\Wan_Document\\VinUni\\VSF\\V-Claw\\.sandbox-workspace\\agent\\workspace\\vclaw_project_brief_extracted.md","preview":"V-Claw project brief"}`,
+	}
+	pending := pendingApproval{
+		message: contracts.UserMessage{
+			RequestID: "req_extract_summary",
+			SessionID: "sess_extract_summary",
+			Channel:   "telegram",
+			Timestamp: fixedTestTime(),
+			Text:      "Tóm tắt nội dung file này giúp tôi",
+		},
+		toolCall: providers.ToolCall{Name: sandboxtool.ToolNameExtractPDF},
+		request:  contracts.ApprovalRequest{ApprovalID: "appr_extract_summary"},
+		remainingToolCalls: []providers.ToolCall{
+			{ID: "call_docs", Name: docstool.ToolNameCreateDocument, Arguments: map[string]any{"title": "Tóm tắt V-Claw Project Brief"}},
+		},
+	}
+
+	continuation := buildApprovalContinuationMessage(pending, result, fixedTestTime())
+	if strings.Contains(continuation.Text, "Continue by calling the remaining tools") {
+		t.Fatalf("summary-only request must not force remaining docs tool calls:\n%s", continuation.Text)
+	}
+	if !strings.Contains(continuation.Text, "did not ask to create, save, or write a Google Docs document") {
+		t.Fatalf("expected no-docs guidance after PDF summary extraction:\n%s", continuation.Text)
+	}
+	if strings.Contains(continuation.Text, "MANDATORY") {
+		t.Fatalf("summary-only request must not be treated as a Docs content write:\n%s", continuation.Text)
+	}
+}
+
 func TestApprovalContinuationPreservesOriginalRequestAcrossTools(t *testing.T) {
 	original := "Trích xuất PDF và lưu nội dung vào Docs"
 	first := pendingApproval{

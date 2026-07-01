@@ -789,6 +789,9 @@ func attachmentPathsFromMetadata(metadata map[string]any) []string {
 	if metadata == nil {
 		return nil
 	}
+	if attachments := scannedAttachmentPaths(metadata["attachments"]); len(attachments) > 0 {
+		return attachments
+	}
 	raw, ok := metadata["attachmentPaths"]
 	if !ok {
 		return nil
@@ -815,6 +818,58 @@ func attachmentPathsFromMetadata(metadata map[string]any) []string {
 		}
 	}
 	return cleaned
+}
+
+func scannedAttachmentPaths(raw any) []string {
+	out := []string{}
+	for _, item := range anySlice(raw) {
+		itemMap, ok := item.(map[string]any)
+		if !ok || !attachmentFileSafetyTransferAllowed(itemMap) {
+			continue
+		}
+		path := strings.TrimSpace(stringMapValue(itemMap, "path", "localPath"))
+		if path != "" {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+func attachmentFileSafetyTransferAllowed(attachment map[string]any) bool {
+	raw, ok := attachment["fileSafety"]
+	if !ok {
+		raw, ok = attachment["file_safety"]
+	}
+	if !ok {
+		return false
+	}
+	metadata, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	decision := strings.ToLower(strings.TrimSpace(stringMapValue(metadata, "decision")))
+	switch decision {
+	case "allow":
+		return true
+	case "requires_approval":
+		return fileSafetyFlagsContain(metadata, "prompt_injection_suspected")
+	default:
+		return false
+	}
+}
+
+func fileSafetyFlagsContain(metadata map[string]any, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	for _, raw := range anySlice(metadata["flags"]) {
+		text, ok := raw.(string)
+		if ok && strings.EqualFold(strings.TrimSpace(text), want) {
+			return true
+		}
+	}
+	return false
 }
 
 func contextualFollowUpText(recentHistory []string, currentText string) string {

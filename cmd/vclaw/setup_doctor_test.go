@@ -58,6 +58,37 @@ func TestPromptEnvValueStripsBOM(t *testing.T) {
 	}
 }
 
+func TestSetUserPathCommandPassesPathAsScriptBlockArgument(t *testing.T) {
+	pathValue := `C:\Users\Windows\.local\bin;D:\Wan_Document\VinUni\VSF\V-Claw`
+	cmd := setUserPathCommand(pathValue)
+	got := strings.Join(cmd.Args, "\n")
+	for _, want := range []string{
+		"powershell",
+		"-NoProfile",
+		"-Command",
+		"VCLAW_UPDATED_USER_PATH",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("set user path command missing %q in args: %#v", want, cmd.Args)
+		}
+	}
+	if strings.Contains(got, pathValue) {
+		t.Fatalf("path value must not be embedded in PowerShell command args: %#v", cmd.Args)
+	}
+	if !containsEnv(cmd.Env, "VCLAW_UPDATED_USER_PATH="+pathValue) {
+		t.Fatalf("path value must be passed via process env, got %#v", cmd.Env)
+	}
+}
+
+func containsEnv(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunDoctorFailsMalformedDotEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(path, []byte("BROKEN\n"), 0600); err != nil {

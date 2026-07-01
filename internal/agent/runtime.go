@@ -837,7 +837,7 @@ agentLoop:
 			assistantMessage.Role = providers.MessageRoleAssistant
 		}
 		if len(assistantMessage.ToolCalls) == 0 && freshWorkspaceReadRequest && len(toolResults) > 0 {
-			if rendered, ok := freshWorkspaceReadAnswerFromToolResults(toolResults); ok {
+			if rendered, ok := freshWorkspaceReadAnswerFromToolResults(message.Text, toolResults); ok {
 				assistantMessage.Content = rendered
 			}
 		}
@@ -849,6 +849,28 @@ agentLoop:
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
+			if freshWorkspaceReadRequest {
+				if missingReads := missingRequestedWorkspaceReadDomains(message.Text, toolResults); len(missingReads) > 0 {
+					r.logger.Info("assistant finalized before all requested workspace reads; retrying missing reads",
+						"request_id", message.RequestID,
+						"session_id", message.SessionID,
+						"iteration", iteration,
+						"missing_reads", strings.Join(missingReads, ","),
+						"content_preview", logPreview(assistantMessage.Content, 180),
+					)
+					if len(providerTranscript) > 0 {
+						providerTranscript = providerTranscript[:len(providerTranscript)-1]
+					}
+					providerTranscript = append(providerTranscript, providers.Message{
+						Role: providers.MessageRoleSystem,
+						Content: strings.TrimSpace(fmt.Sprintf(`The previous assistant response finalized before completing every workspace read requested in the current user message.
+Missing read domains: %s.
+Call the missing read tool(s) now, then synthesize one final answer using all current-request tool results.
+Do not answer with only one tool domain when the user requested multiple branches or a briefing.`, strings.Join(missingReads, ", "))),
+					})
+					continue
+				}
+			}
 			if freshWorkspaceReadRequest && len(toolResults) == 0 {
 				r.logger.Info("assistant answered fresh workspace read without tool call; retrying for read tool",
 					"request_id", message.RequestID,
@@ -1033,6 +1055,12 @@ If required information is missing, ask one concise clarification question inste
 				writes := WorkspaceWriteCalls(assistantMessage.ToolCalls, r.registry)
 				if isCreateFromScratch(writes) {
 					r.logger.Info("workspace flow: create-from-scratch write allowed without prior read",
+						"request_id", message.RequestID,
+						"session_id", message.SessionID,
+						"iteration", iteration,
+					)
+				} else if PriorSessionContextAllowsWorkspaceWrite(assistantMessage.ToolCalls, sessionMemory, r.registry) {
+					r.logger.Info("workspace flow: prior session context write allowed without current-run read",
 						"request_id", message.RequestID,
 						"session_id", message.SessionID,
 						"iteration", iteration,

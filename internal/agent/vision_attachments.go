@@ -148,6 +148,9 @@ func imageAttachmentCandidates(metadata map[string]any) []visionImageCandidate {
 		if !ok {
 			continue
 		}
+		if !attachmentFileSafetyTransferAllowed(itemMap) {
+			continue
+		}
 		path := stringMapValue(itemMap, "path", "localPath")
 		filename := stringMapValue(itemMap, "filename", "name")
 		mimeType := stringMapValue(itemMap, "mimeType", "mime_type")

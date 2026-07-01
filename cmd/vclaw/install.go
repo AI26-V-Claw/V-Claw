@@ -57,11 +57,17 @@ func addUserPath(dir string) error {
 	if strings.TrimSpace(current) != "" {
 		updated = current + ";" + dir
 	}
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", "[Environment]::SetEnvironmentVariable('Path', $args[0], 'User')", updated)
+	cmd := setUserPathCommand(updated)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("update user PATH: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func setUserPathCommand(updated string) *exec.Cmd {
+	cmd := exec.Command("powershell", "-NoProfile", "-Command", "$pathValue = [Environment]::GetEnvironmentVariable('VCLAW_UPDATED_USER_PATH', 'Process'); [Environment]::SetEnvironmentVariable('Path', $pathValue, 'User')")
+	cmd.Env = append(os.Environ(), "VCLAW_UPDATED_USER_PATH="+updated)
+	return cmd
 }
 
 func readUserPath() (string, error) {

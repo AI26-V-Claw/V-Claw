@@ -115,7 +115,7 @@ func renderAgentResponse(response contracts.AgentResponse) string {
 		if result.Success {
 			if data, ok := result.Data.(map[string]any); ok {
 				if text, ok := data["contentForUser"].(string); ok && strings.TrimSpace(text) != "" {
-					return limitOutboundText(renderToolFallback(result.ToolName, text))
+					return limitOutboundText(appendArtifactLinks(renderToolFallback(result.ToolName, text), []contracts.ToolResult{result}))
 				}
 			}
 		}
@@ -151,10 +151,14 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 		case contracts.AgentStatusCancelled:
 			kind = contracts.UserOutputKindError
 		}
-		return &contracts.UserOutput{
+		output := &contracts.UserOutput{
 			Kind: kind,
 			Text: limitOutboundText(renderAssistantMessage(response.Message, response.ToolResults)),
 		}
+		if artifactRef := latestSuccessfulArtifactRef(response.ToolResults); artifactRef != nil {
+			output.ArtifactRef = artifactRef
+		}
+		return output
 	}
 
 	if response.Error != nil {
@@ -174,7 +178,7 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 				if text := extractUserText(result.Data); strings.TrimSpace(text) != "" {
 					return &contracts.UserOutput{
 						Kind:        contracts.UserOutputKindSuccess,
-						Text:        limitOutboundText(renderToolFallback(result.ToolName, text)),
+						Text:        limitOutboundText(appendArtifactLinks(renderToolFallback(result.ToolName, text), []contracts.ToolResult{result})),
 						ArtifactRef: artifactRef,
 					}
 				}
@@ -183,7 +187,7 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 				if text, ok := data["contentForUser"].(string); ok && strings.TrimSpace(text) != "" {
 					output := &contracts.UserOutput{
 						Kind: contracts.UserOutputKindSuccess,
-						Text: limitOutboundText(renderToolFallback(result.ToolName, text)),
+						Text: limitOutboundText(appendArtifactLinks(renderToolFallback(result.ToolName, text), []contracts.ToolResult{result})),
 					}
 					if artifactRef := preferredArtifactRef(result); artifactRef != nil {
 						output.ArtifactRef = artifactRef
@@ -206,6 +210,18 @@ func renderUserOutput(response contracts.AgentResponse) *contracts.UserOutput {
 // text. Returns nil when the tool produced no referenceable artifact.
 func preferredArtifactRef(result contracts.ToolResult) *contracts.ArtifactRef {
 	return result.ArtifactRef
+}
+
+func latestSuccessfulArtifactRef(results []contracts.ToolResult) *contracts.ArtifactRef {
+	for i := len(results) - 1; i >= 0; i-- {
+		if !results[i].Success {
+			continue
+		}
+		if artifactRef := preferredArtifactRef(results[i]); artifactRef != nil && strings.TrimSpace(artifactRef.URI) != "" {
+			return artifactRef
+		}
+	}
+	return nil
 }
 
 func extractUserText(data any) string {
