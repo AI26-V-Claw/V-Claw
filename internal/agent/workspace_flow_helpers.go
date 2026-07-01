@@ -10,6 +10,7 @@ import (
 
 	"vclaw/internal/contracts"
 	"vclaw/internal/providers"
+	"vclaw/internal/sessions"
 	"vclaw/internal/tools"
 )
 
@@ -232,4 +233,91 @@ func WorkspaceWriteCalls(proposedCalls []providers.ToolCall, registry *tools.Too
 		}
 	}
 	return writes
+}
+
+// PriorSessionContextAllowsWorkspaceWrite reports whether a workspace write can
+// safely proceed using artifacts from previous turns in the same session. The
+// write still goes through normal risk/approval handling; this only prevents the
+// read-before-write guard from blocking continuation requests such as appending
+// an already-extracted PDF Markdown file into a Google Docs document that was
+// created in the previous turn.
+func PriorSessionContextAllowsWorkspaceWrite(
+	proposedCalls []providers.ToolCall,
+	memory sessions.SessionMemory,
+	registry *tools.ToolRegistry,
+) bool {
+	writes := WorkspaceWriteCalls(proposedCalls, registry)
+	if len(writes) == 0 {
+		return false
+	}
+	for _, call := range writes {
+		if !priorSessionContextAllowsWorkspaceWriteCall(call, memory) {
+			return false
+		}
+	}
+	return true
+}
+
+func priorSessionContextAllowsWorkspaceWriteCall(call providers.ToolCall, memory sessions.SessionMemory) bool {
+	switch call.Name {
+	case "docs.appendMarkdown":
+		documentID := stringArgument(call.Arguments, "documentId")
+		if documentID == "" || !memoryHasDocsDocument(memory, documentID) {
+			return false
+		}
+		if stringArgument(call.Arguments, "markdown") != "" {
+			return true
+		}
+		return memoryHasLocalFileRef(memory, stringArgument(call.Arguments, "localPath"))
+	case "docs.appendText":
+		documentID := stringArgument(call.Arguments, "documentId")
+		if documentID == "" || !memoryHasDocsDocument(memory, documentID) {
+			return false
+		}
+		if stringArgument(call.Arguments, "text") != "" {
+			return true
+		}
+		return memoryHasLocalFileRef(memory, stringArgument(call.Arguments, "localPath"))
+	default:
+		return false
+	}
+}
+
+func memoryHasDocsDocument(memory sessions.SessionMemory, documentID string) bool {
+	documentID = strings.TrimSpace(documentID)
+	if documentID == "" {
+		return false
+	}
+	for _, result := range memory.LastActionResults {
+		if result.Artifact == nil {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(result.Artifact.Kind))
+		if result.Artifact.ID == documentID && (strings.Contains(kind, "docs.document") || strings.Contains(kind, "docs")) {
+			return true
+		}
+	}
+	return false
+}
+
+func memoryHasLocalFileRef(memory sessions.SessionMemory, localPath string) bool {
+	localPath = strings.TrimSpace(localPath)
+	if localPath == "" {
+		return false
+	}
+	for _, ref := range memory.FileRefs {
+		if strings.EqualFold(strings.TrimSpace(ref.Path), localPath) {
+			return true
+		}
+	}
+	for _, result := range memory.LastActionResults {
+		if result.Artifact == nil {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(result.Artifact.Kind))
+		if kind == "file" && strings.EqualFold(strings.TrimSpace(result.Artifact.URI), localPath) {
+			return true
+		}
+	}
+	return false
 }

@@ -14,7 +14,7 @@ func renderAssistantMessage(message string, results []contracts.ToolResult) stri
 		return ""
 	}
 	if rendered := preferredGmailListFallback(message, results); rendered != "" {
-		return rendered
+		return appendArtifactLinks(rendered, results)
 	}
 	if looksLikeMachinePayload(message) {
 		for i := len(results) - 1; i >= 0; i-- {
@@ -22,24 +22,89 @@ func renderAssistantMessage(message string, results []contracts.ToolResult) stri
 				continue
 			}
 			if rendered := renderMachinePayload(results[i].ToolName, message); rendered != "" {
-				return rendered
+				return appendArtifactLinks(rendered, results)
 			}
 		}
 		if rendered := renderMachinePayload("", message); rendered != "" {
-			return rendered
+			return appendArtifactLinks(rendered, results)
 		}
 		if !shouldFallbackToToolResultForMachineLikeMessage(message) {
 			message = sanitizeDeliveryClaimsForResults(message, results)
-			return formatOutboundText(message)
+			return appendArtifactLinks(formatOutboundText(message), results)
 		}
 		for i := len(results) - 1; i >= 0; i-- {
 			if rendered := renderToolResultForUser(results[i]); rendered != "" {
-				return rendered
+				return appendArtifactLinks(rendered, results)
 			}
 		}
 	}
 	message = sanitizeDeliveryClaimsForResults(message, results)
-	return formatOutboundText(message)
+	return appendArtifactLinks(formatOutboundText(message), results)
+}
+
+func appendArtifactLinks(text string, results []contracts.ToolResult) string {
+	text = strings.TrimSpace(text)
+	links := artifactLinks(results, text)
+	if len(links) == 0 {
+		return text
+	}
+	lines := []string{text, "", "Link kết quả:"}
+	for _, link := range links {
+		if link.label == "" {
+			lines = append(lines, "- "+link.uri)
+			continue
+		}
+		lines = append(lines, "- "+link.label+": "+link.uri)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+type artifactLink struct {
+	label string
+	uri   string
+}
+
+func artifactLinks(results []contracts.ToolResult, existingText string) []artifactLink {
+	seen := map[string]bool{}
+	links := make([]artifactLink, 0, 3)
+	for _, result := range results {
+		if !result.Success || result.ArtifactRef == nil {
+			continue
+		}
+		uri := strings.TrimSpace(result.ArtifactRef.URI)
+		if uri == "" || seen[uri] || strings.Contains(existingText, uri) {
+			continue
+		}
+		seen[uri] = true
+		links = append(links, artifactLink{
+			label: artifactLabel(result.ArtifactRef),
+			uri:   uri,
+		})
+	}
+	return links
+}
+
+func artifactLabel(ref *contracts.ArtifactRef) string {
+	if ref == nil {
+		return ""
+	}
+	if label := strings.TrimSpace(ref.Label); label != "" {
+		return label
+	}
+	switch strings.TrimSpace(ref.Kind) {
+	case "google.docs.document":
+		return "Google Docs"
+	case "google.sheets.spreadsheet":
+		return "Google Sheets"
+	case "google.drive.file":
+		return "Google Drive"
+	case "calendar.event":
+		return "Google Calendar"
+	case "gmail.message":
+		return "Gmail"
+	default:
+		return strings.TrimSpace(ref.Kind)
+	}
 }
 
 func preferredGmailListFallback(message string, results []contracts.ToolResult) string {

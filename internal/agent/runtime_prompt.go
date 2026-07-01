@@ -232,7 +232,9 @@ Convert relative dates and ranges to concrete values before calling tools.
 - "next week" / "tuần sau": next Monday 00:00 through the following Monday 00:00.
 - For a date range: timeMin = start of range, timeMax = exclusive end of range.
 - "today" / "hôm nay" for Gmail: after = today's local date (YYYY-MM-DD), before = tomorrow's local date.
+- "recent" / "gần đây" for Gmail: use a broad recent window, after = local date 7 days ago (YYYY-MM-DD), before = tomorrow's local date.
 - Keep relative date words out of any tool's query parameter. Use query only for title, subject, sender, body, labels, or other content keywords — never for date phrases.
+- Do not put Gmail date operators such as after:YYYY/MM/DD or before:YYYY/MM/DD inside query when using after/before arguments.
 </date-interpretation>
 
 <gmail-search>

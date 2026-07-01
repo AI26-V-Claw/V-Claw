@@ -117,6 +117,54 @@ func TestRenderAgentResponseFormatsCalendarListPayloadWithEventLinks(t *testing.
 	}
 }
 
+func TestRenderAgentResponseAppendsArtifactLinkForDocsMessage(t *testing.T) {
+	got := renderAgentResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "Mình đã tạo và cập nhật Google Docs xong.",
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "docs.appendMarkdown",
+			Success:  true,
+			ArtifactRef: &contracts.ArtifactRef{
+				Kind:  "google.docs.document",
+				Label: "Tóm Tắt PDF Thường",
+				ID:    "doc_123",
+				URI:   "https://docs.google.com/document/d/doc_123/edit",
+			},
+		}},
+	})
+
+	for _, want := range []string{
+		"Mình đã tạo và cập nhật Google Docs xong.",
+		"Link kết quả:",
+		"Tóm Tắt PDF Thường: https://docs.google.com/document/d/doc_123/edit",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected rendered response to contain %q, got:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderAgentResponseDoesNotDuplicateExistingArtifactLink(t *testing.T) {
+	got := renderAgentResponse(contracts.AgentResponse{
+		Status:  contracts.AgentStatusCompleted,
+		Message: "Đã tạo Google Sheets: https://docs.google.com/spreadsheets/d/sheet_123/edit",
+		ToolResults: []contracts.ToolResult{{
+			ToolName: "sheets.createSpreadsheet",
+			Success:  true,
+			ArtifactRef: &contracts.ArtifactRef{
+				Kind:  "google.sheets.spreadsheet",
+				Label: "Summary Sheet",
+				ID:    "sheet_123",
+				URI:   "https://docs.google.com/spreadsheets/d/sheet_123/edit",
+			},
+		}},
+	})
+
+	if strings.Count(got, "https://docs.google.com/spreadsheets/d/sheet_123/edit") != 1 {
+		t.Fatalf("expected artifact link not to be duplicated, got:\n%s", got)
+	}
+}
+
 // func TestRenderAgentResponseCleansAndLimitsMessage(t *testing.T) {
 // 	longLine := strings.Repeat("x", maxOutboundTextRunes+20)
 // 	response := contracts.AgentResponse{
@@ -409,6 +457,32 @@ func TestRenderUserOutputCoversAcceptanceCases(t *testing.T) {
 		}
 		if output.ArtifactRef.ID != "msg_1" || output.ArtifactRef.URI != "https://mail.google.com/mail/u/0/#sent/msg_1" {
 			t.Fatalf("unexpected artifact ref: %#v", output.ArtifactRef)
+		}
+	})
+
+	t.Run("message_with_artifact_keeps_link_ref", func(t *testing.T) {
+		output := renderUserOutput(contracts.AgentResponse{
+			Status:  contracts.AgentStatusCompleted,
+			Message: "Đã upload file lên Google Drive.",
+			ToolResults: []contracts.ToolResult{{
+				ToolName: "drive.uploadFile",
+				Success:  true,
+				ArtifactRef: &contracts.ArtifactRef{
+					Kind:  "google.drive.file",
+					Label: "demo.pdf",
+					ID:    "file_123",
+					URI:   "https://drive.google.com/file/d/file_123/view",
+				},
+			}},
+		})
+		if output == nil || output.ArtifactRef == nil {
+			t.Fatalf("expected artifact ref for message output, got %#v", output)
+		}
+		if output.ArtifactRef.ID != "file_123" {
+			t.Fatalf("unexpected artifact ref: %#v", output.ArtifactRef)
+		}
+		if !strings.Contains(output.Text, "https://drive.google.com/file/d/file_123/view") {
+			t.Fatalf("expected output text to include artifact link, got %#v", output.Text)
 		}
 	})
 

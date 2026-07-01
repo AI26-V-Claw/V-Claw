@@ -42,10 +42,11 @@ func TestRuntimeAttachesTelegramImageToProviderOnly(t *testing.T) {
 	message.Text = "Mo ta anh nay"
 	message.Metadata = map[string]any{
 		"attachments": []map[string]any{{
-			"path":     imagePath,
-			"filename": "photo.png",
-			"mimeType": "image/png",
-			"source":   "telegram",
+			"path":       imagePath,
+			"filename":   "photo.png",
+			"mimeType":   "image/png",
+			"source":     "telegram",
+			"fileSafety": allowedFileSafety(),
 		}},
 	}
 
@@ -101,9 +102,10 @@ func TestRuntimeFailsSoftWhenProviderDoesNotSupportVision(t *testing.T) {
 	message.Text = "Mo ta anh nay"
 	message.Metadata = map[string]any{
 		"attachments": []map[string]any{{
-			"path":     imagePath,
-			"filename": "photo.png",
-			"mimeType": "image/png",
+			"path":       imagePath,
+			"filename":   "photo.png",
+			"mimeType":   "image/png",
+			"fileSafety": allowedFileSafety(),
 		}},
 	}
 
@@ -122,6 +124,53 @@ func TestRuntimeFailsSoftWhenProviderDoesNotSupportVision(t *testing.T) {
 	}
 	if len(provider.calls) != 0 {
 		t.Fatalf("provider should not be called without vision support, got %d calls", len(provider.calls))
+	}
+}
+
+func TestRuntimeDoesNotAttachUnscannedImageToProvider(t *testing.T) {
+	workspaceBase := t.TempDir()
+	t.Setenv("VCLAW_SANDBOX_WORKSPACE_DIR", workspaceBase)
+	imagePath := writeVisionTestPNG(t, workspaceBase, "photo.png")
+	provider := &visionFakeProvider{fakeProvider: fakeProvider{responses: []providers.ChatResponse{{
+		Message: providers.Message{Role: providers.MessageRoleAssistant, Content: "Khong co anh hop le."},
+	}}}}
+	runtime := NewRuntime(RuntimeConfig{
+		Provider:     provider,
+		Registry:     tools.NewToolRegistry(),
+		SessionStore: sessions.NewInMemoryStore(),
+	})
+
+	message := runtimeTestMessage()
+	message.Text = "Mo ta anh nay"
+	message.Metadata = map[string]any{
+		"attachments": []map[string]any{{
+			"path":     imagePath,
+			"filename": "photo.png",
+			"mimeType": "image/png",
+		}},
+	}
+
+	response, err := runtime.Run(context.Background(), message)
+	if err != nil {
+		t.Fatalf("run runtime: %v", err)
+	}
+	if response.Status != contracts.AgentStatusCompleted {
+		t.Fatalf("expected completed response, got %#v", response)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("expected one provider call, got %d", len(provider.calls))
+	}
+	user := lastUserProviderMessage(provider.calls[0].Messages)
+	if len(user.Parts) != 0 {
+		t.Fatalf("unscanned image must not be sent as provider image parts, got %#v", user.Parts)
+	}
+}
+
+func allowedFileSafety() map[string]any {
+	return map[string]any{
+		"decision":      "allow",
+		"flags":         []any{"type_match"},
+		"detected_type": "png",
 	}
 }
 

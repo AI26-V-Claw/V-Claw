@@ -16,20 +16,110 @@ type calendarListEventForAnswer struct {
 	EventLink string `json:"eventLink"`
 }
 
-func freshWorkspaceReadAnswerFromToolResults(results []contracts.ToolResult) (string, bool) {
-	for i := len(results) - 1; i >= 0; i-- {
+func freshWorkspaceReadAnswerFromToolResults(userText string, results []contracts.ToolResult) (string, bool) {
+	if !isSimpleCalendarReadRequest(userText) {
+		return "", false
+	}
+	var calendarResult *contracts.ToolResult
+	successfulReadCount := 0
+	for i := range results {
 		result := results[i]
+		if !result.Success || !isWorkspaceReadResultForFreshAnswer(result.ToolName) {
+			continue
+		}
+		successfulReadCount++
+		if result.ToolName == "calendar.listEvents" {
+			calendarResult = &results[i]
+		}
+	}
+	if successfulReadCount != 1 || calendarResult == nil {
+		return "", false
+	}
+	return calendarListEventsAnswer(*calendarResult)
+}
+
+func missingRequestedWorkspaceReadDomains(userText string, results []contracts.ToolResult) []string {
+	requested := requestedWorkspaceReadDomains(userText)
+	if len(requested) < 2 {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, result := range results {
 		if !result.Success {
 			continue
 		}
-		switch result.ToolName {
-		case "calendar.listEvents":
-			return calendarListEventsAnswer(result)
-		default:
-			continue
+		if domain := workspaceReadResultDomain(result.ToolName); domain != "" {
+			seen[domain] = true
 		}
 	}
-	return "", false
+	missing := make([]string, 0, len(requested))
+	for _, domain := range requested {
+		if !seen[domain] {
+			missing = append(missing, domain)
+		}
+	}
+	return missing
+}
+
+func requestedWorkspaceReadDomains(userText string) []string {
+	lower := strings.ToLower(strings.TrimSpace(userText))
+	if lower == "" {
+		return nil
+	}
+	var domains []string
+	if containsAnyText(lower, "email", "mail", "gmail", "hộp thư", "hop thu") {
+		domains = append(domains, "gmail")
+	}
+	if containsAnyText(lower, "lịch", "lich", "calendar", "sự kiện", "su kien") {
+		domains = append(domains, "calendar")
+	}
+	if containsAnyText(lower, "drive", "google drive", "tài liệu drive", "tai lieu drive") {
+		domains = append(domains, "drive")
+	}
+	if containsAnyText(lower, "chat", "google chat", "tin nhắn", "tin nhan") {
+		domains = append(domains, "chat")
+	}
+	if containsAnyText(lower, "web", "internet", "tìm kiếm", "tim kiem", "tra cứu", "tra cuu") {
+		domains = append(domains, "web")
+	}
+	return domains
+}
+
+func isSimpleCalendarReadRequest(userText string) bool {
+	lower := strings.ToLower(strings.TrimSpace(userText))
+	if lower == "" || !containsAnyText(lower, "lịch", "lich", "calendar", "sự kiện", "su kien") {
+		return false
+	}
+	if len(requestedWorkspaceReadDomains(lower)) != 1 {
+		return false
+	}
+	return !containsAnyText(lower,
+		"briefing", "brief", "tổng hợp", "tong hop", "tóm tắt", "tom tat",
+		"song song", "nhánh", "nhanh", "branch", "branches",
+		"gmail", "email", "mail", "drive", "chat", "web",
+	)
+}
+
+func isWorkspaceReadResultForFreshAnswer(toolName string) bool {
+	return workspaceReadResultDomain(toolName) != ""
+}
+
+func workspaceReadResultDomain(toolName string) string {
+	toolName = strings.TrimSpace(toolName)
+	switch {
+	case strings.HasPrefix(toolName, "gmail."):
+		return "gmail"
+	case strings.HasPrefix(toolName, "calendar."):
+		return "calendar"
+	case strings.HasPrefix(toolName, "drive."):
+		return "drive"
+	case strings.HasPrefix(toolName, "chat."):
+		return "chat"
+	case strings.HasPrefix(toolName, "web."):
+		return "web"
+	default:
+		return ""
+	}
 }
 
 func calendarListEventsAnswer(result contracts.ToolResult) (string, bool) {
